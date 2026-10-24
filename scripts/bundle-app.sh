@@ -10,9 +10,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 dest="${1:-/Applications}"
-version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 
 cargo build --release
+# The binary's own version (0.1.0+<sha>[-dirty]), and the commit count as the
+# build number macOS compares to tell newer from older.
+version="$(target/release/abromux version | cut -d' ' -f2)"
+build="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
 
 app="$(mktemp -d)/AbroMux.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -30,7 +33,7 @@ cat > "$app/Contents/Info.plist" <<EOF
   <key>CFBundleExecutable</key><string>abromux</string>
   <key>CFBundleIconFile</key><string>abromux</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>$version</string>
+  <key>CFBundleVersion</key><string>$build</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>

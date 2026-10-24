@@ -137,7 +137,7 @@ fn dispatch(cmd: &str, mut pos: Vec<String>, mut opts: Map<String, Value>, as_js
     };
     let (method, fmt): (&str, fn(&Value) -> String) = match cmd {
         "version" => {
-            println!("abromux {}", env!("CARGO_PKG_VERSION"));
+            println!("abromux {}", env!("ABROMUX_VERSION"));
             return Ok(());
         }
         "ping" => ("system.ping", |v| v.as_str().unwrap_or_default().into()),
