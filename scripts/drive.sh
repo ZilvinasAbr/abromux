@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run abromux with a ABROMUX_SCRIPT, capturing `snap:` steps through Snapper.app
 # (which holds the Screen Recording permission; see tools/snapper/build.sh).
-# usage: ABROMUX_SCRIPT="type:ls;key:enter;wait:500;snap:/tmp/a.png;quit" scripts/drive.sh
+# usage: ABROMUX_SCRIPT="type:ls;key:enter;wait:500;snap:/tmp/a.png;wait:3000;quit" scripts/drive.sh
+# (Snapper captures asynchronously, so wait after a snap before quitting.)
 cd "$(dirname "$0")/.."
 SNAPPER="$PWD/tools/snapper/Snapper.app"
 ./target/debug/abromux | while read -r tag window path; do

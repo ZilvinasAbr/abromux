@@ -9,7 +9,7 @@
 use crate::{
     AbroMux, DEFAULT_URL,
     browser::normalize_url,
-    ipc,
+    debug, ipc,
     workspace::{Surface, Workspace, git_branch},
 };
 use anyhow::{Context as _, anyhow, bail};
@@ -366,6 +366,30 @@ impl AbroMux {
                 cx.activate(true);
                 window.activate_window();
                 json!({ "window": "window:1" })
+            }
+            // For scripts/perf.py: frame timing and synthetic input.
+            "debug.frame" => return Ok(Reply::Later(debug::after_next_frame(window, cx))),
+            "debug.frames" => {
+                if bool_param(p, "record", true) {
+                    debug::FrameLog::start(&self.frames, window);
+                    json!(null)
+                } else {
+                    debug::FrameLog::stop(&self.frames)
+                }
+            }
+            "debug.input" => {
+                let steps = str_param(p, "steps").context("missing steps")?.to_string();
+                let view = cx.entity();
+                // Deferred: keystrokes dispatch actions to this view, which
+                // is borrowed until the handler returns.
+                window.defer(cx, move |window, cx| {
+                    for step in steps.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                        if let Err(e) = debug::run_step(&view, step, AbroMux::script_mouse, window, cx) {
+                            eprintln!("abromux: debug.input: {e:#}");
+                        }
+                    }
+                });
+                json!(null)
             }
             "app.quit" => {
                 cx.defer(|cx| cx.quit());

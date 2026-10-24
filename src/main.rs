@@ -8,6 +8,7 @@ mod icon;
 mod ipc;
 mod server;
 mod session;
+mod sprite;
 mod terminal;
 mod theme;
 mod workspace;
@@ -133,6 +134,8 @@ struct AbroMux {
     /// Pane being flashed (⌘⇧H), with a counter that restarts the animation.
     flash: Option<(usize, usize)>,
     focus: FocusHandle,
+    /// Frame timings for `debug.frames`.
+    frames: Rc<RefCell<debug::FrameLog>>,
 }
 
 impl AbroMux {
@@ -156,6 +159,7 @@ impl AbroMux {
             hint_gen: 0,
             flash: None,
             focus: cx.focus_handle(),
+            frames: Default::default(),
         };
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
@@ -173,20 +177,18 @@ impl AbroMux {
             this.demo(window, cx);
         }
         if let Ok(script) = std::env::var("ABROMUX_SCRIPT") {
-            debug::run_script(
-                script,
-                |this, ev, window, cx| {
-                    if let PlatformInput::ModifiersChanged(m) = &ev {
-                        this.modifiers_changed(&m.modifiers, window, cx);
-                    } else if let Some(Surface::Terminal(t)) = this.ws().focused_surface().cloned() {
-                        t.update(cx, |t, cx| t.simulate_mouse(ev, window, cx));
-                    }
-                },
-                window,
-                cx,
-            );
+            debug::run_script(script, Self::script_mouse, window, cx);
         }
         this
+    }
+
+    /// Mouse and modifier steps of a test script go to the focused terminal.
+    fn script_mouse(&mut self, ev: PlatformInput, window: &mut Window, cx: &mut Context<Self>) {
+        if let PlatformInput::ModifiersChanged(m) = &ev {
+            self.modifiers_changed(&m.modifiers, window, cx);
+        } else if let Some(Surface::Terminal(t)) = self.ws().focused_surface().cloned() {
+            t.update(cx, |t, cx| t.simulate_mouse(ev, window, cx));
+        }
     }
 
     fn demo(&mut self, window: &mut Window, cx: &mut Context<Self>) {

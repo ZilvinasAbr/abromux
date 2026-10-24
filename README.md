@@ -89,6 +89,8 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 - idle memory and CPU
 - memory per terminal
 - in-app throughput
+- frame draw time and late frames during in-app throughput
+- UI actions, each until the frame showing its result is on screen: new tab, split and workspace (until the prompt), closing a tab, switching workspaces, focusing tabs and panes, keystroke echo, scrolling, and a browser pane until its page has loaded. Each one also records that frame's draw time, which is abromux's own part. The terminal timings use a bare zsh so your shell config doesn't count, and one more times a new tab with your own login shell.
 
 Each run is recorded with its commit, branch and machine, then compared with the last 10 runs on the same machine. A metric is flagged only when it's worse by more than both its own threshold and 3× the baseline's spread. Run it after each change; leave the Mac alone for the ~1.5 minutes it takes.
 
