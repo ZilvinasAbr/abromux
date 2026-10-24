@@ -7,6 +7,8 @@ mod debug;
 mod ghostty;
 mod icon;
 mod ipc;
+mod link;
+mod osc99;
 mod quit;
 mod server;
 mod session;
@@ -322,7 +324,9 @@ impl AbroMux {
             match ev {
                 TerminalEvent::Exited => this.close_surface(id, window, cx),
                 TerminalEvent::Focused => this.focus_surface(id, cx),
-                TerminalEvent::Bell => {
+                TerminalEvent::OpenLink(target) => this.open_link(id, target.clone(), window, cx),
+                // TODO: notification model, pane ring, panel, banners.
+                TerminalEvent::Bell | TerminalEvent::Notification { .. } => {
                     if let Some(i) = this.workspaces.iter().position(|w| w.contains(id))
                         && i != this.active
                     {
@@ -346,6 +350,36 @@ impl AbroMux {
         })
         .detach();
         Surface::Browser(browser)
+    }
+
+    /// ⌘-click on a terminal link: web URLs open in a browser to the right
+    /// of the terminal (a new tab there if that pane already shows one),
+    /// anything else with its default app.
+    fn open_link(&mut self, from: EntityId, target: link::Target, window: &mut Window, cx: &mut Context<Self>) {
+        let url = match target {
+            link::Target::Url(u) if u.starts_with("http://") || u.starts_with("https://") => u,
+            link::Target::Url(u) => {
+                let _ = std::process::Command::new("/usr/bin/open").arg(u).spawn();
+                return;
+            }
+            link::Target::Path(p, _) => {
+                let _ = std::process::Command::new("/usr/bin/open").arg(p).spawn();
+                return;
+            }
+        };
+        let Some(wi) = self.workspaces.iter().position(|w| w.contains(from)) else { return };
+        let ws = &self.workspaces[wi];
+        let Some(pane) = ws.root.panes().into_iter().find(|p| p.tabs.iter().any(|s| s.entity_id() == from)).map(|p| p.id) else { return };
+        let right = ws.root.neighbor(pane, Dir::Right).filter(|&r| {
+            ws.root.panes().into_iter().find(|p| p.id == r).and_then(|p| p.active_surface()).is_some_and(|s| matches!(s, Surface::Browser(_)))
+        });
+        let surface = self.make_browser(&url, window, cx);
+        match right {
+            Some(r) => self.add_tab_to(wi, r, surface, true, window, cx),
+            None => {
+                self.split_pane(wi, pane, Axis::Horizontal, false, surface, true, window, cx);
+            }
+        }
     }
 
     /// Make the pane containing `id` the focused pane (and select its tab).

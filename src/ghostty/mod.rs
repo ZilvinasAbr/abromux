@@ -82,6 +82,9 @@ pub struct Effects {
     pub title_changed: bool,
     pub pwd_changed: bool,
     pub bell: bool,
+    /// Desktop notifications (OSC 9 / 777) as (title, body).
+    /// OSC 99 is parsed but not passed on by libghostty-vt; see osc99.rs.
+    pub notifications: Vec<(String, String)>,
 }
 
 pub struct Terminal {
@@ -137,6 +140,13 @@ unsafe extern "C" fn on_pwd(_: GhosttyTerminal, ud: *mut c_void) {
 unsafe extern "C" fn on_bell(_: GhosttyTerminal, ud: *mut c_void) {
     unsafe { (*(ud as *mut Effects)).bell = true };
 }
+unsafe fn ghostty_str(s: &GhosttyString) -> String {
+    if s.ptr.is_null() { String::new() } else { String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(s.ptr, s.len) }).into_owned() }
+}
+unsafe extern "C" fn on_notification(_: GhosttyTerminal, ud: *mut c_void, n: *const GhosttyTerminalDesktopNotification) {
+    let (fx, n) = unsafe { (&mut *(ud as *mut Effects), &*n) };
+    fx.notifications.push(unsafe { (ghostty_str(&n.title), ghostty_str(&n.body)) });
+}
 
 impl Terminal {
     pub fn new(cols: u16, rows: u16) -> anyhow::Result<Self> {
@@ -168,6 +178,7 @@ impl Terminal {
             set_cb(GHOSTTY_TERMINAL_OPT_TITLE_CHANGED, on_title as *const c_void);
             set_cb(GHOSTTY_TERMINAL_OPT_PWD_CHANGED, on_pwd as *const c_void);
             set_cb(GHOSTTY_TERMINAL_OPT_BELL, on_bell as *const c_void);
+            set_cb(GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION, on_notification as *const c_void);
 
             let t = Self { raw, render, row_iter, row_cells, key_encoder, key_event, mouse_encoder, mouse_event, search: ptr::null_mut(), effects };
             t.apply_theme();
@@ -371,6 +382,24 @@ impl Terminal {
         point.value.coordinate = GhosttyPointCoordinate { x, y: y as u32 };
         let mut r = sized!(GhosttyGridRef);
         (unsafe { ghostty_terminal_grid_ref(self.raw, point, &mut r) } == GHOSTTY_SUCCESS).then_some(r)
+    }
+
+    /// The OSC 8 hyperlink on a viewport cell, if it has one.
+    pub fn hyperlink(&self, x: u16, y: u16) -> Option<String> {
+        let r = self.grid_ref(x, y)?;
+        let mut len = 0usize;
+        unsafe {
+            let first = ghostty_grid_ref_hyperlink_uri(&r, ptr::null_mut(), 0, &mut len);
+            if len == 0 || (first != GHOSTTY_SUCCESS && first != GHOSTTY_OUT_OF_SPACE) {
+                return None;
+            }
+            let mut buf = vec![0u8; len];
+            if ghostty_grid_ref_hyperlink_uri(&r, buf.as_mut_ptr(), buf.len(), &mut len) != GHOSTTY_SUCCESS {
+                return None;
+            }
+            buf.truncate(len);
+            Some(String::from_utf8_lossy(&buf).into_owned()).filter(|u| !u.is_empty())
+        }
     }
 
     /// Select from one viewport cell to another (inclusive).
@@ -751,6 +780,17 @@ mod tests {
         assert_eq!(t.search_count(), (0, None));
         t.end_search();
         assert!(t.frame().matches.is_empty());
+    }
+
+    #[test]
+    fn reports_notifications_and_hyperlinks() {
+        let mut t = Terminal::new(40, 3).unwrap();
+        t.write(b"\x1b]9;Build done\x07\x1b]777;notify;Claude;Needs input\x1b\\");
+        let fx = t.take_effects();
+        assert_eq!(fx.notifications, [("".to_string(), "Build done".to_string()), ("Claude".into(), "Needs input".into())]);
+        t.write(b"see \x1b]8;;https://example.com/a\x1b\\link\x1b]8;;\x1b\\ here");
+        assert_eq!(t.hyperlink(5, 0).as_deref(), Some("https://example.com/a"));
+        assert_eq!(t.hyperlink(1, 0), None);
     }
 
     #[test]

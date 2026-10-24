@@ -5,7 +5,7 @@ use crate::{
     agent::Agent,
     config::{Config, CursorStyle as ConfigCursor},
     ghostty::{self, CursorStyle as Caret, Frame, MouseAction, MouseGeometry, Rgb, ffi},
-    sprite,
+    link, osc99, sprite,
     theme::*,
 };
 use gpui_component::input::{self, Input, InputEvent, InputState};
@@ -33,8 +33,21 @@ const MATCH_FG: Rgb = Rgb(0, 0, 0);
 pub enum TerminalEvent {
     TitleChanged,
     Bell,
+    /// OSC 9 / 99 / 777 from the program.
+    Notification { title: String, body: String },
+    /// ⌘-click on a link.
+    OpenLink(link::Target),
     Exited,
     Focused,
+}
+
+/// The link under the pointer while ⌘ is held: its viewport row, columns
+/// and target.
+#[derive(Clone)]
+struct HoverLink {
+    y: u16,
+    x: Range<u16>,
+    target: link::Target,
 }
 
 pub struct TerminalView {
@@ -75,6 +88,10 @@ pub struct TerminalView {
     searching: bool,
     /// The coding agent running here, as its hooks last reported it.
     pub agent: Option<Agent>,
+    osc99: osc99::Scanner,
+    /// Last pointer position over the terminal, for ⌘ pressed without moving.
+    pointer: Option<Point<Pixels>>,
+    link: Option<HoverLink>,
 }
 
 impl EventEmitter<TerminalEvent> for TerminalView {}
@@ -177,10 +194,14 @@ impl TerminalView {
             find_count: (0, None),
             searching: false,
             agent: None,
+            osc99: Default::default(),
+            pointer: None,
+            link: None,
         }
     }
 
     fn process(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+        let kitty = self.osc99.feed(bytes);
         self.term.write(bytes);
         if std::mem::take(&mut self.clear_pending) {
             self.term.write(b"\x1b[3J");
@@ -214,8 +235,16 @@ impl TerminalView {
         if fx.bell {
             cx.emit(TerminalEvent::Bell);
         }
+        for (title, body) in fx.notifications.into_iter().chain(kitty) {
+            cx.emit(TerminalEvent::Notification { title, body });
+        }
         self.run_search(cx);
         self.dirty = true;
+        if self.link.is_some() {
+            // Output may have moved the text under the pointer.
+            self.link = None;
+            self.update_link(true);
+        }
         cx.notify();
     }
 
@@ -554,6 +583,27 @@ impl TerminalView {
         !m.shift && self.term.mouse_tracking()
     }
 
+    /// Find the link under the pointer while ⌘ is held (`cmd`), or clear it.
+    /// True if the underline changed.
+    fn update_link(&mut self, cmd: bool) -> bool {
+        let found = self.pointer.filter(|_| cmd).and_then(|pos| {
+            let (x, y) = self.cell_at(pos);
+            if let Some(uri) = self.term.hyperlink(x, y) {
+                // An OSC 8 link spans the neighbouring cells with the same URI.
+                let same = |x: u16| self.term.hyperlink(x, y).as_ref() == Some(&uri);
+                let start = (0..x).rev().take_while(|&x| same(x)).last().unwrap_or(x);
+                let end = (x + 1..self.grid.0).take_while(|&x| same(x)).last().unwrap_or(x) + 1;
+                return Some(HoverLink { y, x: start..end, target: link::Target::Url(uri) });
+            }
+            let cwd = self.live_cwd();
+            let row = self.frame().rows.get(y as usize)?;
+            link::find(row, x, &cwd).map(|(x, target)| HoverLink { y, x, target })
+        });
+        let changed = found.as_ref().map(|l| (l.y, l.x.clone())) != self.link.as_ref().map(|l| (l.y, l.x.clone()));
+        self.link = found;
+        changed
+    }
+
     fn report_mouse(&mut self, action: MouseAction, button: Option<u8>, m: Modifiers, pos: Point<Pixels>) {
         let (geometry, at) = mouse_space(pos - self.bounds.origin, self.cell, self.grid);
         let bytes = self.term.encode_mouse(action, button, mods(m), at, self.mouse_buttons != 0, geometry);
@@ -593,6 +643,15 @@ impl TerminalView {
     fn on_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus);
         cx.emit(TerminalEvent::Focused);
+        if ev.button == MouseButton::Left && ev.modifiers.platform {
+            self.pointer = Some(ev.position);
+            self.update_link(true);
+            if let Some(l) = self.link.take() {
+                cx.emit(TerminalEvent::OpenLink(l.target));
+                cx.notify();
+                return;
+            }
+        }
         if self.reporting(ev.modifiers)
             && let Some(b) = button_code(ev.button)
         {
@@ -626,6 +685,10 @@ impl TerminalView {
     }
 
     fn on_mouse_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.pointer = Some(ev.position);
+        if self.update_link(ev.modifiers.platform && ev.pressed_button.is_none()) {
+            cx.notify();
+        }
         if self.reporting(ev.modifiers) {
             // The encoder drops motion the program's tracking mode doesn't want.
             let held = ev.pressed_button.and_then(button_code).filter(|b| self.mouse_buttons & (1 << b) != 0);
@@ -683,10 +746,23 @@ impl Render for TerminalView {
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !hovered {
+                    this.pointer = None;
+                    if this.update_link(false) {
+                        cx.notify();
+                    }
+                }
+            }))
+            .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, _, cx| {
+                if this.update_link(ev.modifiers.platform) {
+                    cx.notify();
+                }
+            }))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up(MouseButton::Right, cx.listener(Self::on_mouse_up))
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_mouse_up))
-            .cursor(gpui::CursorStyle::IBeam)
+            .cursor(if self.link.is_some() { gpui::CursorStyle::PointingHand } else { gpui::CursorStyle::IBeam })
             .child(TerminalElement { view: cx.entity() })
             .children(find_bar)
     }
@@ -713,6 +789,8 @@ struct Prepaint {
     focused: bool,
     selection: (Rgb, Option<Rgb>),
     cursor_text: Option<Rgb>,
+    /// The ⌘-hovered link's row and columns, underlined.
+    link: Option<(u16, Range<u16>)>,
 }
 
 impl Element for TerminalElement {
@@ -752,6 +830,7 @@ impl Element for TerminalElement {
         let font_size = px(view.font_size);
         let selection = (view.config.selection_background.unwrap_or(Rgb(0x5a, 0x3a, 0x2c)), view.config.selection_foreground);
         let cursor_text = view.config.cursor_text;
+        let link = view.link.as_ref().map(|l| (l.y, l.x.clone()));
         let ts = window.text_system();
         let font_id = ts.resolve_font(&font);
         let cell_w = ts.advance(font_id, font_size, 'm').map(|s| s.width).unwrap_or(px(8.));
@@ -770,7 +849,7 @@ impl Element for TerminalElement {
             }
             (frame, v.marked.clone())
         });
-        Prepaint { marked, frame, cell, font, font_size, focused, selection, cursor_text }
+        Prepaint { marked, frame, cell, font, font_size, focused, selection, cursor_text, link }
     }
 
     fn paint(
@@ -783,7 +862,7 @@ impl Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let Prepaint { marked, frame, cell, font, font_size, focused, selection, cursor_text } = p;
+        let Prepaint { marked, frame, cell, font, font_size, focused, selection, cursor_text, link } = p;
         let focus = self.view.read(cx).focus.clone();
         window.handle_input(&focus, TerminalInput(self.view.clone()), cx);
         let font_size = *font_size;
@@ -898,7 +977,7 @@ impl Element for TerminalElement {
                         font: f,
                         color,
                         background_color: None,
-                        underline: c.underline.then(|| UnderlineStyle { thickness: px(1.), color: Some(color), wavy: false }),
+                        underline: (c.underline || link.as_ref().is_some_and(|(ly, lx)| *ly as usize == y && lx.contains(&(x as u16)))).then(|| UnderlineStyle { thickness: px(1.), color: Some(color), wavy: false }),
                         strikethrough: c.strikethrough.then(|| StrikethroughStyle { thickness: px(1.), color: Some(color) }),
                     };
                     match runs.last_mut() {
