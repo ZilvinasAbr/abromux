@@ -1,18 +1,28 @@
-use std::{env, path::PathBuf};
+use std::{env, fs, path::Path, path::PathBuf, process::Command};
 
 fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let vt = root.join("vendor/ghostty-vt-out");
-    // Link the static archive only (the lib dir also has a dylib the linker would prefer).
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
-    std::fs::copy(vt.join("lib/libghostty-vt.a"), out.join("libghostty-vt.a")).expect("build libghostty-vt first");
+    version(&root);
+
+    let vt = root.join("vendor/ghostty-vt-out");
+    let lib = vt.join("lib/libghostty-vt.a");
+    let header = root.join("src/ghostty/wrapper.h");
+    let bindings = out.join("ghostty_vt.rs");
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=ghostty-vt");
     println!("cargo:rerun-if-changed=vendor/ghostty-vt-out/lib/libghostty-vt.a");
     println!("cargo:rerun-if-changed=src/ghostty/wrapper.h");
+    // This script also reruns on every source edit (for the version's dirty
+    // mark), so skip the slow part when its inputs haven't changed.
+    if newer(&bindings, &[&lib, &header]) {
+        return;
+    }
 
+    // Link the static archive only (the lib dir also has a dylib the linker would prefer).
+    fs::copy(&lib, out.join("libghostty-vt.a")).expect("build libghostty-vt first");
     bindgen::Builder::default()
-        .header(root.join("src/ghostty/wrapper.h").to_string_lossy())
+        .header(header.to_string_lossy())
         .clang_arg(format!("-I{}", vt.join("include").display()))
         .allowlist_function("ghostty_.*")
         .allowlist_type("Ghostty.*")
@@ -22,6 +32,40 @@ fn main() {
         .layout_tests(false)
         .generate()
         .expect("bindgen libghostty-vt")
-        .write_to_file(PathBuf::from(env::var("OUT_DIR").unwrap()).join("ghostty_vt.rs"))
+        .write_to_file(&bindings)
         .unwrap();
+}
+
+/// Sets ABROMUX_VERSION to the Cargo version plus the commit, e.g.
+/// `0.1.0+6dea3c2`, with `-dirty` when tracked files have uncommitted changes.
+/// Without git (a source tarball) it's just the Cargo version.
+fn version(root: &Path) {
+    let git = |args: &[&str]| {
+        let o = Command::new("git").arg("-C").arg(root).args(args).output().ok()?;
+        o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    let mut version = env::var("CARGO_PKG_VERSION").unwrap();
+    if let Some(sha) = git(&["rev-parse", "--short", "HEAD"]) {
+        version += &format!("+{sha}");
+        if git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty()) {
+            version += "-dirty";
+        }
+        // Rerun on commit, checkout, staging and edits.
+        let mut watch = vec!["HEAD".to_string(), "index".into(), "packed-refs".into()];
+        watch.extend(git(&["symbolic-ref", "-q", "HEAD"]));
+        for p in watch {
+            if let Some(path) = git(&["rev-parse", "--path-format=absolute", "--git-path", &p]) {
+                println!("cargo:rerun-if-changed={path}");
+            }
+        }
+        println!("cargo:rerun-if-changed=src");
+    }
+    println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rustc-env=ABROMUX_VERSION={version}");
+}
+
+fn newer(out: &Path, inputs: &[&Path]) -> bool {
+    let mtime = |p: &Path| fs::metadata(p).and_then(|m| m.modified()).ok();
+    let Some(t) = mtime(out) else { return false };
+    inputs.iter().all(|i| mtime(i).is_some_and(|m| m <= t))
 }
