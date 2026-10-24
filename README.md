@@ -123,4 +123,4 @@ History lives in `<git common dir>/abromux-perf/history.jsonl`, outside the tree
 
 ## License
 
-[MIT](LICENSE). AbroMux is an independent project, not affiliated with cmux or Ghostty. libghostty-vt is part of [Ghostty](https://github.com/ghostty-org/ghostty) (MIT).
+[MIT](LICENSE). libghostty-vt is part of [Ghostty](https://github.com/ghostty-org/ghostty) (MIT).
