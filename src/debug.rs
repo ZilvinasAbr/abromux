@@ -25,8 +25,8 @@ pub fn snapshot(window: &Window, path: &str) -> anyhow::Result<()> {
         let win: *mut Object = msg_send![view, window];
         msg_send![win, windowNumber]
     };
-    // Capture is done by Snapper.app (it holds the Screen Recording
-    // permission): the driving shell watches stdout for this line.
+    // Capture is done by scripts/drive.sh with screencapture (under the
+    // terminal's Screen Recording permission): it watches stdout for this line.
     use std::io::Write;
     println!("SNAP {number} {path}");
     std::io::stdout().flush()?;

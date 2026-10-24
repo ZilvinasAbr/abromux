@@ -2,6 +2,5 @@
 /vendor/ghostty
 /vendor/zig
 /vendor/ghostty-vt-out
-tools/snapper/Snapper.app
 .claude/
 .DS_Store
