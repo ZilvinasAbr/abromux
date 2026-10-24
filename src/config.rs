@@ -56,10 +56,26 @@ impl Default for Config {
             selection_foreground: None,
             palette: vec![],
             cursor_style: None,
-            keybinds: vec![],
+            keybinds: DEFAULT_KEYBINDS
+                .iter()
+                .filter_map(|(t, a)| {
+                    let (key, mods) = parse_trigger(t)?;
+                    Some(KeyBind { key, mods, bytes: parse_action(a)? })
+                })
+                .collect(),
         }
     }
 }
+
+/// Ghostty's built-in macOS keybinds that send text to the shell, so ⌘⌫,
+/// ⌘←/→ and ⌥←/→ edit the line as they do there. `keybind = clear` drops them.
+const DEFAULT_KEYBINDS: &[(&str, &str)] = &[
+    ("super+backspace", "text:\\x15"),
+    ("super+left", "text:\\x01"),
+    ("super+right", "text:\\x05"),
+    ("alt+left", "esc:b"),
+    ("alt+right", "esc:f"),
+];
 
 impl Config {
     pub fn load() -> Self {
@@ -301,7 +317,8 @@ mod tests {
         assert_eq!(c.background, Some(Rgb(0x1e, 0x1e, 0x2e)));
         assert_eq!(c.palette, vec![(1, Rgb(0xff, 0, 0))]);
         assert_eq!(c.cursor_style, Some(CursorStyle::Bar));
-        assert_eq!(c.keybinds.len(), 2, "non-text actions are ignored");
+        assert_eq!(c.keybinds.len(), DEFAULT_KEYBINDS.len() + 2, "non-text actions are ignored");
+        assert_eq!(c.keybind(&Keystroke::parse("cmd-backspace").unwrap()), Some(b"\x15".as_slice()));
 
         let shift_enter = Keystroke::parse("shift-enter").unwrap();
         assert_eq!(c.keybind(&shift_enter), Some(b"\n".as_slice()));
