@@ -4,6 +4,7 @@
 use crate::{
     config::{Config, CursorStyle as ConfigCursor},
     ghostty::{self, CursorStyle as Caret, Frame, MouseAction, MouseGeometry, Rgb, ffi},
+    sprite,
 };
 use std::ops::Range;
 use futures::{StreamExt, channel::mpsc};
@@ -672,6 +673,20 @@ impl Element for TerminalElement {
                     if c.spacer {
                         continue;
                     }
+                    // Box drawing and blocks are drawn, not shaped, so they
+                    // fill the cell and join up with their neighbours.
+                    if let Some(ch) = sprite_char(c) {
+                        flush(&mut text, &mut runs, chunk_col, window, cx);
+                        chunk_col = x + 1;
+                        let (fg, bg) = colors(c);
+                        let mut color = rgb_to_hsla(fg);
+                        if c.faint {
+                            color.a *= 0.6;
+                        }
+                        let b = Bounds::new(point(origin.x + cell.width * x as f32, row_y), *cell);
+                        sprite::paint(ch, b, font_size, color, rgb_to_hsla(bg.unwrap_or(default_bg)), window);
+                        continue;
+                    }
                     let alone = c.wide || c.text.chars().nth(1).is_some();
                     if alone {
                         flush(&mut text, &mut runs, chunk_col, window, cx);
@@ -721,7 +736,10 @@ impl Element for TerminalElement {
                 match style {
                     Caret::Block => {
                         window.paint_quad(fill(full, color));
-                        if let Some(c) = frame.rows.get(cur.y as usize).and_then(|r| r.get(cur.x as usize)).filter(|c| !c.text.is_empty()) {
+                        let under = frame.rows.get(cur.y as usize).and_then(|r| r.get(cur.x as usize));
+                        if let Some(ch) = under.and_then(sprite_char) {
+                            sprite::paint(ch, full, font_size, rgb_to_hsla(cursor_text.unwrap_or(default_bg)), color, window);
+                        } else if let Some(c) = under.filter(|c| !c.text.is_empty()) {
                             let run = TextRun { len: c.text.len(), font: font.clone(), color: rgb_to_hsla(cursor_text.unwrap_or(default_bg)), background_color: None, underline: None, strikethrough: None };
                             let line = window.text_system().shape_line(c.text.clone().into(), font_size, &[run], None);
                             let _ = line.paint(pos, cell.height, window, cx);
@@ -766,6 +784,13 @@ fn mouse_space(local: Point<Pixels>, cell: Size<Pixels>, (cols, rows): (u16, u16
     };
     let scale = |v: Pixels, real: Pixels, whole: u32| (f32::from(v) - PADDING) * whole as f32 / f32::from(real) + PADDING;
     (geometry, (scale(local.x, cell.width, cw), scale(local.y, cell.height, ch)))
+}
+
+/// The character of a visible cell drawn by `sprite` rather than the font.
+fn sprite_char(c: &ghostty::Cell) -> Option<char> {
+    let mut chars = c.text.chars();
+    let ch = chars.next()?;
+    (chars.next().is_none() && !c.invisible && sprite::covers(ch)).then_some(ch)
 }
 
 /// A process's current directory, via libproc's PROC_PIDVNODEPATHINFO.

@@ -8,6 +8,7 @@ mod icon;
 mod ipc;
 mod server;
 mod session;
+mod sprite;
 mod terminal;
 mod theme;
 mod workspace;
