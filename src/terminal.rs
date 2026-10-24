@@ -502,8 +502,13 @@ impl Render for TerminalView {
             .on_action(cx.listener(|this, _: &ResetFontSize, _, cx| this.set_font_size(this.config.font_size, cx)))
             .on_action(cx.listener(|this, _: &ClearScrollback, _, cx| this.clear_scrollback(cx)))
             .on_action(cx.listener(|this, _: &Paste, _, cx| {
-                if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                let Some(item) = cx.read_from_clipboard() else { return };
+                if let Some(text) = item.text() {
                     this.paste(&text, cx);
+                } else if item.entries().iter().any(|e| matches!(e, ClipboardEntry::Image(_))) {
+                    // No text to paste, so hand the app a raw Ctrl+V: TUIs like
+                    // Claude Code read the image from the system clipboard on it.
+                    this.input(b"\x16", cx);
                 }
             }))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
