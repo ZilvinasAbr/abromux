@@ -652,21 +652,24 @@ impl Element for TerminalElement {
                     }
                 }
 
-                // Text: one shaped line per chunk, each glyph forced onto the
+                // Text: one shaped line per chunk, each glyph snapped onto the
                 // cell grid (fallback fonts have other advances, e.g. ⎿ or ⏺).
-                // Forcing goes by glyph index, so wide cells and multi-codepoint
+                // Snapping goes by glyph index, so wide cells and multi-codepoint
                 // cells get their own chunk.
                 let mut text = String::new();
                 let mut runs: Vec<TextRun> = Vec::new();
                 let mut chunk_col = 0usize;
-                let flush = |text: &mut String, runs: &mut Vec<TextRun>, col: usize, window: &mut Window, cx: &mut App| {
+                // `span` is set for a cell shaped alone: its glyphs are centred
+                // across that many columns as a whole.
+                let flush = |text: &mut String, runs: &mut Vec<TextRun>, col: usize, span: Option<usize>, window: &mut Window, cx: &mut App| {
                     if text.trim().is_empty() {
                         text.clear();
                         runs.clear();
                         return;
                     }
-                    let line = window.text_system().shape_line(SharedString::from(std::mem::take(text)), font_size, runs, Some(cell.width));
+                    let mut line = window.text_system().shape_line(SharedString::from(std::mem::take(text)), font_size, runs, None);
                     runs.clear();
+                    *line = std::sync::Arc::new(snap_to_grid(&line, cell.width, span));
                     let _ = line.paint(point(origin.x + cell.width * col as f32, row_y), cell.height, window, cx);
                 };
                 for (x, c) in row.iter().enumerate() {
@@ -676,7 +679,7 @@ impl Element for TerminalElement {
                     // Box drawing and blocks are drawn, not shaped, so they
                     // fill the cell and join up with their neighbours.
                     if let Some(ch) = sprite_char(c) {
-                        flush(&mut text, &mut runs, chunk_col, window, cx);
+                        flush(&mut text, &mut runs, chunk_col, None, window, cx);
                         chunk_col = x + 1;
                         let (fg, bg) = colors(c);
                         let mut color = rgb_to_hsla(fg);
@@ -689,7 +692,7 @@ impl Element for TerminalElement {
                     }
                     let alone = c.wide || c.text.chars().nth(1).is_some();
                     if alone {
-                        flush(&mut text, &mut runs, chunk_col, window, cx);
+                        flush(&mut text, &mut runs, chunk_col, None, window, cx);
                         chunk_col = x;
                     }
                     let glyph: &str = if c.text.is_empty() || c.invisible { " " } else { &c.text };
@@ -719,11 +722,12 @@ impl Element for TerminalElement {
                     }
                     text.push_str(glyph);
                     if alone {
-                        flush(&mut text, &mut runs, chunk_col, window, cx);
-                        chunk_col = x + if c.wide { 2 } else { 1 };
+                        let span = if c.wide { 2 } else { 1 };
+                        flush(&mut text, &mut runs, chunk_col, Some(span), window, cx);
+                        chunk_col = x + span;
                     }
                 }
-                flush(&mut text, &mut runs, chunk_col, window, cx);
+                flush(&mut text, &mut runs, chunk_col, None, window, cx);
             }
 
             if let Some(cur) = frame.cursor {
@@ -787,6 +791,46 @@ fn mouse_space(local: Point<Pixels>, cell: Size<Pixels>, (cols, rows): (u16, u16
 }
 
 /// The character of a visible cell drawn by `sprite` rather than the font.
+/// Puts glyph `i` exactly at column `i`, centred in it when its own advance
+/// differs from the cell's. GPUI's `force_width` only moves glyphs that are
+/// more than a pixel off, so a fallback glyph left the rest of its chunk a
+/// fraction of a pixel out, and Claude Code's spinner, cycling through
+/// glyphs of different widths, made the text after it shuffle sideways.
+/// With `span`, the line is one cell of that many columns instead, and is
+/// centred in it as a whole.
+fn snap_to_grid(layout: &LineLayout, cell_w: Pixels, span: Option<usize>) -> LineLayout {
+    let shaped: Vec<Pixels> = layout.runs.iter().flat_map(|r| r.glyphs.iter().map(|g| g.position.x)).collect();
+    let (xs, width) = match span {
+        Some(span) => {
+            let dx = (cell_w * span as f32 - layout.width) / 2.;
+            (shaped.iter().map(|&x| x + dx).collect(), cell_w * span as f32)
+        }
+        None => (grid_xs(&shaped, layout.width, cell_w), cell_w * shaped.len() as f32),
+    };
+    let mut xs = xs.into_iter();
+    let runs = layout
+        .runs
+        .iter()
+        .map(|r| ShapedRun {
+            font_id: r.font_id,
+            glyphs: r.glyphs.iter().map(|g| ShapedGlyph { position: point(xs.next().unwrap(), g.position.y), ..g.clone() }).collect(),
+        })
+        .collect();
+    LineLayout { runs, width, ..*layout }
+}
+
+/// Where glyphs shaped at `xs` (in a line `width` wide) go on the grid: glyph
+/// `i` in column `i`, centred by its own advance.
+fn grid_xs(xs: &[Pixels], width: Pixels, cell_w: Pixels) -> Vec<Pixels> {
+    xs.iter()
+        .enumerate()
+        .map(|(i, &x)| {
+            let advance = xs.get(i + 1).copied().unwrap_or(width) - x;
+            cell_w * i as f32 + (cell_w - advance) / 2.
+        })
+        .collect()
+}
+
 fn sprite_char(c: &ghostty::Cell) -> Option<char> {
     let mut chars = c.text.chars();
     let ch = chars.next()?;
@@ -968,5 +1012,15 @@ mod tests {
             let got = t.encode_mouse(MouseAction::Press, Some(1), 0, pos, false, g);
             assert_eq!(got, format!("\x1b[<0;{};{}M", col + 1, row + 1).into_bytes());
         }
+    }
+
+    #[test]
+    fn glyphs_after_a_fallback_glyph_sit_exactly_on_the_grid() {
+        use gpui::px;
+        // A spinner glyph 8.6 px wide in 7.8 px cells: the text after it is
+        // 0.8 px out, under the 1 px GPUI's force_width would correct.
+        let got = super::grid_xs(&[px(0.), px(8.6), px(16.4)], px(24.2), px(7.8));
+        let got: Vec<f32> = got.into_iter().map(|x| (f32::from(x) * 100.).round() / 100.).collect();
+        assert_eq!(got, [-0.4, 7.8, 15.6]);
     }
 }
