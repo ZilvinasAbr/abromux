@@ -221,8 +221,25 @@ impl Workspace {
     }
 
     pub fn name(&self, cx: &App) -> String {
-        if let Some(n) = &self.custom_name {
-            return n.clone();
+        match &self.custom_name {
+            Some(n) => n.clone(),
+            None => self.auto_name(cx),
+        }
+    }
+
+    /// Name when not renamed: the title a program (e.g. an agent) set on the
+    /// focused terminal, or any terminal, else the cwd's folder name.
+    pub fn auto_name(&self, cx: &App) -> String {
+        let title = |s: &Surface| match s {
+            Surface::Terminal(t) => Some(t.read(cx).title.trim().to_string()).filter(|t| !t.is_empty()),
+            Surface::Browser(_) => None,
+        };
+        if let Some(t) = self
+            .focused_surface()
+            .and_then(title)
+            .or_else(|| self.root.panes().iter().flat_map(|p| p.tabs.iter()).find_map(title))
+        {
+            return t;
         }
         self.cwd(cx)
             .map(|c| {

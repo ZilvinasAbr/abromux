@@ -19,7 +19,7 @@ use futures::StreamExt;
 use gpui::{prelude::*, *};
 use gpui_component::{
     Root, Theme, ThemeMode,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, SelectAll},
 };
 use std::{
     borrow::Cow,
@@ -458,7 +458,9 @@ impl AbroMux {
             InputEvent::PressEnter { .. } => {
                 let name = input.read(cx).value().trim().to_string();
                 if let Some(ws) = this.workspaces.iter_mut().find(|w| w.id == id) {
-                    ws.custom_name = (!name.is_empty()).then_some(name);
+                    // Leaving the name as it was keeps it following the agent's title.
+                    let changed = !name.is_empty() && name != ws.auto_name(cx);
+                    ws.custom_name = changed.then_some(name);
                 }
                 this.renaming = None;
                 this.focus_active(window, cx);
@@ -472,6 +474,9 @@ impl AbroMux {
         })
         .detach();
         input.update(cx, |i, cx| i.focus(window, cx));
+        // Select the old name so typing replaces it; the input has to be
+        // rendered before it can take the action.
+        window.on_next_frame(|window, cx| window.dispatch_action(Box::new(SelectAll), cx));
         self.renaming = Some((id, input));
         cx.notify();
     }
@@ -679,6 +684,7 @@ impl AbroMux {
                 let fg = if active { rgb(0xffffff) } else { rgb(TEXT) };
                 let sub = if active { rgba(0xffffffc0) } else { rgb(MUTED) };
                 let renaming = self.renaming.as_ref().filter(|(id, _)| *id == ws.id).map(|(_, input)| input.clone());
+                let is_renaming = renaming.is_some();
                 let group: SharedString = format!("ws-{}", ws.id).into();
                 let hint = shortcut_digit(i, self.workspaces.len()).filter(|_| self.hints == Some(Hints::Command));
 
@@ -710,13 +716,23 @@ impl AbroMux {
                             .gap(px(6.))
                             .when(ws.unread, |s| s.child(div().size(px(7.)).flex_none().rounded_full().bg(rgb(ACCENT_BRIGHT))))
                             .child(match renaming {
+                                // Edit in place: same font and line as the title, in a
+                                // dark inset so it reads as a field on the accent row.
                                 Some(input) => div()
                                     .flex_1()
+                                    .min_w_0()
                                     .h(px(20.))
-                                    .px_1()
-                                    .rounded(px(4.))
-                                    .bg(rgb(INPUT_BG))
+                                    .my(px(-2.))
+                                    .mx(px(-5.))
+                                    .px(px(4.))
+                                    .flex()
+                                    .items_center()
+                                    .rounded(px(5.))
+                                    .bg(rgba(0x0000004d))
+                                    .border_1()
+                                    .border_color(rgba(0xffffff59))
                                     .text_color(rgb(TEXT))
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                     .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                                         if ev.keystroke.key == "escape" {
@@ -725,7 +741,7 @@ impl AbroMux {
                                             cx.notify();
                                         }
                                     }))
-                                    .child(Input::new(&input).appearance(false).text_size(px(12.5)))
+                                    .child(Input::new(&input).appearance(false).text_size(px(12.5)).h_full().px_0().py_0())
                                     .into_any_element(),
                                 None => div()
                                     .flex_1()
@@ -734,10 +750,10 @@ impl AbroMux {
                                     .text_size(px(12.5))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(fg)
-                                    .child(name)
+                                    .child(name.clone())
                                     .into_any_element(),
                             })
-                            .child(
+                            .when(!is_renaming, |s| s.child(
                                 div()
                                     .id(("ws-close", ws.id))
                                     .invisible()
@@ -749,9 +765,9 @@ impl AbroMux {
                                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                     .on_click(cx.listener(move |this, _, window, cx| this.close_workspace(i, window, cx)))
                                     .child(icon("x").size(px(11.)).text_color(sub)),
-                            ),
+                            )),
                     )
-                    .when(!subtitle.is_empty() && Some(&subtitle) != cwd.as_ref().map(|c| tilde(c)).as_ref(), |s| {
+                    .when(!subtitle.is_empty() && subtitle != name && Some(&subtitle) != cwd.as_ref().map(|c| tilde(c)).as_ref(), |s| {
                         s.child(div().mt(px(2.)).text_size(px(11.)).text_color(sub).line_clamp(2).child(subtitle))
                     })
                     .when_some(hint, |s, d| s.child(hint_pill(format!("⌘{d}")).absolute().top(px(6.)).right(px(8.))))
