@@ -25,7 +25,7 @@ So the list below reads in context:
 - [x] **Reading the Ghostty config** (`~/.config/ghostty/config`): theme, font family and size, colors, cursor style, background opacity and blur, keybinds, including leader sequences and key tables. *(partial: theme, font, colors, palette, cursor and `text:`/`csi:`/`esc:` keybinds; not opacity, blur, padding, leader sequences or other actions)*
 - [x] **Font size controls**: ⌘+ / ⌘- / ⌘0.
 - [x] **Clear scrollback**: ⌘K, plus `clear-history` in the CLI.
-- [ ] **Find in terminal**: ⌘F, find next/previous (⌘G / ⌥⌘G), use selection for find (⌘E), hide the find bar.
+- [x] **Find in terminal**: ⌘F, find next/previous (⌘G / ⌥⌘G), use selection for find (⌘E), hide the find bar. *(terminal panes only, not browser pages)*
 - [ ] **Find in directory**: ⌘⇧F, a ripgrep-backed project search.
 - [ ] **Scrollbar**, plus a scroll-speed setting.
 - [ ] **Copy options**: copy-on-select, a copy confirmation, reflowing hard wraps on copy.

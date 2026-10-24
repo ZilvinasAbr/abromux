@@ -5,7 +5,9 @@ use crate::{
     config::{Config, CursorStyle as ConfigCursor},
     ghostty::{self, CursorStyle as Caret, Frame, MouseAction, MouseGeometry, Rgb, ffi},
     sprite,
+    theme::*,
 };
+use gpui_component::input::{self, Input, InputEvent, InputState};
 use std::ops::Range;
 use futures::{StreamExt, channel::mpsc};
 use gpui::{prelude::*, *};
@@ -17,7 +19,15 @@ pub const FONT_FAMILY: &str = "JetBrains Mono";
 const LINE_HEIGHT: f32 = 1.25;
 const PADDING: f32 = 6.;
 
-actions!(terminal, [Copy, Paste, IncreaseFontSize, DecreaseFontSize, ResetFontSize, ClearScrollback]);
+actions!(
+    terminal,
+    [Copy, Paste, IncreaseFontSize, DecreaseFontSize, ResetFontSize, ClearScrollback, Find, FindNext, FindPrevious, UseSelectionForFind]
+);
+
+// Ghostty's default search colours.
+const MATCH_BG: Rgb = Rgb(0xff, 0xe0, 0x82);
+const MATCH_SELECTED_BG: Rgb = Rgb(0xf2, 0xa5, 0x7e);
+const MATCH_FG: Rgb = Rgb(0, 0, 0);
 
 pub enum TerminalEvent {
     TitleChanged,
@@ -55,6 +65,13 @@ pub struct TerminalView {
     /// Whether the shell reports its cwd itself (OSC 7); if not, it's polled.
     osc7: bool,
     cwd_checked: std::time::Instant,
+    /// The find bar's input, kept after closing so ⌘F brings the last search back.
+    find_input: Option<Entity<InputState>>,
+    find_open: bool,
+    /// Match count and selected index (from the newest), for the find bar.
+    find_count: (usize, Option<usize>),
+    /// A task is stepping the search through scrollback.
+    searching: bool,
 }
 
 impl EventEmitter<TerminalEvent> for TerminalView {}
@@ -152,6 +169,10 @@ impl TerminalView {
             scroll_accum: 0.,
             osc7: false,
             cwd_checked: std::time::Instant::now(),
+            find_input: None,
+            find_open: false,
+            find_count: (0, None),
+            searching: false,
         }
     }
 
@@ -189,6 +210,7 @@ impl TerminalView {
         if fx.bell {
             cx.emit(TerminalEvent::Bell);
         }
+        self.run_search(cx);
         self.dirty = true;
         cx.notify();
     }
@@ -329,7 +351,139 @@ impl TerminalView {
         }
     }
 
-    fn on_key_down(&mut self, ev: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    /// ⌘F: show the find bar (or focus it) with its last search.
+    fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = match &self.find_input {
+            Some(input) => input.clone(),
+            None => {
+                let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find"));
+                cx.subscribe_in(&input, window, |this, input, ev: &InputEvent, _, cx| match ev {
+                    InputEvent::Change => {
+                        let needle = input.read(cx).value();
+                        this.term.set_search(&needle);
+                        this.run_search(cx);
+                    }
+                    InputEvent::PressEnter { .. } => this.find_step(true, cx),
+                    InputEvent::Focus => cx.emit(TerminalEvent::Focused),
+                    _ => {}
+                })
+                .detach();
+                self.find_input = Some(input.clone());
+                input
+            }
+        };
+        if !self.find_open {
+            self.find_open = true;
+            let needle = input.read(cx).value();
+            self.term.set_search(&needle);
+            self.run_search(cx);
+        }
+        input.update(cx, |i, cx| i.focus(window, cx));
+        // Runs once the input has focus, so retyping replaces the old search.
+        window.dispatch_action(Box::new(input::SelectAll), cx);
+        cx.notify();
+    }
+
+    /// ⌘E: search for the selected text.
+    fn find_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = self.term.selection_text() else { return };
+        let text = text.lines().next().unwrap_or_default().to_string();
+        self.open_find(window, cx);
+        if let Some(input) = &self.find_input {
+            input.update(cx, |i, cx| i.set_value(text.clone(), window, cx));
+        }
+        self.term.set_search(&text);
+        self.run_search(cx);
+    }
+
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.find_open = false;
+        self.find_count = (0, None);
+        self.term.end_search();
+        self.dirty = true;
+        window.focus(&self.focus);
+        cx.notify();
+    }
+
+    /// ⌘G / ⇧⌘G: select the next match up (older) or down the screen.
+    fn find_step(&mut self, older: bool, cx: &mut Context<Self>) {
+        if !self.find_open {
+            return;
+        }
+        self.term.search_select(older);
+        self.find_count = self.term.search_count();
+        self.dirty = true;
+        cx.notify();
+    }
+
+    /// Step the search until it has caught up with the terminal, a slice at
+    /// a time so a long scrollback doesn't stall the UI.
+    fn run_search(&mut self, cx: &mut Context<Self>) {
+        if !self.find_open || self.searching {
+            return;
+        }
+        self.searching = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                let done = this.update(cx, |this, cx| {
+                    let done = !this.find_open || this.term.search_step();
+                    this.find_count = this.term.search_count();
+                    this.searching = !done;
+                    this.dirty = true;
+                    cx.notify();
+                    done
+                });
+                if done.unwrap_or(true) {
+                    return;
+                }
+                cx.background_executor().timer(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .detach();
+    }
+
+    fn render_find_bar(&self, input: Entity<InputState>, cx: &mut Context<Self>) -> Stateful<Div> {
+        let count = match self.find_count {
+            (total, Some(i)) => format!("{}/{total}", i + 1),
+            (total, None) => format!("-/{total}"),
+        };
+        div()
+            .id("find-bar")
+            .key_context("FindBar")
+            .absolute()
+            .top(px(PADDING))
+            .right(px(PADDING * 2.))
+            .w(px(300.))
+            .h(px(32.))
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_1()
+            .rounded(px(8.))
+            .bg(rgb(TABBAR_BG))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .shadow_md()
+            .cursor_default()
+            .text_size(px(12.))
+            .text_color(rgb(TEXT))
+            // Keep clicks from reaching the terminal (selection, mouse reports).
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .on_action(cx.listener(|this, _: &input::Escape, window, cx| this.close_find(window, cx)))
+            .child(icon("search"))
+            .child(div().flex_1().min_w_0().child(Input::new(&input).appearance(false).text_size(px(12.))))
+            .child(div().flex_none().text_color(rgb(MUTED)).child(count))
+            .child(icon_button("find-up", "chevron-up").on_click(cx.listener(|this, _, _, cx| this.find_step(true, cx))))
+            .child(icon_button("find-down", "chevron-down").on_click(cx.listener(|this, _, _, cx| this.find_step(false, cx))))
+            .child(icon_button("find-close", "x").on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))))
+    }
+
+    fn on_key_down(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Keys typed into the find bar bubble up here; they aren't the shell's.
+        if !self.focus.is_focused(window) {
+            return;
+        }
         let ks = &ev.keystroke;
         // Plain text is left to the input handler (TerminalInput) so IMEs and
         // dead keys can compose it, unless a keybind or the kitty keyboard
@@ -481,8 +635,10 @@ impl TerminalView {
 impl Render for TerminalView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg = self.frame.background;
+        let find_bar = self.find_input.clone().filter(|_| self.find_open).map(|input| self.render_find_bar(input, cx));
         div()
             .id("terminal")
+            .relative()
             .key_context("Terminal")
             .track_focus(&self.focus)
             .size_full()
@@ -495,6 +651,10 @@ impl Render for TerminalView {
             .on_action(cx.listener(|this, _: &DecreaseFontSize, _, cx| this.set_font_size(this.font_size - 1., cx)))
             .on_action(cx.listener(|this, _: &ResetFontSize, _, cx| this.set_font_size(this.config.font_size, cx)))
             .on_action(cx.listener(|this, _: &ClearScrollback, _, cx| this.clear_scrollback(cx)))
+            .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
+            .on_action(cx.listener(|this, _: &FindNext, _, cx| this.find_step(true, cx)))
+            .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.find_step(false, cx)))
+            .on_action(cx.listener(|this, _: &UseSelectionForFind, window, cx| this.find_selection(window, cx)))
             .on_action(cx.listener(|this, _: &Paste, _, cx| {
                 let Some(item) = cx.read_from_clipboard() else { return };
                 if let Some(text) = item.text() {
@@ -515,6 +675,7 @@ impl Render for TerminalView {
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_mouse_up))
             .cursor(gpui::CursorStyle::IBeam)
             .child(TerminalElement { view: cx.entity() })
+            .children(find_bar)
     }
 }
 
@@ -623,10 +784,21 @@ impl Element for TerminalElement {
 
             for (y, row) in frame.rows.iter().enumerate() {
                 let row_y = origin.y + cell.height * y as f32;
-                let colors = |c: &ghostty::Cell| {
+                // Some(selected) for cells inside a find-bar match.
+                let mut hits = vec![None; row.len()];
+                for m in frame.matches.iter().filter(|m| m.y as usize == y) {
+                    for h in hits.iter_mut().take(m.x.end as usize).skip(m.x.start as usize) {
+                        *h = Some(m.selected);
+                    }
+                }
+                let colors = |x: usize, c: &ghostty::Cell| {
                     let (mut fg, mut bg) = (c.fg.unwrap_or(default_fg), c.bg);
                     if c.inverse {
                         (fg, bg) = (bg.unwrap_or(default_bg), Some(fg));
+                    }
+                    if let Some(selected) = hits[x] {
+                        bg = Some(if selected { MATCH_SELECTED_BG } else { MATCH_BG });
+                        fg = MATCH_FG;
                     }
                     if c.selected {
                         bg = Some(selection_bg);
@@ -638,9 +810,9 @@ impl Element for TerminalElement {
                 // Backgrounds: merge runs of equal colour into one quad.
                 let mut x = 0;
                 while x < row.len() {
-                    let (_, bg) = colors(&row[x]);
+                    let (_, bg) = colors(x, &row[x]);
                     let start = x;
-                    while x < row.len() && colors(&row[x]).1 == bg {
+                    while x < row.len() && colors(x, &row[x]).1 == bg {
                         x += 1;
                     }
                     if let Some(bg) = bg {
@@ -681,7 +853,7 @@ impl Element for TerminalElement {
                     if let Some(ch) = sprite_char(c) {
                         flush(&mut text, &mut runs, chunk_col, None, window, cx);
                         chunk_col = x + 1;
-                        let (fg, bg) = colors(c);
+                        let (fg, bg) = colors(x, c);
                         let mut color = rgb_to_hsla(fg);
                         if c.faint {
                             color.a *= 0.6;
@@ -696,7 +868,7 @@ impl Element for TerminalElement {
                         chunk_col = x;
                     }
                     let glyph: &str = if c.text.is_empty() || c.invisible { " " } else { &c.text };
-                    let (fg, _) = colors(c);
+                    let (fg, _) = colors(x, c);
                     let mut color = rgb_to_hsla(fg);
                     if c.faint {
                         color.a *= 0.6;

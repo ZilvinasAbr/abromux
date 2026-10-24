@@ -1333,6 +1333,12 @@ fn run_app(cwd: Option<String>) {
             KeyBinding::new("cmd--", terminal::DecreaseFontSize, Some("Terminal")),
             KeyBinding::new("cmd-0", terminal::ResetFontSize, Some("Terminal")),
             KeyBinding::new("cmd-k", terminal::ClearScrollback, Some("Terminal")),
+            KeyBinding::new("cmd-f", terminal::Find, Some("Terminal")),
+            KeyBinding::new("cmd-g", terminal::FindNext, Some("Terminal")),
+            KeyBinding::new("cmd-shift-g", terminal::FindPrevious, Some("Terminal")),
+            KeyBinding::new("alt-cmd-g", terminal::FindPrevious, Some("Terminal")),
+            KeyBinding::new("cmd-e", terminal::UseSelectionForFind, Some("Terminal")),
+            KeyBinding::new("shift-enter", terminal::FindPrevious, Some("FindBar")),
         ]);
         // The Edit items send copy:/paste:/… down the responder chain, which is
         // the only way the browser's WKWebView gets ⌘C/⌘V/⌘A/⌘X. gpui views
