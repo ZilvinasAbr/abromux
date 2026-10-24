@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>abromux performance</title>
+<!-- Template for `scripts/perf.py report`; the script fills in the data below. -->
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f4f3f0;
+  --surface-1: #fcfcfb;
+  --border: #e3e2dd;
+  --grid: #ecebe7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #7a7973;
+  --series-1: #2a78d6;
+  --band: rgba(42, 120, 214, 0.10);
+  --good: #0ca30c;
+  --critical: #d03b3b;
+  --warning: #fab219;
+  --chip-bg: #f0efec;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --border: #2e2e2b;
+    --grid: #262624;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8f8e86;
+    --series-1: #3987e5;
+    --band: rgba(57, 135, 229, 0.16);
+    --chip-bg: #262624;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #121211;
+  --surface-1: #1a1a19;
+  --border: #2e2e2b;
+  --grid: #262624;
+  --text-primary: #f0efec;
+  --text-secondary: #c3c2b7;
+  --text-muted: #8f8e86;
+  --series-1: #3987e5;
+  --band: rgba(57, 135, 229, 0.16);
+  --chip-bg: #262624;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--surface-0);
+  color: var(--text-primary);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+main { max-width: 1180px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+h2 { font-size: 15px; margin: 40px 0 12px; }
+h3 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin: 28px 0 10px; }
+.meta { color: var(--text-secondary); margin: 0; }
+.mono, code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; }
+
+/* latest run */
+.latest { display: grid; grid-template-columns: minmax(220px, 280px) 1fr; gap: 16px; margin-top: 24px; }
+.hero { padding: 20px; display: flex; flex-direction: column; gap: 10px; }
+.hero .big { font-size: 32px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.1; display: flex; align-items: center; gap: 10px; }
+.hero .big svg { flex: none; }
+.hero p { margin: 0; color: var(--text-secondary); }
+.hero .note { color: var(--text-primary); background: var(--chip-bg); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; }
+th, td { padding: 7px 12px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--grid); }
+th { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td .unit { color: var(--text-muted); margin-left: 3px; font-size: 12px; }
+.chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--text-primary); }
+.chip svg { flex: none; }
+.muted { color: var(--text-muted); }
+
+/* controls */
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; margin: 36px 0 0; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; background: var(--surface-1); }
+.seg button { border: 0; background: none; color: var(--text-secondary); font: inherit; font-size: 13px; padding: 5px 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--chip-bg); color: var(--text-primary); font-weight: 600; }
+label.ctl { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 13px; }
+select { font: inherit; font-size: 13px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); }
+.legend { display: inline-flex; gap: 14px; color: var(--text-secondary); font-size: 12.5px; flex-wrap: wrap; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+
+/* charts */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+.chart { padding: 14px 14px 8px; position: relative; }
+.chart header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.chart .title { font-weight: 600; font-size: 13.5px; }
+.chart .sub { color: var(--text-muted); font-size: 12px; }
+.chart .value { font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chart svg.plot { display: block; width: 100%; height: auto; margin-top: 6px; overflow: visible; }
+.chart .empty { color: var(--text-muted); font-size: 13px; padding: 40px 0; text-align: center; }
+.axis text { fill: var(--text-muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.tip {
+  position: fixed; pointer-events: none; z-index: 10; display: none;
+  background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 6px 24px rgba(0,0,0,0.14); max-width: 300px;
+}
+.tip .v { font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tip .row { color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+details { margin-top: 40px; }
+summary { cursor: pointer; font-weight: 600; font-size: 15px; }
+details .card { margin-top: 12px; }
+footer { margin-top: 40px; color: var(--text-muted); font-size: 12px; }
+
+@media (max-width: 960px) {
+  .latest { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<main>
+  <h1>abromux performance</h1>
+  <p class="meta" id="meta"></p>
+
+  <section class="latest">
+    <div class="card hero" id="hero"></div>
+    <div class="card tablewrap"><table id="latest-table"></table></div>
+  </section>
+
+  <div class="controls">
+    <div class="seg" role="group" aria-label="Runs shown" id="range"></div>
+    <label class="ctl">Branch <select id="branch"></select></label>
+    <label class="ctl"><input type="checkbox" id="busy"> Busy-machine runs</label>
+    <div class="legend" aria-hidden="true">
+      <span><svg width="12" height="12"><circle cx="6" cy="6" r="4" fill="var(--series-1)"/></svg>run</span>
+      <span><svg width="12" height="12"><circle cx="6" cy="6" r="3.5" fill="var(--surface-1)" stroke="var(--series-1)" stroke-width="1.5"/></svg>busy machine</span>
+      <span><svg width="12" height="12"><circle cx="6" cy="6" r="4" fill="var(--critical)"/></svg>regression</span>
+      <span><svg width="18" height="12"><rect x="0" y="2" width="18" height="8" fill="var(--band)"/><line x1="0" x2="18" y1="6" y2="6" stroke="var(--series-1)" stroke-dasharray="3 2"/></svg>latest baseline ± allowed</span>
+    </div>
+  </div>
+
+  <div id="charts"></div>
+
+  <details>
+    <summary>All runs (table)</summary>
+    <div class="card tablewrap"><table id="runs-table"></table></div>
+  </details>
+
+  <footer id="footer"></footer>
+</main>
+<div class="tip" id="tip"></div>
+
+<script>
+const DATA = /*DATA*/null;
+
+const GROUPS = [
+  ["Build and VT parsing", ["binary_size_mb", "vt_ascii_mbps", "vt_color_mbps", "vt_unicode_mbps"]],
+  ["Startup", ["startup_socket_ms", "startup_prompt_ms"]],
+  ["Memory and idle CPU", ["idle_footprint_mb", "per_terminal_mb", "footprint_after_mb", "idle_cpu_pct", "idle_cpu_11_pct"]],
+  ["In-app throughput", ["app_ascii_mbps", "app_color_mbps", "app_unicode_mbps", "throughput_cpu_s"]],
+];
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmt = (v) => v == null ? "–" : Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2);
+const when = (ts) => { const d = new Date(ts); return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }); };
+
+const ICON = {
+  WORSE: '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="7" fill="var(--critical)"/><path d="M4 5.5 7 9l3-3.5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  better: '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="7" fill="var(--good)"/><path d="M4 8.5 7 5l3 3.5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  ok: '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="var(--text-muted)" stroke-width="1.5"/></svg>',
+  new: '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-dasharray="2 2"/></svg>',
+};
+const STATUS_LABEL = { WORSE: "Regression", better: "Better", ok: "Within noise", new: "No baseline" };
+const chip = (s) => `<span class="chip">${ICON[s]}${STATUS_LABEL[s]}</span>`;
+
+// ---- header + latest run ----
+function renderLatest() {
+  const m = DATA.machine, runs = DATA.runs, latest = runs[runs.length - 1], g = latest.git;
+  $("meta").textContent = `${m.chip}, ${m.mem_gb} GB, macOS ${m.os} · ${runs.length} run${runs.length === 1 ? "" : "s"} on this machine`;
+  const rows = DATA.latest.rows, regs = rows.filter((r) => r.status === "WORSE");
+  const nb = DATA.latest.baseCount;
+  const headline = !nb ? `${ICON.new} First run`
+    : regs.length ? `${ICON.WORSE.replace(/14/g, "26")} ${regs.length} regression${regs.length > 1 ? "s" : ""}`
+    : `${ICON.better.replace(/14/g, "26").replace("M4 8.5 7 5l3 3.5", "M4 7.2 6.2 9.4 10 5")} No regressions`;
+  $("hero").innerHTML = `
+    <div class="muted">Latest run · ${esc(when(latest.timestamp))}</div>
+    <div class="big">${headline}</div>
+    <p><code>${esc(g.sha.slice(0, 8))}</code>${g.dirty ? " + uncommitted changes" : ""} on <code>${esc(g.branch)}</code></p>
+    <p>${esc(g.subject)}</p>
+    <p class="muted">${esc(latest.mode)} run${latest.label ? " · " + esc(latest.label) : ""} · compared with the median of the last ${nb} quiet run${nb === 1 ? "" : "s"}</p>
+    ${latest.busy ? `<div class="note">The machine was busy (load ${latest.load}), so this run's numbers are noisy and it isn't used as a baseline.</div>` : ""}`;
+  $("latest-table").innerHTML = `<thead><tr><th>Metric</th><th class="num">Now</th><th class="num">Baseline</th><th class="num">Change</th><th>Status</th></tr></thead><tbody>` +
+    rows.map((r) => `<tr>
+      <td>${esc(r.desc)}</td>
+      <td class="num">${fmt(r.now)}<span class="unit">${esc(r.unit)}</span></td>
+      <td class="num">${fmt(r.baseline)}</td>
+      <td class="num">${r.delta == null ? "–" : (r.delta >= 0 ? "+" : "") + (r.delta * 100).toFixed(1) + "%"}</td>
+      <td>${chip(r.status)}</td></tr>`).join("") + "</tbody>";
+}
+
+// ---- filters ----
+const state = { range: 30, branch: "", busy: false };
+try { Object.assign(state, JSON.parse(localStorage.getItem("abromux-perf-filters") || "{}")); } catch {}
+const save = () => { try { localStorage.setItem("abromux-perf-filters", JSON.stringify(state)); } catch {} };
+
+function renderControls() {
+  const ranges = [[10, "10"], [30, "30"], [100, "100"], [0, "All"]];
+  $("range").innerHTML = '<button disabled style="cursor:default">Last</button>' + ranges.map(([n, l]) => `<button data-n="${n}" aria-pressed="${state.range === n}">${l}</button>`).join("");
+  $("range").onclick = (e) => { const b = e.target.closest("button[data-n]"); if (!b) return; state.range = +b.dataset.n; save(); renderControls(); renderCharts(); };
+  const branches = [...new Set(DATA.runs.map((r) => r.git.branch))].sort();
+  if (state.branch && !branches.includes(state.branch)) state.branch = "";
+  $("branch").innerHTML = `<option value="">All</option>` + branches.map((b) => `<option ${b === state.branch ? "selected" : ""}>${esc(b)}</option>`).join("");
+  $("branch").onchange = (e) => { state.branch = e.target.value; save(); renderCharts(); };
+  $("busy").checked = state.busy;
+  $("busy").onchange = (e) => { state.busy = e.target.checked; save(); renderCharts(); };
+}
+
+function visibleRuns() {
+  let runs = DATA.runs.filter((r) => (state.busy || !r.busy) && (!state.branch || r.git.branch === state.branch));
+  return state.range ? runs.slice(-state.range) : runs;
+}
+
+// ---- charts ----
+function niceTicks(lo, hi, count = 4) {
+  if (hi === lo) { const p = Math.abs(lo) * 0.1 || 1; lo -= p; hi += p; }
+  const raw = (hi - lo) / count, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((s) => s * mag).find((s) => s >= raw);
+  const start = Math.floor(lo / step) * step, ticks = [];
+  for (let v = start; v <= hi + step * 0.5; v += step) ticks.push(+v.toPrecision(12));
+  return ticks;
+}
+
+const W = 340, H = 150, M = { l: 40, r: 10, t: 8, b: 20 };
+
+function chartSvg(name, runs) {
+  const pts = runs.map((r, i) => ({ r, i, v: r.metrics[name] })).filter((p) => p.v != null);
+  if (!pts.length) return null;
+  const row = DATA.latest.rows.find((x) => x.name === name);
+  const band = row && row.baseline != null ? [row.baseline - row.allowed, row.baseline + row.allowed, row.baseline] : null;
+  let lo = Math.min(...pts.map((p) => p.v)), hi = Math.max(...pts.map((p) => p.v));
+  // Every metric is non-negative; don't let the band push the axis below 0.
+  if (band) { band[0] = Math.max(0, band[0]); lo = Math.min(lo, band[0]); hi = Math.max(hi, band[1]); }
+  if (lo >= 0 && lo < (hi - lo) * 0.6) lo = 0;
+  const ticks = niceTicks(lo, hi);
+  const y0 = ticks[0], y1 = ticks[ticks.length - 1];
+  const iw = W - M.l - M.r, ih = H - M.t - M.b;
+  const n = runs.length;
+  const x = (i) => M.l + (n === 1 ? iw / 2 : (i / (n - 1)) * iw);
+  const y = (v) => M.t + ih - ((v - y0) / (y1 - y0 || 1)) * ih;
+
+  let s = `<svg class="plot" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(DATA.metrics[name].desc)} over the last ${n} runs">`;
+  s += `<g class="axis">`;
+  for (const t of ticks) s += `<line x1="${M.l}" x2="${W - M.r}" y1="${y(t)}" y2="${y(t)}" stroke="var(--grid)"/><text x="${M.l - 6}" y="${y(t) + 3.5}" text-anchor="end">${fmt(t)}</text>`;
+  const first = runs[0], last = runs[n - 1];
+  const day = (ts) => new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  s += `<text x="${M.l}" y="${H - 4}">${esc(day(first.timestamp))}</text>`;
+  if (n > 1) s += `<text x="${W - M.r}" y="${H - 4}" text-anchor="end">${esc(day(last.timestamp))}</text>`;
+  s += `</g>`;
+  if (band) {
+    const top = y(Math.min(band[1], y1)), bot = y(Math.max(band[0], y0));
+    s += `<rect x="${M.l}" width="${iw}" y="${top}" height="${Math.max(0, bot - top)}" fill="var(--band)"/>`;
+    s += `<line x1="${M.l}" x2="${W - M.r}" y1="${y(band[2])}" y2="${y(band[2])}" stroke="var(--series-1)" stroke-opacity="0.55" stroke-dasharray="4 3"/>`;
+  }
+  if (pts.length > 1) s += `<polyline points="${pts.map((p) => `${x(p.i)},${y(p.v)}`).join(" ")}" fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  const dense = pts.length > 60;
+  for (const p of pts) {
+    const worse = p.r.status[name] === "WORSE";
+    const rad = dense && !worse && !p.r.busy ? 0 : 4;
+    if (!rad) continue;
+    if (p.r.busy) s += `<circle cx="${x(p.i)}" cy="${y(p.v)}" r="3.5" fill="var(--surface-1)" stroke="${worse ? "var(--critical)" : "var(--series-1)"}" stroke-width="1.5"/>`;
+    else s += `<circle cx="${x(p.i)}" cy="${y(p.v)}" r="${rad}" fill="${worse ? "var(--critical)" : "var(--series-1)"}" stroke="var(--surface-1)" stroke-width="2"/>`;
+  }
+  s += `<line class="xh" x1="0" x2="0" y1="${M.t}" y2="${M.t + ih}" stroke="var(--text-muted)" stroke-width="1" visibility="hidden"/>`;
+  s += `<circle class="xh-dot" r="5" fill="none" stroke="var(--text-primary)" stroke-width="1.5" visibility="hidden"/>`;
+  s += `<rect class="hit" x="${M.l - 8}" y="0" width="${iw + 16}" height="${H}" fill="transparent"/>`;
+  s += `</svg>`;
+  return { svg: s, pts, x, y };
+}
+
+function renderCharts() {
+  const runs = visibleRuns();
+  const host = $("charts");
+  host.innerHTML = "";
+  for (const [title, names] of GROUPS) {
+    const present = names.filter((nm) => DATA.runs.some((r) => r.metrics[nm] != null));
+    if (!present.length) continue;
+    host.insertAdjacentHTML("beforeend", `<h3>${esc(title)}</h3><div class="grid"></div>`);
+    const grid = host.lastElementChild;
+    for (const name of present) {
+      const meta = DATA.metrics[name];
+      const card = document.createElement("div");
+      card.className = "card chart";
+      const row = DATA.latest.rows.find((r) => r.name === name);
+      card.innerHTML = `<header><div><div class="title">${esc(meta.desc)}</div><div class="sub">${esc(meta.unit)} · ${meta.better} is better</div></div>
+        <div class="value">${row ? fmt(row.now) + " " + esc(meta.unit) : ""}</div></header>`;
+      const c = runs.length ? chartSvg(name, runs) : null;
+      if (!c) { card.insertAdjacentHTML("beforeend", `<div class="empty">No data for these runs</div>`); grid.appendChild(card); continue; }
+      card.insertAdjacentHTML("beforeend", c.svg);
+      grid.appendChild(card);
+      attachHover(card.querySelector("svg"), c, name);
+    }
+  }
+}
+
+function attachHover(svg, c, name) {
+  const tip = $("tip"), xh = svg.querySelector(".xh"), dot = svg.querySelector(".xh-dot"), hit = svg.querySelector(".hit");
+  const meta = DATA.metrics[name];
+  const hide = () => { tip.style.display = "none"; xh.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); };
+  hit.addEventListener("mousemove", (e) => {
+    const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+    const lx = pt.matrixTransform(svg.getScreenCTM().inverse()).x;
+    let best = c.pts[0];
+    for (const p of c.pts) if (Math.abs(c.x(p.i) - lx) < Math.abs(c.x(best.i) - lx)) best = p;
+    const px = c.x(best.i), py = c.y(best.v);
+    xh.setAttribute("x1", px); xh.setAttribute("x2", px); xh.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", px); dot.setAttribute("cy", py); dot.setAttribute("visibility", "visible");
+    const r = best.r, st = r.status[name], g = r.git;
+    tip.innerHTML = `<div class="v">${fmt(best.v)} ${esc(meta.unit)}</div>
+      <div class="row">${chip(st)}${r.busy ? ` · busy (load ${r.load})` : ""}</div>
+      <div class="row"><code>${esc(g.sha.slice(0, 8))}</code>${g.dirty ? "+" : ""} ${esc(g.branch)}</div>
+      <div class="row">${esc(g.subject)}</div>
+      <div class="row">${esc(when(r.timestamp))} · ${esc(r.mode)}${r.label ? " · " + esc(r.label) : ""}</div>`;
+    tip.style.display = "block";
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let left = e.clientX + 14, top = e.clientY - th - 10;
+    if (left + tw > innerWidth - 8) left = e.clientX - tw - 14;
+    if (top < 8) top = e.clientY + 16;
+    tip.style.left = left + "px"; tip.style.top = top + "px";
+  });
+  hit.addEventListener("mouseleave", hide);
+}
+
+// ---- table of all runs ----
+function renderRunsTable() {
+  const names = Object.keys(DATA.metrics).filter((nm) => DATA.runs.some((r) => r.metrics[nm] != null));
+  $("runs-table").innerHTML = `<thead><tr><th>Run</th><th>When</th><th>Commit</th><th>Branch</th>${names.map((nm) => `<th class="num" title="${esc(DATA.metrics[nm].desc)}">${esc(nm)}</th>`).join("")}</tr></thead><tbody>` +
+    DATA.runs.slice().reverse().map((r) => `<tr>
+      <td class="mono">${esc(r.id)}${r.busy ? ' <span class="muted">busy</span>' : ""}</td>
+      <td>${esc(when(r.timestamp))}</td>
+      <td class="mono">${esc(r.git.sha.slice(0, 8))}${r.git.dirty ? "+" : ""}</td>
+      <td>${esc(r.git.branch)}</td>
+      ${names.map((nm) => { const v = r.metrics[nm], w = r.status[nm] === "WORSE"; return `<td class="num"${w ? ' style="color:var(--critical);font-weight:600" title="regression"' : ""}>${w ? "▼ " : ""}${fmt(v)}</td>`; }).join("")}
+    </tr>`).join("") + "</tbody>";
+}
+
+renderLatest();
+renderControls();
+renderCharts();
+renderRunsTable();
+$("footer").innerHTML = `Generated ${esc(when(DATA.generated))} by <code>scripts/perf.py report</code> from <code>${esc(DATA.history)}</code>. A regression is worse than the baseline median by more than both the metric's threshold and 3× the baseline's spread; busy-machine runs never count as baseline.`;
+</script>
+</body>
+</html>

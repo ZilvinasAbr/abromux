@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d2b28"/>
+      <stop offset="1" stop-color="#141312"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eb9372"/>
+      <stop offset="1" stop-color="#c25a37"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#d97757" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#d97757" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="scan" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="8" height="3" fill="#000" fill-opacity="0.12"/>
+    </pattern>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+    <clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+  </defs>
+
+  <g filter="url(#shadow)">
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  </g>
+  <g clip-path="url(#sq)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#halo)"/>
+    <!-- glyph glow -->
+    <g fill="#d97757" opacity="0.75" filter="url(#glow)">
+      <rect x="304" y="264" width="64" height="64" rx="12"/>
+      <rect x="376" y="264" width="64" height="64" rx="12"/>
+      <rect x="448" y="264" width="64" height="64" rx="12"/>
+      <rect x="232" y="336" width="64" height="64" rx="12"/>
+      <rect x="520" y="336" width="64" height="64" rx="12"/>
+      <rect x="232" y="408" width="64" height="64" rx="12"/>
+      <rect x="520" y="408" width="64" height="64" rx="12"/>
+      <rect x="232" y="480" width="64" height="64" rx="12"/>
+      <rect x="304" y="480" width="64" height="64" rx="12"/>
+      <rect x="376" y="480" width="64" height="64" rx="12"/>
+      <rect x="448" y="480" width="64" height="64" rx="12"/>
+      <rect x="520" y="480" width="64" height="64" rx="12"/>
+      <rect x="232" y="552" width="64" height="64" rx="12"/>
+      <rect x="520" y="552" width="64" height="64" rx="12"/>
+      <rect x="232" y="624" width="64" height="64" rx="12"/>
+      <rect x="520" y="624" width="64" height="64" rx="12"/>
+      <rect x="232" y="696" width="64" height="64" rx="12"/>
+      <rect x="520" y="696" width="64" height="64" rx="12"/>
+    </g>
+    <g fill="url(#ink)">
+      <rect x="304" y="264" width="64" height="64" rx="12"/>
+      <rect x="376" y="264" width="64" height="64" rx="12"/>
+      <rect x="448" y="264" width="64" height="64" rx="12"/>
+      <rect x="232" y="336" width="64" height="64" rx="12"/>
+      <rect x="520" y="336" width="64" height="64" rx="12"/>
+      <rect x="232" y="408" width="64" height="64" rx="12"/>
+      <rect x="520" y="408" width="64" height="64" rx="12"/>
+      <rect x="232" y="480" width="64" height="64" rx="12"/>
+      <rect x="304" y="480" width="64" height="64" rx="12"/>
+      <rect x="376" y="480" width="64" height="64" rx="12"/>
+      <rect x="448" y="480" width="64" height="64" rx="12"/>
+      <rect x="520" y="480" width="64" height="64" rx="12"/>
+      <rect x="232" y="552" width="64" height="64" rx="12"/>
+      <rect x="520" y="552" width="64" height="64" rx="12"/>
+      <rect x="232" y="624" width="64" height="64" rx="12"/>
+      <rect x="520" y="624" width="64" height="64" rx="12"/>
+      <rect x="232" y="696" width="64" height="64" rx="12"/>
+      <rect x="520" y="696" width="64" height="64" rx="12"/>
+    </g>
+    <!-- beam cursor -->
+    <rect x="656" y="720" width="136" height="40" rx="10" fill="#faf9f5"/>
+    <rect x="100" y="100" width="824" height="824" fill="url(#scan)"/>
+  </g>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" fill="none" stroke="url(#rim)" stroke-width="3"/>
+</svg>
