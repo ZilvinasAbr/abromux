@@ -88,6 +88,7 @@ So the list below reads in context:
 
 ## 5. Browser
 
+- [ ] **Find in page**: ⌘F in browser panes, with the same bar and keys as find in terminal (⌘G / ⇧⌘G, ⌘E, Esc). WKWebView has no search our gpui bar can drive, so this means injecting a find script that highlights matches and reports a count, as cmux does (`BrowserFindScript`). The bar has to sit above the page, which runs into the native webview layering issue below.
 - [ ] **Browser shortcuts**: ⌘[ / ⌘] for back and forward, ⌘R to reload, ⌥⌘I for devtools, ⌥⌘C for the JS console.
 - [ ] **Shortcuts while a webview has focus**: keystrokes currently go to the webview, so ⌘ shortcuts can miss the app. This is a known POC limit.
 - [ ] **Popovers over webviews**: native webviews draw on top of everything, so UI can't overlap a visible browser.
