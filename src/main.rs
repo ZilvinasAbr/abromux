@@ -7,6 +7,7 @@ mod debug;
 mod ghostty;
 mod icon;
 mod ipc;
+mod quit;
 mod server;
 mod session;
 mod sprite;
@@ -1094,7 +1095,7 @@ impl Render for AbroMux {
             .flex()
             .text_color(rgb(TEXT))
             .font_family(".AppleSystemUIFont")
-            .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
+            .on_action(cx.listener(|_, _: &Quit, window, cx| quit::request(window, cx)))
             .on_action(cx.listener(|this, _: &NewWorkspace, window, cx| {
                 let cwd = this.focused_cwd(cx);
                 this.new_workspace(cwd, window, cx)
@@ -1296,7 +1297,10 @@ fn run_app(cwd: Option<String>) {
         theme.mono_font_family = terminal::FONT_FAMILY.into();
 
         cx.set_global(config::Config::load());
-        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &Quit, cx| match cx.active_window().or_else(|| cx.windows().first().copied()) {
+            Some(w) => w.update(cx, |_, window, cx| quit::request(window, cx)).unwrap_or_else(|_| cx.quit()),
+            None => cx.quit(),
+        });
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("cmd-n", NewWorkspace, None),
