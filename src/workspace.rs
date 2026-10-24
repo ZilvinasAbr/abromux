@@ -33,7 +33,13 @@ impl Surface {
             }
             Surface::Browser(b) => {
                 let b = b.read(cx);
-                if !b.title.is_empty() { b.title.clone() } else { b.url.clone() }
+                if !b.title.is_empty() {
+                    b.title.clone()
+                } else if !b.url.is_empty() {
+                    b.url.clone()
+                } else {
+                    "New Tab".into()
+                }
             }
         }
     }

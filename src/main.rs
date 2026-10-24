@@ -76,7 +76,8 @@ actions!(
     ]
 );
 
-const DEFAULT_URL: &str = "https://github.com/ZilvinasAbr/abromux";
+/// New browsers open blank, with the address bar focused.
+const DEFAULT_URL: &str = "";
 /// How long a lone ⌘ or ⌃ must be held before shortcut hints show (cmux's value).
 const HINT_DELAY: Duration = Duration::from_millis(300);
 /// Sidebar width: default and the range its edge can be dragged within.

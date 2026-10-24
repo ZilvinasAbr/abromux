@@ -42,8 +42,14 @@ impl BrowserView {
     pub fn new(url: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (tx, mut rx) = mpsc::unbounded::<WebMsg>();
         let (tx_title, tx_url) = (tx.clone(), tx);
-        let raw = wry::WebViewBuilder::new()
-            .with_url(url)
+        let builder = wry::WebViewBuilder::new();
+        // A blank page gets the pane's background rather than white.
+        let builder = if url.is_empty() {
+            builder.with_html(format!("<html style=\"background:#{PANE_BG:06x}\"></html>"))
+        } else {
+            builder.with_url(url)
+        };
+        let raw = builder
             .with_devtools(true)
             .with_document_title_changed_handler(move |t| {
                 let _ = tx_title.unbounded_send(WebMsg::Title(t));
@@ -75,6 +81,7 @@ impl BrowserView {
                     match msg {
                         WebMsg::Title(t) => this.title = t,
                         WebMsg::Url(u) => {
+                            let u = if u.starts_with("about:blank") { String::new() } else { u };
                             this.url = u.clone();
                             this.address.update(cx, |a, cx| a.set_value(u, window, cx));
                         }
