@@ -1,4 +1,5 @@
 mod agent;
+mod banner;
 mod bench;
 mod browser;
 mod cli;
@@ -8,6 +9,7 @@ mod ghostty;
 mod icon;
 mod ipc;
 mod link;
+mod notification;
 mod osc99;
 mod quit;
 mod server;
@@ -75,7 +77,9 @@ actions!(
         FocusRight,
         FocusUp,
         FocusDown,
-        FlashPane
+        FlashPane,
+        ToggleNotifications,
+        JumpToUnread
     ]
 );
 
@@ -150,6 +154,13 @@ struct AbroMux {
     focus: FocusHandle,
     /// Frame timings for `debug.frames`.
     frames: Rc<RefCell<debug::FrameLog>>,
+    /// Oldest first (notification.rs).
+    notifications: Vec<notification::Notification>,
+    next_notification: usize,
+    /// The ⌘I list is showing.
+    notifications_open: bool,
+    /// Unread count last put on the dock icon.
+    badge: usize,
 }
 
 impl AbroMux {
@@ -176,10 +187,25 @@ impl AbroMux {
             flash: None,
             focus: cx.focus_handle(),
             frames: Default::default(),
+            notifications: vec![],
+            next_notification: 0,
+            notifications_open: false,
+            badge: 0,
         };
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
                 this.set_hints(None, cx);
+            }
+            // Coming back marks what you're looking at as read.
+            cx.notify();
+        })
+        .detach();
+        let mut banner_clicks = banner::init();
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(id) = banner_clicks.next().await {
+                if this.update_in(cx, |this, window, cx| this.open_notification(id, window, cx)).is_err() {
+                    break;
+                }
             }
         })
         .detach();
@@ -254,7 +280,6 @@ impl AbroMux {
         self.new_workspace(Some(format!("{parent}/gpui-experiments")), window, cx);
         send(self.ws().focused_surface(), "printf '\\a'\r", cx);
         self.select_workspace(0, window, cx);
-        self.workspaces[2].unread = true;
     }
 
     /// Keep the session file current: layout every few seconds, everything
@@ -325,14 +350,11 @@ impl AbroMux {
                 TerminalEvent::Exited => this.close_surface(id, window, cx),
                 TerminalEvent::Focused => this.focus_surface(id, cx),
                 TerminalEvent::OpenLink(target) => this.open_link(id, target.clone(), window, cx),
-                // TODO: notification model, pane ring, panel, banners.
-                TerminalEvent::Bell | TerminalEvent::Notification { .. } => {
-                    if let Some(i) = this.workspaces.iter().position(|w| w.contains(id))
-                        && i != this.active
-                    {
-                        this.workspaces[i].unread = true;
-                    }
-                    cx.notify();
+                TerminalEvent::Bell => {
+                    this.add_notification(id, String::new(), String::new(), true, window, cx);
+                }
+                TerminalEvent::Notification { title, body } => {
+                    this.add_notification(id, title.clone(), body.clone(), false, window, cx);
                 }
                 TerminalEvent::TitleChanged => cx.notify(),
             }
@@ -401,6 +423,7 @@ impl AbroMux {
 
     fn close_surface(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(wi) = self.workspaces.iter().position(|w| w.contains(id)) else { return };
+        self.forget_notifications(id);
         let ws = &mut self.workspaces[wi];
         self.surface_refs.remove(&id);
         let pane_id = ws.root.panes().iter().find(|p| p.tabs.iter().any(|s| s.entity_id() == id)).map(|p| p.id).unwrap();
@@ -442,7 +465,7 @@ impl AbroMux {
         let id = self.next_ws;
         let surface = self.make_terminal(cwd, id, window, cx);
         let pane = Pane { id: self.pane_id(), tabs: vec![surface], active: 0 };
-        let ws = Workspace { id, custom_name: None, focused_pane: pane.id, root: Node::Leaf(pane), unread: false };
+        let ws = Workspace { id, custom_name: None, focused_pane: pane.id, root: Node::Leaf(pane) };
         self.workspaces.push(ws);
         let index = self.workspaces.len() - 1;
         if select {
@@ -461,6 +484,7 @@ impl AbroMux {
         for p in ws.root.panes() {
             for s in &p.tabs {
                 self.surface_refs.remove(&s.entity_id());
+                self.notifications.retain(|n| n.surface != s.entity_id());
                 if let Surface::Browser(b) = s {
                     b.update(cx, |b, cx| b.set_shown(false, cx));
                 }
@@ -480,7 +504,6 @@ impl AbroMux {
     fn select_workspace(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index < self.workspaces.len() {
             self.active = index;
-            self.workspaces[index].unread = false;
             self.focus_active(window, cx);
             cx.notify();
         }
@@ -679,7 +702,7 @@ impl AbroMux {
             for p in ws.root.panes() {
                 for (ti, s) in p.tabs.iter().enumerate() {
                     if let Surface::Browser(b) = s {
-                        let shown = wi == self.active && ti == p.active && self.renaming.is_none();
+                        let shown = wi == self.active && ti == p.active && self.renaming.is_none() && !self.notifications_open;
                         b.update(cx, |b, cx| b.set_shown(shown, cx));
                     }
                 }
@@ -723,6 +746,7 @@ impl AbroMux {
                 let is_renaming = renaming.is_some();
                 let group: SharedString = format!("ws-{}", ws.id).into();
                 let hint = shortcut_digit(i, self.workspaces.len()).filter(|_| self.hints == Some(Hints::Command));
+                let latest = self.latest_unread(ws).map(|n| n.text());
 
                 div()
                     .id(("ws", ws.id))
@@ -750,7 +774,7 @@ impl AbroMux {
                             .flex()
                             .items_center()
                             .gap(px(6.))
-                            .when(ws.unread, |s| s.child(div().size(px(7.)).flex_none().rounded_full().bg(rgb(ACCENT_BRIGHT))))
+                            .when(latest.is_some(), |s| s.child(div().size(px(7.)).flex_none().rounded_full().bg(rgb(ACCENT_BRIGHT))))
                             .child(match renaming {
                                 // Edit in place: same font and line as the title, in a
                                 // dark inset so it reads as a field on the accent row.
@@ -805,6 +829,18 @@ impl AbroMux {
                     )
                     .when(!subtitle.is_empty() && subtitle != name && Some(&subtitle) != cwd.as_ref().map(|c| tilde(c)).as_ref(), |s| {
                         s.child(div().mt(px(2.)).text_size(px(11.)).text_color(sub).line_clamp(2).child(subtitle))
+                    })
+                    .when_some(latest, |s, text| {
+                        s.child(
+                            div()
+                                .mt(px(2.))
+                                .flex()
+                                .gap(px(4.))
+                                .text_size(px(11.))
+                                .text_color(if active { rgb(0xffffff) } else { rgb(ACCENT_BRIGHT) })
+                                .child(icon("bell").mt(px(1.)).size(px(10.)).text_color(if active { rgb(0xffffff) } else { rgb(ACCENT_BRIGHT) }))
+                                .child(div().flex_1().min_w_0().line_clamp(2).child(text)),
+                        )
                     })
                     .when_some(hint, |s, d| s.child(hint_pill(format!("⌘{d}")).absolute().top(px(6.)).right(px(8.))))
                     .when(!meta.is_empty(), |s| {
@@ -887,7 +923,8 @@ impl AbroMux {
     /// Sidebar toggle and new-workspace buttons, shown in the sidebar's
     /// titlebar row or next to the traffic lights when it's hidden. Holding
     /// ⌘ swaps them for their shortcuts.
-    fn titlebar_buttons(&self, cx: &mut Context<Self>) -> [AnyElement; 2] {
+    fn titlebar_buttons(&self, cx: &mut Context<Self>) -> [AnyElement; 3] {
+        let unread = self.notifications.iter().filter(|n| !n.read).count();
         let hints = self.hints == Some(Hints::Command);
         let button = |id: &'static str, name: &str, keys: &str| {
             if hints {
@@ -903,6 +940,34 @@ impl AbroMux {
                     this.sidebar = !this.sidebar;
                     cx.notify();
                 }))
+                .into_any_element(),
+            button("notifications-button", "bell", "⌘I")
+                .relative()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.notifications_open = !this.notifications_open;
+                    cx.notify();
+                }))
+                .when(unread > 0 && !hints, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .top(px(-2.))
+                            .right(px(-3.))
+                            .min_w(px(13.))
+                            .h(px(13.))
+                            .px(px(3.))
+                            .rounded_full()
+                            .bg(rgb(ACCENT_BRIGHT))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(8.5))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(0xffffff))
+                            .child(if unread > 99 { "99+".to_string() } else { unread.to_string() }),
+                    )
+                })
                 .into_any_element(),
             button("new-ws", "plus", "⌘N")
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -974,6 +1039,7 @@ impl AbroMux {
             let active = ti == pane.active;
             let hint = shortcut_digit(ti, tab_count).filter(|_| tab_hints);
             let sid = s.entity_id();
+            let unread = self.surface_unread(sid);
             let group: SharedString = format!("tab-{sid}").into();
             div()
                 .id(("tab", sid))
@@ -1008,7 +1074,8 @@ impl AbroMux {
                     MouseButton::Middle,
                     cx.listener(move |this, _, window, cx| this.close_surface(sid, window, cx)),
                 )
-                .child(icon(s.icon()).size(px(12.)).text_color(if active { rgb(TEXT) } else { rgb(MUTED) }))
+                .when(unread, |d| d.text_color(rgb(TEXT)).child(div().size(px(6.)).flex_none().rounded_full().bg(rgb(ACCENT_BRIGHT))))
+                .child(icon(s.icon()).size(px(12.)).text_color(if active || unread { rgb(TEXT) } else { rgb(MUTED) }))
                 .child(div().flex_1().min_w_0().truncate().child(s.title(cx)))
                 .when_some(hint, |d, n| d.child(hint_pill(format!("⌃{n}"))))
                 .when(hint.is_none(), |d| d.child(
@@ -1078,6 +1145,8 @@ impl AbroMux {
             None => div().into_any_element(),
         };
 
+        // A ring around panes with unread notifications, like cmux.
+        let ring = pane.tabs.iter().any(|s| self.surface_unread(s.entity_id()));
         div()
             .id(("pane", pane_id))
             .size_full()
@@ -1107,6 +1176,7 @@ impl AbroMux {
                         )
                     }),
             )
+            .when(ring, |d| d.child(div().absolute().inset_0().border_2().border_color(rgb(ACCENT_BRIGHT))))
             .into_any_element()
     }
 }
@@ -1114,7 +1184,9 @@ impl AbroMux {
 impl Render for AbroMux {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window_bounds = Some(window.window_bounds().get_bounds());
+        self.mark_viewed(window);
         self.sync_webviews(cx);
+        let notifications = self.notifications_open.then(|| self.render_notifications(cx));
         let ws = self.ws();
         let multi = ws.root.panes().len() > 1;
         let main = self.render_node(&self.ws().root, multi, cx);
@@ -1201,6 +1273,22 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &FocusUp, w, cx| this.focus_dir(Dir::Up, w, cx)))
             .on_action(cx.listener(|this, _: &FocusDown, w, cx| this.focus_dir(Dir::Down, w, cx)))
             .on_action(cx.listener(|this, _: &FlashPane, _, cx| this.flash_pane(cx)))
+            .on_action(cx.listener(|this, _: &ToggleNotifications, _, cx| {
+                this.notifications_open = !this.notifications_open;
+                cx.notify()
+            }))
+            .on_action(cx.listener(|this, _: &JumpToUnread, window, cx| {
+                this.jump_to_unread(window, cx);
+            }))
+            .when(self.notifications_open, |d| {
+                d.capture_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
+                    if ev.keystroke.key == "escape" {
+                        this.notifications_open = false;
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                }))
+            })
             .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, w, cx| this.modifiers_changed(&ev.modifiers, w, cx)))
             // Pressing a key while holding ⌘/⌃ means a shortcut, not a look at the hints.
             .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| this.set_hints(None, cx)))
@@ -1274,6 +1362,8 @@ impl Render for AbroMux {
                     })
                     .child(div().flex_1().min_h_0().child(main)),
             )
+            .relative()
+            .children(notifications)
     }
 }
 
@@ -1378,6 +1468,8 @@ fn run_app(cwd: Option<String>) {
             KeyBinding::new("alt-cmd-up", FocusUp, None),
             KeyBinding::new("alt-cmd-down", FocusDown, None),
             KeyBinding::new("cmd-shift-h", FlashPane, None),
+            KeyBinding::new("cmd-i", ToggleNotifications, None),
+            KeyBinding::new("cmd-shift-u", JumpToUnread, None),
             // Keybindings run before key listeners; let these reach the PTY.
             KeyBinding::new("tab", NoAction, Some("Terminal")),
             KeyBinding::new("shift-tab", NoAction, Some("Terminal")),

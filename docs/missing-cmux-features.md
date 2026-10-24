@@ -30,7 +30,7 @@ So the list below reads in context:
 - [ ] **Scrollbar**, plus a scroll-speed setting.
 - [ ] **Copy options**: copy-on-select, a copy confirmation, reflowing hard wraps on copy.
 - [ ] **Safe paste**: confirm before pasting multi-line or otherwise unsafe text.
-- [ ] **Clickable links**: URLs and file paths, opening in a browser pane.
+- [x] **Clickable links**: URLs and file paths, opening in a browser pane. *(partial: ⌘-click; a URL wrapped onto the next row isn't found, and `path:line` opens the file without going to the line)*
 - [ ] **Password input indicator**: shows when the terminal is in no-echo mode.
 - [ ] **Text-editing gestures**: ⌥←/→ word movement and ⌘←/→ line movement in the shell prompt.
 - [ ] **Max content width and alignment**, for wide displays.
@@ -65,7 +65,7 @@ So the list below reads in context:
 - [ ] **More sidebar metadata**:
   - [ ] linked PR status and number
   - [ ] listening ports
-  - [ ] the latest notification's text
+  - [x] the latest notification's text
   - [ ] status pills set by scripts (`set-status`, `clear-status`, `list-status`)
   - [ ] a progress bar (`set-progress`, `clear-progress`)
   - [ ] a per-workspace log (`log`, `list-log`, `clear-log`)
@@ -78,12 +78,12 @@ So the list below reads in context:
 
 ## 4. Notifications and attention
 
-- [ ] **OSC 9 / 99 / 777 desktop notifications** from terminal programs. abromux only handles BEL.
-- [ ] **Unread ring on the pane** and lit-up tabs. abromux only shows a sidebar dot.
-- [ ] **Notifications panel**: ⌘I lists pending notifications.
-- [ ] **Jump to the latest unread**: ⌘⇧U. Also ⌥⌘U to toggle unread, and ⌃⌘U to mark one as oldest and move to the next.
-- [ ] **Native macOS notifications**: banners, dock badge, menu-bar item, sounds, and suppression while the app is focused.
-- [ ] **CLI**: `notify`, `list-notifications`, `dismiss-notification`, `mark-notification-read`, `open-notification`, `jump-to-unread`, `clear-notifications`.
+- [x] **OSC 9 / 99 / 777 desktop notifications** from terminal programs.
+- [x] **Unread ring on the pane** and lit-up tabs.
+- [x] **Notifications panel**: ⌘I lists pending notifications.
+- [x] **Jump to the latest unread**: ⌘⇧U. Also ⌥⌘U to toggle unread, and ⌃⌘U to mark one as oldest and move to the next. *(partial: no ⌥⌘U or ⌃⌘U)*
+- [x] **Native macOS notifications**: banners, dock badge, menu-bar item, sounds, and suppression while the app is focused. *(partial: no menu-bar item; banners only from AbroMux.app)*
+- [x] **CLI**: `notify`, `list-notifications`, `dismiss-notification`, `mark-notification-read`, `open-notification`, `jump-to-unread`, `clear-notifications`. *(partial: no `dismiss-notification` or `mark-notification-read`)*
 - [ ] **Notification hooks**: run a command when a notification fires.
 
 ## 5. Browser

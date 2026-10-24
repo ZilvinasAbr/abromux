@@ -40,6 +40,11 @@ Commands:
   read-screen [--surface <ref>] [--workspace <ref>] [--scrollback] [--lines <n>]
   capture-pane                                               (alias for read-screen)
   clear-history [--surface <ref>] [--workspace <ref>]        (clear screen and scrollback, like ⌘K)
+  notify [--title <text>] [--subtitle <text>] [--body <text>] [--surface <ref>]   (rings that terminal's pane)
+  list-notifications
+  open-notification <id>                                     (select its terminal and mark it read)
+  jump-to-unread                                             (the newest unread notification, like ⌘⇧U)
+  clear-notifications
   open <path-or-url>...                                      (directories open workspaces, URLs open browser splits)
   focus-window [--window <ref>]                              (bring abromux to the front; there is one window)
   sidebar <toggle|show|hide>
@@ -184,6 +189,22 @@ fn dispatch(cmd: &str, mut pos: Vec<String>, mut opts: Map<String, Value>, as_js
             ("surface.read_text", |v| s(v))
         }
         "clear-history" => ("surface.clear_history", |_| "OK".into()),
+        "notify" => {
+            if !opts.contains_key("body") && !pos.is_empty() {
+                opts.insert("body".into(), json!(pos.join(" ")));
+            }
+            ("notification.create", |v| match v["id"].as_u64() {
+                Some(id) => format!("OK notification:{id} {}", s(&v["surface"])),
+                None => "OK (you were looking at it)".into(),
+            })
+        }
+        "list-notifications" => ("notification.list", |v| lines(v, notification_line)),
+        "open-notification" => {
+            first("id", &mut opts)?;
+            ("notification.open", |v| format!("OK notification:{}", v["id"]))
+        }
+        "jump-to-unread" => ("notification.jump_unread", |v| if v["jumped"] == true { "OK".into() } else { "OK no unread notifications".into() }),
+        "clear-notifications" => ("notification.clear", |_| "OK".into()),
         "sidebar" => {
             opts.insert("state".into(), json!(pos.first().map(String::as_str).unwrap_or("toggle")));
             ("app.sidebar", |v| format!("OK visible={}", v["visible"]))
@@ -373,6 +394,16 @@ fn workspace_line(w: &Value) -> String {
         line += "  [unread]";
     }
     line
+}
+
+fn notification_line(n: &Value) -> String {
+    let text = match (s(&n["title"]), s(&n["body"])) {
+        (t, b) if t.is_empty() => b,
+        (t, b) if b.is_empty() => t,
+        (t, b) => format!("{t}: {b}"),
+    };
+    let unread = if n["read"] == true { " " } else { "•" };
+    format!("{unread} notification:{}  {} {}  {}s ago  {text}", n["id"], s(&n["workspace"]), s(&n["surface"]), n["age_seconds"])
 }
 
 fn pane_line(p: &Value) -> String {

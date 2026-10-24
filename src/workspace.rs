@@ -203,7 +203,6 @@ pub struct Workspace {
     pub custom_name: Option<String>,
     pub root: Node,
     pub focused_pane: usize,
-    pub unread: bool,
 }
 
 impl Workspace {

@@ -387,6 +387,57 @@ impl AbroMux {
                 return Ok(Reply::Later(rx));
             }
 
+            "notification.create" => {
+                let (_, _, s) = self.surface_target(p)?;
+                let mut title = str_param(p, "title").unwrap_or_default().to_string();
+                if let Some(sub) = str_param(p, "subtitle") {
+                    title = if title.is_empty() { sub.into() } else { format!("{title} — {sub}") };
+                }
+                let body = str_param(p, "body").unwrap_or_default().to_string();
+                if title.is_empty() && body.is_empty() {
+                    bail!("notify needs --title or --body");
+                }
+                let id = self.add_notification(s.entity_id(), title, body, false, window, cx);
+                json!({ "id": id, "surface": self.sref(&s) })
+            }
+            "notification.list" => {
+                let now = std::time::SystemTime::now();
+                json!(self
+                    .notifications
+                    .iter()
+                    .rev()
+                    .map(|n| {
+                        let ws = self.workspaces.iter().position(|w| w.contains(n.surface));
+                        json!({
+                            "id": n.id,
+                            "title": n.title,
+                            "body": n.body,
+                            "read": n.read,
+                            "surface": format!("surface:{}", self.surface_refs.get(&n.surface).copied().unwrap_or(0)),
+                            "workspace": ws.map(|wi| self.ws_ref(wi)),
+                            "age_seconds": now.duration_since(n.at).unwrap_or_default().as_secs(),
+                        })
+                    })
+                    .collect::<Vec<_>>())
+            }
+            "notification.open" => {
+                let id = match p.get("id") {
+                    Some(Value::String(s)) => s.trim_start_matches("notification:").parse().ok(),
+                    Some(v) => v.as_u64().map(|n| n as usize),
+                    None => None,
+                }
+                .context("missing notification id")?;
+                if !self.open_notification(id, window, cx) {
+                    bail!("no notification {id}");
+                }
+                json!({ "id": id })
+            }
+            "notification.jump_unread" => json!({ "jumped": self.jump_to_unread(window, cx) }),
+            "notification.clear" => {
+                self.clear_notifications(cx);
+                json!(null)
+            }
+
             "app.sidebar" => {
                 self.sidebar = match str_param(p, "state").unwrap_or("toggle") {
                     "show" => true,
@@ -621,7 +672,7 @@ impl AbroMux {
             "index": wi,
             "name": ws.name(cx),
             "selected": wi == self.active,
-            "unread": ws.unread,
+            "unread": self.ws_unread(ws),
             "cwd": cwd,
             "branch": cwd.as_deref().and_then(git_branch),
             "pane_count": ws.root.panes().len(),

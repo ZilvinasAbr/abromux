@@ -173,7 +173,7 @@ impl AbroMux {
             let Some(root) = self.build_node(state.root, id, window, cx) else { continue };
             let panes: Vec<usize> = root.panes().iter().map(|p| p.id).collect();
             let focused_pane = panes.get(state.focused).or(panes.first()).copied().unwrap_or(0);
-            self.workspaces.push(Workspace { id, custom_name: state.name, root, focused_pane, unread: false });
+            self.workspaces.push(Workspace { id, custom_name: state.name, root, focused_pane });
         }
         if self.workspaces.is_empty() {
             return false;

@@ -4,7 +4,9 @@ A proof-of-concept of [cmux](https://cmux.com) built with Rust and [GPUI](https:
 
 - **Terminal panes** use [libghostty-vt](https://github.com/ghostty-org/ghostty) for all terminal state: VT parsing, screen and scrollback, colors, selection and key encoding. It is linked statically through a bindgen FFI layer. A shell runs in a PTY (`portable-pty`) and GPUI draws each cell. Text goes through the macOS input system, so IMEs and dead keys compose as usual. Mouse clicks, drags and the wheel go to TUI apps that ask for them (vim, htop, lazygit); hold Shift to select or scroll locally. Full-screen apps without mouse support get arrow keys from the wheel, like Ghostty's alternate scroll.
 - **Browser panes** are native WKWebViews (wry, via `gpui-component`). Each has an address bar with back, forward and reload.
-- **Workspaces** sit in a left sidebar, cmux style. Each entry shows the name, the focused tab's title, the git branch and the cwd. A blue dot means a bell rang in that workspace while you were elsewhere.
+- **Workspaces** sit in a left sidebar, cmux style. Each entry shows the name, the focused tab's title, the git branch and the cwd.
+- **Notifications** come from terminal programs (OSC 9, OSC 99 and OSC 777, as Claude Code, Codex and others send them), from the bell, and from `abromux notify`. One you aren't looking at rings its pane, puts a dot on its tab and on its workspace, shows its text under the workspace in the sidebar, counts on the dock icon, and, while AbroMux is in the background, shows a macOS banner that takes you to it when clicked (banners need AbroMux.app; a `cargo run` build has the rest). It's read once you look at that terminal. ⌘I lists them all; ⌘⇧U jumps to the newest unread one.
+- **Links** in terminal output underline while you hold ⌘ over them: URLs, OSC 8 hyperlinks, and paths to files that exist (relative ones from the shell's directory, `path:line` too). ⌘-click opens web links in a browser to the right of the terminal (a new tab there if that pane already shows one) and anything else with its default app.
 - **Panes** split right or down, and each pane has a tab bar of terminal and browser tabs. Drag a divider to resize.
 
 ## Requirements
@@ -53,6 +55,9 @@ abromux send-key --surface surface:3 ctrl-c
 abromux read-screen --surface surface:3 --scrollback --lines 50
 abromux browser open https://example.com
 abromux browser eval 'document.title'
+abromux notify --title 'Tests' --body 'all green'   # rings the pane it runs in
+abromux list-notifications
+abromux jump-to-unread
 abromux --json list-panes
 ```
 
@@ -74,6 +79,9 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Select tab in focused pane | click | ⌃1…⌃8, ⌃9 for the last (hold ⌃ to see the numbers) |
 | Focus pane in a direction | click | ⌥⌘← → ↑ ↓ |
 | Flash focused pane | | ⌘⇧H |
+| Notifications list | bell icon in the titlebar | ⌘I (Esc closes) |
+| Jump to newest unread notification | click it in the list | ⌘⇧U |
+| Open a link in a terminal | ⌘-click | |
 | Toggle sidebar | sidebar icon | ⌘B |
 | Copy / paste in terminal | drag to select, double-click selects a word | ⌘C / ⌘V |
 | Font size (per terminal) | | ⌘+ / ⌘- / ⌘0 |

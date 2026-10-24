@@ -32,7 +32,17 @@ impl Scanner {
     /// Feed PTY output; returns the notifications it completes, as (title, body).
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<(String, String)> {
         let mut done = vec![];
-        for &b in bytes {
+        let mut i = 0;
+        while i < bytes.len() {
+            // Most output is outside any escape: skip to the next ESC.
+            if matches!(self.state, State::Ground) {
+                match bytes[i..].iter().position(|&b| b == 0x1b) {
+                    Some(n) => i += n,
+                    None => break,
+                }
+            }
+            let b = bytes[i];
+            i += 1;
             self.state = match (std::mem::take(&mut self.state), b) {
                 (State::Ground, 0x1b) => State::Esc,
                 (State::Ground, _) => State::Ground,

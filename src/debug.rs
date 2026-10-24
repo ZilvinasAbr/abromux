@@ -39,7 +39,7 @@ pub type OnMouse<V> = fn(&mut V, PlatformInput, &mut Window, &mut Context<V>);
 
 /// Drive the app for testing. `ABROMUX_SCRIPT` is `;`-separated steps:
 /// `wait:MS`, `key:cmd-n` (gpui keystroke syntax), `type:TEXT`, `snap:PATH`, `quit`,
-/// `mouse:down|up|move,X,Y[,left|right|middle][,shift]` and `scroll:X,Y,DY`
+/// `mouse:down|up|move,X,Y[,left|right|middle][,shift][,cmd]` and `scroll:X,Y,DY`
 /// (window pixels; positive DY scrolls up), and `mods:cmd|ctrl|none` for a
 /// modifier-only change.
 pub fn run_script<V: 'static>(script: String, on_mouse: OnMouse<V>, window: &mut Window, cx: &mut Context<V>) {
@@ -173,7 +173,7 @@ fn mouse_event(cmd: &str, arg: &str) -> Option<PlatformInput> {
     use gpui::{Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollDelta, ScrollWheelEvent, point, px};
     let parts: Vec<&str> = arg.split(',').map(str::trim).collect();
     let num = |i: usize| parts.get(i).and_then(|v| v.parse::<f32>().ok());
-    let modifiers = Modifiers { shift: parts.contains(&"shift"), ..Default::default() };
+    let modifiers = Modifiers { shift: parts.contains(&"shift"), platform: parts.contains(&"cmd"), ..Default::default() };
     if cmd == "mods" {
         let modifiers = Modifiers { platform: parts.contains(&"cmd"), control: parts.contains(&"ctrl"), ..Default::default() };
         return Some(PlatformInput::ModifiersChanged(gpui::ModifiersChangedEvent { modifiers, ..Default::default() }));
