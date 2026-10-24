@@ -653,8 +653,10 @@ impl Element for TerminalElement {
                     }
                 }
 
-                // Text: one shaped line per chunk; wide glyphs get their own
-                // chunk so the grid never drifts.
+                // Text: one shaped line per chunk, each glyph forced onto the
+                // cell grid (fallback fonts have other advances, e.g. ⎿ or ⏺).
+                // Forcing goes by glyph index, so wide cells and multi-codepoint
+                // cells get their own chunk.
                 let mut text = String::new();
                 let mut runs: Vec<TextRun> = Vec::new();
                 let mut chunk_col = 0usize;
@@ -664,7 +666,7 @@ impl Element for TerminalElement {
                         runs.clear();
                         return;
                     }
-                    let line = window.text_system().shape_line(SharedString::from(std::mem::take(text)), font_size, runs, None);
+                    let line = window.text_system().shape_line(SharedString::from(std::mem::take(text)), font_size, runs, Some(cell.width));
                     runs.clear();
                     let _ = line.paint(point(origin.x + cell.width * col as f32, row_y), cell.height, window, cx);
                 };
@@ -672,7 +674,8 @@ impl Element for TerminalElement {
                     if c.spacer {
                         continue;
                     }
-                    if c.wide {
+                    let alone = c.wide || c.text.chars().nth(1).is_some();
+                    if alone {
                         flush(&mut text, &mut runs, chunk_col, window, cx);
                         chunk_col = x;
                     }
@@ -702,9 +705,9 @@ impl Element for TerminalElement {
                         _ => runs.push(run),
                     }
                     text.push_str(glyph);
-                    if c.wide {
+                    if alone {
                         flush(&mut text, &mut runs, chunk_col, window, cx);
-                        chunk_col = x + 2;
+                        chunk_col = x + if c.wide { 2 } else { 1 };
                     }
                 }
                 flush(&mut text, &mut runs, chunk_col, window, cx);
