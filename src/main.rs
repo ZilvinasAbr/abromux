@@ -78,6 +78,12 @@ actions!(
 const DEFAULT_URL: &str = "https://github.com/ZilvinasAbr/abromux";
 /// How long a lone ⌘ or ⌃ must be held before shortcut hints show (cmux's value).
 const HINT_DELAY: Duration = Duration::from_millis(300);
+/// Sidebar width: default and the range its edge can be dragged within.
+const SIDEBAR_WIDTH: f32 = 232.;
+const SIDEBAR_MIN: f32 = 180.;
+const SIDEBAR_MAX: f32 = 480.;
+/// Height of the titlebar row the traffic lights sit in.
+const TITLEBAR_H: f32 = 38.;
 
 /// Which shortcut hints are showing: ⌘ numbers workspaces, ⌃ numbers the
 /// focused pane's tabs.
@@ -126,6 +132,8 @@ struct AbroMux {
     window_bounds: Option<Bounds<Pixels>>,
     renaming: Option<(usize, Entity<InputState>)>,
     sidebar: bool,
+    sidebar_width: f32,
+    resizing_sidebar: bool,
     split_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     dragging: Option<(usize, Axis)>,
     branches: RefCell<HashMap<String, (Instant, Option<String>)>>,
@@ -153,6 +161,8 @@ impl AbroMux {
             window_bounds: None,
             renaming: None,
             sidebar: true,
+            sidebar_width: SIDEBAR_WIDTH,
+            resizing_sidebar: false,
             split_bounds: Default::default(),
             dragging: None,
             branches: Default::default(),
@@ -762,29 +772,26 @@ impl AbroMux {
             .collect();
 
         div()
-            .w(px(232.))
+            .w(px(self.sidebar_width))
             .h_full()
             .flex_none()
             .flex()
             .flex_col()
+            .relative()
             .bg(rgba(SIDEBAR_BG))
             .border_r_1()
             .border_color(rgb(BORDER))
             .child(
                 // Titlebar row: traffic lights live on the left.
                 div()
-                    .h(px(38.))
+                    .h(px(TITLEBAR_H))
                     .flex_none()
                     .flex()
                     .items_center()
                     .justify_end()
                     .gap_1()
                     .pr(px(10.))
-                    .child(icon_button("toggle-sidebar", "panel-left").on_click(cx.listener(|this, _, _, cx| {
-                        this.sidebar = false;
-                        cx.notify();
-                    })))
-                    .child(icon_button("new-ws", "plus").on_click(cx.listener(|this, _, window, cx| this.new_workspace(None, window, cx)))),
+                    .children(self.titlebar_buttons(cx)),
             )
             .child(
                 div()
@@ -799,27 +806,56 @@ impl AbroMux {
                     .children(rows),
             )
             .child(
+                // Drag the right edge to resize; double-click resets.
                 div()
-                    .id("new-ws-footer")
-                    .flex_none()
-                    .m(px(8.))
-                    .px(px(10.))
-                    .py(px(6.))
-                    .rounded(px(7.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .text_size(px(12.))
-                    .text_color(rgb(MUTED))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgba(HOVER)).text_color(rgb(TEXT)))
-                    .on_click(cx.listener(|this, _, window, cx| this.new_workspace(None, window, cx)))
-                    .child(icon("plus").size(px(12.)).text_color(rgb(MUTED)))
-                    .child("New workspace")
-                    .child(div().flex_1())
-                    .child(div().text_size(px(11.)).child("⌘N")),
+                    .id("sidebar-edge")
+                    .absolute()
+                    .top_0()
+                        .right_0()
+                    .w(px(6.))
+                    .h_full()
+                    .cursor_col_resize()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                            if ev.click_count >= 2 {
+                                this.sidebar_width = SIDEBAR_WIDTH;
+                                cx.notify();
+                            } else {
+                                this.resizing_sidebar = true;
+                            }
+                            cx.stop_propagation();
+                        }),
+                    ),
             )
             .into_any_element()
+    }
+
+    /// Sidebar toggle and new-workspace buttons, shown in the sidebar's
+    /// titlebar row or next to the traffic lights when it's hidden. Holding
+    /// ⌘ swaps them for their shortcuts.
+    fn titlebar_buttons(&self, cx: &mut Context<Self>) -> [AnyElement; 2] {
+        let hints = self.hints == Some(Hints::Command);
+        let button = |id: &'static str, name: &str, keys: &str| {
+            if hints {
+                div().id(id).flex().flex_none().items_center().h(px(22.)).cursor_pointer().child(hint_pill(keys.into()))
+            } else {
+                icon_button(id, name)
+            }
+        };
+        [
+            button("toggle-sidebar", "panel-left", "⌘B")
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.sidebar = !this.sidebar;
+                    cx.notify();
+                }))
+                .into_any_element(),
+            button("new-ws", "plus", "⌘N")
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|this, _, window, cx| this.new_workspace(None, window, cx)))
+                .into_any_element(),
+        ]
     }
 
     fn render_node(&self, node: &Node, multi: bool, cx: &mut Context<Self>) -> AnyElement {
@@ -1115,7 +1151,17 @@ impl Render for AbroMux {
             .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, w, cx| this.modifiers_changed(&ev.modifiers, w, cx)))
             // Pressing a key while holding ⌘/⌃ means a shortcut, not a look at the hints.
             .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| this.set_hints(None, cx)))
+            .when(self.resizing_sidebar, |d| d.cursor_col_resize())
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
+                if this.resizing_sidebar {
+                    if ev.pressed_button != Some(MouseButton::Left) {
+                        this.resizing_sidebar = false;
+                    } else {
+                        this.sidebar_width = f32::from(ev.position.x).clamp(SIDEBAR_MIN, SIDEBAR_MAX);
+                        cx.notify();
+                    }
+                    return;
+                }
                 let Some((id, axis)) = this.dragging else { return };
                 if ev.pressed_button != Some(MouseButton::Left) {
                     this.dragging = None;
@@ -1133,7 +1179,13 @@ impl Render for AbroMux {
                     cx.notify();
                 }
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.dragging = None))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| {
+                    this.dragging = None;
+                    this.resizing_sidebar = false;
+                }),
+            )
             .children(sidebar)
             .child(
                 div()
@@ -1144,22 +1196,27 @@ impl Render for AbroMux {
                     .flex_col()
                     .bg(rgb(PANE_BG))
                     .when(!self.sidebar, |d| {
+                        // Same height as the sidebar's titlebar row so the
+                        // traffic lights sit centered in it.
                         d.child(
                             div()
-                                .h(px(30.))
+                                .h(px(TITLEBAR_H))
                                 .flex_none()
                                 .flex()
                                 .items_center()
                                 .pl(px(80.))
-                                .gap_2()
+                                .pr(px(10.))
+                                .gap_1()
                                 .bg(rgb(TABBAR_BG))
                                 .border_b_1()
                                 .border_color(rgb(BORDER))
-                                .child(icon_button("show-sidebar", "panel-left").on_click(cx.listener(|this, _, _, cx| {
-                                    this.sidebar = true;
-                                    cx.notify();
-                                })))
-                                .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(title)),
+                                .on_mouse_down(MouseButton::Left, |ev, window, _| {
+                                    if ev.click_count == 2 {
+                                        window.titlebar_double_click();
+                                    }
+                                })
+                                .children(self.titlebar_buttons(cx))
+                                .child(div().ml_2().min_w_0().truncate().text_size(px(12.)).text_color(rgb(MUTED)).child(title)),
                         )
                     })
                     .child(div().flex_1().min_h_0().child(main)),
