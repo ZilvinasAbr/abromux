@@ -14,6 +14,7 @@ mod theme;
 mod workspace;
 
 use browser::{BrowserEvent, BrowserView};
+use futures::StreamExt;
 use gpui::{prelude::*, *};
 use gpui_component::{
     Root, Theme, ThemeMode,
@@ -167,6 +168,15 @@ impl AbroMux {
             }
         })
         .detach();
+        let mut clicks = browser::watch_clicks();
+        cx.spawn_in(window, async move |this, cx| {
+            while clicks.next().await.is_some() {
+                if this.update_in(cx, |this, window, cx| this.follow_page_focus(window, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         this.socket = server::start(window, cx);
         let restored = session.is_some_and(|s| this.restore(s, window, cx));
         if !restored || cwd.is_some() {
@@ -180,6 +190,22 @@ impl AbroMux {
             debug::run_script(script, Self::script_mouse, window, cx);
         }
         this
+    }
+
+    /// A click into a page gives its WKWebView native focus behind gpui's back.
+    /// Move gpui focus there too, or the address bar keeps taking ⌘A/⌘C/⌘V.
+    fn follow_page_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let hit = self.ws().root.panes().into_iter().filter_map(|p| p.active_surface()).find_map(|s| match s {
+            Surface::Browser(b) if b.read(cx).page_has_focus(cx) => Some(b.clone()),
+            _ => None,
+        });
+        if let Some(b) = hit {
+            let focus = b.focus_handle(cx);
+            if !focus.is_focused(window) {
+                b.update(cx, |b, cx| b.page_focused(window, cx));
+                self.focus_surface(b.entity_id(), cx);
+            }
+        }
     }
 
     /// Mouse and modifier steps of a test script go to the focused terminal.
@@ -1250,6 +1276,21 @@ fn run_app(cwd: Option<String>) {
             KeyBinding::new("cmd--", terminal::DecreaseFontSize, Some("Terminal")),
             KeyBinding::new("cmd-0", terminal::ResetFontSize, Some("Terminal")),
             KeyBinding::new("cmd-k", terminal::ClearScrollback, Some("Terminal")),
+        ]);
+        // The Edit items send copy:/paste:/… down the responder chain, which is
+        // the only way the browser's WKWebView gets ⌘C/⌘V/⌘A/⌘X. gpui views
+        // handle those keys through their own bindings before the menu sees them.
+        cx.set_menus(vec![
+            Menu { name: "AbroMux".into(), items: vec![MenuItem::action("Quit AbroMux", Quit)] },
+            Menu {
+                name: "Edit".into(),
+                items: vec![
+                    MenuItem::os_action("Cut", gpui_component::input::Cut, OsAction::Cut),
+                    MenuItem::os_action("Copy", terminal::Copy, OsAction::Copy),
+                    MenuItem::os_action("Paste", terminal::Paste, OsAction::Paste),
+                    MenuItem::os_action("Select All", gpui_component::input::SelectAll, OsAction::SelectAll),
+                ],
+            },
         ]);
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
