@@ -165,8 +165,11 @@ const DATA = /*DATA*/null;
 const GROUPS = [
   ["Build and VT parsing", ["binary_size_mb", "vt_ascii_mbps", "vt_color_mbps", "vt_unicode_mbps"]],
   ["Startup", ["startup_socket_ms", "startup_prompt_ms"]],
+  ["Opening terminals", ["new_tab_login_ms", "new_tab_ms", "new_split_ms", "new_workspace_ms", "browser_open_ms"]],
+  ["Navigation and input", ["switch_workspace_ms", "focus_tab_ms", "focus_pane_ms", "close_tab_ms", "echo_ms", "scroll_ms", "rpc_ping_ms"]],
+  ["Frame draw", ["new_tab_draw_ms", "new_split_draw_ms", "switch_workspace_draw_ms", "echo_draw_ms", "scroll_draw_ms"]],
   ["Memory and idle CPU", ["idle_footprint_mb", "per_terminal_mb", "footprint_after_mb", "idle_cpu_pct", "idle_cpu_11_pct"]],
-  ["In-app throughput", ["app_ascii_mbps", "app_color_mbps", "app_unicode_mbps", "throughput_cpu_s"]],
+  ["In-app throughput", ["app_ascii_mbps", "app_color_mbps", "app_unicode_mbps", "throughput_cpu_s", "throughput_frame_p99_ms", "throughput_late_pct"]],
 ];
 
 const $ = (id) => document.getElementById(id);

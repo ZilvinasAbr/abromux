@@ -19,7 +19,8 @@ Runs made while the machine is busy (load > cores/2) are recorded but kept
 out of baselines.
 
 The app part launches abromux in its own socket/session/config, keeps it in
-front (macOS throttles covered windows) and quits it. Leave the Mac alone
+front (macOS throttles covered windows) and quits it. Then it relaunches it
+with a bare zsh to time UI actions over the socket. Leave the Mac alone
 while it runs. Python 3 stdlib only.
 """
 
@@ -58,13 +59,36 @@ METRICS = {
     "app_unicode_mbps":     ("MB/s", "higher", 0.10, 0,    "in-app throughput, CJK + emoji"),
     "throughput_cpu_s":     ("s",    "lower",  0.15, 0.2,  "app CPU time for the throughput run"),
     "footprint_after_mb":   ("MB",   "lower",  0.10, 3,    "footprint after throughput"),
+    "throughput_frame_p99_ms": ("ms", "lower", 0.30, 2,    "p99 frame draw during throughput"),
+    "throughput_late_pct":  ("%",    "lower",  0.50, 5,    "frames late by over half a vsync during throughput"),
+    "new_tab_login_ms":     ("ms",   "lower",  0.20, 50,   "new tab -> prompt drawn, your login shell"),
+    "rpc_ping_ms":          ("ms",   "lower",  0.50, 0.3,  "control socket round trip"),
+    "new_tab_ms":           ("ms",   "lower",  0.20, 10,   "new tab -> prompt drawn, bare zsh"),
+    "new_tab_draw_ms":      ("ms",   "lower",  0.30, 0.5,  "draw of the frame showing a new tab"),
+    "new_split_ms":         ("ms",   "lower",  0.20, 10,   "split right -> prompt drawn, bare zsh"),
+    "new_split_draw_ms":    ("ms",   "lower",  0.30, 0.5,  "draw of the frame showing a new split"),
+    "new_workspace_ms":     ("ms",   "lower",  0.20, 10,   "new workspace -> prompt drawn, bare zsh"),
+    "close_tab_ms":         ("ms",   "lower",  0.30, 4,    "close a tab -> drawn"),
+    "switch_workspace_ms":  ("ms",   "lower",  0.30, 4,    "switch to another of 12 workspaces -> drawn"),
+    "switch_workspace_draw_ms": ("ms", "lower", 0.30, 0.5, "draw of the frame after a workspace switch"),
+    "focus_tab_ms":         ("ms",   "lower",  0.30, 4,    "focus the other tab in a pane -> drawn"),
+    "focus_pane_ms":        ("ms",   "lower",  0.30, 4,    "focus the other pane of a split -> drawn"),
+    "echo_ms":              ("ms",   "lower",  0.30, 4,    "keystroke -> shell's echo drawn"),
+    "echo_draw_ms":         ("ms",   "lower",  0.30, 0.5,  "draw of the frame showing the echo"),
+    "scroll_ms":            ("ms",   "lower",  0.30, 4,    "scroll wheel through scrollback -> drawn"),
+    "scroll_draw_ms":       ("ms",   "lower",  0.30, 0.5,  "draw of the frame after a scroll"),
+    "browser_open_ms":      ("ms",   "lower",  0.25, 30,   "browser split -> local page loaded"),
 }
 
 MODES = {
-    # startup runs, settle seconds, idle CPU window seconds, throughput passes
-    "quick": dict(startup_runs=3, settle=5, idle=10, passes=3),
-    "full": dict(startup_runs=5, settle=15, idle=30, passes=3),
+    # startup runs, settle seconds, idle CPU window seconds, throughput
+    # passes, repetitions of each UI action
+    "quick": dict(startup_runs=3, settle=5, idle=10, passes=3, reps=10),
+    "full": dict(startup_runs=5, settle=15, idle=30, passes=3, reps=25),
 }
+
+# Bare zsh for the action timings: no user rc files, a fixed prompt to wait for.
+BARE_PROMPT = "abromux-perf> "
 
 
 def sh(*cmd, check=True, **kw):
@@ -167,6 +191,69 @@ def median(xs):
     return statistics.median(xs) if xs else None
 
 
+def percentile(xs, p):
+    xs = sorted(xs)
+    return xs[min(len(xs) - 1, int(len(xs) * p / 100))]
+
+
+class Rpc:
+    """One persistent connection to the control socket. Polling through the
+    CLI would add a process spawn (several ms) to every sample."""
+
+    def __init__(self, path, timeout=10):
+        import socket
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(timeout)
+        self.sock.connect(str(path))
+        self.buf = b""
+        self.n = 0
+
+    def call(self, method, **params):
+        self.n += 1
+        self.sock.sendall(json.dumps({"id": self.n, "method": method, "params": params}).encode() + b"\n")
+        while b"\n" not in self.buf:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise RuntimeError("control socket closed")
+            self.buf += chunk
+        line, self.buf = self.buf.split(b"\n", 1)
+        r = json.loads(line)
+        if not r.get("ok"):
+            raise RuntimeError(f"{method}: {r.get('error')}")
+        return r["result"]
+
+    def timed(self, method, **params):
+        """-> (result, milliseconds)"""
+        t0 = time.perf_counter()
+        r = self.call(method, **params)
+        return r, (time.perf_counter() - t0) * 1000
+
+    def frame(self):
+        """Wait until the next frame has been presented; -> its draw in ms."""
+        return self.call("debug.frame")["draw_ms"]
+
+    def vsync(self):
+        """The display's frame interval in ms, from half a second of idle frames."""
+        self.call("debug.frames", record=True)
+        time.sleep(0.5)
+        return median(self.call("debug.frames", record=False)["interval_ms"]) or 1000 / 60
+
+    def wait_text(self, surface, pattern, timeout=5):
+        """Poll a terminal until its screen matches; -> perf_counter() then."""
+        end = time.perf_counter() + timeout
+        while time.perf_counter() < end:
+            try:
+                if re.search(pattern, self.call("surface.read_text", surface=surface), re.M):
+                    return time.perf_counter()
+            except RuntimeError:
+                pass  # the surface may not be registered yet
+            time.sleep(0.001)
+        raise RuntimeError(f"{surface}: {pattern!r} not seen in {timeout} s")
+
+    def close(self):
+        self.sock.close()
+
+
 # ---- the suite -------------------------------------------------------------------
 
 class Suite:
@@ -184,7 +271,7 @@ class Suite:
         if samples and len(samples) > 1:
             self.samples[name] = [round(s, 4) for s in samples]
         unit = METRICS[name][0]
-        log(f"  {name:<20} {value:10.2f} {unit}")
+        log(f"  {name:<24} {value:10.2f} {unit}")
 
     def binary_size(self):
         self.put("binary_size_mb", self.bin.stat().st_size / 1e6)
@@ -216,6 +303,7 @@ class Suite:
         self.proc = None
         try:
             self._app(tmp)
+            self.actions(tmp)
         finally:
             self.quit()
             shutil.rmtree(tmp, ignore_errors=True)
@@ -326,6 +414,9 @@ stty $old
 print done >> {res}
 clear
 """)
+        rpc = Rpc(self.env["ABROMUX_SOCKET_PATH"])
+        vsync = rpc.vsync()
+        rpc.call("debug.frames", record=True)
         c0 = cpu_secs(pid)
         self.cli("send", f"zsh {script}\\n")
         end = time.monotonic() + 600
@@ -336,6 +427,10 @@ clear
         else:
             raise RuntimeError("in-app throughput timed out")
         self.put("throughput_cpu_s", cpu_secs(pid) - c0)
+        frames = rpc.call("debug.frames", record=False)
+        if frames["draw_ms"]:
+            self.put("throughput_frame_p99_ms", percentile(frames["draw_ms"], 99))
+            self.put("throughput_late_pct", 100 * sum(i > 1.5 * vsync for i in frames["interval_ms"]) / len(frames["interval_ms"]))
         times = {}
         for line in res.read_text().splitlines():
             if line != "done":
@@ -347,6 +442,180 @@ clear
             self.put(f"app_{f}_mbps", median(mbps), mbps)
         self.put("footprint_after_mb", footprint_mb(pid))
         self.grid = grid
+
+        # What a new tab feels like with your own shell config; the bare-zsh
+        # timings below are the ones that isolate abromux.
+        try:
+            self.front()
+            login = []
+            for _ in range(min(c["reps"], 5)):
+                t0 = time.perf_counter()
+                ref = rpc.call("surface.create")["ref"]
+                rpc.wait_text(ref, r"[%$#] *$", timeout=10)
+                rpc.frame()
+                login.append((time.perf_counter() - t0) * 1000)
+                rpc.call("surface.close", surface=ref)
+            self.put("new_tab_login_ms", median(login), login)
+        finally:
+            rpc.close()
+
+    def actions(self, tmp):
+        """UI actions over the socket, in a fresh app whose shells are a bare
+        zsh, so shell startup is small and the same on every machine.
+
+        Each is timed until the frame showing its result has been presented
+        (`debug.frame`), so it includes waiting for the next vsync; each
+        sample starts at a random point in the frame, as a person would. The
+        `_draw_ms` metrics are that frame's own draw: abromux's part, and the
+        steadier number to watch."""
+        c = self.cfg
+        log("UI actions")
+        self.quit()
+        zdot = tmp / "zdot"
+        zdot.mkdir()
+        (zdot / ".zshrc").write_text(f"PROMPT='{BARE_PROMPT}'\nunsetopt PROMPT_SP\n")
+        self.env = {**self.env, "SHELL": "/bin/zsh", "ZDOTDIR": str(zdot)}
+        prompt = re.escape(BARE_PROMPT.strip()) + r" *$"
+        self.launch()
+        while self.cli("ping").returncode:
+            if self.proc.poll() is not None:
+                raise RuntimeError("abromux exited during startup")
+            time.sleep(0.01)
+        self.front()
+        rpc = Rpc(self.env["ABROMUX_SOCKET_PATH"])
+        try:
+            self._actions(rpc, c["reps"], prompt)
+        finally:
+            rpc.close()
+
+    def _actions(self, rpc, reps, prompt):
+        focused = rpc.call("system.identify")["focused"]
+        base, base_pane = focused["surface"], focused["pane"]
+        rpc.wait_text(base, prompt)
+        time.sleep(1)
+        vsync = rpc.vsync()
+
+        def sample(action, n, name, draw_name=None, undo=None):
+            """Time `action(i)` until its frame is presented, `n` times; ->
+            what each action returned. `action` runs the action and waits
+            for its result (a prompt, say) to be in the app's state; `undo`
+            gets that result after each sample, untimed."""
+            totals, draws, out = [], [], []
+            for i in range(n):
+                time.sleep(random.uniform(0, vsync / 1000))
+                t0 = time.perf_counter()
+                out.append(action(i))
+                draws.append(rpc.frame())
+                totals.append((time.perf_counter() - t0) * 1000)
+                if undo:
+                    undo(out[-1])
+            self.put(name, median(totals), totals)
+            if draw_name:
+                self.put(draw_name, median(draws), draws)
+            return out
+
+        pings = [rpc.timed("system.ping")[1] for _ in range(50)]
+        self.put("rpc_ping_ms", median(pings), pings)
+
+        def new_tab(_):
+            ref = rpc.call("surface.create", surface=base)["ref"]
+            rpc.wait_text(ref, prompt)
+            return ref
+
+        tabs = sample(new_tab, reps, "new_tab_ms", "new_tab_draw_ms")
+        sample(lambda i: rpc.call("surface.close", surface=tabs[i]), reps, "close_tab_ms")
+
+        def new_split(_):
+            ref = rpc.call("surface.split", surface=base, direction="right")["surface"]["ref"]
+            rpc.wait_text(ref, prompt)
+            return ref
+
+        sample(new_split, reps, "new_split_ms", "new_split_draw_ms", undo=lambda ref: rpc.call("surface.close", surface=ref))
+
+        # 11 more workspaces, which the switch timing below cycles through.
+        def new_workspace(_):
+            ws = rpc.call("workspace.create")["ref"]
+            rpc.wait_text(rpc.call("workspace.tree", workspace=ws)[0]["panes"][0]["surfaces"][0]["ref"], prompt)
+
+        sample(new_workspace, 11, "new_workspace_ms")
+        sample(lambda i: rpc.call("workspace.select", workspace=str(i % 12)), reps * 3, "switch_workspace_ms", "switch_workspace_draw_ms")
+        rpc.call("workspace.select", workspace="0")
+
+        other = new_tab(0)
+        sample(lambda i: rpc.call("surface.focus", surface=(base, other)[i % 2]), reps * 2, "focus_tab_ms")
+        rpc.call("surface.close", surface=other)
+
+        r = rpc.call("surface.split", surface=base, direction="right")
+        rpc.wait_text(r["surface"]["ref"], prompt)
+        sample(lambda i: rpc.call("pane.focus", pane=(base_pane, r["pane"])[i % 2]), reps * 2, "focus_pane_ms")
+        rpc.call("surface.close", surface=r["surface"]["ref"])
+
+        # Keystrokes go through gpui's key dispatch and the terminal's input
+        # handler, like typing (minus the macOS input method).
+        rpc.call("surface.focus", surface=base)
+        typed = "abcdefghijklmnopqrstuvwxyz" * 2
+
+        def key(i):
+            rpc.call("debug.input", steps=f"type:{typed[i]}")
+            rpc.wait_text(base, re.escape(BARE_PROMPT + typed[: i + 1]) + "$")
+
+        sample(key, min(reps * 2, len(typed)), "echo_ms", "echo_draw_ms")
+        rpc.call("debug.input", steps="key:ctrl-u")
+
+        # Wheel up through scrollback, 3 lines a notch.
+        rpc.call("surface.send_text", surface=base, text="seq 1 5000\\n")
+        rpc.wait_text(base, r"^5000$")
+        rpc.wait_text(base, prompt)
+        sample(lambda _: rpc.call("debug.input", steps="scroll:600,350,48"), reps * 2, "scroll_ms", "scroll_draw_ms")
+        rpc.call("debug.input", steps="key:ctrl-u")
+
+        self._browser(rpc, base, min(reps, 5))
+
+    def _browser(self, rpc, base, reps):
+        """Browser split until a page served from localhost has loaded. Last,
+        because an eval that never answers holds up the whole socket."""
+        import http.server
+        import threading
+
+        class Page(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b"<!doctype html><title>perf</title><p>abromux perf</p>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Page)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{server.server_port}/"
+        loaded = f"complete 127.0.0.1:{server.server_port}"
+
+        def state(ref):
+            try:
+                return rpc.call("browser.eval", surface=ref, script="document.readyState + ' ' + location.host")
+            except RuntimeError:
+                return None  # the webview drops scripts sent while it isn't ready
+
+        times = []
+        try:
+            for i in range(reps):
+                t0 = time.perf_counter()
+                ref = rpc.call("browser.open", surface=base, url=f"{url}?{i}")["surface"]["ref"]
+                while state(ref) != loaded:
+                    if time.perf_counter() > t0 + 10:
+                        raise RuntimeError("page didn't load in 10 s")
+                    time.sleep(0.002)
+                times.append((time.perf_counter() - t0) * 1000)
+                rpc.call("surface.close", surface=ref)
+        except (RuntimeError, OSError) as e:
+            log(f"  browser timing skipped: {e}")
+        finally:
+            server.shutdown()
+        self.put("browser_open_ms", median(times), times)
 
 
 # ---- comparison ----------------------------------------------------------------------
@@ -408,7 +677,7 @@ def compare(rec, history, n=10, out=sys.stdout):
     print(f"baseline: median of the last {len(base)} quiet run(s) on this machine ({rec['machine']['chip']}, {rec['machine']['mem_gb']} GB)\n", file=out)
     use_color = out.isatty() and not os.environ.get("NO_COLOR")
     paint = lambda s, c: f"\x1b[{c}m{s}\x1b[0m" if use_color else s
-    print(f"{'metric':<20} {'now':>10} {'baseline':>10} {'Δ':>8} {'prev':>10}  {'unit':<5} status", file=out)
+    print(f"{'metric':<24} {'now':>10} {'baseline':>10} {'Δ':>8} {'prev':>10}  {'unit':<5} status", file=out)
     regressions = []
     for row in rows_for(rec, history, n):
         name, unit, cur, med, delta, pv, status = (row[k] for k in ("name", "unit", "now", "baseline", "delta", "prev", "status"))
@@ -417,7 +686,7 @@ def compare(rec, history, n=10, out=sys.stdout):
         st = {"WORSE": paint("▼ WORSE", "31;1"), "better": paint("▲ better", "32"), "ok": "  ok", "new": "  new"}[status]
         if status == "ok" and row["n"] < 3:
             st += f" (n={row['n']})"
-        print(f"{name:<20} {cell(cur)} {cell(med)} {d} {cell(pv)}  {unit:<5} {st}", file=out)
+        print(f"{name:<24} {cell(cur)} {cell(med)} {d} {cell(pv)}  {unit:<5} {st}", file=out)
         if status == "WORSE":
             regressions.append(name)
     if regressions:
