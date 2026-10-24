@@ -3,6 +3,7 @@
 // re-prompt on every capture).
 //   open -W -a Snapper.app --args --request              # ask macOS for permission
 //   open -W -a Snapper.app --args --window <id> <out.png> # capture one window
+import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -22,6 +23,9 @@ guard args.count == 3, args[0] == "--window", let windowID = UInt32(args[1]) els
     fail("usage: --window <id> <out.png>")
 }
 let out = URL(fileURLWithPath: args[2])
+// Connects to the window server; without it captureImage trips
+// CGS_REQUIRE_INIT on recent macOS.
+_ = NSApplication.shared
 
 Task {
     do {
