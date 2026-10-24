@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bindgen",
+ "block",
  "futures",
  "gpui",
  "gpui-component",

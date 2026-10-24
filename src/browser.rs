@@ -1,3 +1,4 @@
+#![allow(unexpected_cfgs)]
 //! A browser pane: address bar + native WKWebView (via wry / gpui-component).
 
 use crate::theme::*;
@@ -6,8 +7,9 @@ use gpui::{prelude::*, *};
 use gpui_component::{
     input::{Input, InputEvent, InputState},
     webview::WebView,
-    wry,
+    wry::{self, WebViewExtMacOS},
 };
+use objc::{msg_send, runtime::Object, sel, sel_impl};
 
 pub enum BrowserEvent {
     TitleChanged,
@@ -59,11 +61,8 @@ impl BrowserView {
                 let text = input.read(cx).value().trim().to_string();
                 if !text.is_empty() {
                     this.navigate(&normalize_url(&text), cx);
-                    this.webview.update(cx, |w, _| {
-                        let _ = w.raw().focus();
-                    });
+                    this.focus_page(window, cx);
                 }
-                let _ = window;
             }
             InputEvent::Focus => cx.emit(BrowserEvent::Focused),
             _ => {}
@@ -99,8 +98,41 @@ impl BrowserView {
     }
 
     pub fn focus_address(this: &Entity<Self>, window: &mut Window, cx: &mut App) {
-        let address = this.read(cx).address.clone();
+        let this = this.read(cx);
+        // Take native focus back from the page so typing reaches the address bar.
+        let _ = this.webview.read(cx).raw().focus_parent();
+        let address = this.address.clone();
         address.update(cx, |a, cx| a.focus(window, cx));
+    }
+
+    /// Give the page keyboard focus, natively and in gpui.
+    fn focus_page(&self, window: &mut Window, cx: &mut App) {
+        let _ = self.webview.read(cx).raw().focus();
+        self.page_focused(window, cx);
+    }
+
+    /// Follow the page taking native focus: move gpui focus off the address
+    /// bar (or it keeps taking ⌘A/⌘C/⌘V) and drop its selection, which the
+    /// input otherwise keeps showing.
+    pub fn page_focused(&self, window: &mut Window, cx: &mut App) {
+        window.focus(&self.focus);
+        self.address.update(cx, |a, cx| a.unselect(window, cx));
+    }
+
+    /// Whether the page holds native keyboard focus (the window's first
+    /// responder is the WKWebView or a view inside it).
+    pub fn page_has_focus(&self, cx: &App) -> bool {
+        let webview = self.webview.read(cx).raw().webview();
+        let webview = &*webview as *const _ as *mut Object;
+        unsafe {
+            let window: *mut Object = msg_send![webview, window];
+            if window.is_null() {
+                return false;
+            }
+            let responder: *mut Object = msg_send![window, firstResponder];
+            let is_view: bool = !responder.is_null() && msg_send![responder, isKindOfClass: objc::class!(NSView)];
+            is_view && msg_send![responder, isDescendantOf: webview]
+        }
     }
 
     /// Native views float above gpui content, so hidden panes must be hidden
@@ -164,6 +196,20 @@ impl Render for BrowserView {
             )
             .child(div().flex_1().min_h_0().child(self.webview.clone()))
     }
+}
+
+/// Yields after each left click in the app. Pages are native views, so gpui
+/// never sees clicks into them.
+pub fn watch_clicks() -> mpsc::UnboundedReceiver<()> {
+    let (tx, rx) = mpsc::unbounded();
+    let handler = block::ConcreteBlock::new(move |event: *mut Object| -> *mut Object {
+        let _ = tx.unbounded_send(());
+        event
+    })
+    .copy();
+    // NSEventMaskLeftMouseDown. AppKit copies the block and keeps the monitor.
+    let _: *mut Object = unsafe { msg_send![objc::class!(NSEvent), addLocalMonitorForEventsMatchingMask: 1u64 << 1 handler: &*handler] };
+    rx
 }
 
 pub fn normalize_url(text: &str) -> String {
