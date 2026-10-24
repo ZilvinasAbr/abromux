@@ -387,15 +387,8 @@ impl TerminalView {
     }
 
     fn report_mouse(&mut self, action: MouseAction, button: Option<u8>, m: Modifiers, pos: Point<Pixels>) {
-        let local = pos - self.bounds.origin;
-        let geometry = MouseGeometry {
-            width: f32::from(self.bounds.size.width) as u32,
-            height: f32::from(self.bounds.size.height) as u32,
-            cell_width: f32::from(self.cell.width) as u32,
-            cell_height: f32::from(self.cell.height) as u32,
-            padding: PADDING as u32,
-        };
-        let bytes = self.term.encode_mouse(action, button, mods(m), (f32::from(local.x), f32::from(local.y)), self.mouse_buttons != 0, geometry);
+        let (geometry, at) = mouse_space(pos - self.bounds.origin, self.cell, self.grid);
+        let bytes = self.term.encode_mouse(action, button, mods(m), at, self.mouse_buttons != 0, geometry);
         self.send(&bytes);
     }
 
@@ -755,6 +748,26 @@ impl Element for TerminalElement {
     }
 }
 
+/// The encoder's geometry and a pointer position (relative to the element)
+/// in it. The encoder takes whole-pixel cells, as the PTY's pixel size does,
+/// but real cells are fractional (7.8 px), so a truncated width drifts a
+/// column every few dozen. Scale the position into a grid of whole-pixel
+/// cells instead, so it lands in the same cell it does on screen.
+fn mouse_space(local: Point<Pixels>, cell: Size<Pixels>, (cols, rows): (u16, u16)) -> (MouseGeometry, (f32, f32)) {
+    let (cw, ch) = (f32::from(cell.width) as u32, f32::from(cell.height) as u32);
+    let (cw, ch) = (cw.max(1), ch.max(1));
+    let pad = PADDING as u32;
+    let geometry = MouseGeometry {
+        width: cols as u32 * cw + pad * 2,
+        height: rows as u32 * ch + pad * 2,
+        cell_width: cw,
+        cell_height: ch,
+        padding: pad,
+    };
+    let scale = |v: Pixels, real: Pixels, whole: u32| (f32::from(v) - PADDING) * whole as f32 / f32::from(real) + PADDING;
+    (geometry, (scale(local.x, cell.width, cw), scale(local.y, cell.height, ch)))
+}
+
 /// A process's current directory, via libproc's PROC_PIDVNODEPATHINFO.
 fn process_cwd(pid: u32) -> Option<String> {
     unsafe extern "C" {
@@ -913,5 +926,22 @@ mod tests {
         let here = std::env::current_dir().unwrap().canonicalize().unwrap();
         let got = super::process_cwd(std::process::id()).map(std::path::PathBuf::from);
         assert_eq!(got.map(|p| p.canonicalize().unwrap()), Some(here));
+    }
+
+    #[test]
+    fn mouse_reports_land_in_the_cell_under_the_pointer() {
+        use crate::ghostty::{MouseAction, Terminal};
+        use gpui::{point, px, size};
+        // Cells are 7.9 px wide on screen; truncated to 7 px the encoder
+        // used to report column ~170 for a click on column 150.
+        let cell = size(px(7.9), px(17.6));
+        let mut t = Terminal::new(200, 40).unwrap();
+        t.write(b"\x1b[?1000h\x1b[?1006h");
+        for (col, row) in [(0u16, 0u16), (150, 30), (199, 39)] {
+            let at = point(px(super::PADDING + 7.9 * (col as f32 + 0.9)), px(super::PADDING + 17.6 * (row as f32 + 0.9)));
+            let (g, pos) = super::mouse_space(at, cell, (200, 40));
+            let got = t.encode_mouse(MouseAction::Press, Some(1), 0, pos, false, g);
+            assert_eq!(got, format!("\x1b[<0;{};{}M", col + 1, row + 1).into_bytes());
+        }
     }
 }
