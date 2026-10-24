@@ -61,6 +61,17 @@ pub struct Frame {
     pub foreground: Rgb,
     pub cursor_color: Option<Rgb>,
     pub cursor: Option<Cursor>,
+    /// Find-bar matches in the viewport, one entry per row a match covers.
+    pub matches: Vec<Match>,
+}
+
+/// The columns `x` of viewport row `y` that a search match covers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Match {
+    pub y: u16,
+    pub x: std::ops::Range<u16>,
+    /// The match ⌘G last moved to.
+    pub selected: bool,
 }
 
 /// Effects raised by the terminal while processing output. Callbacks only
@@ -82,6 +93,8 @@ pub struct Terminal {
     key_event: GhosttyKeyEvent,
     mouse_encoder: GhosttyMouseEncoder,
     mouse_event: GhosttyMouseEvent,
+    /// The find bar's search; null while it's closed.
+    search: GhosttySearch,
     effects: Box<Effects>,
 }
 
@@ -156,7 +169,7 @@ impl Terminal {
             set_cb(GHOSTTY_TERMINAL_OPT_PWD_CHANGED, on_pwd as *const c_void);
             set_cb(GHOSTTY_TERMINAL_OPT_BELL, on_bell as *const c_void);
 
-            let t = Self { raw, render, row_iter, row_cells, key_encoder, key_event, mouse_encoder, mouse_event, effects };
+            let t = Self { raw, render, row_iter, row_cells, key_encoder, key_event, mouse_encoder, mouse_event, search: ptr::null_mut(), effects };
             t.apply_theme();
             Ok(t)
         }
@@ -439,6 +452,119 @@ impl Terminal {
         }
     }
 
+    /// Search the screen and scrollback for `needle` (ASCII letters match
+    /// either case). Empty clears the search. Results come in as
+    /// `search_step` catches up.
+    pub fn set_search(&mut self, needle: &str) {
+        unsafe {
+            if self.search.is_null() && ghostty_search_new(ptr::null(), &mut self.search, self.raw) != GHOSTTY_SUCCESS {
+                self.search = ptr::null_mut();
+                return;
+            }
+            let s = GhosttyString { ptr: needle.as_ptr(), len: needle.len() };
+            ghostty_search_set(self.search, GHOSTTY_SEARCH_OPT_NEEDLE, &s as *const _ as *const c_void);
+        }
+    }
+
+    pub fn end_search(&mut self) {
+        unsafe { ghostty_search_free(self.search) };
+        self.search = ptr::null_mut();
+    }
+
+    /// Do a bounded amount of searching, reading new output too. True once
+    /// the search has caught up with the terminal.
+    pub fn search_step(&mut self) -> bool {
+        if self.search.is_null() {
+            return true;
+        }
+        let mut status = GHOSTTY_SEARCH_STATUS_COMPLETE;
+        unsafe {
+            for _ in 0..32 {
+                ghostty_search_feed(self.search);
+                for _ in 0..64 {
+                    ghostty_search_tick(self.search, &mut status);
+                    if status != GHOSTTY_SEARCH_STATUS_RUNNING {
+                        break;
+                    }
+                }
+                if status == GHOSTTY_SEARCH_STATUS_COMPLETE {
+                    break;
+                }
+            }
+        }
+        status == GHOSTTY_SEARCH_STATUS_COMPLETE
+    }
+
+    /// Move to the next match up the screen (`older`) or down, wrapping and
+    /// scrolling it into view. False when there are no matches.
+    pub fn search_select(&mut self, older: bool) -> bool {
+        if self.search.is_null() {
+            return false;
+        }
+        let opt = if older { GHOSTTY_SEARCH_OPT_SELECT_NEXT } else { GHOSTTY_SEARCH_OPT_SELECT_PREV };
+        unsafe { ghostty_search_set(self.search, opt, ptr::null()) == GHOSTTY_SUCCESS }
+    }
+
+    /// Total matches, and the selected one's index counting from the newest.
+    pub fn search_count(&self) -> (usize, Option<usize>) {
+        if self.search.is_null() {
+            return (0, None);
+        }
+        let (mut total, mut index) = (0usize, 0usize);
+        unsafe {
+            ghostty_search_get(self.search, GHOSTTY_SEARCH_DATA_TOTAL_MATCHES, &mut total as *mut _ as *mut c_void);
+            let selected = ghostty_search_get(self.search, GHOSTTY_SEARCH_DATA_SELECTED_INDEX, &mut index as *mut _ as *mut c_void) == GHOSTTY_SUCCESS;
+            (total, selected.then_some(index))
+        }
+    }
+
+    /// A match's endpoints as viewport cells, start first. None if either
+    /// is off screen.
+    fn viewport_span(&self, s: &GhosttySelection) -> Option<((u16, u32), (u16, u32))> {
+        let point = |r: &GhosttyGridRef| {
+            let mut p = GhosttyPointCoordinate::default();
+            (unsafe { ghostty_terminal_point_from_grid_ref(self.raw, r, GHOSTTY_POINT_TAG_VIEWPORT, &mut p) } == GHOSTTY_SUCCESS).then_some((p.x, p.y))
+        };
+        let (a, b) = (point(&s.start)?, point(&s.end)?);
+        Some(if (a.1, a.0) <= (b.1, b.0) { (a, b) } else { (b, a) })
+    }
+
+    /// The search's matches in the viewport. Feeds first, so the list
+    /// follows scrolling and new output.
+    fn viewport_matches(&self, cols: u16, rows: u32) -> Vec<Match> {
+        if self.search.is_null() {
+            return Vec::new();
+        }
+        unsafe {
+            ghostty_search_feed(self.search);
+            let mut buf = GhosttySelectionBuffer { ptr: ptr::null_mut(), cap: 0, len: 0 };
+            ghostty_search_get(self.search, GHOSTTY_SEARCH_DATA_VIEWPORT_MATCHES, &mut buf as *mut _ as *mut c_void);
+            if buf.len == 0 {
+                return Vec::new();
+            }
+            let mut sels = vec![sized!(GhosttySelection); buf.len];
+            buf = GhosttySelectionBuffer { ptr: sels.as_mut_ptr(), cap: sels.len(), len: 0 };
+            if ghostty_search_get(self.search, GHOSTTY_SEARCH_DATA_VIEWPORT_MATCHES, &mut buf as *mut _ as *mut c_void) != GHOSTTY_SUCCESS {
+                return Vec::new();
+            }
+            sels.truncate(buf.len);
+            let mut sel = sized!(GhosttySelection);
+            let selected = (ghostty_search_get(self.search, GHOSTTY_SEARCH_DATA_SELECTED_MATCH, &mut sel as *mut _ as *mut c_void) == GHOSTTY_SUCCESS)
+                .then(|| self.viewport_span(&sel))
+                .flatten();
+            let mut out = Vec::new();
+            for s in &sels {
+                // Matches on the viewport's pages can lie just past it.
+                let Some(span @ ((sx, sy), (ex, ey))) = self.viewport_span(s).filter(|(_, end)| end.1 < rows) else { continue };
+                for y in sy..=ey {
+                    let x = if y == sy { sx } else { 0 }..if y == ey { ex + 1 } else { cols };
+                    out.push(Match { y: y as u16, x, selected: Some(span) == selected });
+                }
+            }
+            out
+        }
+    }
+
     /// Snapshot the visible viewport for drawing.
     pub fn frame(&mut self) -> Frame {
         unsafe {
@@ -525,6 +651,7 @@ impl Terminal {
                 frame.rows.push(row);
             }
             ghostty_render_state_clean(rs);
+            frame.matches = self.viewport_matches(cols, frame.rows.len() as u32);
             frame
         }
     }
@@ -533,6 +660,7 @@ impl Terminal {
 impl Drop for Terminal {
     fn drop(&mut self) {
         unsafe {
+            ghostty_search_free(self.search);
             ghostty_mouse_event_free(self.mouse_event);
             ghostty_mouse_encoder_free(self.mouse_encoder);
             ghostty_key_event_free(self.key_event);
@@ -596,6 +724,33 @@ mod tests {
         assert!(!t.alt_screen());
         t.write(b"\x1b[?1049h");
         assert!(t.alt_screen());
+    }
+
+    #[test]
+    fn search_finds_and_selects_matches() {
+        let mut t = Terminal::new(20, 3).unwrap();
+        // Five lines in three rows: two matches scroll off into history.
+        t.write(b"error one\r\nok\r\nERROR two\r\nfine\r\nan error");
+        t.set_search("error");
+        while !t.search_step() {}
+        assert_eq!(t.search_count(), (3, None), "ASCII letters match either case");
+        let visible = |selected: Option<usize>| vec![Match { y: 0, x: 0..5, selected: selected == Some(1) }, Match { y: 2, x: 3..8, selected: selected == Some(0) }];
+        assert_eq!(t.frame().matches, visible(None), "not the one in history");
+
+        assert!(t.search_select(true));
+        assert_eq!(t.search_count(), (3, Some(0)), "the newest match first");
+        assert_eq!(t.frame().matches, visible(Some(0)));
+        assert!(t.search_select(true));
+        assert_eq!(t.frame().matches, visible(Some(1)));
+        assert!(t.search_select(true));
+        assert_eq!(t.frame().matches[0], Match { y: 0, x: 0..5, selected: true }, "scrolled up to error one");
+        assert!(t.search_select(false));
+        assert_eq!(t.search_count().1, Some(1));
+
+        t.set_search("");
+        assert_eq!(t.search_count(), (0, None));
+        t.end_search();
+        assert!(t.frame().matches.is_empty());
     }
 
     #[test]

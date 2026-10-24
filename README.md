@@ -78,6 +78,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Copy / paste in terminal | drag to select, double-click selects a word | ⌘C / ⌘V |
 | Font size (per terminal) | | ⌘+ / ⌘- / ⌘0 |
 | Clear screen and scrollback | | ⌘K |
+| Find in terminal (screen and scrollback) | | ⌘F, then ⌘G / ⇧⌘G or Enter / ⇧Enter, Esc to close; ⌘E finds the selection |
 
 ## Performance
 
