@@ -149,8 +149,8 @@ What's missing beyond the browser commands above:
 
 ## 9. Coding-agent integrations
 
-- [ ] **Agent hooks**: `hooks setup` for Claude Code, Codex, OpenCode, Gemini, Kiro, Amp, Cursor, Pi and others. They feed notifications, status and session IDs.
-- [ ] **Agent session resume**: `restore` and `fork` from checkpoints, plus `surface resume` commands.
+- [x] **Agent hooks**: `hooks setup` for Claude Code, Codex, OpenCode, Gemini, Kiro, Amp, Cursor, Pi and others. They feed notifications, status and session IDs. *(partial: `hooks install` for Claude Code only, and it feeds session IDs only)*
+- [x] **Agent session resume**: `restore` and `fork` from checkpoints, plus `surface resume` commands. *(partial: session restore resumes Claude Code sessions; no `fork` or CLI commands)*
 - [ ] **Agent hibernation**: put idle agents to sleep under memory pressure and wake them later.
 - [ ] **Feed**: an approval inbox for agent permission prompts and turn-complete events.
 - [ ] **Multi-agent teams as panes**: `claude-teams`, `codex-teams`, and oh-my-opencode (`omo`/`omx`/`omc`). Subagents become native splits.

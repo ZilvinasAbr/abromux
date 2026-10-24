@@ -2,6 +2,7 @@
 //! drawn cell-by-cell with gpui.
 
 use crate::{
+    agent::Agent,
     config::{Config, CursorStyle as ConfigCursor},
     ghostty::{self, CursorStyle as Caret, Frame, MouseAction, MouseGeometry, Rgb, ffi},
     sprite,
@@ -72,6 +73,8 @@ pub struct TerminalView {
     find_count: (usize, Option<usize>),
     /// A task is stepping the search through scrollback.
     searching: bool,
+    /// The coding agent running here, as its hooks last reported it.
+    pub agent: Option<Agent>,
 }
 
 impl EventEmitter<TerminalEvent> for TerminalView {}
@@ -173,6 +176,7 @@ impl TerminalView {
             find_open: false,
             find_count: (0, None),
             searching: false,
+            agent: None,
         }
     }
 
@@ -315,8 +319,10 @@ impl TerminalView {
         (!kept.trim().is_empty()).then_some(kept)
     }
 
-    /// Replay saved output above the new shell's prompt and reapply zoom.
-    pub fn restore(&mut self, scrollback: Option<&str>, font_size: Option<f32>, cx: &mut Context<Self>) {
+    /// Replay saved output above the new shell's prompt, reapply zoom, and
+    /// resume the agent that was running (typed ahead; the shell reads it
+    /// once it starts).
+    pub fn restore(&mut self, scrollback: Option<&str>, font_size: Option<f32>, agent: Option<Agent>, cx: &mut Context<Self>) {
         if let Some(vt) = scrollback {
             self.term.write(vt.as_bytes());
             self.term.write(b"\x1b[0m\r\n");
@@ -324,6 +330,13 @@ impl TerminalView {
         }
         if let Some(size) = font_size {
             self.set_font_size(size, cx);
+        }
+        if let Some(agent) = agent
+            && let Some(cmd) = agent.resume_command(&self.cwd)
+        {
+            self.send(format!("{cmd}\r").as_bytes());
+            // Kept until its hooks report in, so a quick quit doesn't drop it.
+            self.agent = Some(agent);
         }
     }
 

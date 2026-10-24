@@ -9,6 +9,7 @@ use std::{
     io::{BufRead, BufReader, Write},
     os::unix::net::UnixStream,
     path::PathBuf,
+    time::Duration,
 };
 
 /// `$ABROMUX_SOCKET_PATH`, else `~/Library/Application Support/abromux/abromux.sock`.
@@ -30,8 +31,19 @@ pub fn err(id: &Value, error: impl std::fmt::Display) -> Value {
 
 /// One request/response round trip.
 pub fn call(method: &str, params: Value) -> anyhow::Result<Value> {
+    round_trip(method, params, None)
+}
+
+/// `call`, giving up after `timeout` (for hooks that mustn't stall their caller).
+pub fn call_timeout(method: &str, params: Value, timeout: Duration) -> anyhow::Result<Value> {
+    round_trip(method, params, Some(timeout))
+}
+
+fn round_trip(method: &str, params: Value, timeout: Option<Duration>) -> anyhow::Result<Value> {
     let path = socket_path();
     let stream = UnixStream::connect(&path).map_err(|e| anyhow::anyhow!("abromux is not running ({}: {e})", path.display()))?;
+    stream.set_read_timeout(timeout)?;
+    stream.set_write_timeout(timeout)?;
     let mut writer = stream.try_clone()?;
     let mut line = serde_json::to_string(&json!({ "id": 1, "method": method, "params": params }))?;
     line.push('\n');

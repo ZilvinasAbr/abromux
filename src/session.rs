@@ -2,7 +2,8 @@
 //! writes its windows, workspaces, split tree, tabs, working directories,
 //! browser URLs and terminal scrollback to `session.json`; the next launch
 //! rebuilds them. Shells start fresh in the saved cwd; their old output is
-//! replayed above the new prompt (best effort, like cmux).
+//! replayed above the new prompt (best effort, like cmux), and a Claude Code
+//! session that was running in one is resumed there.
 //!
 //! `$ABROMUX_SESSION_PATH` overrides the file
 //! (default `~/Library/Application Support/abromux/session.json`).
@@ -11,6 +12,7 @@
 
 use crate::{
     AbroMux,
+    agent::Agent,
     workspace::{Node, Pane, Surface, Workspace},
 };
 use gpui::{App, Axis, Bounds, Context, Pixels, Window, point, px, size};
@@ -85,6 +87,9 @@ pub enum TabState {
         /// Screen and scrollback as VT text (styles kept).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scrollback: Option<String>,
+        /// A coding agent to resume (see agent.rs).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<Agent>,
     },
     Browser {
         url: String,
@@ -206,11 +211,11 @@ impl AbroMux {
 
     fn build_tab(&mut self, state: TabState, ws: usize, window: &mut Window, cx: &mut Context<Self>) -> Surface {
         match state {
-            TabState::Terminal { cwd, font_size, scrollback } => {
+            TabState::Terminal { cwd, font_size, scrollback, agent } => {
                 let cwd = std::path::Path::new(&cwd).is_dir().then_some(cwd);
                 let s = self.make_terminal(cwd, ws, window, cx);
                 if let Surface::Terminal(t) = &s {
-                    t.update(cx, |t, cx| t.restore(scrollback.as_deref(), font_size, cx));
+                    t.update(cx, |t, cx| t.restore(scrollback.as_deref(), font_size, agent, cx));
                 }
                 s
             }
@@ -238,6 +243,7 @@ fn tab_state(s: &Surface, scrollback: bool, cx: &App) -> TabState {
                 cwd: t.live_cwd(),
                 font_size: Some(t.font_size()),
                 scrollback: scrollback.then(|| t.scrollback_vt(SCROLLBACK_LINES)).flatten(),
+                agent: t.agent.clone(),
             }
         }
         Surface::Browser(b) => TabState::Browser { url: b.read(cx).url.clone() },
@@ -263,7 +269,7 @@ mod tests {
                     vertical: false,
                     ratio: 0.3,
                     children: Box::new([
-                        NodeState::Pane { active: 0, tabs: vec![TabState::Terminal { cwd: "/tmp".into(), font_size: Some(14.), scrollback: Some("\x1b[1mhi\x1b[0m".into()) }] },
+                        NodeState::Pane { active: 0, tabs: vec![TabState::Terminal { cwd: "/tmp".into(), font_size: Some(14.), scrollback: Some("\x1b[1mhi\x1b[0m".into()), agent: Some(Agent { kind: "claude".into(), session_id: "abc".into(), cwd: "/tmp".into(), permission_mode: None }) }] },
                         NodeState::Pane { active: 0, tabs: vec![TabState::Browser { url: "https://example.com".into() }] },
                     ]),
                 },

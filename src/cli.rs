@@ -1,7 +1,7 @@
 //! `abromux <command>`: drive a running abromux over its control socket. Command
 //! names and flags follow cmux's CLI where the two overlap.
 
-use crate::ipc;
+use crate::{agent, ipc};
 use serde_json::{Map, Value, json};
 use std::{io::IsTerminal, path::Path};
 
@@ -43,6 +43,7 @@ Commands:
   open <path-or-url>...                                      (directories open workspaces, URLs open browser splits)
   focus-window [--window <ref>]                              (bring abromux to the front; there is one window)
   sidebar <toggle|show|hide>
+  hooks install|uninstall                                    (Claude Code hooks, so restore resumes Claude sessions)
   quit
   rpc <method> [json-params]
 
@@ -92,6 +93,10 @@ fn parse(args: &[String]) -> Result<Args, String> {
 }
 
 pub fn run(argv: Vec<String>) -> i32 {
+    // Runs on every Claude Code hook event, so skip the usual parsing.
+    if argv.len() == 2 && argv[0] == "hooks" && argv[1] == "claude-event" {
+        return agent::claude_event();
+    }
     let Args { mut pos, mut opts } = match parse(&argv) {
         Ok(a) => a,
         Err(e) => return fail(e),
@@ -185,6 +190,15 @@ fn dispatch(cmd: &str, mut pos: Vec<String>, mut opts: Map<String, Value>, as_js
         }
         "quit" => ("app.quit", |_| "OK".into()),
         "focus-window" => ("window.focus", |v| format!("OK {}", s(&v["window"]))),
+        "hooks" => {
+            let msg = match pos.first().map(String::as_str) {
+                Some("install") => agent::hooks(true),
+                Some("uninstall") => agent::hooks(false),
+                _ => return Err("hooks: expected install or uninstall".into()),
+            };
+            println!("{}", msg.map_err(|e| format!("{e:#}"))?);
+            return Ok(());
+        }
         "open" => return open(pos, opts),
         "browser" => return browser(pos, opts, as_json),
         "rpc" => {

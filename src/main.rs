@@ -1,3 +1,4 @@
+mod agent;
 mod bench;
 mod browser;
 mod cli;

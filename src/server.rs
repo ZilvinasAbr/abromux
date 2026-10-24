@@ -8,6 +8,7 @@
 
 use crate::{
     AbroMux, DEFAULT_URL,
+    agent::Agent,
     browser::normalize_url,
     debug, ipc,
     workspace::{Surface, Workspace, git_branch},
@@ -312,6 +313,39 @@ impl AbroMux {
                 let lines = p.get("lines").and_then(Value::as_u64).map(|n| n as usize);
                 let scrollback = bool_param(p, "scrollback", false);
                 json!(t.update(cx, |t, _| t.read_text(scrollback, lines)))
+            }
+
+            // From `abromux hooks claude-event` (agent.rs).
+            "agent.report" => {
+                let t = self.terminal_target(p)?;
+                let ended = str_param(p, "event") == Some("SessionEnd");
+                let reported = Agent::from_report(p);
+                let has_mode = p.get("permission_mode").is_some_and(|m| !m.is_null());
+                t.update(cx, |t, _| match (ended, reported) {
+                    // A nested `claude -p` ending mustn't drop the outer
+                    // session; the outer one's next Stop reasserts it anyway.
+                    (true, Some(a)) => {
+                        if t.agent.as_ref().is_some_and(|cur| cur.session_id == a.session_id) {
+                            t.agent = None;
+                        }
+                    }
+                    (false, Some(mut a)) => {
+                        if let Some(cur) = &t.agent
+                            && cur.session_id == a.session_id
+                        {
+                            // `--resume` needs the directory the session
+                            // started in; Claude's cwd can wander since.
+                            a.cwd = cur.cwd.clone();
+                            // SessionStart doesn't carry the permission mode.
+                            if !has_mode {
+                                a.permission_mode = cur.permission_mode.clone();
+                            }
+                        }
+                        t.agent = Some(a);
+                    }
+                    (_, None) => {}
+                });
+                json!(null)
             }
 
             "browser.open" => {
