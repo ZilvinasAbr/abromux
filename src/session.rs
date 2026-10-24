@@ -29,11 +29,17 @@ pub struct Session {
     pub active: usize,
     #[serde(default = "yes")]
     pub sidebar: bool,
+    #[serde(default = "sidebar_width")]
+    pub sidebar_width: f32,
     pub workspaces: Vec<WorkspaceState>,
 }
 
 fn yes() -> bool {
     true
+}
+
+fn sidebar_width() -> f32 {
+    crate::SIDEBAR_WIDTH
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -150,7 +156,7 @@ impl AbroMux {
                 root: node_state(&ws.root, scrollback, cx),
             })
             .collect();
-        Session { version: VERSION, window, active: self.active, sidebar: self.sidebar, workspaces }
+        Session { version: VERSION, window, active: self.active, sidebar: self.sidebar, sidebar_width: self.sidebar_width, workspaces }
     }
 
     /// Rebuild the saved workspaces. Returns false (and builds nothing) if
@@ -168,6 +174,7 @@ impl AbroMux {
             return false;
         }
         self.sidebar = session.sidebar;
+        self.sidebar_width = session.sidebar_width.clamp(crate::SIDEBAR_MIN, crate::SIDEBAR_MAX);
         self.select_workspace(session.active.min(self.workspaces.len() - 1), window, cx);
         true
     }
@@ -248,6 +255,7 @@ mod tests {
             window: Some(WindowState { x: 10., y: 20., width: 800., height: 600. }),
             active: 1,
             sidebar: false,
+            sidebar_width: 300.,
             workspaces: vec![WorkspaceState {
                 name: Some("api".into()),
                 focused: 1,
@@ -266,6 +274,6 @@ mod tests {
 
         let minimal = r#"{"version":1,"active":0,"workspaces":[{"root":{"kind":"pane","tabs":[{"kind":"terminal","cwd":"/"}]}}]}"#;
         let m: Session = serde_json::from_str(minimal).unwrap();
-        assert!(m.sidebar && m.window.is_none() && m.workspaces[0].name.is_none());
+        assert!(m.sidebar && m.sidebar_width == crate::SIDEBAR_WIDTH && m.window.is_none() && m.workspaces[0].name.is_none());
     }
 }
