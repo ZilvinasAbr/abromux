@@ -4,3 +4,4 @@
 /vendor/ghostty-vt-out
 .claude/
 .DS_Store
+/dist

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hardened runtime exceptions. Programs run in a terminal pane ask macOS for
+     access as AbroMux, so it needs these for them to be allowed at all. -->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.automation.apple-events</key><true/>
+  <key>com.apple.security.device.audio-input</key><true/>
+  <key>com.apple.security.device.camera</key><true/>
+</dict>
+</plist>

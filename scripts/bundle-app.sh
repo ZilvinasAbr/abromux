@@ -3,21 +3,46 @@
 #
 #   scripts/bundle-app.sh                 # installs /Applications/AbroMux.app
 #   scripts/bundle-app.sh ~/Applications  # or another folder
+#   scripts/bundle-app.sh --dist          # notarized dist/AbroMux-<version>.dmg
+#
+# Signs with the first "Developer ID Application" certificate in the keychain
+# (or $ABROMUX_SIGN_IDENTITY), falling back to an ad-hoc signature. --dist
+# needs the certificate and notarytool credentials stored once with:
+#   xcrun notarytool store-credentials abromux-notary --apple-id <id> --team-id <team>
+# ($ABROMUX_NOTARY_PROFILE picks another profile name.)
 #
 # The `abromux` CLI on PATH can point at the bundled binary:
 #   ln -sf /Applications/AbroMux.app/Contents/MacOS/abromux ~/.cargo/bin/abromux
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-dest="${1:-/Applications}"
+dist=false
+if [[ "${1:-}" == "--dist" ]]; then
+  dist=true
+else
+  dest="${1:-/Applications}"
+fi
+
+identity="${ABROMUX_SIGN_IDENTITY:-$(security find-identity -v -p codesigning |
+  sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -n1)}"
+profile="${ABROMUX_NOTARY_PROFILE:-abromux-notary}"
+if $dist && [[ -z "$identity" ]]; then
+  echo "--dist needs a Developer ID Application certificate." >&2
+  exit 1
+fi
 
 cargo build --release
 # The binary's own version (0.1.0+<sha>[-dirty]), and the commit count as the
 # build number macOS compares to tell newer from older.
 version="$(target/release/abromux version | cut -d' ' -f2)"
 build="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
+if $dist && [[ "$version" == *-dirty ]]; then
+  echo "Refusing to ship a -dirty build; commit or stash first." >&2
+  exit 1
+fi
 
-app="$(mktemp -d)/AbroMux.app"
+tmp="$(mktemp -d)"
+app="$tmp/AbroMux.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/abromux "$app/Contents/MacOS/abromux"
 cp assets/app/abromux.icns "$app/Contents/Resources/abromux.icns"
@@ -38,15 +63,44 @@ cat > "$app/Contents/Info.plist" <<EOF
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
+  <key>NSAppleEventsUsageDescription</key><string>A program running in AbroMux wants to control other apps.</string>
+  <key>NSCameraUsageDescription</key><string>A program running in AbroMux wants to use the camera.</string>
+  <key>NSMicrophoneUsageDescription</key><string>A program running in AbroMux wants to use the microphone.</string>
 </dict>
 </plist>
 EOF
 
-# Ad-hoc sign so Gatekeeper and TCC treat it as one stable app.
-codesign --force --deep --sign - "$app"
+if [[ -n "$identity" ]]; then
+  # Hardened runtime and a secure timestamp are what notarization requires.
+  codesign --force --sign "$identity" --options runtime --timestamp \
+    --entitlements assets/app/abromux.entitlements "$app"
+  echo "Signed with $identity"
+else
+  # Ad-hoc sign so Gatekeeper and TCC treat it as one stable app.
+  codesign --force --sign - "$app"
+  echo "No Developer ID certificate; signed ad-hoc."
+fi
+codesign --verify --strict "$app"
+
+if $dist; then
+  mkdir -p dist
+  dmg="dist/AbroMux-$version.dmg"
+  ln -s /Applications "$tmp/Applications"
+  rm -f "$dmg"
+  hdiutil create -volname AbroMux -srcfolder "$tmp" -fs HFS+ -format UDZO -quiet "$dmg"
+  codesign --force --sign "$identity" --timestamp "$dmg"
+  # Notarizing the disk image covers the app inside it too.
+  xcrun notarytool submit "$dmg" --keychain-profile "$profile" --wait
+  xcrun stapler staple "$dmg"
+  spctl --assess --type open --context context:primary-signature -v "$dmg"
+  rm -rf "$tmp"
+  echo "Built $dmg ($version)"
+  exit 0
+fi
 
 rm -rf "$dest/AbroMux.app"
 mv "$app" "$dest/AbroMux.app"
+rm -rf "$tmp"
 # Make Finder and the Dock pick up the new icon instead of a cached one.
 touch "$dest/AbroMux.app"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$dest/AbroMux.app" || true
