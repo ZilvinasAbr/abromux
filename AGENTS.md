@@ -11,7 +11,7 @@ Every commit has its own version automatically. Don't bump anything by hand per 
 
 ## Nightly app
 
-To check a change in the real app, build it with `scripts/nightly.sh` (AbroMux Nightly.app), not `scripts/bundle-app.sh`/`update-app.sh`, which replace the user's release AbroMux.app. Details are in the README under "Nightly build".
+To check a change in the real app, build it with `scripts/nightly.sh` (AbroMux Nightly.app), not `scripts/bundle-app.sh`/`update-app.sh`, which replace the user's release AbroMux.app. Details are in `docs/guide.md` under "Nightly build".
 
 In code, use `channel::app_name()` for the user-visible app name and `channel::support_dir()` for files under Application Support, never a hardcoded "AbroMux" or `abromux/` path, so the two apps stay apart.
 
