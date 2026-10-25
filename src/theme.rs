@@ -13,6 +13,8 @@ pub const MUTED: u32 = 0x9c9a92;
 pub const ACCENT: u32 = 0xc96442;
 pub const ACCENT_BRIGHT: u32 = 0xd97757;
 pub const HOVER: u32 = 0xffffff10;
+/// Fill for where a dragged tab would land.
+pub const DROP_TINT: u32 = 0xc9644233;
 
 pub fn icon(name: &str) -> Svg {
     svg()

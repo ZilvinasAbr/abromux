@@ -8,7 +8,7 @@ A proof-of-concept of [cmux](https://cmux.com) built with Rust and [GPUI](https:
 - **Claude Code and Codex** show up in the sidebar once you've run `abromux hooks install`: a "Running" pill while the agent works and "Needs input" when it asks for permission. When it asks, or finishes a turn, its terminal gets a notification ("Codex: Asks to run …", "Claude Code: <the start of its reply>").
 - **Notifications** come from terminal programs (OSC 9, OSC 99 and OSC 777, as Claude Code, Codex and others send them), from the bell, and from `abromux notify`. One you aren't looking at rings its pane, puts a dot on its tab and on its workspace, shows its text under the workspace in the sidebar, counts on the dock icon, and, while AbroMux is in the background, shows a macOS banner that takes you to it when clicked (banners need AbroMux.app; a `cargo run` build has the rest). It's read once you look at that terminal. ⌘I lists them all; ⌘⇧U jumps to the newest unread one.
 - **Links** in terminal output underline while you hold ⌘ over them: URLs, OSC 8 hyperlinks, and paths to files that exist (relative ones from the shell's directory, `path:line` too). ⌘-click opens web links in a browser to the right of the terminal (a new tab there if that pane already shows one) and anything else with its default app.
-- **Panes** split right or down, and each pane has a tab bar of terminal and browser tabs. Drag a divider to resize.
+- **Panes** split right or down, and each pane has a tab bar of terminal and browser tabs. Drag a divider to resize. Drag a tab to reorder it, onto another pane's tab bar or middle to move it there, onto a pane's edge to split that pane, or onto the outer edge of the pane area to split the whole workspace (full width or height). A highlight shows where it will land.
 
 ## Requirements
 
@@ -102,6 +102,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | New terminal tab | terminal icon in pane tab bar | ⌘T |
 | New browser tab | globe icon | ⌘⇧L (⌘L focuses address bar) |
 | Split right / down | split icons | ⌘D / ⌘⇧D |
+| Move tab / split by dragging | drag a tab onto a tab bar, a pane's edge or the window's edge | |
 | Close tab | tab `×` / middle-click | ⌘W (last tab closes the pane; last pane closes the workspace) |
 | Cycle tabs | | ⌘⇧[ / ⌘⇧], ⌃Tab / ⌃⇧Tab |
 | Select tab in focused pane | click | ⌃1…⌃8, ⌃9 for the last (hold ⌃ to see the numbers) |

@@ -33,14 +33,14 @@ use gpui_component::{
 };
 use std::{
     borrow::Cow,
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
     time::{Duration, Instant},
 };
 use terminal::{TerminalEvent, TerminalView};
 use theme::*;
-use workspace::{Dir, Node, Pane, Surface, Workspace, git_branch, tilde};
+use workspace::{Dir, Node, Pane, Surface, TabDrop, Workspace, git_branch, tilde};
 
 actions!(
     abromux,
@@ -106,6 +106,10 @@ const SIDEBAR_MIN: f32 = 180.;
 const SIDEBAR_MAX: f32 = 480.;
 /// Height of the titlebar row the traffic lights sit in.
 const TITLEBAR_H: f32 = 38.;
+const TABBAR_H: f32 = 30.;
+/// How close to the pane area's outer edge a dragged tab splits the whole
+/// workspace instead of one pane.
+const DROP_EDGE: f32 = 32.;
 
 /// Which shortcut hints are showing: ⌘ numbers workspaces, ⌃ numbers the
 /// focused pane's tabs.
@@ -174,6 +178,11 @@ struct AbroMux {
     resizing_sidebar: bool,
     split_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     dragging: Option<(usize, Axis)>,
+    /// Where a dragged tab would land: the pane under the cursor, the
+    /// target, and the area to highlight.
+    tab_drop: Option<(usize, TabDrop, Bounds<Pixels>)>,
+    /// The pane area, for drops on its outer edges.
+    main_bounds: Rc<Cell<Bounds<Pixels>>>,
     branches: RefCell<HashMap<String, (Instant, Option<String>)>>,
     hints: Option<Hints>,
     /// Bumped on every modifier change so a stale delayed show does nothing.
@@ -217,6 +226,8 @@ impl AbroMux {
             resizing_sidebar: false,
             split_bounds: Default::default(),
             dragging: None,
+            tab_drop: None,
+            main_bounds: Default::default(),
             branches: Default::default(),
             hints: None,
             hint_gen: 0,
@@ -764,6 +775,90 @@ impl AbroMux {
         Some(new_id)
     }
 
+    fn move_tab(&mut self, id: EntityId, to: TabDrop, window: &mut Window, cx: &mut Context<Self>) {
+        let (pane, split) = (self.pane_id(), self.id());
+        if self.workspaces[self.active].move_tab(id, to, pane, split) {
+            self.focus_active(window, cx);
+        }
+        self.tab_drop = None;
+        cx.notify();
+    }
+
+    /// A tab dragged over pane `pane_id`'s content (`ev.bounds`): near the
+    /// pane area's outer edge it splits the whole workspace, near the pane's
+    /// own edge it splits the pane, and in the middle it joins its tabs.
+    fn drag_over_pane(
+        &mut self,
+        pane_id: usize,
+        ev: &DragMoveEvent<DraggedTab>,
+        cx: &mut Context<Self>,
+    ) {
+        let (b, pos) = (ev.bounds, ev.event.position);
+        if !b.contains(&pos) {
+            if self.tab_drop.is_some_and(|(over, ..)| over == pane_id) {
+                self.tab_drop = None;
+                cx.notify();
+            }
+            return;
+        }
+        let ws = self.ws();
+        let id = ev.drag(cx).sid;
+        let half = |r: Bounds<Pixels>, dir: Dir| {
+            let (w, h) = (r.size.width / 2., r.size.height / 2.);
+            match dir {
+                Dir::Left => Bounds::new(r.origin, size(w, r.size.height)),
+                Dir::Right => {
+                    Bounds::new(point(r.origin.x + w, r.origin.y), size(w, r.size.height))
+                }
+                Dir::Up => Bounds::new(r.origin, size(r.size.width, h)),
+                Dir::Down => Bounds::new(point(r.origin.x, r.origin.y + h), size(r.size.width, h)),
+            }
+        };
+        let m = self.main_bounds.get();
+        // The top band starts below the top row's tab bars.
+        let edge = [
+            (Dir::Left, f32::from(pos.x - m.left())),
+            (Dir::Right, f32::from(m.right() - pos.x)),
+            (Dir::Up, f32::from(pos.y - m.top()) - TABBAR_H),
+            (Dir::Down, f32::from(m.bottom() - pos.y)),
+        ]
+        .into_iter()
+        .filter(|&(_, d)| d < DROP_EDGE)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(dir, _)| dir)
+        .filter(|&dir| ws.root.panes().len() > 1 && ws.accepts(id, TabDrop::Edge(dir)));
+        let target = if let Some(dir) = edge {
+            Some((TabDrop::Edge(dir), half(m, dir)))
+        } else {
+            let fx = (pos.x - b.left()) / b.size.width;
+            let fy = (pos.y - b.top()) / b.size.height;
+            let (dir, d) = [
+                (Dir::Left, fx),
+                (Dir::Right, 1. - fx),
+                (Dir::Up, fy),
+                (Dir::Down, 1. - fy),
+            ]
+            .into_iter()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap();
+            let to = if d < 0.3 {
+                TabDrop::Split { pane: pane_id, dir }
+            } else {
+                TabDrop::Tabs {
+                    pane: pane_id,
+                    index: usize::MAX,
+                }
+            };
+            let rect = if d < 0.3 { half(b, dir) } else { b };
+            ws.accepts(id, to).then_some((to, rect))
+        };
+        let next = target.map(|(to, rect)| (pane_id, to, rect));
+        if next != self.tab_drop {
+            self.tab_drop = next;
+            cx.notify();
+        }
+    }
+
     fn cycle_tab(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         let ws = &mut self.workspaces[self.active];
         if let Some(p) = ws.root.pane_mut(ws.focused_pane)
@@ -896,11 +991,11 @@ impl AbroMux {
             for p in ws.root.panes() {
                 for (ti, s) in p.tabs.iter().enumerate() {
                     if let Surface::Browser(b) = s {
-                        let shown = wi == self.active
-                            && ti == p.active
-                            && self.renaming.is_none()
-                            && !self.notifications_open
-                            && self.palette.is_none();
+                        let shown = wi == self.active && ti == p.active && self.renaming.is_none() && !self.notifications_open
+                            && self.palette.is_none()
+                            // Hidden while dragging a tab so drop targets show
+                            // over them and get the mouse.
+                            && !cx.has_active_drag();
                         b.update(cx, |b, cx| b.set_shown(shown, cx));
                     }
                 }
@@ -1371,6 +1466,26 @@ impl AbroMux {
                     MouseButton::Middle,
                     cx.listener(move |this, _, window, cx| this.close_surface(sid, window, cx)),
                 )
+                .on_drag(
+                    DraggedTab {
+                        sid,
+                        icon: s.icon(),
+                        title: s.title(cx).into(),
+                    },
+                    |d, _, _, cx| cx.new(|_| d.clone()),
+                )
+                .drag_over::<DraggedTab>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
+                .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
+                    this.move_tab(
+                        d.sid,
+                        TabDrop::Tabs {
+                            pane: pane_id,
+                            index: ti,
+                        },
+                        window,
+                        cx,
+                    )
+                }))
                 .when(unread, |d| {
                     d.text_color(rgb(TEXT)).child(
                         div()
@@ -1418,7 +1533,7 @@ impl AbroMux {
         let tab_bar =
             div()
                 .id(("tabbar", pane_id))
-                .h(px(30.))
+                .h(px(TABBAR_H))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -1441,7 +1556,19 @@ impl AbroMux {
                             if ev.click_count == 2 {
                                 window.titlebar_double_click();
                             }
-                        }),
+                        })
+                        .drag_over::<DraggedTab>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
+                        .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
+                            this.move_tab(
+                                d.sid,
+                                TabDrop::Tabs {
+                                    pane: pane_id,
+                                    index: tab_count,
+                                },
+                                window,
+                                cx,
+                            )
+                        })),
                 )
                 .child(
                     div()
@@ -1515,6 +1642,27 @@ impl AbroMux {
                     .when(multi && !focused, |d| {
                         d.child(div().absolute().inset_0().bg(rgba(0x0000004a)))
                     })
+                    // Catches a dragged tab over the content (terminals and
+                    // webviews would otherwise swallow it).
+                    .when(cx.has_active_drag(), |d| {
+                        d.child(
+                            div()
+                                .id(("drop", pane_id))
+                                .absolute()
+                                .inset_0()
+                                .on_drag_move(cx.listener(
+                                    move |this, ev: &DragMoveEvent<DraggedTab>, _, cx| {
+                                        this.drag_over_pane(pane_id, ev, cx)
+                                    },
+                                ))
+                                .on_drop(cx.listener(|this, d: &DraggedTab, window, cx| {
+                                    match this.tab_drop {
+                                        Some((_, to, _)) => this.move_tab(d.sid, to, window, cx),
+                                        None => cx.notify(),
+                                    }
+                                })),
+                        )
+                    })
                     .when_some(self.flash.filter(|(p, _)| *p == pane_id), |d, (_, n)| {
                         d.child(
                             div()
@@ -1548,6 +1696,9 @@ impl Render for AbroMux {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window_bounds = Some(window.window_bounds().get_bounds());
         self.mark_viewed(window);
+        if !cx.has_active_drag() {
+            self.tab_drop = None;
+        }
         self.sync_webviews(cx);
         let notifications = self
             .notifications_open
@@ -1769,11 +1920,68 @@ impl Render for AbroMux {
                                 ),
                         )
                     })
-                    .child(div().flex_1().min_h_0().child(main)),
+                    .child({
+                        let (bounds, origin) =
+                            (self.main_bounds.clone(), self.main_bounds.get().origin);
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .relative()
+                            .child(
+                                canvas(move |b, _, _| bounds.set(b), |_, _, _, _| {})
+                                    .absolute()
+                                    .size_full(),
+                            )
+                            .child(main)
+                            .when_some(self.tab_drop, |d, (_, _, r)| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .left(r.origin.x - origin.x)
+                                        .top(r.origin.y - origin.y)
+                                        .w(r.size.width)
+                                        .h(r.size.height)
+                                        .rounded(px(4.))
+                                        .border_2()
+                                        .border_color(rgb(ACCENT))
+                                        .bg(rgba(DROP_TINT)),
+                                )
+                            })
+                    }),
             )
             .relative()
             .children(notifications)
             .children(palette)
+    }
+}
+
+/// A tab being dragged, drawn as a chip under the cursor.
+#[derive(Clone)]
+struct DraggedTab {
+    sid: EntityId,
+    icon: &'static str,
+    title: SharedString,
+}
+
+impl Render for DraggedTab {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .h(px(TABBAR_H))
+            .max_w(px(220.))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .rounded(px(5.))
+            .border_1()
+            .border_color(rgb(ACCENT))
+            .bg(rgb(PANE_BG))
+            .opacity(0.9)
+            .text_size(px(12.))
+            .text_color(rgb(TEXT))
+            .font_family(".AppleSystemUIFont")
+            .child(icon(self.icon).size(px(12.)).text_color(rgb(TEXT)))
+            .child(div().min_w_0().truncate().child(self.title.clone()))
     }
 }
 

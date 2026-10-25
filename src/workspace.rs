@@ -175,6 +175,24 @@ impl Node {
         children.iter_mut().any(|c| c.remove(target))
     }
 
+    /// Put `new` beside the whole tree on side `dir`: a full-width (or
+    /// full-height) split.
+    pub fn wrap(&mut self, dir: Dir, new: Pane, split_id: usize) {
+        let old = std::mem::replace(self, Node::Leaf(dummy()));
+        let before = matches!(dir, Dir::Left | Dir::Up);
+        let children = if before {
+            [Node::Leaf(new), old]
+        } else {
+            [old, Node::Leaf(new)]
+        };
+        *self = Node::Split {
+            id: split_id,
+            axis: dir.axis(),
+            ratio: 0.5,
+            children: Box::new(children),
+        };
+    }
+
     /// The innermost split along `axis` that holds pane `pane`: the one
     /// whose divider a resize of that pane along `axis` moves.
     pub fn split_along(&self, pane: usize, axis: Axis) -> Option<usize> {
@@ -258,6 +276,26 @@ pub enum Dir {
     Right,
     Up,
     Down,
+}
+
+impl Dir {
+    pub fn axis(self) -> Axis {
+        match self {
+            Dir::Left | Dir::Right => Axis::Horizontal,
+            Dir::Up | Dir::Down => Axis::Vertical,
+        }
+    }
+}
+
+/// Where a dragged tab lands.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum TabDrop {
+    /// Into pane `pane`'s tabs at `index` (past the end appends).
+    Tabs { pane: usize, index: usize },
+    /// A new pane split off pane `pane` on side `dir`.
+    Split { pane: usize, dir: Dir },
+    /// A new pane beside the whole workspace on side `dir`.
+    Edge(Dir),
 }
 
 fn dummy() -> Pane {
@@ -376,6 +414,105 @@ impl Workspace {
             .panes()
             .iter()
             .any(|p| p.tabs.iter().any(|s| s.entity_id() == id))
+    }
+
+    /// Pane, index and pane tab count of tab `id`.
+    fn find_tab(&self, id: EntityId) -> Option<(usize, usize, usize)> {
+        self.root.panes().iter().find_map(|p| {
+            p.tabs
+                .iter()
+                .position(|s| s.entity_id() == id)
+                .map(|i| (p.id, i, p.tabs.len()))
+        })
+    }
+
+    /// Whether moving tab `id` to `to` would change anything.
+    pub fn accepts(&self, id: EntityId, to: TabDrop) -> bool {
+        let Some((from, _, count)) = self.find_tab(id) else {
+            return false;
+        };
+        let alone = count == 1;
+        let has = |pane| self.root.panes().iter().any(|p| p.id == pane);
+        match to {
+            // A pane's only tab can't be split off it or reordered within it.
+            TabDrop::Tabs { pane, .. } | TabDrop::Split { pane, .. } => {
+                has(pane) && !(pane == from && alone)
+            }
+            // Nor can a one-pane workspace's only tab move to an edge.
+            TabDrop::Edge(_) => !(alone && matches!(self.root, Node::Leaf(_))),
+        }
+    }
+
+    /// Move tab `id` to `to`, closing the pane it leaves if that empties it.
+    /// A new pane, if one is made, gets id `new_pane` under split `split_id`.
+    /// Focuses the tab where it lands; false (and no change) unless
+    /// [`accepts`](Self::accepts).
+    pub fn move_tab(
+        &mut self,
+        id: EntityId,
+        to: TabDrop,
+        new_pane: usize,
+        split_id: usize,
+    ) -> bool {
+        if !self.accepts(id, to) {
+            return false;
+        }
+        let (from, idx, count) = self.find_tab(id).unwrap();
+        let alone = count == 1;
+
+        let src = self.root.pane_mut(from).unwrap();
+        let surface = src.tabs.remove(idx);
+        if src.active > idx || src.active >= src.tabs.len() {
+            src.active = src.active.saturating_sub(1);
+        }
+        let dest = match to {
+            TabDrop::Tabs { pane, index } => {
+                let p = self.root.pane_mut(pane).unwrap();
+                // The tab's own removal shifts later slots in its pane.
+                let at = if pane == from && index > idx {
+                    index - 1
+                } else {
+                    index
+                }
+                .min(p.tabs.len());
+                p.tabs.insert(at, surface);
+                p.active = at;
+                pane
+            }
+            TabDrop::Split { pane, dir } => {
+                let new = Pane {
+                    id: new_pane,
+                    tabs: vec![surface],
+                    active: 0,
+                };
+                let before = matches!(dir, Dir::Left | Dir::Up);
+                assert!(
+                    self.root
+                        .split(pane, dir.axis(), before, new, split_id)
+                        .is_ok(),
+                    "pane checked above"
+                );
+                new_pane
+            }
+            TabDrop::Edge(dir) => {
+                self.root.wrap(
+                    dir,
+                    Pane {
+                        id: new_pane,
+                        tabs: vec![surface],
+                        active: 0,
+                    },
+                    split_id,
+                );
+                new_pane
+            }
+        };
+        if alone {
+            // Not the root leaf: the drop always leaves another pane.
+            self.root.remove(from);
+        }
+        self.focused_pane = dest;
+        true
     }
 
     /// cwd of the focused terminal, or of any terminal in the workspace.
@@ -502,6 +639,30 @@ mod tests {
             vec![5, 3],
             "left/up splits put the new pane first"
         );
+    }
+
+    #[test]
+    fn wrap_splits_the_whole_tree() {
+        let mut root = Node::Leaf(pane(1));
+        assert!(root.split(1, Axis::Horizontal, false, pane(2), 100).is_ok());
+        root.wrap(Dir::Down, pane(3), 101);
+        assert_eq!(ids(&root), vec![1, 2, 3]);
+        // ┌───┬───┐
+        // │ 1 │ 2 │
+        // ├───┴───┤
+        // │   3   │
+        // └───────┘
+        assert_eq!(root.neighbor(1, Dir::Down), Some(3));
+        assert_eq!(root.neighbor(2, Dir::Down), Some(3));
+        assert_eq!(root.split_along(3, Axis::Vertical), Some(101));
+
+        root.wrap(Dir::Left, pane(4), 102);
+        assert_eq!(
+            ids(&root),
+            vec![4, 1, 2, 3],
+            "left/up wraps put the new pane first"
+        );
+        assert_eq!(root.neighbor(3, Dir::Left), Some(4));
     }
 
     #[test]
