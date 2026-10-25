@@ -6,7 +6,10 @@
 //! one gives focus back and dispatches the action there, exactly as its
 //! shortcut would.
 
-use crate::{AbroMux, TITLEBAR_H, browser, channel, shortcut_digit, terminal, theme::*, workspace::Surface, workspace::tilde};
+use crate::{
+    AbroMux, TITLEBAR_H, browser, channel, shortcut_digit, terminal, theme::*, workspace::Surface,
+    workspace::tilde,
+};
 use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputEvent, InputState};
 
@@ -52,9 +55,10 @@ pub struct Palette {
 /// and the tab bar cover them.
 fn commands() -> Vec<(&'static str, Box<dyn Action>)> {
     use crate::{
-        CloseTab, CloseWorkspace, FlashPane, FocusAddressBar, FocusDown, FocusLeft, FocusRight, FocusUp, JumpToUnread, NewBrowser, NewTerminal, NewWorkspace,
-        NextTab, NextWorkspace, PrevTab, PrevWorkspace, Quit, RenameWorkspace, ResizeDown, ResizeLeft, ResizeRight, ResizeUp, SplitDown, SplitRight,
-        ToggleNotifications, ToggleSidebar,
+        CloseTab, CloseWorkspace, FlashPane, FocusAddressBar, FocusDown, FocusLeft, FocusRight,
+        FocusUp, JumpToUnread, NewBrowser, NewTerminal, NewWorkspace, NextTab, NextWorkspace,
+        PrevTab, PrevWorkspace, Quit, RenameWorkspace, ResizeDown, ResizeLeft, ResizeRight,
+        ResizeUp, SplitDown, SplitRight, ToggleNotifications, ToggleSidebar,
     };
     vec![
         ("New Workspace", Box::new(NewWorkspace)),
@@ -86,7 +90,10 @@ fn commands() -> Vec<(&'static str, Box<dyn Action>)> {
         ("Find…", Box::new(terminal::Find)),
         ("Find Next", Box::new(terminal::FindNext)),
         ("Find Previous", Box::new(terminal::FindPrevious)),
-        ("Use Selection for Find", Box::new(terminal::UseSelectionForFind)),
+        (
+            "Use Selection for Find",
+            Box::new(terminal::UseSelectionForFind),
+        ),
         ("Clear Scrollback", Box::new(terminal::ClearScrollback)),
         ("Increase Font Size", Box::new(terminal::IncreaseFontSize)),
         ("Decrease Font Size", Box::new(terminal::DecreaseFontSize)),
@@ -104,7 +111,12 @@ fn commands() -> Vec<(&'static str, Box<dyn Action>)> {
 impl AbroMux {
     /// ⌘⇧P / ⌘P: open the palette in `mode`, switch an open one to it, or
     /// close it if it's already showing `mode`.
-    pub(crate) fn toggle_palette(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_palette(
+        &mut self,
+        mode: Mode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let prev_focus = match self.palette.take() {
             Some(p) if p.mode == mode => {
                 self.restore_focus(p.prev_focus, window, cx);
@@ -130,24 +142,36 @@ impl AbroMux {
             Mode::Workspaces => "Search workspaces",
         };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
-        cx.subscribe_in(&input, window, |this, input, ev: &InputEvent, _, cx| match ev {
-            InputEvent::Change => {
-                let query = input.read(cx).value().to_string();
-                if let Some(p) = &mut this.palette {
-                    p.filter(&query);
+        cx.subscribe_in(
+            &input,
+            window,
+            |this, input, ev: &InputEvent, _, cx| match ev {
+                InputEvent::Change => {
+                    let query = input.read(cx).value().to_string();
+                    if let Some(p) = &mut this.palette {
+                        p.filter(&query);
+                        cx.notify();
+                    }
+                }
+                // Focus went somewhere else (a click outside, a pane taking it).
+                InputEvent::Blur if this.palette.as_ref().is_some_and(|p| &p.input == input) => {
+                    this.palette = None;
                     cx.notify();
                 }
-            }
-            // Focus went somewhere else (a click outside, a pane taking it).
-            InputEvent::Blur if this.palette.as_ref().is_some_and(|p| &p.input == input) => {
-                this.palette = None;
-                cx.notify();
-            }
-            _ => {}
-        })
+                _ => {}
+            },
+        )
         .detach();
         input.update(cx, |i, cx| i.focus(window, cx));
-        let mut palette = Palette { mode, input, entries, matches: vec![], selected: 0, prev_focus, scroll: ScrollHandle::new() };
+        let mut palette = Palette {
+            mode,
+            input,
+            entries,
+            matches: vec![],
+            selected: 0,
+            prev_focus,
+            scroll: ScrollHandle::new(),
+        };
         palette.filter("");
         self.palette = Some(palette);
         cx.notify();
@@ -160,7 +184,12 @@ impl AbroMux {
         }
     }
 
-    fn restore_focus(&mut self, prev: Option<FocusHandle>, window: &mut Window, cx: &mut Context<Self>) {
+    fn restore_focus(
+        &mut self,
+        prev: Option<FocusHandle>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match prev {
             Some(f) => window.focus(&f),
             None => self.focus_active(window, cx),
@@ -219,8 +248,20 @@ impl AbroMux {
                 let keys = keymap
                     .bindings_for_action(action.as_ref())
                     .find(|b| b.predicate().is_none_or(|p| p.depth_of(&stack).is_some()))
-                    .map(|b| b.keystrokes().iter().map(|k| key_label(k.modifiers(), k.key())).collect::<Vec<_>>().join(" ").into());
-                Entry { title: title.into(), subtitle: None, keys, target: Target::Action(action) }
+                    .map(|b| {
+                        b.keystrokes()
+                            .iter()
+                            .map(|k| key_label(k.modifiers(), k.key()))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .into()
+                    });
+                Entry {
+                    title: title.into(),
+                    subtitle: None,
+                    keys,
+                    target: Target::Action(action),
+                }
             })
             .collect()
     }
@@ -240,10 +281,16 @@ impl AbroMux {
     }
 
     /// Handlers for the palette's keys, put on the root element.
-    pub(crate) fn palette_actions(&self, root: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
+    pub(crate) fn palette_actions(
+        &self,
+        root: Stateful<Div>,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         root.on_action(cx.listener(|this, _: &SelectNext, _, cx| this.move_selection(1, cx)))
             .on_action(cx.listener(|this, _: &SelectPrev, _, cx| this.move_selection(-1, cx)))
-            .on_action(cx.listener(|this, _: &Confirm, window, cx| this.confirm_palette(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &Confirm, window, cx| this.confirm_palette(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.close_palette(window, cx)))
     }
 
@@ -292,10 +339,28 @@ impl AbroMux {
                             .flex()
                             .items_baseline()
                             .gap(px(8.))
-                            .child(div().flex_none().text_size(px(13.)).child(highlighted(&e.title, positions)))
-                            .children(e.subtitle.clone().map(|s| div().min_w_0().truncate().text_size(px(11.5)).text_color(rgb(MUTED)).child(s))),
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_size(px(13.))
+                                    .child(highlighted(&e.title, positions)),
+                            )
+                            .children(e.subtitle.clone().map(|s| {
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(11.5))
+                                    .text_color(rgb(MUTED))
+                                    .child(s)
+                            })),
                     )
-                    .children(e.keys.clone().map(|k| div().flex_none().text_size(px(11.5)).text_color(rgb(MUTED)).child(k)))
+                    .children(e.keys.clone().map(|k| {
+                        div()
+                            .flex_none()
+                            .text_size(px(11.5))
+                            .text_color(rgb(MUTED))
+                            .child(k)
+                    }))
                     .into_any_element()
             })
             .collect();
@@ -313,46 +378,74 @@ impl AbroMux {
                         .id("palette-backdrop")
                         .absolute()
                         .inset_0()
-                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_palette(window, cx))),
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| this.close_palette(window, cx)),
+                        ),
                 )
                 .child(
-                    div().absolute().top(px(TITLEBAR_H + 8.)).left_0().right_0().flex().justify_center().child(
-                        div()
-                            .id("palette")
-                            .key_context(CONTEXT)
-                            .w(px(WIDTH))
-                            .flex()
-                            .flex_col()
-                            .rounded(px(10.))
-                            .bg(rgb(TABBAR_BG))
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .shadow_lg()
-                            .overflow_hidden()
-                            .occlude()
-                            // Keep focus in the input when a row is clicked.
-                            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
-                            .child(
-                                div()
-                                    .h(px(40.))
-                                    .px(px(14.))
-                                    .flex()
-                                    .items_center()
-                                    .border_b_1()
-                                    .border_color(rgb(BORDER))
-                                    .child(Input::new(&p.input).appearance(false).text_size(px(14.)).h_full().px_0().py_0()),
-                            )
-                            .child(
-                                div()
-                                    .id("palette-rows")
-                                    .max_h(px(MAX_ROWS_HEIGHT))
-                                    .py(px(6.))
-                                    .overflow_y_scroll()
-                                    .track_scroll(&p.scroll)
-                                    .when(rows.is_empty(), |d| d.child(div().px(px(16.)).py(px(8.)).text_size(px(12.5)).text_color(rgb(MUTED)).child(empty)))
-                                    .children(rows),
-                            ),
-                    ),
+                    div()
+                        .absolute()
+                        .top(px(TITLEBAR_H + 8.))
+                        .left_0()
+                        .right_0()
+                        .flex()
+                        .justify_center()
+                        .child(
+                            div()
+                                .id("palette")
+                                .key_context(CONTEXT)
+                                .w(px(WIDTH))
+                                .flex()
+                                .flex_col()
+                                .rounded(px(10.))
+                                .bg(rgb(TABBAR_BG))
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .shadow_lg()
+                                .overflow_hidden()
+                                .occlude()
+                                // Keep focus in the input when a row is clicked.
+                                .on_mouse_down(MouseButton::Left, |_, window, _| {
+                                    window.prevent_default()
+                                })
+                                .child(
+                                    div()
+                                        .h(px(40.))
+                                        .px(px(14.))
+                                        .flex()
+                                        .items_center()
+                                        .border_b_1()
+                                        .border_color(rgb(BORDER))
+                                        .child(
+                                            Input::new(&p.input)
+                                                .appearance(false)
+                                                .text_size(px(14.))
+                                                .h_full()
+                                                .px_0()
+                                                .py_0(),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .id("palette-rows")
+                                        .max_h(px(MAX_ROWS_HEIGHT))
+                                        .py(px(6.))
+                                        .overflow_y_scroll()
+                                        .track_scroll(&p.scroll)
+                                        .when(rows.is_empty(), |d| {
+                                            d.child(
+                                                div()
+                                                    .px(px(16.))
+                                                    .py(px(8.))
+                                                    .text_size(px(12.5))
+                                                    .text_color(rgb(MUTED))
+                                                    .child(empty),
+                                            )
+                                        })
+                                        .children(rows),
+                                ),
+                        ),
                 )
                 .into_any_element(),
         )
@@ -361,8 +454,12 @@ impl AbroMux {
 
 impl Palette {
     fn filter(&mut self, query: &str) {
-        let mut scored: Vec<(i32, usize, Vec<usize>)> =
-            self.entries.iter().enumerate().filter_map(|(i, e)| fuzzy_match(query, &e.title).map(|(score, pos)| (score, i, pos))).collect();
+        let mut scored: Vec<(i32, usize, Vec<usize>)> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| fuzzy_match(query, &e.title).map(|(score, pos)| (score, i, pos)))
+            .collect();
         // Best score first; ties keep palette order.
         scored.sort_by_key(|(score, i, _)| (-score, *i));
         self.matches = scored.into_iter().map(|(_, i, pos)| (i, pos)).collect();
@@ -373,9 +470,17 @@ impl Palette {
 
 /// The title with matched characters in the accent colour.
 fn highlighted(title: &SharedString, positions: &[usize]) -> StyledText {
-    let style = HighlightStyle { color: Some(rgb(ACCENT_BRIGHT).into()), font_weight: Some(FontWeight::SEMIBOLD), ..Default::default() };
-    let highlights =
-        title.char_indices().enumerate().filter(|(ci, _)| positions.contains(ci)).map(|(_, (b, c))| (b..b + c.len_utf8(), style)).collect::<Vec<_>>();
+    let style = HighlightStyle {
+        color: Some(rgb(ACCENT_BRIGHT).into()),
+        font_weight: Some(FontWeight::SEMIBOLD),
+        ..Default::default()
+    };
+    let highlights = title
+        .char_indices()
+        .enumerate()
+        .filter(|(ci, _)| positions.contains(ci))
+        .map(|(_, (b, c))| (b..b + c.len_utf8(), style))
+        .collect::<Vec<_>>();
     StyledText::new(title.clone()).with_highlights(highlights)
 }
 
@@ -388,7 +493,12 @@ fn key_label(m: &Modifiers, key: &str) -> String {
         k => (m.shift, k),
     };
     let mut s = String::new();
-    for (on, sym) in [(m.control, '⌃'), (m.alt, '⌥'), (shift, '⇧'), (m.platform, '⌘')] {
+    for (on, sym) in [
+        (m.control, '⌃'),
+        (m.alt, '⌥'),
+        (shift, '⇧'),
+        (m.platform, '⌘'),
+    ] {
         if on {
             s.push(sym);
         }
@@ -417,12 +527,19 @@ pub fn fuzzy_match(query: &str, text: &str) -> Option<(i32, Vec<usize>)> {
     if q.is_empty() {
         return Some((0, vec![]));
     }
-    let t: Vec<char> = text.chars().map(|c| c.to_lowercase().next().unwrap_or(c)).collect();
+    let t: Vec<char> = text
+        .chars()
+        .map(|c| c.to_lowercase().next().unwrap_or(c))
+        .collect();
     let word_start = |i: usize| i == 0 || !t[i - 1].is_alphanumeric();
 
     // A contiguous run, preferring one that starts a word.
     let runs = (0..t.len()).filter(|&i| t[i..].starts_with(&q));
-    if let Some(start) = runs.clone().find(|&i| word_start(i)).or_else(|| runs.clone().next()) {
+    if let Some(start) = runs
+        .clone()
+        .find(|&i| word_start(i))
+        .or_else(|| runs.clone().next())
+    {
         let score =
             1000 + if start == 0 {
                 200
@@ -442,7 +559,11 @@ pub fn fuzzy_match(query: &str, text: &str) -> Option<(i32, Vec<usize>)> {
         let rest = &q[qi + 1..];
         let candidates: Vec<usize> = (from..t.len()).filter(|&i| t[i] == c).collect();
         let fits = |i: usize| is_subsequence(rest, &t[i + 1..]);
-        let pick = candidates.iter().copied().find(|&i| word_start(i) && fits(i)).or_else(|| candidates.iter().copied().find(|&i| fits(i)))?;
+        let pick = candidates
+            .iter()
+            .copied()
+            .find(|&i| word_start(i) && fits(i))
+            .or_else(|| candidates.iter().copied().find(|&i| fits(i)))?;
         pos.push(pick);
         from = pick + 1;
     }
@@ -468,9 +589,15 @@ mod tests {
     #[test]
     fn matches_and_positions() {
         assert_eq!(fuzzy_match("", "Split Right"), Some((0, vec![])));
-        assert_eq!(fuzzy_match("right", "Split Right").unwrap().1, vec![6, 7, 8, 9, 10]);
+        assert_eq!(
+            fuzzy_match("right", "Split Right").unwrap().1,
+            vec![6, 7, 8, 9, 10]
+        );
         assert_eq!(fuzzy_match("SR", "Split Right").unwrap().1, vec![0, 6]);
-        assert_eq!(fuzzy_match("ntt", "New Terminal Tab").unwrap().1, vec![0, 4, 13]);
+        assert_eq!(
+            fuzzy_match("ntt", "New Terminal Tab").unwrap().1,
+            vec![0, 4, 13]
+        );
         assert!(fuzzy_match("xyz", "Split Right").is_none());
         assert!(fuzzy_match("thgir", "Split Right").is_none());
     }
@@ -495,12 +622,33 @@ mod tests {
 
     #[test]
     fn key_labels() {
-        let cmd = Modifiers { platform: true, ..Default::default() };
-        let cmd_shift = Modifiers { platform: true, shift: true, ..Default::default() };
-        let ctrl_shift = Modifiers { control: true, shift: true, ..Default::default() };
+        let cmd = Modifiers {
+            platform: true,
+            ..Default::default()
+        };
+        let cmd_shift = Modifiers {
+            platform: true,
+            shift: true,
+            ..Default::default()
+        };
+        let ctrl_shift = Modifiers {
+            control: true,
+            shift: true,
+            ..Default::default()
+        };
         assert_eq!(key_label(&cmd, "}"), "⇧⌘]");
         assert_eq!(key_label(&cmd_shift, "p"), "⇧⌘P");
         assert_eq!(key_label(&ctrl_shift, "h"), "⌃⇧H");
-        assert_eq!(key_label(&Modifiers { alt: true, platform: true, ..Default::default() }, "left"), "⌥⌘←");
+        assert_eq!(
+            key_label(
+                &Modifiers {
+                    alt: true,
+                    platform: true,
+                    ..Default::default()
+                },
+                "left"
+            ),
+            "⌥⌘←"
+        );
     }
 }

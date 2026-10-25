@@ -41,7 +41,8 @@ pub fn call_timeout(method: &str, params: Value, timeout: Duration) -> anyhow::R
 
 fn round_trip(method: &str, params: Value, timeout: Option<Duration>) -> anyhow::Result<Value> {
     let path = socket_path();
-    let stream = UnixStream::connect(&path).map_err(|e| anyhow::anyhow!("abromux is not running ({}: {e})", path.display()))?;
+    let stream = UnixStream::connect(&path)
+        .map_err(|e| anyhow::anyhow!("abromux is not running ({}: {e})", path.display()))?;
     stream.set_read_timeout(timeout)?;
     stream.set_write_timeout(timeout)?;
     let mut writer = stream.try_clone()?;
@@ -50,7 +51,8 @@ fn round_trip(method: &str, params: Value, timeout: Option<Duration>) -> anyhow:
     writer.write_all(line.as_bytes())?;
     let mut reply = String::new();
     BufReader::new(stream).read_line(&mut reply)?;
-    let reply: Value = serde_json::from_str(&reply).map_err(|e| anyhow::anyhow!("bad reply from abromux: {e}"))?;
+    let reply: Value =
+        serde_json::from_str(&reply).map_err(|e| anyhow::anyhow!("bad reply from abromux: {e}"))?;
     if reply["ok"].as_bool() == Some(true) {
         Ok(reply["result"].clone())
     } else {

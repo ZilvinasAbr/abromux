@@ -78,8 +78,21 @@ impl Kind {
     /// prompt (Claude's Notification, Codex's PermissionRequest).
     fn events(self) -> &'static [&'static str] {
         match self {
-            Kind::Claude => &["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop", "SessionEnd"],
-            Kind::Codex => &["SessionStart", "UserPromptSubmit", "PostToolUse", "PermissionRequest", "Stop"],
+            Kind::Claude => &[
+                "SessionStart",
+                "UserPromptSubmit",
+                "PostToolUse",
+                "Notification",
+                "Stop",
+                "SessionEnd",
+            ],
+            Kind::Codex => &[
+                "SessionStart",
+                "UserPromptSubmit",
+                "PostToolUse",
+                "PermissionRequest",
+                "Stop",
+            ],
         }
     }
 
@@ -92,7 +105,11 @@ impl Kind {
 
     /// The file our hooks go in, or None if the agent isn't set up here.
     fn settings_path(self) -> anyhow::Result<Option<PathBuf>> {
-        let home = || std::env::var("HOME").map(PathBuf::from).context("HOME isn't set");
+        let home = || {
+            std::env::var("HOME")
+                .map(PathBuf::from)
+                .context("HOME isn't set")
+        };
         Ok(match self {
             Kind::Claude => Some(match std::env::var("CLAUDE_CONFIG_DIR") {
                 Ok(dir) => PathBuf::from(dir).join("settings.json"),
@@ -114,8 +131,12 @@ impl Kind {
         let exe = quote(exe);
         let sub = self.subcommand();
         match self {
-            Kind::Claude => format!("[ -n \"$ABROMUX_SURFACE_ID\" ] && [ -x {exe} ] && {exe} hooks {sub} || true"),
-            Kind::Codex => format!("[ -n \"$ABROMUX_SURFACE_ID\" ] && [ -x {exe} ] && ABROMUX_AGENT_PID=$PPID {exe} hooks {sub} >/dev/null 2>&1; echo '{{}}'"),
+            Kind::Claude => format!(
+                "[ -n \"$ABROMUX_SURFACE_ID\" ] && [ -x {exe} ] && {exe} hooks {sub} || true"
+            ),
+            Kind::Codex => format!(
+                "[ -n \"$ABROMUX_SURFACE_ID\" ] && [ -x {exe} ] && ABROMUX_AGENT_PID=$PPID {exe} hooks {sub} >/dev/null 2>&1; echo '{{}}'"
+            ),
         }
     }
 }
@@ -126,7 +147,10 @@ const SUMMARY_CHARS: usize = 160;
 /// Session ids and modes go into a shell command line, so keep them to safe
 /// characters.
 fn safe(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 128 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    !s.is_empty()
+        && s.len() <= 128
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Single-quote for sh.
@@ -148,8 +172,13 @@ impl Agent {
             session_id: session_id.into(),
             cwd: s("cwd").unwrap_or_default().into(),
             // Codex's modes don't map to a resume flag.
-            permission_mode: s("permission_mode").filter(|m| kind == Kind::Claude && safe(m) && *m != "default").map(String::from),
-            pid: p.get("pid").and_then(Value::as_u64).and_then(|p| u32::try_from(p).ok()),
+            permission_mode: s("permission_mode")
+                .filter(|m| kind == Kind::Claude && safe(m) && *m != "default")
+                .map(String::from),
+            pid: p
+                .get("pid")
+                .and_then(Value::as_u64)
+                .and_then(|p| u32::try_from(p).ok()),
         })
     }
 
@@ -190,13 +219,24 @@ impl Agent {
 /// output would land in the conversation), so a closed app can't get in the
 /// agent's way.
 pub fn hook_event(kind: Kind) -> i32 {
-    let Ok(surface) = std::env::var("ABROMUX_SURFACE_ID") else { return 0 };
+    let Ok(surface) = std::env::var("ABROMUX_SURFACE_ID") else {
+        return 0;
+    };
     let mut input = String::new();
     if std::io::stdin().read_to_string(&mut input).is_err() {
         return 0;
     }
-    let Ok(payload) = serde_json::from_str::<Value>(&input) else { return 0 };
-    let params = report(kind, &payload, &surface, std::env::var("ABROMUX_AGENT_PID").ok().and_then(|p| p.parse().ok()));
+    let Ok(payload) = serde_json::from_str::<Value>(&input) else {
+        return 0;
+    };
+    let params = report(
+        kind,
+        &payload,
+        &surface,
+        std::env::var("ABROMUX_AGENT_PID")
+            .ok()
+            .and_then(|p| p.parse().ok()),
+    );
     let _ = ipc::call_timeout("agent.report", params, Duration::from_secs(2));
     0
 }
@@ -226,9 +266,18 @@ fn report(kind: Kind, payload: &Value, surface: &str, pid: Option<u32>) -> Value
     if event == "PermissionRequest" {
         let input = &payload["tool_input"];
         // The notification's title already names the agent.
-        let what = input["command"].as_str().or(input["cmd"].as_str()).map(|c| format!("Asks to run {c}"));
-        let what = what.or_else(|| payload["tool_name"].as_str().map(|t| format!("Asks to use {t}")));
-        params["message"] = json!(shorten(&what.unwrap_or_else(|| "Needs your approval".into())));
+        let what = input["command"]
+            .as_str()
+            .or(input["cmd"].as_str())
+            .map(|c| format!("Asks to run {c}"));
+        let what = what.or_else(|| {
+            payload["tool_name"]
+                .as_str()
+                .map(|t| format!("Asks to use {t}"))
+        });
+        params["message"] = json!(shorten(
+            &what.unwrap_or_else(|| "Needs your approval".into())
+        ));
     }
     params
 }
@@ -239,26 +288,31 @@ fn last_reply(path: &str) -> Option<String> {
     // Only the tail: transcripts grow to megabytes.
     let mut f = std::fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
-    f.seek(SeekFrom::Start(len.saturating_sub(256 * 1024))).ok()?;
+    f.seek(SeekFrom::Start(len.saturating_sub(256 * 1024)))
+        .ok()?;
     let mut bytes = vec![];
     f.read_to_end(&mut bytes).ok()?;
     summary(&String::from_utf8_lossy(&bytes))
 }
 
 fn summary(jsonl: &str) -> Option<String> {
-    jsonl.lines().rev().filter_map(|l| serde_json::from_str::<Value>(l).ok()).find_map(|v| {
-        if v["type"] != "assistant" {
-            return None;
-        }
-        let text = v["message"]["content"]
-            .as_array()?
-            .iter()
-            .filter(|c| c["type"] == "text")
-            .filter_map(|c| c["text"].as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
-        shorten(&text)
-    })
+    jsonl
+        .lines()
+        .rev()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find_map(|v| {
+            if v["type"] != "assistant" {
+                return None;
+            }
+            let text = v["message"]["content"]
+                .as_array()?
+                .iter()
+                .filter(|c| c["type"] == "text")
+                .filter_map(|c| c["text"].as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            shorten(&text)
+        })
 }
 
 /// Text on one line, cut to `SUMMARY_CHARS`. None if it's blank.
@@ -275,14 +329,22 @@ fn shorten(text: &str) -> Option<String> {
 
 /// Ours, from any abromux binary (a moved or rebuilt one is replaced too).
 fn is_ours(hook: &Value) -> bool {
-    hook["command"].as_str().is_some_and(|c| Kind::ALL.iter().any(|k| c.contains(&format!("hooks {}", k.subcommand()))))
+    hook["command"].as_str().is_some_and(|c| {
+        Kind::ALL
+            .iter()
+            .any(|k| c.contains(&format!("hooks {}", k.subcommand())))
+    })
 }
 
 /// Drop our hooks from `settings`, and any event list left empty.
 fn strip(settings: &mut Map<String, Value>) {
-    let Some(Value::Object(hooks)) = settings.get_mut("hooks") else { return };
+    let Some(Value::Object(hooks)) = settings.get_mut("hooks") else {
+        return;
+    };
     for groups in hooks.values_mut() {
-        let Value::Array(groups) = groups else { continue };
+        let Value::Array(groups) = groups else {
+            continue;
+        };
         groups.retain_mut(|g| match g.get_mut("hooks") {
             Some(Value::Array(list)) => {
                 list.retain(|h| !is_ours(h));
@@ -302,10 +364,17 @@ fn strip(settings: &mut Map<String, Value>) {
 fn add(settings: &mut Map<String, Value>, kind: Kind, exe: &str) -> anyhow::Result<()> {
     let command = kind.command(exe);
     let hooks = settings.entry("hooks").or_insert_with(|| json!({}));
-    let Value::Object(hooks) = hooks else { bail!("\"hooks\" in the {} settings isn't an object", kind.label()) };
+    let Value::Object(hooks) = hooks else {
+        bail!("\"hooks\" in the {} settings isn't an object", kind.label())
+    };
     for event in kind.events() {
         let groups = hooks.entry(*event).or_insert_with(|| json!([]));
-        let Value::Array(groups) = groups else { bail!("hooks.{event} in the {} settings isn't a list", kind.label()) };
+        let Value::Array(groups) = groups else {
+            bail!(
+                "hooks.{event} in the {} settings isn't a list",
+                kind.label()
+            )
+        };
         groups.push(json!({ "hooks": [{ "type": "command", "command": command, "timeout": 5 }] }));
     }
     Ok(())
@@ -318,18 +387,26 @@ pub fn hooks(install: bool) -> anyhow::Result<String> {
     for kind in Kind::ALL {
         match kind.settings_path()? {
             Some(path) => out.push(edit(kind, &path, install)?),
-            None => out.push(format!("Skipped {}: no ~/.codex (or $CODEX_HOME) folder", kind.title())),
+            None => out.push(format!(
+                "Skipped {}: no ~/.codex (or $CODEX_HOME) folder",
+                kind.title()
+            )),
         }
     }
     if install && out.iter().any(|l| l.contains("Codex hooks")) {
-        out.push("Codex asks you to review new hooks once: open `codex` and trust them (or run /hooks).".into());
+        out.push(
+            "Codex asks you to review new hooks once: open `codex` and trust them (or run /hooks)."
+                .into(),
+        );
     }
     Ok(out.join("\n"))
 }
 
 fn edit(kind: Kind, path: &std::path::Path, install: bool) -> anyhow::Result<String> {
     let mut settings = match std::fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str::<Value>(&text).with_context(|| format!("can't parse {}", path.display()))? {
+        Ok(text) => match serde_json::from_str::<Value>(&text)
+            .with_context(|| format!("can't parse {}", path.display()))?
+        {
             Value::Object(m) => m,
             _ => bail!("{} isn't a JSON object", path.display()),
         },
@@ -338,16 +415,26 @@ fn edit(kind: Kind, path: &std::path::Path, install: bool) -> anyhow::Result<Str
     };
     strip(&mut settings);
     if install {
-        let exe = std::env::current_exe().and_then(|e| e.canonicalize()).context("can't find the abromux binary")?;
+        let exe = std::env::current_exe()
+            .and_then(|e| e.canonicalize())
+            .context("can't find the abromux binary")?;
         add(&mut settings, kind, &exe.to_string_lossy())?;
     }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension("json.abromux-tmp");
-    std::fs::write(&tmp, serde_json::to_string_pretty(&Value::Object(settings))? + "\n")?;
+    std::fs::write(
+        &tmp,
+        serde_json::to_string_pretty(&Value::Object(settings))? + "\n",
+    )?;
     std::fs::rename(&tmp, path)?;
-    Ok(format!("{} {} hooks in {}", if install { "Installed" } else { "Removed" }, kind.title(), path.display()))
+    Ok(format!(
+        "{} {} hooks in {}",
+        if install { "Installed" } else { "Removed" },
+        kind.title(),
+        path.display()
+    ))
 }
 
 #[cfg(test)]
@@ -358,7 +445,9 @@ mod tests {
     fn report_validates_ids_and_drops_default_mode() {
         let a = Agent::from_report(&json!({ "kind": "claude", "session_id": "9b77eba8-c39f", "cwd": "/p", "permission_mode": "default" })).unwrap();
         assert_eq!(a.permission_mode, None);
-        assert!(Agent::from_report(&json!({ "kind": "claude", "session_id": "x; rm -rf ~" })).is_none());
+        assert!(
+            Agent::from_report(&json!({ "kind": "claude", "session_id": "x; rm -rf ~" })).is_none()
+        );
         assert!(Agent::from_report(&json!({ "kind": "gemini", "session_id": "abc" })).is_none());
         let c = Agent::from_report(&json!({ "kind": "codex", "session_id": "abc", "permission_mode": "bypassPermissions", "pid": 42 })).unwrap();
         assert_eq!((c.permission_mode, c.pid), (None, Some(42)));
@@ -369,16 +458,31 @@ mod tests {
         // Payloads as codex-cli 0.164 sends them.
         let stop = json!({ "hook_event_name": "Stop", "session_id": "01a1", "cwd": "/p", "last_assistant_message": "Done:\n  all  green." });
         let r = report(Kind::Codex, &stop, "surface:3", Some(7));
-        assert_eq!((r["kind"].as_str(), r["summary"].as_str(), r["pid"].as_u64()), (Some("codex"), Some("Done: all green."), Some(7)));
+        assert_eq!(
+            (r["kind"].as_str(), r["summary"].as_str(), r["pid"].as_u64()),
+            (Some("codex"), Some("Done: all green."), Some(7))
+        );
         let ask = json!({ "hook_event_name": "PermissionRequest", "session_id": "01a1", "tool_name": "Bash", "tool_input": { "command": "touch  /etc/x" } });
-        assert_eq!(report(Kind::Codex, &ask, "surface:3", None)["message"], "Asks to run touch /etc/x");
+        assert_eq!(
+            report(Kind::Codex, &ask, "surface:3", None)["message"],
+            "Asks to run touch /etc/x"
+        );
         let ask = json!({ "hook_event_name": "PermissionRequest", "tool_name": "apply_patch" });
-        assert_eq!(report(Kind::Codex, &ask, "surface:3", None)["message"], "Asks to use apply_patch");
+        assert_eq!(
+            report(Kind::Codex, &ask, "surface:3", None)["message"],
+            "Asks to use apply_patch"
+        );
     }
 
     #[test]
     fn alive_checks_the_process() {
-        let mut a = Agent { kind: "codex".into(), session_id: "a".into(), cwd: String::new(), permission_mode: None, pid: None };
+        let mut a = Agent {
+            kind: "codex".into(),
+            session_id: "a".into(),
+            cwd: String::new(),
+            permission_mode: None,
+            pid: None,
+        };
         assert!(a.alive(), "no pid: assume so");
         a.pid = Some(std::process::id());
         assert!(a.alive());
@@ -388,11 +492,32 @@ mod tests {
 
     #[test]
     fn resume_command_cds_only_when_needed() {
-        let a = Agent { kind: "claude".into(), session_id: "abc-1".into(), cwd: "/it's here".into(), permission_mode: Some("auto".into()), pid: None };
-        assert_eq!(a.resume_command("/it's here").unwrap(), "claude --resume abc-1 --permission-mode auto");
-        assert_eq!(a.resume_command("/tmp").unwrap(), r"cd -- '/it'\''s here' && claude --resume abc-1 --permission-mode auto");
-        let c = Agent { kind: "codex".into(), session_id: "01a1-2".into(), cwd: "/p".into(), permission_mode: None, pid: None };
-        assert_eq!(c.resume_command("/tmp").unwrap(), "cd -- '/p' && codex resume 01a1-2");
+        let a = Agent {
+            kind: "claude".into(),
+            session_id: "abc-1".into(),
+            cwd: "/it's here".into(),
+            permission_mode: Some("auto".into()),
+            pid: None,
+        };
+        assert_eq!(
+            a.resume_command("/it's here").unwrap(),
+            "claude --resume abc-1 --permission-mode auto"
+        );
+        assert_eq!(
+            a.resume_command("/tmp").unwrap(),
+            r"cd -- '/it'\''s here' && claude --resume abc-1 --permission-mode auto"
+        );
+        let c = Agent {
+            kind: "codex".into(),
+            session_id: "01a1-2".into(),
+            cwd: "/p".into(),
+            permission_mode: None,
+            pid: None,
+        };
+        assert_eq!(
+            c.resume_command("/tmp").unwrap(),
+            "cd -- '/p' && codex resume 01a1-2"
+        );
     }
 
     #[test]
@@ -407,7 +532,10 @@ mod tests {
         .map(Value::to_string)
         .collect::<Vec<_>>()
         .join("\n");
-        assert_eq!(summary(&(jsonl + "\n{truncated")).as_deref(), Some("All tests pass."));
+        assert_eq!(
+            summary(&(jsonl + "\n{truncated")).as_deref(),
+            Some("All tests pass.")
+        );
         let long = json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "é".repeat(300) }] } }).to_string();
         assert_eq!(summary(&long).unwrap().chars().count(), SUMMARY_CHARS + 1);
         assert_eq!(summary(""), None);
@@ -416,28 +544,50 @@ mod tests {
     #[test]
     fn install_is_idempotent_and_uninstall_keeps_other_hooks() {
         let theirs = json!({ "hooks": [{ "type": "command", "command": "notify.sh" }] });
-        let mut s: Map<String, Value> = serde_json::from_value(json!({ "model": "opus", "hooks": { "Stop": [theirs] } })).unwrap();
+        let mut s: Map<String, Value> =
+            serde_json::from_value(json!({ "model": "opus", "hooks": { "Stop": [theirs] } }))
+                .unwrap();
         for _ in 0..2 {
             strip(&mut s);
-            add(&mut s, Kind::Claude, "/Applications/AbroMux.app/Contents/MacOS/abromux").unwrap();
+            add(
+                &mut s,
+                Kind::Claude,
+                "/Applications/AbroMux.app/Contents/MacOS/abromux",
+            )
+            .unwrap();
         }
         assert_eq!(s["hooks"]["Stop"].as_array().unwrap().len(), 2);
         assert_eq!(s["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
         strip(&mut s);
-        assert_eq!(Value::Object(s), json!({ "model": "opus", "hooks": { "Stop": [theirs] } }));
+        assert_eq!(
+            Value::Object(s),
+            json!({ "model": "opus", "hooks": { "Stop": [theirs] } })
+        );
     }
 
     #[test]
     fn codex_hooks_go_after_existing_ones() {
         let theirs = json!({ "matcher": "Edit", "hooks": [{ "type": "command", "command": "fmt.sh", "timeout": 60 }] });
-        let mut s: Map<String, Value> = serde_json::from_value(json!({ "hooks": { "PostToolUse": [theirs] } })).unwrap();
+        let mut s: Map<String, Value> =
+            serde_json::from_value(json!({ "hooks": { "PostToolUse": [theirs] } })).unwrap();
         add(&mut s, Kind::Codex, "/x/abromux").unwrap();
         let post = s["hooks"]["PostToolUse"].as_array().unwrap();
-        assert_eq!(post[0], theirs, "existing hooks keep their place (and Codex's trust)");
+        assert_eq!(
+            post[0], theirs,
+            "existing hooks keep their place (and Codex's trust)"
+        );
         let cmd = post[1]["hooks"][0]["command"].as_str().unwrap();
-        assert_eq!(cmd, r#"[ -n "$ABROMUX_SURFACE_ID" ] && [ -x '/x/abromux' ] && ABROMUX_AGENT_PID=$PPID '/x/abromux' hooks codex-event >/dev/null 2>&1; echo '{}'"#);
-        assert!(s["hooks"].get("PermissionRequest").is_some() && s["hooks"].get("SessionEnd").is_none());
+        assert_eq!(
+            cmd,
+            r#"[ -n "$ABROMUX_SURFACE_ID" ] && [ -x '/x/abromux' ] && ABROMUX_AGENT_PID=$PPID '/x/abromux' hooks codex-event >/dev/null 2>&1; echo '{}'"#
+        );
+        assert!(
+            s["hooks"].get("PermissionRequest").is_some() && s["hooks"].get("SessionEnd").is_none()
+        );
         strip(&mut s);
-        assert_eq!(Value::Object(s), json!({ "hooks": { "PostToolUse": [theirs] } }));
+        assert_eq!(
+            Value::Object(s),
+            json!({ "hooks": { "PostToolUse": [theirs] } })
+        );
     }
 }

@@ -9,7 +9,11 @@ static PNG: &[u8] = include_bytes!("../assets/app/abromux.png");
 static NIGHTLY_PNG: &[u8] = include_bytes!("../assets/app/abromux-nightly.png");
 
 pub fn set_dock_icon() {
-    let png = if crate::channel::nightly() { NIGHTLY_PNG } else { PNG };
+    let png = if crate::channel::nightly() {
+        NIGHTLY_PNG
+    } else {
+        PNG
+    };
     unsafe {
         let data: *mut Object =
             msg_send![class!(NSData), dataWithBytes: png.as_ptr() length: png.len()];

@@ -96,9 +96,17 @@ impl Scanner {
                 _ => {}
             }
         }
-        let text = if base64 { String::from_utf8_lossy(&decode_base64(payload)).into_owned() } else { payload.to_string() };
+        let text = if base64 {
+            String::from_utf8_lossy(&decode_base64(payload)).into_owned()
+        } else {
+            payload.to_string()
+        };
         let mut anonymous = Default::default();
-        let entry = if id.is_empty() { &mut anonymous } else { self.pending.entry(id.to_string()).or_default() };
+        let entry = if id.is_empty() {
+            &mut anonymous
+        } else {
+            self.pending.entry(id.to_string()).or_default()
+        };
         match part {
             "title" => entry.0.push_str(&text),
             "body" => entry.1.push_str(&text),
@@ -108,7 +116,11 @@ impl Scanner {
         if more {
             return None;
         }
-        let (title, body) = if id.is_empty() { anonymous } else { self.pending.remove(id).unwrap_or_default() };
+        let (title, body) = if id.is_empty() {
+            anonymous
+        } else {
+            self.pending.remove(id).unwrap_or_default()
+        };
         (!title.is_empty() || !body.is_empty()).then_some((title, body))
     }
 }
@@ -141,12 +153,30 @@ mod tests {
     #[test]
     fn finds_notifications_split_across_reads_and_chunks() {
         let mut s = Scanner::default();
-        assert_eq!(s.feed(b"out\x1b]99;;Hello\x07more"), [("Hello".to_string(), String::new())]);
+        assert_eq!(
+            s.feed(b"out\x1b]99;;Hello\x07more"),
+            [("Hello".to_string(), String::new())]
+        );
         // Title and body in two sequences, the second split across reads.
-        assert!(s.feed(b"\x1b]99;i=7:d=0;Build\x1b\\\x1b]99;i=7:p=bo").is_empty());
-        assert_eq!(s.feed(b"dy;ok\x1b\\"), [("Build".to_string(), "ok".to_string())]);
-        assert_eq!(s.feed(b"\x1b]99;e=1:p=body;aMOpIQ==\x07"), [(String::new(), "hé!".to_string())]);
-        assert!(s.feed(b"\x1b]9;not kitty\x07\x1b]990;x\x07\x1b]99;p=?;\x07").is_empty());
-        assert!(s.feed(b"\x1b]99;;cut \x1b[0m").is_empty(), "another escape cancels it");
+        assert!(
+            s.feed(b"\x1b]99;i=7:d=0;Build\x1b\\\x1b]99;i=7:p=bo")
+                .is_empty()
+        );
+        assert_eq!(
+            s.feed(b"dy;ok\x1b\\"),
+            [("Build".to_string(), "ok".to_string())]
+        );
+        assert_eq!(
+            s.feed(b"\x1b]99;e=1:p=body;aMOpIQ==\x07"),
+            [(String::new(), "hé!".to_string())]
+        );
+        assert!(
+            s.feed(b"\x1b]9;not kitty\x07\x1b]990;x\x07\x1b]99;p=?;\x07")
+                .is_empty()
+        );
+        assert!(
+            s.feed(b"\x1b]99;;cut \x1b[0m").is_empty(),
+            "another escape cancels it"
+        );
     }
 }

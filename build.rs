@@ -41,8 +41,15 @@ fn main() {
 /// Without git (a source tarball) it's just the Cargo version.
 fn version(root: &Path) {
     let git = |args: &[&str]| {
-        let o = Command::new("git").arg("-C").arg(root).args(args).output().ok()?;
-        o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        let o = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .ok()?;
+        o.status
+            .success()
+            .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
     };
     let mut version = env::var("CARGO_PKG_VERSION").unwrap();
     if let Some(sha) = git(&["rev-parse", "--short", "HEAD"]) {

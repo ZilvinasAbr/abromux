@@ -86,7 +86,15 @@ Commands:
 ";
 
 /// Flags that take no value.
-const SWITCHES: &[&str] = &["json", "scrollback", "all", "help", "interactive", "compact", "exact"];
+const SWITCHES: &[&str] = &[
+    "json",
+    "scrollback",
+    "all",
+    "help",
+    "interactive",
+    "compact",
+    "exact",
+];
 
 struct Args {
     pos: Vec<String>,
@@ -164,7 +172,12 @@ fn call(method: &str, params: Map<String, Value>) -> Result<Value, String> {
     ipc::call(method, Value::Object(params)).map_err(|e| e.to_string())
 }
 
-fn dispatch(cmd: &str, mut pos: Vec<String>, mut opts: Map<String, Value>, as_json: bool) -> Result<(), String> {
+fn dispatch(
+    cmd: &str,
+    mut pos: Vec<String>,
+    mut opts: Map<String, Value>,
+    as_json: bool,
+) -> Result<(), String> {
     let mut first = |name: &str, opts: &mut Map<String, Value>| -> Result<(), String> {
         if pos.is_empty() {
             return Err(format!("{cmd}: missing <{name}>"));
@@ -186,7 +199,9 @@ fn dispatch(cmd: &str, mut pos: Vec<String>, mut opts: Map<String, Value>, as_js
         "close-workspace" => ("workspace.close", |v| format!("OK {}", s(&v["closed"]))),
         "rename-workspace" => {
             first("title", &mut opts)?;
-            ("workspace.rename", |v| format!("OK {} {}", s(&v["ref"]), s(&v["name"])))
+            ("workspace.rename", |v| {
+                format!("OK {} {}", s(&v["ref"]), s(&v["name"]))
+            })
         }
         "tree" => ("workspace.tree", tree),
         "list-panes" => ("pane.list", |v| lines(v, pane_line)),
@@ -197,7 +212,9 @@ fn dispatch(cmd: &str, mut pos: Vec<String>, mut opts: Map<String, Value>, as_js
                 Some("-L") => "left",
                 Some("-U") => "up",
                 Some("-D") => "down",
-                Some(d) => return Err(format!("resize-pane: expected -L, -R, -U or -D, got {d:?}")),
+                Some(d) => {
+                    return Err(format!("resize-pane: expected -L, -R, -U or -D, got {d:?}"));
+                }
             };
             opts.insert("direction".into(), json!(dir));
             ("pane.resize", |v| format!("OK {}", s(&v["pane"])))
@@ -239,9 +256,17 @@ fn dispatch(cmd: &str, mut pos: Vec<String>, mut opts: Map<String, Value>, as_js
         "list-notifications" => ("notification.list", |v| lines(v, notification_line)),
         "open-notification" => {
             first("id", &mut opts)?;
-            ("notification.open", |v| format!("OK notification:{}", v["id"]))
+            ("notification.open", |v| {
+                format!("OK notification:{}", v["id"])
+            })
         }
-        "jump-to-unread" => ("notification.jump_unread", |v| if v["jumped"] == true { "OK".into() } else { "OK no unread notifications".into() }),
+        "jump-to-unread" => ("notification.jump_unread", |v| {
+            if v["jumped"] == true {
+                "OK".into()
+            } else {
+                "OK no unread notifications".into()
+            }
+        }),
         "clear-notifications" => ("notification.clear", |_| "OK".into()),
         "set-status" => {
             first("key", &mut opts)?;
@@ -253,11 +278,20 @@ fn dispatch(cmd: &str, mut pos: Vec<String>, mut opts: Map<String, Value>, as_js
         }
         "clear-status" => {
             first("key", &mut opts)?;
-            ("status.clear", |v| if v["cleared"] == true { "OK".into() } else { "OK (no such status)".into() })
+            ("status.clear", |v| {
+                if v["cleared"] == true {
+                    "OK".into()
+                } else {
+                    "OK (no such status)".into()
+                }
+            })
         }
         "list-status" => ("status.list", |v| {
             lines(v, |st| {
-                let color = st["color"].as_str().map(|c| format!("  {c}")).unwrap_or_default();
+                let color = st["color"]
+                    .as_str()
+                    .map(|c| format!("  {c}"))
+                    .unwrap_or_default();
                 format!("{}  {}{color}", s(&st["key"]), s(&st["value"]))
             })
         }),
@@ -275,13 +309,24 @@ fn dispatch(cmd: &str, mut pos: Vec<String>, mut opts: Map<String, Value>, as_js
         }
         "list-log" => ("log.list", |v| {
             lines(v, |l| {
-                let source = l["source"].as_str().map(|s| format!("[{s}] ")).unwrap_or_default();
-                format!("{:<8} {}s ago  {source}{}", s(&l["level"]), l["age_seconds"], s(&l["message"]))
+                let source = l["source"]
+                    .as_str()
+                    .map(|s| format!("[{s}] "))
+                    .unwrap_or_default();
+                format!(
+                    "{:<8} {}s ago  {source}{}",
+                    s(&l["level"]),
+                    l["age_seconds"],
+                    s(&l["message"])
+                )
             })
         }),
         "clear-log" => ("log.clear", |_| "OK".into()),
         "sidebar" => {
-            opts.insert("state".into(), json!(pos.first().map(String::as_str).unwrap_or("toggle")));
+            opts.insert(
+                "state".into(),
+                json!(pos.first().map(String::as_str).unwrap_or("toggle")),
+            );
             ("app.sidebar", |v| format!("OK visible={}", v["visible"]))
         }
         "quit" => ("app.quit", |_| "OK".into()),
@@ -300,10 +345,18 @@ fn dispatch(cmd: &str, mut pos: Vec<String>, mut opts: Map<String, Value>, as_js
         "rpc" => {
             let method = pos.first().ok_or("rpc: missing <method>")?.clone();
             let params = match pos.get(1) {
-                Some(j) => serde_json::from_str(j).map_err(|e| format!("rpc: bad JSON params: {e}"))?,
+                Some(j) => {
+                    serde_json::from_str(j).map_err(|e| format!("rpc: bad JSON params: {e}"))?
+                }
                 None => Value::Object(opts),
             };
-            println!("{}", serde_json::to_string_pretty(&ipc::call(&method, params).map_err(|e| e.to_string())?).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &ipc::call(&method, params).map_err(|e| e.to_string())?
+                )
+                .unwrap()
+            );
             return Ok(());
         }
         _ => return Err(format!("unknown command {cmd:?} (see `abromux --help`)")),
@@ -312,7 +365,11 @@ fn dispatch(cmd: &str, mut pos: Vec<String>, mut opts: Map<String, Value>, as_js
     Ok(())
 }
 
-fn browser(mut pos: Vec<String>, mut opts: Map<String, Value>, as_json: bool) -> Result<(), String> {
+fn browser(
+    mut pos: Vec<String>,
+    mut opts: Map<String, Value>,
+    as_json: bool,
+) -> Result<(), String> {
     // `browser surface:3 url` is shorthand for `browser --surface surface:3 url`.
     if pos.first().is_some_and(|p| p.starts_with("surface:")) {
         opts.insert("surface".into(), json!(pos.remove(0)));
@@ -330,7 +387,14 @@ fn browser(mut pos: Vec<String>, mut opts: Map<String, Value>, as_json: bool) ->
             ("browser.open", created)
         }
         "goto" | "navigate" => {
-            opts.insert("url".into(), json!(if arg.is_empty() { return Err(format!("browser {sub}: missing <url>")) } else { arg }));
+            opts.insert(
+                "url".into(),
+                json!(if arg.is_empty() {
+                    return Err(format!("browser {sub}: missing <url>"));
+                } else {
+                    arg
+                }),
+            );
             ("browser.navigate", |v| format!("OK {}", s(&v["url"])))
         }
         "back" => ("browser.back", |_| "OK".into()),
@@ -372,7 +436,14 @@ fn browser(mut pos: Vec<String>, mut opts: Map<String, Value>, as_json: bool) ->
                 return Err("browser type: missing <text>".into());
             }
             opts.insert("text".into(), json!(pos.join(" ")));
-            (if sub == "fill" { "browser.fill" } else { "browser.type" }, |_| "OK".into())
+            (
+                if sub == "fill" {
+                    "browser.fill"
+                } else {
+                    "browser.type"
+                },
+                |_| "OK".into(),
+            )
         }
         "press" => {
             if arg.is_empty() {
@@ -390,12 +461,17 @@ fn browser(mut pos: Vec<String>, mut opts: Map<String, Value>, as_json: bool) ->
             ("browser.select", |v| format!("OK {}", lines(v, s)))
         }
         "scroll" => {
-            let dir = pos.first().filter(|d| ["up", "down", "left", "right"].contains(&d.as_str())).cloned();
+            let dir = pos
+                .first()
+                .filter(|d| ["up", "down", "left", "right"].contains(&d.as_str()))
+                .cloned();
             if dir.is_some() {
                 pos.remove(0);
             }
             let amount: f64 = match pos.first() {
-                Some(n) => n.parse().map_err(|_| format!("browser scroll: bad amount {n:?}"))?,
+                Some(n) => n
+                    .parse()
+                    .map_err(|_| format!("browser scroll: bad amount {n:?}"))?,
                 None => 500.,
             };
             let (dx, dy) = match dir.as_deref().unwrap_or("down") {
@@ -418,7 +494,10 @@ fn browser(mut pos: Vec<String>, mut opts: Map<String, Value>, as_json: bool) ->
             }
             match what.as_str() {
                 "attr" => {
-                    opts.insert("name".into(), json!(pos.first().ok_or("browser get attr: missing <attribute>")?));
+                    opts.insert(
+                        "name".into(),
+                        json!(pos.first().ok_or("browser get attr: missing <attribute>")?),
+                    );
                 }
                 "styles" => {
                     opts.insert("names".into(), json!(pos));
@@ -461,7 +540,13 @@ fn browser(mut pos: Vec<String>, mut opts: Map<String, Value>, as_json: bool) ->
         "screenshot" => {
             if let Some(path) = pos.first() {
                 let path = Path::new(path);
-                let path = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().map_err(|e| e.to_string())?.join(path) };
+                let path = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    std::env::current_dir()
+                        .map_err(|e| e.to_string())?
+                        .join(path)
+                };
                 opts.insert("path".into(), json!(path));
             }
             ("browser.screenshot", |v| s(&v["path"]))
@@ -505,7 +590,12 @@ fn open(pos: Vec<String>, opts: Map<String, Value>) -> Result<(), String> {
             o.insert("url".into(), json!(target));
             call("browser.open", o)?
         };
-        println!("OK {}", s(v.get("ref").or(v.get("surface").and_then(|s| s.get("ref"))).unwrap_or(&Value::Null)));
+        println!(
+            "OK {}",
+            s(v.get("ref")
+                .or(v.get("surface").and_then(|s| s.get("ref")))
+                .unwrap_or(&Value::Null))
+        );
     }
     Ok(())
 }
@@ -547,15 +637,22 @@ fn open_dir(dir: &str) -> i32 {
 /// to this terminal. None means "run the app here": dev builds outside a
 /// bundle, and the bundle's own launch from Finder or `open`.
 pub fn launch() -> Option<i32> {
-    let exe = std::env::current_exe().and_then(|e| e.canonicalize()).ok()?;
-    let bundle = exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app"))?;
+    let exe = std::env::current_exe()
+        .and_then(|e| e.canonicalize())
+        .ok()?;
+    let bundle = exe
+        .ancestors()
+        .find(|p| p.extension().is_some_and(|e| e == "app"))?;
     if ipc::call("window.focus", json!({})).is_ok() {
         return Some(0);
     }
     if !std::io::stdin().is_terminal() {
         return None;
     }
-    match std::process::Command::new("/usr/bin/open").arg(bundle).status() {
+    match std::process::Command::new("/usr/bin/open")
+        .arg(bundle)
+        .status()
+    {
         Ok(s) if s.success() => Some(0),
         Ok(s) => Some(fail(format!("open {}: {s}", bundle.display()))),
         Err(e) => Some(fail(format!("can't run open: {e}"))),
@@ -563,7 +660,9 @@ pub fn launch() -> Option<i32> {
 }
 
 fn absolute(p: &str) -> String {
-    std::fs::canonicalize(p).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| p.into())
+    std::fs::canonicalize(p)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| p.into())
 }
 
 // ---- output -------------------------------------------------------------
@@ -588,7 +687,9 @@ fn s(v: &Value) -> String {
 }
 
 fn lines(v: &Value, f: fn(&Value) -> String) -> String {
-    v.as_array().map(|a| a.iter().map(f).collect::<Vec<_>>().join("\n")).unwrap_or_default()
+    v.as_array()
+        .map(|a| a.iter().map(f).collect::<Vec<_>>().join("\n"))
+        .unwrap_or_default()
 }
 
 fn mark(on: bool) -> &'static str {
@@ -596,7 +697,12 @@ fn mark(on: bool) -> &'static str {
 }
 
 fn workspace_line(w: &Value) -> String {
-    let mut line = format!("{} {}  {}", mark(w["selected"] == true), s(&w["ref"]), s(&w["name"]));
+    let mut line = format!(
+        "{} {}  {}",
+        mark(w["selected"] == true),
+        s(&w["ref"]),
+        s(&w["name"])
+    );
     if let Some(cwd) = w["cwd"].as_str() {
         line += &format!("  {cwd}");
     }
@@ -616,17 +722,34 @@ fn notification_line(n: &Value) -> String {
         (t, b) => format!("{t}: {b}"),
     };
     let unread = if n["read"] == true { " " } else { "•" };
-    format!("{unread} notification:{}  {} {}  {}s ago  {text}", n["id"], s(&n["workspace"]), s(&n["surface"]), n["age_seconds"])
+    format!(
+        "{unread} notification:{}  {} {}  {}s ago  {text}",
+        n["id"],
+        s(&n["workspace"]),
+        s(&n["surface"]),
+        n["age_seconds"]
+    )
 }
 
 fn pane_line(p: &Value) -> String {
     let n = p["surfaces"].as_array().map_or(0, Vec::len);
-    format!("{} {}  {n} surface{}", mark(p["focused"] == true), s(&p["ref"]), if n == 1 { "" } else { "s" })
+    format!(
+        "{} {}  {n} surface{}",
+        mark(p["focused"] == true),
+        s(&p["ref"]),
+        if n == 1 { "" } else { "s" }
+    )
 }
 
 fn surface_line(t: &Value) -> String {
     let detail = t["url"].as_str().or(t["cwd"].as_str()).unwrap_or_default();
-    format!("{} {}  {:<8}  {}  {detail}", mark(t["active"] == true), s(&t["ref"]), s(&t["type"]), s(&t["title"]))
+    format!(
+        "{} {}  {:<8}  {}  {detail}",
+        mark(t["active"] == true),
+        s(&t["ref"]),
+        s(&t["type"]),
+        s(&t["title"])
+    )
 }
 
 fn tree(v: &Value) -> String {
@@ -644,7 +767,12 @@ fn tree(v: &Value) -> String {
 }
 
 fn created(v: &Value) -> String {
-    format!("OK {} {} {}", s(&v["surface"]["ref"]), s(&v["pane"]), s(&v["workspace"]))
+    format!(
+        "OK {} {} {}",
+        s(&v["surface"]["ref"]),
+        s(&v["pane"]),
+        s(&v["workspace"])
+    )
 }
 
 #[cfg(test)]
@@ -657,7 +785,14 @@ mod tests {
 
     #[test]
     fn parses_flags_switches_and_positionals() {
-        let a = args(&["send", "--surface", "surface:2", "ls\\n", "--no-focus", "--scrollback"]);
+        let a = args(&[
+            "send",
+            "--surface",
+            "surface:2",
+            "ls\\n",
+            "--no-focus",
+            "--scrollback",
+        ]);
         assert_eq!(a.pos, ["send", "ls\\n"]);
         assert_eq!(a.opts["surface"], "surface:2");
         assert_eq!(a.opts["focus"], false);

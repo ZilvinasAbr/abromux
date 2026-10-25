@@ -20,7 +20,14 @@ pub fn covers(c: char) -> bool {
 
 /// Paints `c` over `cell`. `bg` is the cell's background, used to open the
 /// gap inside double lines.
-pub fn paint(c: char, cell: Bounds<Pixels>, font_size: Pixels, fg: Hsla, bg: Hsla, window: &mut Window) {
+pub fn paint(
+    c: char,
+    cell: Bounds<Pixels>,
+    font_size: Pixels,
+    fg: Hsla,
+    bg: Hsla,
+    window: &mut Window,
+) {
     let scale = window.scale_factor();
     let snap = |v: Pixels| (f32::from(v) * scale).round() / scale;
     let mut cv = Canvas {
@@ -79,8 +86,15 @@ pub fn paint(c: char, cell: Bounds<Pixels>, font_size: Pixels, fg: Hsla, bg: Hsl
         0x2595 => cv.block(7. / 8., 0., 1., 1.),
         // ▖ ▗ ▘ ▙ ▚ ▛ ▜ ▝ ▞ ▟: bits are upper left, upper right, lower left, lower right.
         0x2596..=0x259f => {
-            let quads = [0b0010, 0b0001, 0b1000, 0b1011, 0b1001, 0b1110, 0b1101, 0b0100, 0b0110, 0b0111][(code - 0x2596) as usize];
-            for (bit, x, y) in [(0b1000, 0., 0.), (0b0100, 0.5, 0.), (0b0010, 0., 0.5), (0b0001, 0.5, 0.5)] {
+            let quads = [
+                0b0010, 0b0001, 0b1000, 0b1011, 0b1001, 0b1110, 0b1101, 0b0100, 0b0110, 0b0111,
+            ][(code - 0x2596) as usize];
+            for (bit, x, y) in [
+                (0b1000, 0., 0.),
+                (0b0100, 0.5, 0.),
+                (0b0010, 0., 0.5),
+                (0b0001, 0.5, 0.5),
+            ] {
                 if quads & bit != 0 {
                     cv.block(x, y, x + 0.5, y + 0.5);
                 }
@@ -112,7 +126,11 @@ fn arms(code: u32) -> Option<[Line; 4]> {
         // 2570
         "", "", "", "", "...l", "l...", ".l..", "..l.", "...h", "h...", ".h..", "..h.", ".h.l", "l.h.", ".l.h", "h.l.",
     ];
-    let spec: [u8; 4] = TABLE.get(code.checked_sub(0x2500)? as usize)?.as_bytes().try_into().ok()?;
+    let spec: [u8; 4] = TABLE
+        .get(code.checked_sub(0x2500)? as usize)?
+        .as_bytes()
+        .try_into()
+        .ok()?;
     Some(spec.map(|b| match b {
         b'l' => Line::Light,
         b'h' => Line::Heavy,
@@ -151,7 +169,10 @@ impl Canvas<'_> {
 
     fn rect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, color: Hsla) {
         if x1 > x0 && y1 > y0 {
-            self.window.paint_quad(fill(Bounds::from_corners(point(px(x0), px(y0)), point(px(x1), px(y1))), color));
+            self.window.paint_quad(fill(
+                Bounds::from_corners(point(px(x0), px(y0)), point(px(x1), px(y1))),
+                color,
+            ));
         }
     }
 
@@ -194,7 +215,9 @@ impl Canvas<'_> {
         // double lines, or passes straight on when nothing crosses it;
         // otherwise it stops at the line across it.
         let through = |opposite: Line, a: Line, b: Line| {
-            a == Line::Double || b == Line::Double || opposite == Line::Double && (a == Line::None || b == Line::None)
+            a == Line::Double
+                || b == Line::Double
+                || opposite == Line::Double && (a == Line::None || b == Line::None)
         };
         let (gx, gy, bg) = (self.mid_x(t), self.mid_y(t), self.bg);
         if left == Line::Double {
@@ -206,17 +229,29 @@ impl Canvas<'_> {
             self.bar(true, start, self.x1, t, bg);
         }
         if up == Line::Double {
-            let end = if through(down, left, right) { gy + t } else { cy };
+            let end = if through(down, left, right) {
+                gy + t
+            } else {
+                cy
+            };
             self.bar(false, self.y0, end, t, bg);
         }
         if down == Line::Double {
-            let start = if through(up, left, right) { gy } else { cy + hw };
+            let start = if through(up, left, right) {
+                gy
+            } else {
+                cy + hw
+            };
             self.bar(false, start, self.y1, t, bg);
         }
     }
 
     fn dashes(&mut self, horizontal: bool, n: u32, width: f32) {
-        let (a, b) = if horizontal { (self.x0, self.x1) } else { (self.y0, self.y1) };
+        let (a, b) = if horizontal {
+            (self.x0, self.x1)
+        } else {
+            (self.y0, self.y1)
+        };
         let seg = (b - a) / n as f32;
         let gap = (seg * 0.4).max(1. / self.scale);
         for i in 0..n {
@@ -234,7 +269,10 @@ impl Canvas<'_> {
         let mut path = PathBuilder::stroke(px(t));
         path.move_to(point(px(mx), px(y)));
         path.line_to(point(px(mx), px(my + r * (y - my).signum())));
-        path.curve_to(point(px(mx + r * (x - mx).signum()), px(my)), point(px(mx), px(my)));
+        path.curve_to(
+            point(px(mx + r * (x - mx).signum()), px(my)),
+            point(px(mx), px(my)),
+        );
         path.line_to(point(px(x), px(my)));
         if let Ok(path) = path.build() {
             self.window.paint_path(path, self.fg);
@@ -242,7 +280,11 @@ impl Canvas<'_> {
     }
 
     fn diagonal(&mut self, down: bool) {
-        let (ya, yb) = if down { (self.y0, self.y1) } else { (self.y1, self.y0) };
+        let (ya, yb) = if down {
+            (self.y0, self.y1)
+        } else {
+            (self.y1, self.y0)
+        };
         let mut path = PathBuilder::stroke(px(self.light));
         path.move_to(point(px(self.x0), px(ya)));
         path.line_to(point(px(self.x1), px(yb)));

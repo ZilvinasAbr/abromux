@@ -42,7 +42,12 @@ pub type OnMouse<V> = fn(&mut V, PlatformInput, &mut Window, &mut Context<V>);
 /// `mouse:down|up|move,X,Y[,left|right|middle][,shift][,cmd]` and `scroll:X,Y,DY`
 /// (window pixels; positive DY scrolls up), and `mods:cmd|ctrl|none` for a
 /// modifier-only change.
-pub fn run_script<V: 'static>(script: String, on_mouse: OnMouse<V>, window: &mut Window, cx: &mut Context<V>) {
+pub fn run_script<V: 'static>(
+    script: String,
+    on_mouse: OnMouse<V>,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) {
     cx.spawn_in(window, async move |this, cx| {
         Timer::after(Duration::from_millis(2500)).await;
         for step in script.split(';').map(str::trim).filter(|s| !s.is_empty()) {
@@ -62,7 +67,13 @@ pub fn run_script<V: 'static>(script: String, on_mouse: OnMouse<V>, window: &mut
 }
 
 /// One script step other than `wait`. Also behind the `debug.input` RPC.
-pub fn run_step<V: 'static>(view: &Entity<V>, step: &str, on_mouse: OnMouse<V>, window: &mut Window, cx: &mut App) -> anyhow::Result<()> {
+pub fn run_step<V: 'static>(
+    view: &Entity<V>,
+    step: &str,
+    on_mouse: OnMouse<V>,
+    window: &mut Window,
+    cx: &mut App,
+) -> anyhow::Result<()> {
     let (cmd, arg) = step.split_once(':').unwrap_or((step, ""));
     match cmd {
         "mouse" | "scroll" | "mods" => {
@@ -75,8 +86,13 @@ pub fn run_step<V: 'static>(view: &Entity<V>, step: &str, on_mouse: OnMouse<V>, 
         }
         "type" => {
             for ch in arg.chars() {
-                let key = if ch == ' ' { "space".to_string() } else { ch.to_lowercase().to_string() };
-                let mut ks = Keystroke::parse(&key).map_err(|e| anyhow!("can't type {ch:?}: {e:?}"))?;
+                let key = if ch == ' ' {
+                    "space".to_string()
+                } else {
+                    ch.to_lowercase().to_string()
+                };
+                let mut ks =
+                    Keystroke::parse(&key).map_err(|e| anyhow!("can't type {ch:?}: {e:?}"))?;
                 ks.modifiers.shift = ch.is_uppercase();
                 ks.key_char = Some(ch.to_string());
                 window.dispatch_keystroke(ks, cx);
@@ -107,7 +123,9 @@ pub fn after_next_frame(window: &Window, cx: &mut App) -> oneshot::Receiver<anyh
         let start = Instant::now();
         cx.spawn(async move |_| {
             if let Some(tx) = on_frame.borrow_mut().take() {
-                let _ = tx.send(Ok(json!({ "wait_ms": ms(start - requested), "draw_ms": ms(start.elapsed()) })));
+                let _ = tx.send(Ok(
+                    json!({ "wait_ms": ms(start - requested), "draw_ms": ms(start.elapsed()) }),
+                ));
             }
         })
         .detach();
@@ -138,7 +156,11 @@ impl FrameLog {
     pub fn start(log: &Rc<RefCell<Self>>, window: &Window) {
         let generation = {
             let mut l = log.borrow_mut();
-            *l = FrameLog { generation: l.generation + 1, recording: true, ..Default::default() };
+            *l = FrameLog {
+                generation: l.generation + 1,
+                recording: true,
+                ..Default::default()
+            };
             l.generation
         };
         Self::next(log.clone(), generation, window);
@@ -163,25 +185,47 @@ impl FrameLog {
                 }
             }
             let draws = log.clone();
-            cx.spawn(async move |_| draws.borrow_mut().draws.push(ms(start.elapsed()))).detach();
+            cx.spawn(async move |_| draws.borrow_mut().draws.push(ms(start.elapsed())))
+                .detach();
             Self::next(log, generation, window);
         });
     }
 }
 
 fn mouse_event(cmd: &str, arg: &str) -> Option<PlatformInput> {
-    use gpui::{Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollDelta, ScrollWheelEvent, point, px};
+    use gpui::{
+        Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollDelta,
+        ScrollWheelEvent, point, px,
+    };
     let parts: Vec<&str> = arg.split(',').map(str::trim).collect();
     let num = |i: usize| parts.get(i).and_then(|v| v.parse::<f32>().ok());
-    let modifiers = Modifiers { shift: parts.contains(&"shift"), platform: parts.contains(&"cmd"), ..Default::default() };
+    let modifiers = Modifiers {
+        shift: parts.contains(&"shift"),
+        platform: parts.contains(&"cmd"),
+        ..Default::default()
+    };
     if cmd == "mods" {
-        let modifiers = Modifiers { platform: parts.contains(&"cmd"), control: parts.contains(&"ctrl"), ..Default::default() };
-        return Some(PlatformInput::ModifiersChanged(gpui::ModifiersChangedEvent { modifiers, ..Default::default() }));
+        let modifiers = Modifiers {
+            platform: parts.contains(&"cmd"),
+            control: parts.contains(&"ctrl"),
+            ..Default::default()
+        };
+        return Some(PlatformInput::ModifiersChanged(
+            gpui::ModifiersChangedEvent {
+                modifiers,
+                ..Default::default()
+            },
+        ));
     }
     if cmd == "scroll" {
         let position = point(px(num(0)?), px(num(1)?));
         let delta = ScrollDelta::Pixels(point(px(0.), px(num(2)?)));
-        return Some(PlatformInput::ScrollWheel(ScrollWheelEvent { position, delta, modifiers, ..Default::default() }));
+        return Some(PlatformInput::ScrollWheel(ScrollWheelEvent {
+            position,
+            delta,
+            modifiers,
+            ..Default::default()
+        }));
     }
     let position = point(px(num(1)?), px(num(2)?));
     let button = match parts.get(3).copied() {
@@ -190,9 +234,24 @@ fn mouse_event(cmd: &str, arg: &str) -> Option<PlatformInput> {
         _ => MouseButton::Left,
     };
     Some(match parts[0] {
-        "down" => PlatformInput::MouseDown(MouseDownEvent { button, position, modifiers, click_count: 1, first_mouse: false }),
-        "up" => PlatformInput::MouseUp(MouseUpEvent { button, position, modifiers, click_count: 1 }),
-        "move" => PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: parts.get(3).map(|_| button), modifiers }),
+        "down" => PlatformInput::MouseDown(MouseDownEvent {
+            button,
+            position,
+            modifiers,
+            click_count: 1,
+            first_mouse: false,
+        }),
+        "up" => PlatformInput::MouseUp(MouseUpEvent {
+            button,
+            position,
+            modifiers,
+            click_count: 1,
+        }),
+        "move" => PlatformInput::MouseMove(MouseMoveEvent {
+            position,
+            pressed_button: parts.get(3).map(|_| button),
+            modifiers,
+        }),
         _ => return None,
     })
 }

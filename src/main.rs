@@ -128,9 +128,25 @@ impl AssetSource for Assets {
             };
         }
         let bytes = embed!(
-            "terminal", "globe", "plus", "close", "x", "split-right", "split-down", "chevron-left", "chevron-right",
-            "chevron-down", "chevron-up", "rotate-cw", "panel-left", "bell", "git-branch", "folder", "search",
-            "circle-x", "pencil"
+            "terminal",
+            "globe",
+            "plus",
+            "close",
+            "x",
+            "split-right",
+            "split-down",
+            "chevron-left",
+            "chevron-right",
+            "chevron-down",
+            "chevron-up",
+            "rotate-cw",
+            "panel-left",
+            "bell",
+            "git-branch",
+            "folder",
+            "search",
+            "circle-x",
+            "pencil"
         );
         Ok(bytes.map(Cow::Borrowed))
     }
@@ -179,7 +195,12 @@ struct AbroMux {
 }
 
 impl AbroMux {
-    fn new(cwd: Option<String>, session: Option<session::Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        cwd: Option<String>,
+        session: Option<session::Session>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut this = Self {
             workspaces: vec![],
             active: 0,
@@ -219,7 +240,12 @@ impl AbroMux {
         let mut banner_clicks = banner::init();
         cx.spawn_in(window, async move |this, cx| {
             while let Some(id) = banner_clicks.next().await {
-                if this.update_in(cx, |this, window, cx| this.open_notification(id, window, cx)).is_err() {
+                if this
+                    .update_in(cx, |this, window, cx| {
+                        this.open_notification(id, window, cx)
+                    })
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -228,7 +254,10 @@ impl AbroMux {
         let mut clicks = browser::watch_clicks();
         cx.spawn_in(window, async move |this, cx| {
             while clicks.next().await.is_some() {
-                if this.update_in(cx, |this, window, cx| this.follow_page_focus(window, cx)).is_err() {
+                if this
+                    .update_in(cx, |this, window, cx| this.follow_page_focus(window, cx))
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -252,10 +281,16 @@ impl AbroMux {
     /// A click into a page gives its WKWebView native focus behind gpui's back.
     /// Move gpui focus there too, or the address bar keeps taking ⌘A/⌘C/⌘V.
     fn follow_page_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let hit = self.ws().root.panes().into_iter().filter_map(|p| p.active_surface()).find_map(|s| match s {
-            Surface::Browser(b) if b.read(cx).page_has_focus(cx) => Some(b.clone()),
-            _ => None,
-        });
+        let hit = self
+            .ws()
+            .root
+            .panes()
+            .into_iter()
+            .filter_map(|p| p.active_surface())
+            .find_map(|s| match s {
+                Surface::Browser(b) if b.read(cx).page_has_focus(cx) => Some(b.clone()),
+                _ => None,
+            });
         if let Some(b) = hit {
             let focus = b.focus_handle(cx);
             if !focus.is_focused(window) {
@@ -286,13 +321,27 @@ impl AbroMux {
         let first = self.ws().root.panes()[0].id;
         self.workspaces[self.active].focused_pane = first;
         self.split(Axis::Vertical, false, window, cx);
-        send(self.ws().focused_surface(), &format!("cd {repo} && printf '\\e[1;32mlibghostty-vt\\e[0m + \\e[1;34mgpui\\e[0m\\n' && ls src\r"), cx);
+        send(
+            self.ws().focused_surface(),
+            &format!(
+                "cd {repo} && printf '\\e[1;32mlibghostty-vt\\e[0m + \\e[1;34mgpui\\e[0m\\n' && ls src\r"
+            ),
+            cx,
+        );
         self.workspaces[self.active].focused_pane = first;
 
         self.new_workspace(Some(repo.clone()), window, cx);
         self.workspaces[self.active].custom_name = Some("abromux".into());
-        send(self.ws().focused_surface(), "cargo --version && wc -l src/*.rs\r", cx);
-        let parent = std::path::Path::new(&repo).parent().unwrap().to_string_lossy().to_string();
+        send(
+            self.ws().focused_surface(),
+            "cargo --version && wc -l src/*.rs\r",
+            cx,
+        );
+        let parent = std::path::Path::new(&repo)
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         self.new_workspace(Some(format!("{parent}/gpui-experiments")), window, cx);
         send(self.ws().focused_surface(), "printf '\\a'\r", cx);
         self.select_workspace(0, window, cx);
@@ -308,7 +357,9 @@ impl AbroMux {
             let mut last = None;
             loop {
                 Timer::after(Duration::from_secs(5)).await;
-                let Ok(s) = this.update(cx, |this, cx| this.snapshot(false, cx)) else { break };
+                let Ok(s) = this.update(cx, |this, cx| this.snapshot(false, cx)) else {
+                    break;
+                };
                 if last.as_ref() != Some(&s) {
                     session::save(&s);
                     last = Some(s);
@@ -352,11 +403,23 @@ impl AbroMux {
 
     /// A shell in `cwd`; `ws` is the owning workspace's id (exported to the
     /// shell so `abromux` run inside it targets its own workspace and surface).
-    fn make_terminal(&mut self, cwd: Option<String>, ws: usize, window: &mut Window, cx: &mut Context<Self>) -> Surface {
+    fn make_terminal(
+        &mut self,
+        cwd: Option<String>,
+        ws: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Surface {
         let surface = self.next_surface + 1;
-        let mut env = vec![("ABROMUX_WORKSPACE_ID".into(), format!("workspace:{ws}")), ("ABROMUX_SURFACE_ID".into(), format!("surface:{surface}"))];
+        let mut env = vec![
+            ("ABROMUX_WORKSPACE_ID".into(), format!("workspace:{ws}")),
+            ("ABROMUX_SURFACE_ID".into(), format!("surface:{surface}")),
+        ];
         if let Some(path) = &self.socket {
-            env.push(("ABROMUX_SOCKET_PATH".into(), path.to_string_lossy().into_owned()));
+            env.push((
+                "ABROMUX_SOCKET_PATH".into(),
+                path.to_string_lossy().into_owned(),
+            ));
         }
         let term = cx.new(|cx| TerminalView::new(cwd, env, cx));
         self.surface_ref(term.entity_id());
@@ -393,7 +456,13 @@ impl AbroMux {
     /// ⌘-click on a terminal link: web URLs open in a browser to the right
     /// of the terminal (a new tab there if that pane already shows one),
     /// anything else with its default app.
-    fn open_link(&mut self, from: EntityId, target: link::Target, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_link(
+        &mut self,
+        from: EntityId,
+        target: link::Target,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let url = match target {
             link::Target::Url(u) if u.starts_with("http://") || u.starts_with("https://") => u,
             link::Target::Url(u) => {
@@ -405,11 +474,26 @@ impl AbroMux {
                 return;
             }
         };
-        let Some(wi) = self.workspaces.iter().position(|w| w.contains(from)) else { return };
+        let Some(wi) = self.workspaces.iter().position(|w| w.contains(from)) else {
+            return;
+        };
         let ws = &self.workspaces[wi];
-        let Some(pane) = ws.root.panes().into_iter().find(|p| p.tabs.iter().any(|s| s.entity_id() == from)).map(|p| p.id) else { return };
+        let Some(pane) = ws
+            .root
+            .panes()
+            .into_iter()
+            .find(|p| p.tabs.iter().any(|s| s.entity_id() == from))
+            .map(|p| p.id)
+        else {
+            return;
+        };
         let right = ws.root.neighbor(pane, Dir::Right).filter(|&r| {
-            ws.root.panes().into_iter().find(|p| p.id == r).and_then(|p| p.active_surface()).is_some_and(|s| matches!(s, Surface::Browser(_)))
+            ws.root
+                .panes()
+                .into_iter()
+                .find(|p| p.id == r)
+                .and_then(|p| p.active_surface())
+                .is_some_and(|s| matches!(s, Surface::Browser(_)))
         });
         let surface = self.make_browser(&url, window, cx);
         match right {
@@ -423,7 +507,12 @@ impl AbroMux {
     /// Make the pane containing `id` the focused pane (and select its tab).
     fn focus_surface(&mut self, id: EntityId, cx: &mut Context<Self>) {
         for (wi, ws) in self.workspaces.iter_mut().enumerate() {
-            let hit = ws.root.panes().iter().find_map(|p| p.tabs.iter().position(|s| s.entity_id() == id).map(|t| (p.id, t)));
+            let hit = ws.root.panes().iter().find_map(|p| {
+                p.tabs
+                    .iter()
+                    .position(|s| s.entity_id() == id)
+                    .map(|t| (p.id, t))
+            });
             if let Some((pane, tab)) = hit {
                 ws.focused_pane = pane;
                 if let Some(p) = ws.root.pane_mut(pane) {
@@ -438,12 +527,20 @@ impl AbroMux {
     }
 
     fn close_surface(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(wi) = self.workspaces.iter().position(|w| w.contains(id)) else { return };
+        let Some(wi) = self.workspaces.iter().position(|w| w.contains(id)) else {
+            return;
+        };
         self.forget_notifications(id);
         self.forget_status(id);
         let ws = &mut self.workspaces[wi];
         self.surface_refs.remove(&id);
-        let pane_id = ws.root.panes().iter().find(|p| p.tabs.iter().any(|s| s.entity_id() == id)).map(|p| p.id).unwrap();
+        let pane_id = ws
+            .root
+            .panes()
+            .iter()
+            .find(|p| p.tabs.iter().any(|s| s.entity_id() == id))
+            .map(|p| p.id)
+            .unwrap();
         let pane = ws.root.pane_mut(pane_id).unwrap();
         let idx = pane.tabs.iter().position(|s| s.entity_id() == id).unwrap();
         pane.tabs.remove(idx);
@@ -477,11 +574,21 @@ impl AbroMux {
     }
 
     /// Returns the new workspace's index.
-    fn create_workspace(&mut self, cwd: Option<String>, select: bool, window: &mut Window, cx: &mut Context<Self>) -> usize {
+    fn create_workspace(
+        &mut self,
+        cwd: Option<String>,
+        select: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> usize {
         self.next_ws += 1;
         let id = self.next_ws;
         let surface = self.make_terminal(cwd, id, window, cx);
-        let pane = Pane { id: self.pane_id(), tabs: vec![surface], active: 0 };
+        let pane = Pane {
+            id: self.pane_id(),
+            tabs: vec![surface],
+            active: 0,
+        };
         let focused = pane.id;
         let ws = Workspace::new(id, None, Node::Leaf(pane), focused);
         self.workspaces.push(ws);
@@ -528,27 +635,33 @@ impl AbroMux {
     }
 
     fn start_rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ws) = self.workspaces.get(index) else { return };
+        let Some(ws) = self.workspaces.get(index) else {
+            return;
+        };
         let (id, name) = (ws.id, ws.name(cx));
         let input = cx.new(|cx| InputState::new(window, cx).default_value(name));
-        cx.subscribe_in(&input, window, move |this, input, ev: &InputEvent, window, cx| match ev {
-            InputEvent::PressEnter { .. } => {
-                let name = input.read(cx).value().trim().to_string();
-                if let Some(ws) = this.workspaces.iter_mut().find(|w| w.id == id) {
-                    // Leaving the name as it was keeps it following the agent's title.
-                    let changed = !name.is_empty() && name != ws.auto_name(cx);
-                    ws.custom_name = changed.then_some(name);
+        cx.subscribe_in(
+            &input,
+            window,
+            move |this, input, ev: &InputEvent, window, cx| match ev {
+                InputEvent::PressEnter { .. } => {
+                    let name = input.read(cx).value().trim().to_string();
+                    if let Some(ws) = this.workspaces.iter_mut().find(|w| w.id == id) {
+                        // Leaving the name as it was keeps it following the agent's title.
+                        let changed = !name.is_empty() && name != ws.auto_name(cx);
+                        ws.custom_name = changed.then_some(name);
+                    }
+                    this.renaming = None;
+                    this.focus_active(window, cx);
+                    cx.notify();
                 }
-                this.renaming = None;
-                this.focus_active(window, cx);
-                cx.notify();
-            }
-            InputEvent::Blur => {
-                this.renaming = None;
-                cx.notify();
-            }
-            _ => {}
-        })
+                InputEvent::Blur => {
+                    this.renaming = None;
+                    cx.notify();
+                }
+                _ => {}
+            },
+        )
         .detach();
         input.update(cx, |i, cx| i.focus(window, cx));
         // Select the old name so typing replaces it; the input has to be
@@ -559,7 +672,12 @@ impl AbroMux {
     }
 
     fn focus_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(s) = self.workspaces.get(self.active).and_then(|w| w.focused_surface()).cloned() {
+        if let Some(s) = self
+            .workspaces
+            .get(self.active)
+            .and_then(|w| w.focused_surface())
+            .cloned()
+        {
             // Defer so newly-created views have been laid out first.
             window.defer(cx, move |window, cx| s.focus(window, cx));
         }
@@ -577,9 +695,19 @@ impl AbroMux {
     }
 
     /// Insert `surface` after the active tab of pane `pane_id` in workspace `wi`.
-    fn add_tab_to(&mut self, wi: usize, pane_id: usize, surface: Surface, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn add_tab_to(
+        &mut self,
+        wi: usize,
+        pane_id: usize,
+        surface: Surface,
+        focus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let ws = &mut self.workspaces[wi];
-        let Some(pane) = ws.root.pane_mut(pane_id) else { return };
+        let Some(pane) = ws.root.pane_mut(pane_id) else {
+            return;
+        };
         let at = (pane.active + 1).min(pane.tabs.len());
         pane.tabs.insert(at, surface);
         if focus {
@@ -618,7 +746,11 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let pane = Pane { id: self.pane_id(), tabs: vec![surface], active: 0 };
+        let pane = Pane {
+            id: self.pane_id(),
+            tabs: vec![surface],
+            active: 0,
+        };
         let (new_id, split_id) = (pane.id, self.id());
         let ws = &mut self.workspaces[wi];
         ws.root.split(pane_id, axis, before, pane, split_id).ok()?;
@@ -646,7 +778,9 @@ impl AbroMux {
     /// ⌃1–8 select that tab of the focused pane, ⌃9 the last one.
     fn select_tab(&mut self, index: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
         let ws = &mut self.workspaces[self.active];
-        let Some(p) = ws.root.pane_mut(ws.focused_pane) else { return };
+        let Some(p) = ws.root.pane_mut(ws.focused_pane) else {
+            return;
+        };
         let i = index.unwrap_or(p.tabs.len().saturating_sub(1));
         if i < p.tabs.len() {
             p.active = i;
@@ -667,7 +801,14 @@ impl AbroMux {
     /// Move the divider of pane `pane`'s innermost split along `dir`'s axis
     /// by `px` toward `dir`, as tmux's `resize-pane` does. False if the pane
     /// has no such split.
-    fn resize_pane(&mut self, wi: usize, pane: usize, dir: Dir, px: f32, cx: &mut Context<Self>) -> bool {
+    fn resize_pane(
+        &mut self,
+        wi: usize,
+        pane: usize,
+        dir: Dir,
+        px: f32,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let (axis, sign) = match dir {
             Dir::Left => (Axis::Horizontal, -1.),
             Dir::Right => (Axis::Horizontal, 1.),
@@ -675,10 +816,20 @@ impl AbroMux {
             Dir::Down => (Axis::Vertical, 1.),
         };
         let root = &mut self.workspaces[wi].root;
-        let Some(id) = root.split_along(pane, axis) else { return false };
-        let Some(b) = self.split_bounds.borrow().get(&id).copied() else { return false };
-        let size = f32::from(if axis == Axis::Horizontal { b.size.width } else { b.size.height });
-        let Some(ratio) = root.split_mut(id) else { return false };
+        let Some(id) = root.split_along(pane, axis) else {
+            return false;
+        };
+        let Some(b) = self.split_bounds.borrow().get(&id).copied() else {
+            return false;
+        };
+        let size = f32::from(if axis == Axis::Horizontal {
+            b.size.width
+        } else {
+            b.size.height
+        });
+        let Some(ratio) = root.split_mut(id) else {
+            return false;
+        };
         *ratio = (*ratio + sign * px / size.max(1.)).clamp(0.1, 0.9);
         cx.notify();
         true
@@ -745,7 +896,11 @@ impl AbroMux {
             for p in ws.root.panes() {
                 for (ti, s) in p.tabs.iter().enumerate() {
                     if let Surface::Browser(b) = s {
-                        let shown = wi == self.active && ti == p.active && self.renaming.is_none() && !self.notifications_open && self.palette.is_none();
+                        let shown = wi == self.active
+                            && ti == p.active
+                            && self.renaming.is_none()
+                            && !self.notifications_open
+                            && self.palette.is_none();
                         b.update(cx, |b, cx| b.set_shown(shown, cx));
                     }
                 }
@@ -775,7 +930,10 @@ impl AbroMux {
             .map(|(i, ws)| {
                 let active = i == self.active;
                 let name = ws.name(cx);
-                let subtitle = ws.focused_surface().map(|s| s.title(cx)).unwrap_or_default();
+                let subtitle = ws
+                    .focused_surface()
+                    .map(|s| s.title(cx))
+                    .unwrap_or_default();
                 let cwd = ws.cwd(cx);
                 let branch = cwd.as_deref().and_then(|c| self.branch(c));
                 let meta = match (&branch, &cwd) {
@@ -785,10 +943,15 @@ impl AbroMux {
                 };
                 let fg = if active { rgb(0xffffff) } else { rgb(TEXT) };
                 let sub = if active { rgba(0xffffffc0) } else { rgb(MUTED) };
-                let renaming = self.renaming.as_ref().filter(|(id, _)| *id == ws.id).map(|(_, input)| input.clone());
+                let renaming = self
+                    .renaming
+                    .as_ref()
+                    .filter(|(id, _)| *id == ws.id)
+                    .map(|(_, input)| input.clone());
                 let is_renaming = renaming.is_some();
                 let group: SharedString = format!("ws-{}", ws.id).into();
-                let hint = shortcut_digit(i, self.workspaces.len()).filter(|_| self.hints == Some(Hints::Command));
+                let hint = shortcut_digit(i, self.workspaces.len())
+                    .filter(|_| self.hints == Some(Hints::Command));
                 let latest = self.latest_unread(ws).map(|n| n.text());
                 let status = self.render_ws_status(ws, active);
 
@@ -818,7 +981,15 @@ impl AbroMux {
                             .flex()
                             .items_center()
                             .gap(px(6.))
-                            .when(latest.is_some(), |s| s.child(div().size(px(7.)).flex_none().rounded_full().bg(rgb(ACCENT_BRIGHT))))
+                            .when(latest.is_some(), |s| {
+                                s.child(
+                                    div()
+                                        .size(px(7.))
+                                        .flex_none()
+                                        .rounded_full()
+                                        .bg(rgb(ACCENT_BRIGHT)),
+                                )
+                            })
                             .child(match renaming {
                                 // Edit in place: same font and line as the title, in a
                                 // dark inset so it reads as a field on the accent row.
@@ -837,15 +1008,26 @@ impl AbroMux {
                                     .border_color(rgba(0xffffff59))
                                     .text_color(rgb(TEXT))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                    .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
-                                        if ev.keystroke.key == "escape" {
-                                            this.renaming = None;
-                                            this.focus_active(window, cx);
-                                            cx.notify();
-                                        }
-                                    }))
-                                    .child(Input::new(&input).appearance(false).text_size(px(12.5)).h_full().px_0().py_0())
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
+                                    .capture_key_down(cx.listener(
+                                        |this, ev: &KeyDownEvent, window, cx| {
+                                            if ev.keystroke.key == "escape" {
+                                                this.renaming = None;
+                                                this.focus_active(window, cx);
+                                                cx.notify();
+                                            }
+                                        },
+                                    ))
+                                    .child(
+                                        Input::new(&input)
+                                            .appearance(false)
+                                            .text_size(px(12.5))
+                                            .h_full()
+                                            .px_0()
+                                            .py_0(),
+                                    )
                                     .into_any_element(),
                                 None => div()
                                     .flex_1()
@@ -857,23 +1039,41 @@ impl AbroMux {
                                     .child(name.clone())
                                     .into_any_element(),
                             })
-                            .when(!is_renaming, |s| s.child(
-                                div()
-                                    .id(("ws-close", ws.id))
-                                    .invisible()
-                                    .group_hover(group.clone(), |s| s.visible())
-                                    .flex_none()
-                                    .rounded(px(4.))
-                                    .p(px(2.))
-                                    .hover(|s| s.bg(rgba(0xffffff22)))
-                                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                    .on_click(cx.listener(move |this, _, window, cx| this.close_workspace(i, window, cx)))
-                                    .child(icon("x").size(px(11.)).text_color(sub)),
-                            )),
+                            .when(!is_renaming, |s| {
+                                s.child(
+                                    div()
+                                        .id(("ws-close", ws.id))
+                                        .invisible()
+                                        .group_hover(group.clone(), |s| s.visible())
+                                        .flex_none()
+                                        .rounded(px(4.))
+                                        .p(px(2.))
+                                        .hover(|s| s.bg(rgba(0xffffff22)))
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
+                                        })
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.close_workspace(i, window, cx)
+                                        }))
+                                        .child(icon("x").size(px(11.)).text_color(sub)),
+                                )
+                            }),
                     )
-                    .when(!subtitle.is_empty() && subtitle != name && Some(&subtitle) != cwd.as_ref().map(|c| tilde(c)).as_ref(), |s| {
-                        s.child(div().mt(px(2.)).text_size(px(11.)).text_color(sub).line_clamp(2).child(subtitle))
-                    })
+                    .when(
+                        !subtitle.is_empty()
+                            && subtitle != name
+                            && Some(&subtitle) != cwd.as_ref().map(|c| tilde(c)).as_ref(),
+                        |s| {
+                            s.child(
+                                div()
+                                    .mt(px(2.))
+                                    .text_size(px(11.))
+                                    .text_color(sub)
+                                    .line_clamp(2)
+                                    .child(subtitle),
+                            )
+                        },
+                    )
                     .when_some(latest, |s, text| {
                         s.child(
                             div()
@@ -881,13 +1081,30 @@ impl AbroMux {
                                 .flex()
                                 .gap(px(4.))
                                 .text_size(px(11.))
-                                .text_color(if active { rgb(0xffffff) } else { rgb(ACCENT_BRIGHT) })
-                                .child(icon("bell").mt(px(1.)).size(px(10.)).text_color(if active { rgb(0xffffff) } else { rgb(ACCENT_BRIGHT) }))
+                                .text_color(if active {
+                                    rgb(0xffffff)
+                                } else {
+                                    rgb(ACCENT_BRIGHT)
+                                })
+                                .child(icon("bell").mt(px(1.)).size(px(10.)).text_color(
+                                    if active {
+                                        rgb(0xffffff)
+                                    } else {
+                                        rgb(ACCENT_BRIGHT)
+                                    },
+                                ))
                                 .child(div().flex_1().min_w_0().line_clamp(2).child(text)),
                         )
                     })
                     .children(status)
-                    .when_some(hint, |s, d| s.child(hint_pill(format!("⌘{d}")).absolute().top(px(6.)).right(px(8.))))
+                    .when_some(hint, |s, d| {
+                        s.child(
+                            hint_pill(format!("⌘{d}"))
+                                .absolute()
+                                .top(px(6.))
+                                .right(px(8.)),
+                        )
+                    })
                     .when(!meta.is_empty(), |s| {
                         s.child(
                             div()
@@ -897,8 +1114,15 @@ impl AbroMux {
                                 .gap(px(4.))
                                 .text_size(px(10.5))
                                 .text_color(sub)
-                                .when(branch.is_some(), |s| s.child(icon("git-branch").size(px(10.)).text_color(sub)))
-                                .child(div().truncate().font_family(terminal::FONT_FAMILY).child(meta)),
+                                .when(branch.is_some(), |s| {
+                                    s.child(icon("git-branch").size(px(10.)).text_color(sub))
+                                })
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .font_family(terminal::FONT_FAMILY)
+                                        .child(meta),
+                                ),
                         )
                     })
                     .into_any_element()
@@ -945,7 +1169,7 @@ impl AbroMux {
                     .id("sidebar-edge")
                     .absolute()
                     .top_0()
-                        .right_0()
+                    .right_0()
                     .w(px(6.))
                     .h_full()
                     .cursor_col_resize()
@@ -973,7 +1197,14 @@ impl AbroMux {
         let hints = self.hints == Some(Hints::Command);
         let button = |id: &'static str, name: &str, keys: &str| {
             if hints {
-                div().id(id).flex().flex_none().items_center().h(px(22.)).cursor_pointer().child(hint_pill(keys.into()))
+                div()
+                    .id(id)
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .h(px(22.))
+                    .cursor_pointer()
+                    .child(hint_pill(keys.into()))
             } else {
                 icon_button(id, name)
             }
@@ -1010,7 +1241,11 @@ impl AbroMux {
                             .text_size(px(8.5))
                             .font_weight(FontWeight::BOLD)
                             .text_color(rgb(0xffffff))
-                            .child(if unread > 99 { "99+".to_string() } else { unread.to_string() }),
+                            .child(if unread > 99 {
+                                "99+".to_string()
+                            } else {
+                                unread.to_string()
+                            }),
                     )
                 })
                 .into_any_element(),
@@ -1024,7 +1259,12 @@ impl AbroMux {
     fn render_node(&self, node: &Node, multi: bool, cx: &mut Context<Self>) -> AnyElement {
         match node {
             Node::Leaf(p) => self.render_pane(p, multi, cx),
-            Node::Split { id, axis, ratio, children } => {
+            Node::Split {
+                id,
+                axis,
+                ratio,
+                children,
+            } => {
                 let (id, axis) = (*id, *axis);
                 let horizontal = axis == Axis::Horizontal;
                 let bounds = self.split_bounds.clone();
@@ -1055,7 +1295,12 @@ impl AbroMux {
                     .when(horizontal, |s| s.w(relative(*ratio)).h_full())
                     .when(!horizontal, |s| s.h(relative(*ratio)).w_full())
                     .child(self.render_node(&children[0], multi, cx));
-                let b = div().flex_1().min_w_0().min_h_0().overflow_hidden().child(self.render_node(&children[1], multi, cx));
+                let b = div()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(self.render_node(&children[1], multi, cx));
                 div()
                     .size_full()
                     .flex()
@@ -1063,9 +1308,12 @@ impl AbroMux {
                     .when(!horizontal, |s| s.flex_col())
                     .relative()
                     .child(
-                        canvas(move |b, _, _| bounds.borrow_mut().insert(id, b), |_, _, _, _| {})
-                            .absolute()
-                            .size_full(),
+                        canvas(
+                            move |b, _, _| bounds.borrow_mut().insert(id, b),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
                     )
                     .child(a)
                     .child(divider)
@@ -1101,8 +1349,12 @@ impl AbroMux {
                 .text_size(px(12.))
                 .cursor_pointer()
                 .when(active, |d| d.bg(rgb(PANE_BG)).text_color(rgb(TEXT)))
-                .when(!active, |d| d.text_color(rgb(MUTED)).hover(|d| d.bg(rgba(HOVER))))
-                .when(active && focused && multi, |d| d.border_t_2().border_color(rgb(ACCENT)))
+                .when(!active, |d| {
+                    d.text_color(rgb(MUTED)).hover(|d| d.bg(rgba(HOVER)))
+                })
+                .when(active && focused && multi, |d| {
+                    d.border_t_2().border_color(rgb(ACCENT))
+                })
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _, window, cx| {
@@ -1119,70 +1371,119 @@ impl AbroMux {
                     MouseButton::Middle,
                     cx.listener(move |this, _, window, cx| this.close_surface(sid, window, cx)),
                 )
-                .when(unread, |d| d.text_color(rgb(TEXT)).child(div().size(px(6.)).flex_none().rounded_full().bg(rgb(ACCENT_BRIGHT))))
-                .child(icon(s.icon()).size(px(12.)).text_color(if active || unread { rgb(TEXT) } else { rgb(MUTED) }))
+                .when(unread, |d| {
+                    d.text_color(rgb(TEXT)).child(
+                        div()
+                            .size(px(6.))
+                            .flex_none()
+                            .rounded_full()
+                            .bg(rgb(ACCENT_BRIGHT)),
+                    )
+                })
+                .child(
+                    icon(s.icon())
+                        .size(px(12.))
+                        .text_color(if active || unread {
+                            rgb(TEXT)
+                        } else {
+                            rgb(MUTED)
+                        }),
+                )
                 .child(div().flex_1().min_w_0().truncate().child(s.title(cx)))
                 .when_some(hint, |d, n| d.child(hint_pill(format!("⌃{n}"))))
-                .when(hint.is_none(), |d| d.child(
-                    div()
-                        .id(("tab-close", sid))
-                        .flex_none()
-                        .rounded(px(3.))
-                        .p(px(2.))
-                        .when(!active, |d| d.invisible().group_hover(group.clone(), |d| d.visible()))
-                        .hover(|d| d.bg(rgba(0xffffff18)))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(move |this, _, window, cx| this.close_surface(sid, window, cx)))
-                        .child(icon("x").size(px(10.)).text_color(rgb(MUTED))),
-                ))
+                .when(hint.is_none(), |d| {
+                    d.child(
+                        div()
+                            .id(("tab-close", sid))
+                            .flex_none()
+                            .rounded(px(3.))
+                            .p(px(2.))
+                            .when(!active, |d| {
+                                d.invisible().group_hover(group.clone(), |d| d.visible())
+                            })
+                            .hover(|d| d.bg(rgba(0xffffff18)))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.close_surface(sid, window, cx)
+                            }))
+                            .child(icon("x").size(px(10.)).text_color(rgb(MUTED))),
+                    )
+                })
         });
 
         let focus_pane = move |this: &mut Self, cx: &mut Context<Self>| {
             this.workspaces[this.active].focused_pane = pane_id;
             cx.notify();
         };
-        let tab_bar = div()
-            .id(("tabbar", pane_id))
-            .h(px(30.))
-            .flex_none()
-            .flex()
-            .items_center()
-            .bg(rgb(TABBAR_BG))
-            .border_b_1()
-            .border_color(rgb(BORDER))
-            .child(div().id(("tabs", pane_id)).h_full().flex().overflow_x_scroll().children(tabs))
-            .child(div().flex_1().h_full().on_mouse_down(MouseButton::Left, |ev, window, _| {
-                if ev.click_count == 2 {
-                    window.titlebar_double_click();
-                }
-            }))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(2.))
-                    .px(px(6.))
-                    .child(icon_button(("pane-term", pane_id), "terminal").on_click(cx.listener(move |this, _, window, cx| {
-                        focus_pane(this, cx);
-                        let cwd = this.focused_cwd(cx);
-                        let ws = this.ws().id;
-                        let s = this.make_terminal(cwd, ws, window, cx);
-                        this.add_tab(s, window, cx);
-                    })))
-                    .child(icon_button(("pane-web", pane_id), "globe").on_click(cx.listener(move |this, _, window, cx| {
-                        focus_pane(this, cx);
-                        let s = this.make_browser(DEFAULT_URL, window, cx);
-                        this.add_tab(s, window, cx);
-                    })))
-                    .child(icon_button(("pane-split-r", pane_id), "split-right").on_click(cx.listener(move |this, _, window, cx| {
-                        focus_pane(this, cx);
-                        this.split(Axis::Horizontal, false, window, cx);
-                    })))
-                    .child(icon_button(("pane-split-d", pane_id), "split-down").on_click(cx.listener(move |this, _, window, cx| {
-                        focus_pane(this, cx);
-                        this.split(Axis::Vertical, false, window, cx);
-                    }))),
-            );
+        let tab_bar =
+            div()
+                .id(("tabbar", pane_id))
+                .h(px(30.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .bg(rgb(TABBAR_BG))
+                .border_b_1()
+                .border_color(rgb(BORDER))
+                .child(
+                    div()
+                        .id(("tabs", pane_id))
+                        .h_full()
+                        .flex()
+                        .overflow_x_scroll()
+                        .children(tabs),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .on_mouse_down(MouseButton::Left, |ev, window, _| {
+                            if ev.click_count == 2 {
+                                window.titlebar_double_click();
+                            }
+                        }),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(2.))
+                        .px(px(6.))
+                        .child(icon_button(("pane-term", pane_id), "terminal").on_click(
+                            cx.listener(move |this, _, window, cx| {
+                                focus_pane(this, cx);
+                                let cwd = this.focused_cwd(cx);
+                                let ws = this.ws().id;
+                                let s = this.make_terminal(cwd, ws, window, cx);
+                                this.add_tab(s, window, cx);
+                            }),
+                        ))
+                        .child(
+                            icon_button(("pane-web", pane_id), "globe").on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    focus_pane(this, cx);
+                                    let s = this.make_browser(DEFAULT_URL, window, cx);
+                                    this.add_tab(s, window, cx);
+                                },
+                            )),
+                        )
+                        .child(
+                            icon_button(("pane-split-r", pane_id), "split-right").on_click(
+                                cx.listener(move |this, _, window, cx| {
+                                    focus_pane(this, cx);
+                                    this.split(Axis::Horizontal, false, window, cx);
+                                }),
+                            ),
+                        )
+                        .child(
+                            icon_button(("pane-split-d", pane_id), "split-down").on_click(
+                                cx.listener(move |this, _, window, cx| {
+                                    focus_pane(this, cx);
+                                    this.split(Axis::Vertical, false, window, cx);
+                                }),
+                            ),
+                        ),
+                );
 
         let content = match pane.active_surface() {
             Some(Surface::Terminal(t)) => t.clone().into_any_element(),
@@ -1199,7 +1500,10 @@ impl AbroMux {
             .flex_col()
             .bg(rgb(PANE_BG))
             .relative()
-            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| focus_pane(this, cx)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| focus_pane(this, cx)),
+            )
             .child(tab_bar)
             .child(
                 div()
@@ -1208,7 +1512,9 @@ impl AbroMux {
                     .relative()
                     .child(content)
                     // Unfocused splits are dimmed, like cmux/ghostty.
-                    .when(multi && !focused, |d| d.child(div().absolute().inset_0().bg(rgba(0x0000004a))))
+                    .when(multi && !focused, |d| {
+                        d.child(div().absolute().inset_0().bg(rgba(0x0000004a)))
+                    })
                     .when_some(self.flash.filter(|(p, _)| *p == pane_id), |d, (_, n)| {
                         d.child(
                             div()
@@ -1217,11 +1523,23 @@ impl AbroMux {
                                 .border_2()
                                 .border_color(rgb(ACCENT))
                                 .bg(rgba(0x1f6fe522))
-                                .with_animation(("flash", n), Animation::new(Duration::from_millis(600)), |d, t| d.opacity(1. - t)),
+                                .with_animation(
+                                    ("flash", n),
+                                    Animation::new(Duration::from_millis(600)),
+                                    |d, t| d.opacity(1. - t),
+                                ),
                         )
                     }),
             )
-            .when(ring, |d| d.child(div().absolute().inset_0().border_2().border_color(rgb(ACCENT_BRIGHT))))
+            .when(ring, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .border_2()
+                        .border_color(rgb(ACCENT_BRIGHT)),
+                )
+            })
             .into_any_element()
     }
 }
@@ -1231,12 +1549,18 @@ impl Render for AbroMux {
         self.window_bounds = Some(window.window_bounds().get_bounds());
         self.mark_viewed(window);
         self.sync_webviews(cx);
-        let notifications = self.notifications_open.then(|| self.render_notifications(cx));
+        let notifications = self
+            .notifications_open
+            .then(|| self.render_notifications(cx));
         let palette = self.render_palette(cx);
         let ws = self.ws();
         let multi = ws.root.panes().len() > 1;
         let main = self.render_node(&self.ws().root, multi, cx);
-        let sidebar = if self.sidebar { Some(self.render_sidebar(cx)) } else { None };
+        let sidebar = if self.sidebar {
+            Some(self.render_sidebar(cx))
+        } else {
+            None
+        };
         let title = self.ws().name(cx);
 
         div()
@@ -1252,7 +1576,9 @@ impl Render for AbroMux {
                 let cwd = this.focused_cwd(cx);
                 this.new_workspace(cwd, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &CloseWorkspace, window, cx| this.close_workspace(this.active, window, cx)))
+            .on_action(cx.listener(|this, _: &CloseWorkspace, window, cx| {
+                this.close_workspace(this.active, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &RenameWorkspace, window, cx| {
                 this.sidebar = true;
                 this.start_rename(this.active, window, cx)
@@ -1275,8 +1601,12 @@ impl Render for AbroMux {
                 let s = this.make_browser(DEFAULT_URL, window, cx);
                 this.add_tab(s, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &SplitRight, window, cx| this.split(Axis::Horizontal, false, window, cx)))
-            .on_action(cx.listener(|this, _: &SplitDown, window, cx| this.split(Axis::Vertical, false, window, cx)))
+            .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
+                this.split(Axis::Horizontal, false, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
+                this.split(Axis::Vertical, false, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 if let Some(id) = this.ws().focused_surface().map(|s| s.entity_id()) {
                     this.close_surface(id, window, cx)
@@ -1318,18 +1648,28 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &FocusRight, w, cx| this.focus_dir(Dir::Right, w, cx)))
             .on_action(cx.listener(|this, _: &FocusUp, w, cx| this.focus_dir(Dir::Up, w, cx)))
             .on_action(cx.listener(|this, _: &FocusDown, w, cx| this.focus_dir(Dir::Down, w, cx)))
-            .on_action(cx.listener(|this, _: &ResizeLeft, _, cx| this.resize_focused(Dir::Left, cx)))
-            .on_action(cx.listener(|this, _: &ResizeRight, _, cx| this.resize_focused(Dir::Right, cx)))
+            .on_action(
+                cx.listener(|this, _: &ResizeLeft, _, cx| this.resize_focused(Dir::Left, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ResizeRight, _, cx| this.resize_focused(Dir::Right, cx)),
+            )
             .on_action(cx.listener(|this, _: &ResizeUp, _, cx| this.resize_focused(Dir::Up, cx)))
-            .on_action(cx.listener(|this, _: &ResizeDown, _, cx| this.resize_focused(Dir::Down, cx)))
+            .on_action(
+                cx.listener(|this, _: &ResizeDown, _, cx| this.resize_focused(Dir::Down, cx)),
+            )
             .on_action(cx.listener(|this, _: &FlashPane, _, cx| this.flash_pane(cx)))
             .on_action(cx.listener(|this, _: &ToggleNotifications, window, cx| {
                 this.close_palette(window, cx);
                 this.notifications_open = !this.notifications_open;
                 cx.notify()
             }))
-            .on_action(cx.listener(|this, _: &CommandPalette, window, cx| this.toggle_palette(palette::Mode::Commands, window, cx)))
-            .on_action(cx.listener(|this, _: &WorkspaceSwitcher, window, cx| this.toggle_palette(palette::Mode::Workspaces, window, cx)))
+            .on_action(cx.listener(|this, _: &CommandPalette, window, cx| {
+                this.toggle_palette(palette::Mode::Commands, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &WorkspaceSwitcher, window, cx| {
+                this.toggle_palette(palette::Mode::Workspaces, window, cx)
+            }))
             .map(|d| self.palette_actions(d, cx))
             .on_action(cx.listener(|this, _: &JumpToUnread, window, cx| {
                 this.jump_to_unread(window, cx);
@@ -1343,7 +1683,9 @@ impl Render for AbroMux {
                     }
                 }))
             })
-            .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, w, cx| this.modifiers_changed(&ev.modifiers, w, cx)))
+            .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, w, cx| {
+                this.modifiers_changed(&ev.modifiers, w, cx)
+            }))
             // Pressing a key while holding ⌘/⌃ means a shortcut, not a look at the hints.
             .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| this.set_hints(None, cx)))
             .when(self.resizing_sidebar, |d| d.cursor_col_resize())
@@ -1352,17 +1694,22 @@ impl Render for AbroMux {
                     if ev.pressed_button != Some(MouseButton::Left) {
                         this.resizing_sidebar = false;
                     } else {
-                        this.sidebar_width = f32::from(ev.position.x).clamp(SIDEBAR_MIN, SIDEBAR_MAX);
+                        this.sidebar_width =
+                            f32::from(ev.position.x).clamp(SIDEBAR_MIN, SIDEBAR_MAX);
                         cx.notify();
                     }
                     return;
                 }
-                let Some((id, axis)) = this.dragging else { return };
+                let Some((id, axis)) = this.dragging else {
+                    return;
+                };
                 if ev.pressed_button != Some(MouseButton::Left) {
                     this.dragging = None;
                     return;
                 }
-                let Some(b) = this.split_bounds.borrow().get(&id).copied() else { return };
+                let Some(b) = this.split_bounds.borrow().get(&id).copied() else {
+                    return;
+                };
                 let r = if axis == Axis::Horizontal {
                     (ev.position.x - b.origin.x) / b.size.width
                 } else {
@@ -1411,7 +1758,15 @@ impl Render for AbroMux {
                                     }
                                 })
                                 .children(self.titlebar_buttons(cx))
-                                .child(div().ml_2().min_w_0().truncate().text_size(px(12.)).text_color(rgb(MUTED)).child(title)),
+                                .child(
+                                    div()
+                                        .ml_2()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(MUTED))
+                                        .child(title),
+                                ),
                         )
                     })
                     .child(div().flex_1().min_h_0().child(main)),
@@ -1476,9 +1831,13 @@ fn run_app(cwd: Option<String>) {
         theme.mono_font_family = terminal::FONT_FAMILY.into();
 
         cx.set_global(config::Config::load());
-        cx.on_action(|_: &Quit, cx| match cx.active_window().or_else(|| cx.windows().first().copied()) {
-            Some(w) => w.update(cx, |_, window, cx| quit::request(window, cx)).unwrap_or_else(|_| cx.quit()),
-            None => cx.quit(),
+        cx.on_action(|_: &Quit, cx| {
+            match cx.active_window().or_else(|| cx.windows().first().copied()) {
+                Some(w) => w
+                    .update(cx, |_, window, cx| quit::request(window, cx))
+                    .unwrap_or_else(|_| cx.quit()),
+                None => cx.quit(),
+            }
         });
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
@@ -1532,9 +1891,17 @@ fn run_app(cwd: Option<String>) {
             KeyBinding::new("cmd-shift-p", CommandPalette, None),
             KeyBinding::new("cmd-p", WorkspaceSwitcher, None),
             KeyBinding::new("down", palette::SelectNext, Some("CommandPalette > Input")),
-            KeyBinding::new("ctrl-n", palette::SelectNext, Some("CommandPalette > Input")),
+            KeyBinding::new(
+                "ctrl-n",
+                palette::SelectNext,
+                Some("CommandPalette > Input"),
+            ),
             KeyBinding::new("up", palette::SelectPrev, Some("CommandPalette > Input")),
-            KeyBinding::new("ctrl-p", palette::SelectPrev, Some("CommandPalette > Input")),
+            KeyBinding::new(
+                "ctrl-p",
+                palette::SelectPrev,
+                Some("CommandPalette > Input"),
+            ),
             KeyBinding::new("enter", palette::Confirm, Some("CommandPalette > Input")),
             KeyBinding::new("escape", palette::Dismiss, Some("CommandPalette > Input")),
             // Keybindings run before key listeners; let these reach the PTY.
@@ -1573,14 +1940,24 @@ fn run_app(cwd: Option<String>) {
         // the only way the browser's WKWebView gets ⌘C/⌘V/⌘A/⌘X. gpui views
         // handle those keys through their own bindings before the menu sees them.
         cx.set_menus(vec![
-            Menu { name: channel::app_name().into(), items: vec![MenuItem::action(format!("Quit {}", channel::app_name()), Quit)] },
+            Menu {
+                name: channel::app_name().into(),
+                items: vec![MenuItem::action(
+                    format!("Quit {}", channel::app_name()),
+                    Quit,
+                )],
+            },
             Menu {
                 name: "Edit".into(),
                 items: vec![
                     MenuItem::os_action("Cut", gpui_component::input::Cut, OsAction::Cut),
                     MenuItem::os_action("Copy", terminal::Copy, OsAction::Copy),
                     MenuItem::os_action("Paste", terminal::Paste, OsAction::Paste),
-                    MenuItem::os_action("Select All", gpui_component::input::SelectAll, OsAction::SelectAll),
+                    MenuItem::os_action(
+                        "Select All",
+                        gpui_component::input::SelectAll,
+                        OsAction::SelectAll,
+                    ),
                 ],
             },
         ]);

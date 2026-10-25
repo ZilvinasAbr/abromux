@@ -23,10 +23,22 @@ pub fn find(row: &[Cell], col: u16, cwd: &str) -> Option<(Range<u16>, Target)> {
         .iter()
         .enumerate()
         .filter(|(_, c)| !c.spacer)
-        .map(|(x, c)| (x as u16, if c.text.is_empty() { " " } else { c.text.as_str() }))
+        .map(|(x, c)| {
+            (
+                x as u16,
+                if c.text.is_empty() {
+                    " "
+                } else {
+                    c.text.as_str()
+                },
+            )
+        })
         .collect();
     let at = cells.iter().rposition(|&(x, _)| x <= col)?;
-    let breaks = |s: &str| s.chars().all(|c| c.is_whitespace() || "\"'`<>│".contains(c));
+    let breaks = |s: &str| {
+        s.chars()
+            .all(|c| c.is_whitespace() || "\"'`<>│".contains(c))
+    };
     if breaks(cells[at].1) {
         return None;
     }
@@ -60,7 +72,13 @@ fn classify(word: &[&str], cwd: &str) -> Option<(usize, usize, Target)> {
 
     if let Some(s) = SCHEMES.iter().filter_map(|s| text.find(s)).min() {
         let url = trim_end(&text[s..]);
-        return (url.len() > text[s..].find("://")? + 3).then(|| (cell_at[s], cell_at[s + url.len()], Target::Url(url.to_string())));
+        return (url.len() > text[s..].find("://")? + 3).then(|| {
+            (
+                cell_at[s],
+                cell_at[s + url.len()],
+                Target::Url(url.to_string()),
+            )
+        });
     }
 
     let s = text.find(|c: char| !"([{".contains(c))?;
@@ -75,7 +93,11 @@ fn classify(word: &[&str], cwd: &str) -> Option<(usize, usize, Target)> {
     if file.is_empty() || file == "." || !full.exists() {
         return None;
     }
-    Some((cell_at[s], cell_at[s + path.len()], Target::Path(full, line)))
+    Some((
+        cell_at[s],
+        cell_at[s + path.len()],
+        Target::Path(full, line),
+    ))
 }
 
 /// Drop trailing punctuation that ends a sentence rather than the link,
@@ -84,7 +106,8 @@ fn trim_end(s: &str) -> &str {
     let mut s = s;
     loop {
         let Some(c) = s.chars().last() else { return s };
-        let unbalanced = |open: char, close: char| s.matches(close).count() > s.matches(open).count();
+        let unbalanced =
+            |open: char, close: char| s.matches(close).count() > s.matches(open).count();
         let drop = match c {
             '.' | ',' | ';' | ':' | '!' | '?' => true,
             ')' => unbalanced('(', ')'),
@@ -114,7 +137,16 @@ mod tests {
     use super::*;
 
     fn row(s: &str) -> Vec<Cell> {
-        s.chars().map(|c| Cell { text: if c == ' ' { String::new() } else { c.to_string() }, ..Default::default() }).collect()
+        s.chars()
+            .map(|c| Cell {
+                text: if c == ' ' {
+                    String::new()
+                } else {
+                    c.to_string()
+                },
+                ..Default::default()
+            })
+            .collect()
     }
 
     fn url(s: &str) -> Target {
@@ -124,7 +156,10 @@ mod tests {
     #[test]
     fn finds_urls_without_the_punctuation_around_them() {
         let r = row("see (https://example.com/a_(b)), then");
-        assert_eq!(find(&r, 10, "/"), Some((5..30, url("https://example.com/a_(b)"))));
+        assert_eq!(
+            find(&r, 10, "/"),
+            Some((5..30, url("https://example.com/a_(b)")))
+        );
         assert_eq!(find(&r, 4, "/"), None, "the ( before it isn't part of it");
         assert_eq!(find(&r, 33, "/"), None);
         let r = row("href=\"http://x.io/?q=1\".");
@@ -138,14 +173,34 @@ mod tests {
         let r = row("error at src/link.rs:42:7: oops");
         let target = Target::Path(PathBuf::from(here).join("src/link.rs"), Some(42));
         assert_eq!(find(&r, 12, here), Some((9..25, target)));
-        assert_eq!(find(&row("see src/nope.rs here"), 6, here), None, "missing files aren't links");
-        assert_eq!(find(&row("Cargo.toml."), 2, here), Some((0..10, Target::Path(PathBuf::from(here).join("Cargo.toml"), None))));
+        assert_eq!(
+            find(&row("see src/nope.rs here"), 6, here),
+            None,
+            "missing files aren't links"
+        );
+        assert_eq!(
+            find(&row("Cargo.toml."), 2, here),
+            Some((
+                0..10,
+                Target::Path(PathBuf::from(here).join("Cargo.toml"), None)
+            ))
+        );
     }
 
     #[test]
     fn wide_cells_map_back_to_columns() {
         // 日 takes two columns (a cell and its spacer), so the URL starts at 3.
-        let mut r = vec![Cell { text: "日".into(), wide: true, ..Default::default() }, Cell { spacer: true, ..Default::default() }];
+        let mut r = vec![
+            Cell {
+                text: "日".into(),
+                wide: true,
+                ..Default::default()
+            },
+            Cell {
+                spacer: true,
+                ..Default::default()
+            },
+        ];
         r.extend(row(" http://a.b"));
         assert_eq!(find(&r, 5, "/"), Some((3..13, url("http://a.b"))));
     }

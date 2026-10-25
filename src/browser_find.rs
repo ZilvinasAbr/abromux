@@ -96,7 +96,10 @@ fn script(call: &str) -> String {
 pub fn search(query: &str) -> String {
     // A JSON string is a valid JS string literal, except that U+2028/U+2029
     // ended JS string literals before ES2019.
-    let q = serde_json::to_string(query).unwrap().replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029");
+    let q = serde_json::to_string(query)
+        .unwrap()
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029");
     script(&format!("search({q})"))
 }
 
@@ -133,7 +136,10 @@ mod tests {
 
     #[test]
     fn parses_counts() {
-        assert_eq!(parse_count(r#"{"total":3,"current":1}"#), Some((3, Some(1))));
+        assert_eq!(
+            parse_count(r#"{"total":3,"current":1}"#),
+            Some((3, Some(1)))
+        );
         assert_eq!(parse_count(r#"{"total":2,"current":-1}"#), Some((2, None)));
         assert_eq!(parse_count(r#"{"total":0,"current":-1}"#), Some((0, None)));
         assert_eq!(parse_count(""), None);

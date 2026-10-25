@@ -10,7 +10,6 @@ use futures::{
     StreamExt,
     channel::{mpsc, oneshot},
 };
-use std::sync::Mutex;
 use gpui::{prelude::*, *};
 use gpui_component::{
     input::{self, Input, InputEvent, InputState},
@@ -18,8 +17,12 @@ use gpui_component::{
     wry::{self, WebViewExtMacOS},
 };
 use objc::{msg_send, runtime::Object, sel, sel_impl};
+use std::sync::Mutex;
 
-actions!(browser, [Back, Forward, Reload, ToggleDevTools, ShowConsole]);
+actions!(
+    browser,
+    [Back, Forward, Reload, ToggleDevTools, ShowConsole]
+);
 
 pub enum BrowserEvent {
     TitleChanged,
@@ -80,18 +83,26 @@ impl BrowserView {
             .expect("create webview");
         let webview = cx.new(|cx| WebView::new(raw, window, cx));
 
-        let address = cx.new(|cx| InputState::new(window, cx).placeholder("Search or enter URL").default_value(url.to_string()));
-        cx.subscribe_in(&address, window, |this, input, ev: &InputEvent, window, cx| match ev {
-            InputEvent::PressEnter { .. } => {
-                let text = input.read(cx).value().trim().to_string();
-                if !text.is_empty() {
-                    this.navigate(&normalize_url(&text), cx);
-                    this.focus_page(window, cx);
+        let address = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Search or enter URL")
+                .default_value(url.to_string())
+        });
+        cx.subscribe_in(
+            &address,
+            window,
+            |this, input, ev: &InputEvent, window, cx| match ev {
+                InputEvent::PressEnter { .. } => {
+                    let text = input.read(cx).value().trim().to_string();
+                    if !text.is_empty() {
+                        this.navigate(&normalize_url(&text), cx);
+                        this.focus_page(window, cx);
+                    }
                 }
-            }
-            InputEvent::Focus => cx.emit(BrowserEvent::Focused),
-            _ => {}
-        })
+                InputEvent::Focus => cx.emit(BrowserEvent::Focused),
+                _ => {}
+            },
+        )
         .detach();
 
         cx.spawn_in(window, async move |this, cx| {
@@ -100,7 +111,11 @@ impl BrowserView {
                     match msg {
                         WebMsg::Title(t) => this.title = t,
                         WebMsg::Url(u) => {
-                            let u = if u.starts_with("about:blank") { String::new() } else { u };
+                            let u = if u.starts_with("about:blank") {
+                                String::new()
+                            } else {
+                                u
+                            };
                             this.url = u.clone();
                             this.address.update(cx, |a, cx| a.set_value(u, window, cx));
                             // A new document has no highlights; search it afresh.
@@ -111,7 +126,12 @@ impl BrowserView {
                         }
                         WebMsg::Selection(json) => {
                             let text: String = serde_json::from_str(&json).unwrap_or_default();
-                            let text = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default().to_string();
+                            let text = text
+                                .lines()
+                                .map(str::trim)
+                                .find(|l| !l.is_empty())
+                                .unwrap_or_default()
+                                .to_string();
                             if !text.is_empty() {
                                 this.open_find(window, cx);
                                 if let Some(input) = &this.find_input {
@@ -183,7 +203,8 @@ impl BrowserView {
                 return false;
             }
             let responder: *mut Object = msg_send![window, firstResponder];
-            let is_view: bool = !responder.is_null() && msg_send![responder, isKindOfClass: objc::class!(NSView)];
+            let is_view: bool =
+                !responder.is_null() && msg_send![responder, isKindOfClass: objc::class!(NSView)];
             is_view && msg_send![responder, isDescendantOf: webview]
         }
     }
@@ -193,7 +214,8 @@ impl BrowserView {
     pub fn set_shown(&mut self, shown: bool, cx: &mut App) {
         if self.shown != shown {
             self.shown = shown;
-            self.webview.update(cx, |w, _| if shown { w.show() } else { w.hide() });
+            self.webview
+                .update(cx, |w, _| if shown { w.show() } else { w.hide() });
         }
     }
 
@@ -214,7 +236,11 @@ impl BrowserView {
             if inspector.is_null() {
                 return;
             }
-            let action = if console { sel!(showConsole) } else { sel!(show) };
+            let action = if console {
+                sel!(showConsole)
+            } else {
+                sel!(show)
+            };
             let ok: bool = msg_send![inspector, respondsToSelector: action];
             if ok {
                 let _: () = msg_send![inspector, performSelector: action];
@@ -264,7 +290,11 @@ impl BrowserView {
         if !self.find_open {
             return;
         }
-        let needle = self.find_input.as_ref().map(|i| i.read(cx).value().to_string()).unwrap_or_default();
+        let needle = self
+            .find_input
+            .as_ref()
+            .map(|i| i.read(cx).value().to_string())
+            .unwrap_or_default();
         if needle.is_empty() {
             self.find_count = (0, None);
             self.find_script(&browser_find::clear(), cx);
@@ -316,18 +346,43 @@ impl BrowserView {
             .bg(rgb(TABBAR_BG))
             .text_size(px(12.))
             .text_color(rgb(TEXT))
-            .on_action(cx.listener(|this, _: &input::Escape, window, cx| this.close_find(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &input::Escape, window, cx| this.close_find(window, cx)),
+            )
             .child(icon("search"))
-            .child(div().flex_1().min_w_0().child(Input::new(&input).appearance(false).text_size(px(12.))))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(&input).appearance(false).text_size(px(12.))),
+            )
             .child(div().flex_none().text_color(rgb(MUTED)).child(count))
-            .child(icon_button("find-up", "chevron-up").on_click(cx.listener(|this, _, _, cx| this.find_step(false, cx))))
-            .child(icon_button("find-down", "chevron-down").on_click(cx.listener(|this, _, _, cx| this.find_step(true, cx))))
-            .child(icon_button("find-close", "x").on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))))
+            .child(
+                icon_button("find-up", "chevron-up")
+                    .on_click(cx.listener(|this, _, _, cx| this.find_step(false, cx))),
+            )
+            .child(
+                icon_button("find-down", "chevron-down")
+                    .on_click(cx.listener(|this, _, _, cx| this.find_step(true, cx))),
+            )
+            .child(
+                icon_button("find-close", "x")
+                    .on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))),
+            )
     }
 
     /// Run `js` and hand its JSON-encoded result to `done` (on a wry thread).
-    pub fn eval(&self, js: &str, cx: &App, done: impl Fn(String) + Send + 'static) -> anyhow::Result<()> {
-        Ok(self.webview.read(cx).raw().evaluate_script_with_callback(js, done)?)
+    pub fn eval(
+        &self,
+        js: &str,
+        cx: &App,
+        done: impl Fn(String) + Send + 'static,
+    ) -> anyhow::Result<()> {
+        Ok(self
+            .webview
+            .read(cx)
+            .raw()
+            .evaluate_script_with_callback(js, done)?)
     }
 
     /// `eval`, as a future of the JSON. Canceled if the page drops the script.
@@ -343,14 +398,23 @@ impl BrowserView {
     }
 
     /// Save a PNG of the page as shown (WKWebView's own snapshot) to `path`.
-    pub fn screenshot(&self, path: std::path::PathBuf, cx: &App) -> oneshot::Receiver<anyhow::Result<serde_json::Value>> {
+    pub fn screenshot(
+        &self,
+        path: std::path::PathBuf,
+        cx: &App,
+    ) -> oneshot::Receiver<anyhow::Result<serde_json::Value>> {
         let (tx, rx) = oneshot::channel();
         let tx = Mutex::new(Some(tx));
         let handler = block::ConcreteBlock::new(move |image: *mut Object, _error: *mut Object| {
-            let out = unsafe { png_data(image) }.ok_or_else(|| anyhow::anyhow!("WebKit couldn't snapshot the page (is it on screen?)")).and_then(|png| {
-                std::fs::write(&path, &png).map_err(|e| anyhow::anyhow!("can't write {}: {e}", path.display()))?;
-                Ok(serde_json::json!({ "path": path, "bytes": png.len() }))
-            });
+            let out = unsafe { png_data(image) }
+                .ok_or_else(|| {
+                    anyhow::anyhow!("WebKit couldn't snapshot the page (is it on screen?)")
+                })
+                .and_then(|png| {
+                    std::fs::write(&path, &png)
+                        .map_err(|e| anyhow::anyhow!("can't write {}: {e}", path.display()))?;
+                    Ok(serde_json::json!({ "path": path, "bytes": png.len() }))
+                });
             if let Some(tx) = tx.lock().unwrap().take() {
                 let _ = tx.send(out);
             }
@@ -359,7 +423,9 @@ impl BrowserView {
         let webview = self.webview.read(cx).raw().webview();
         let webview = &*webview as *const _ as *mut Object;
         let nil: *mut Object = std::ptr::null_mut();
-        let _: () = unsafe { msg_send![webview, takeSnapshotWithConfiguration: nil completionHandler: &*handler] };
+        let _: () = unsafe {
+            msg_send![webview, takeSnapshotWithConfiguration: nil completionHandler: &*handler]
+        };
         rx
     }
 }
@@ -367,14 +433,20 @@ impl BrowserView {
 impl Render for BrowserView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let nav = |id: &'static str, icon: &'static str| icon_button(id, icon).size(px(24.));
-        let find_bar = self.find_input.clone().filter(|_| self.find_open).map(|input| self.render_find_bar(input, cx));
+        let find_bar = self
+            .find_input
+            .clone()
+            .filter(|_| self.find_open)
+            .map(|input| self.render_find_bar(input, cx));
         div()
             .key_context("Browser")
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &Back, _, cx| this.script("history.back()", cx)))
             .on_action(cx.listener(|this, _: &Forward, _, cx| this.script("history.forward()", cx)))
             .on_action(cx.listener(|this, _: &Reload, _, cx| this.reload(cx)))
-            .on_action(cx.listener(|this, _: &ToggleDevTools, _, cx| this.show_inspector(false, cx)))
+            .on_action(
+                cx.listener(|this, _: &ToggleDevTools, _, cx| this.show_inspector(false, cx)),
+            )
             .on_action(cx.listener(|this, _: &ShowConsole, _, cx| this.show_inspector(true, cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.find_step(true, cx)))
@@ -394,9 +466,18 @@ impl Render for BrowserView {
                     .px_2()
                     .border_b_1()
                     .border_color(rgb(BORDER))
-                    .child(nav("back", "chevron-left").on_click(cx.listener(|this, _, _, cx| this.script("history.back()", cx))))
-                    .child(nav("fwd", "chevron-right").on_click(cx.listener(|this, _, _, cx| this.script("history.forward()", cx))))
-                    .child(nav("reload", "rotate-cw").on_click(cx.listener(|this, _, _, cx| this.reload(cx))))
+                    .child(
+                        nav("back", "chevron-left").on_click(
+                            cx.listener(|this, _, _, cx| this.script("history.back()", cx)),
+                        ),
+                    )
+                    .child(nav("fwd", "chevron-right").on_click(
+                        cx.listener(|this, _, _, cx| this.script("history.forward()", cx)),
+                    ))
+                    .child(
+                        nav("reload", "rotate-cw")
+                            .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -408,7 +489,11 @@ impl Render for BrowserView {
                             .rounded(px(6.))
                             .bg(rgb(INPUT_BG))
                             .text_size(px(12.))
-                            .child(Input::new(&self.address).appearance(false).text_size(px(12.))),
+                            .child(
+                                Input::new(&self.address)
+                                    .appearance(false)
+                                    .text_size(px(12.)),
+                            ),
                     ),
             )
             .children(find_bar)
@@ -426,7 +511,9 @@ pub fn watch_clicks() -> mpsc::UnboundedReceiver<()> {
     })
     .copy();
     // NSEventMaskLeftMouseDown. AppKit copies the block and keeps the monitor.
-    let _: *mut Object = unsafe { msg_send![objc::class!(NSEvent), addLocalMonitorForEventsMatchingMask: 1u64 << 1 handler: &*handler] };
+    let _: *mut Object = unsafe {
+        msg_send![objc::class!(NSEvent), addLocalMonitorForEventsMatchingMask: 1u64 << 1 handler: &*handler]
+    };
     rx
 }
 
@@ -465,7 +552,9 @@ pub fn normalize_url(text: &str) -> String {
         let q: String = text
             .bytes()
             .map(|b| match b {
-                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
+                    (b as char).to_string()
+                }
                 b' ' => "+".into(),
                 _ => format!("%{b:02X}"),
             })

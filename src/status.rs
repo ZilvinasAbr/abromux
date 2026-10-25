@@ -16,8 +16,24 @@ const KEEP_LOG: usize = 200;
 
 /// Icons a status may name: the ones bundled with the app.
 pub const ICONS: &[&str] = &[
-    "terminal", "globe", "plus", "x", "split-right", "split-down", "chevron-left", "chevron-right", "chevron-down", "chevron-up",
-    "rotate-cw", "panel-left", "bell", "git-branch", "folder", "search", "circle-x", "pencil",
+    "terminal",
+    "globe",
+    "plus",
+    "x",
+    "split-right",
+    "split-down",
+    "chevron-left",
+    "chevron-right",
+    "chevron-down",
+    "chevron-up",
+    "rotate-cw",
+    "panel-left",
+    "bell",
+    "git-branch",
+    "folder",
+    "search",
+    "circle-x",
+    "pencil",
 ];
 
 pub const RUNNING: u32 = 0x6a9fd8;
@@ -62,14 +78,31 @@ impl AbroMux {
         }
     }
 
-    pub(crate) fn set_progress(&mut self, wi: usize, progress: Option<Progress>, cx: &mut Context<Self>) {
+    pub(crate) fn set_progress(
+        &mut self,
+        wi: usize,
+        progress: Option<Progress>,
+        cx: &mut Context<Self>,
+    ) {
         self.workspaces[wi].progress = progress;
         cx.notify();
     }
 
-    pub(crate) fn add_log(&mut self, wi: usize, level: LogLevel, source: Option<String>, message: String, cx: &mut Context<Self>) {
+    pub(crate) fn add_log(
+        &mut self,
+        wi: usize,
+        level: LogLevel,
+        source: Option<String>,
+        message: String,
+        cx: &mut Context<Self>,
+    ) {
         let log = &mut self.workspaces[wi].log;
-        log.push(LogEntry { level, source, message, at: SystemTime::now() });
+        log.push(LogEntry {
+            level,
+            source,
+            message,
+            at: SystemTime::now(),
+        });
         let excess = log.len().saturating_sub(KEEP_LOG);
         log.drain(..excess);
         cx.notify();
@@ -77,14 +110,37 @@ impl AbroMux {
 
     /// The agent in terminal `surface`: `state` is its pill text, or None
     /// to remove it.
-    pub(crate) fn set_agent_status(&mut self, surface: EntityId, label: &str, state: Option<(&str, u32)>, cx: &mut Context<Self>) {
-        let Some(wi) = self.workspaces.iter().position(|w| w.contains(surface)) else { return };
+    pub(crate) fn set_agent_status(
+        &mut self,
+        surface: EntityId,
+        label: &str,
+        state: Option<(&str, u32)>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(wi) = self.workspaces.iter().position(|w| w.contains(surface)) else {
+            return;
+        };
         // "Claude 3": the surface number keeps two agents in one workspace apart.
-        let key = format!("{label} {}", self.surface_refs.get(&surface).copied().unwrap_or(0));
+        let key = format!(
+            "{label} {}",
+            self.surface_refs.get(&surface).copied().unwrap_or(0)
+        );
         // Keep the pill where it is when only its state changes.
-        self.workspaces[wi].status.retain(|s| s.owner != Some(surface) || state.is_some() && s.key == key);
+        self.workspaces[wi]
+            .status
+            .retain(|s| s.owner != Some(surface) || state.is_some() && s.key == key);
         match state {
-            Some((value, color)) => self.set_status(wi, Status { key, value: value.into(), icon: None, color: Some(color), owner: Some(surface) }, cx),
+            Some((value, color)) => self.set_status(
+                wi,
+                Status {
+                    key,
+                    value: value.into(),
+                    icon: None,
+                    color: Some(color),
+                    owner: Some(surface),
+                },
+                cx,
+            ),
             None => cx.notify(),
         }
     }
@@ -112,14 +168,37 @@ impl AbroMux {
                 .px(px(6.))
                 .py(px(1.))
                 .rounded(px(4.))
-                .bg(if active { rgba(0x0000002e) } else { rgba(0xffffff0d) })
+                .bg(if active {
+                    rgba(0x0000002e)
+                } else {
+                    rgba(0xffffff0d)
+                })
                 .text_size(px(10.5))
                 .map(|d| match s.icon.as_deref().filter(|i| ICONS.contains(i)) {
                     Some(i) => d.child(icon(i).size(px(10.)).text_color(s.color.map_or(sub, rgb))),
-                    None => d.child(div().size(px(6.)).flex_none().rounded_full().bg(s.color.map_or(sub, rgb))),
+                    None => d.child(
+                        div()
+                            .size(px(6.))
+                            .flex_none()
+                            .rounded_full()
+                            .bg(s.color.map_or(sub, rgb)),
+                    ),
                 })
-                .child(div().flex_none().whitespace_nowrap().text_color(sub).child(key))
-                .child(div().flex_none().max_w(px(150.)).truncate().text_color(fg).child(s.value.clone()))
+                .child(
+                    div()
+                        .flex_none()
+                        .whitespace_nowrap()
+                        .text_color(sub)
+                        .child(key),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .max_w(px(150.))
+                        .truncate()
+                        .text_color(fg)
+                        .child(s.value.clone()),
+                )
         });
         let progress = ws.progress.as_ref().map(|p| {
             let pct = (p.value.clamp(0., 1.) * 100.).round();
@@ -134,7 +213,12 @@ impl AbroMux {
                         .gap(px(6.))
                         .text_size(px(10.5))
                         .text_color(sub)
-                        .child(div().min_w_0().truncate().child(p.label.clone().unwrap_or_default()))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .child(p.label.clone().unwrap_or_default()),
+                        )
                         .child(div().flex_none().child(format!("{pct}%"))),
                 )
                 .child(
@@ -142,12 +226,26 @@ impl AbroMux {
                         .h(px(3.))
                         .w_full()
                         .rounded_full()
-                        .bg(if active { rgba(0x00000040) } else { rgba(0xffffff1a) })
-                        .child(div().h_full().w(relative(p.value.clamp(0., 1.))).rounded_full().bg(if active { rgb(0xffffff) } else { rgb(RUNNING) })),
+                        .bg(if active {
+                            rgba(0x00000040)
+                        } else {
+                            rgba(0xffffff1a)
+                        })
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(p.value.clamp(0., 1.)))
+                                .rounded_full()
+                                .bg(if active { rgb(0xffffff) } else { rgb(RUNNING) }),
+                        ),
                 )
         });
         let log = ws.log.last().map(|l| {
-            let color = if active { sub } else { rgb(level_color(l.level)) };
+            let color = if active {
+                sub
+            } else {
+                rgb(level_color(l.level))
+            };
             let text = match &l.source {
                 Some(s) => format!("[{s}] {}", l.message),
                 None => l.message.clone(),
@@ -158,7 +256,17 @@ impl AbroMux {
                 .gap(px(4.))
                 .text_size(px(10.5))
                 .child(div().size(px(6.)).flex_none().rounded_full().bg(color))
-                .child(div().min_w_0().truncate().text_color(if l.level == LogLevel::Info { sub } else { color }).child(text))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(if l.level == LogLevel::Info {
+                            sub
+                        } else {
+                            color
+                        })
+                        .child(text),
+                )
         });
         Some(
             div()
@@ -166,7 +274,16 @@ impl AbroMux {
                 .flex()
                 .flex_col()
                 .gap(px(3.))
-                .when(!ws.status.is_empty(), |d| d.child(div().flex().flex_col().items_start().gap(px(3.)).children(pills)))
+                .when(!ws.status.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_start()
+                            .gap(px(3.))
+                            .children(pills),
+                    )
+                })
                 .children(progress)
                 .children(log)
                 .into_any_element(),

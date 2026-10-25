@@ -15,7 +15,10 @@ pub const ACCENT_BRIGHT: u32 = 0xd97757;
 pub const HOVER: u32 = 0xffffff10;
 
 pub fn icon(name: &str) -> Svg {
-    svg().path(format!("icons/{name}.svg")).size(px(14.)).flex_none()
+    svg()
+        .path(format!("icons/{name}.svg"))
+        .size(px(14.))
+        .flex_none()
 }
 
 pub fn icon_button(id: impl Into<ElementId>, name: &str) -> Stateful<Div> {

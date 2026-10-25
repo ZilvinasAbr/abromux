@@ -490,24 +490,37 @@ return A.run(@NAME@, @OPTS@);
 /// Escape a JSON value for splicing into JS: JSON is valid JS, except that
 /// U+2028/U+2029 ended string literals before ES2019.
 fn js(v: &Value) -> String {
-    v.to_string().replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029")
+    v.to_string()
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
 }
 
 /// The script running action `name` (snapshot, click, fill, …) with `opts`.
 pub fn script(name: &str, opts: &Value) -> String {
-    SCRIPT.replacen("@NAME@", &js(&json!(name)), 1).replacen("@OPTS@", &js(opts), 1)
+    SCRIPT
+        .replacen("@NAME@", &js(&json!(name)), 1)
+        .replacen("@OPTS@", &js(opts), 1)
 }
 
 /// `wait --js`: the expression, run as is in the page and made a boolean.
 pub fn condition(expr: &str) -> String {
-    format!("(() => {{ try {{ return JSON.stringify({{ result: !!(\n{expr}\n) }}); }} catch (x) {{ return JSON.stringify({{ error: String(x && x.message || x) }}); }} }})()")
+    format!(
+        "(() => {{ try {{ return JSON.stringify({{ result: !!(\n{expr}\n) }}); }} catch (x) {{ return JSON.stringify({{ error: String(x && x.message || x) }}); }} }})()"
+    )
 }
 
 /// `wait --text`, `--url` and `--load`, as conditions.
-pub fn page_condition(text: Option<&str>, url: Option<&str>, load: Option<&str>) -> anyhow::Result<String> {
+pub fn page_condition(
+    text: Option<&str>,
+    url: Option<&str>,
+    load: Option<&str>,
+) -> anyhow::Result<String> {
     let mut parts = vec![];
     if let Some(t) = text {
-        parts.push(format!("(document.body?.innerText ?? '').includes({})", js(&json!(t))));
+        parts.push(format!(
+            "(document.body?.innerText ?? '').includes({})",
+            js(&json!(t))
+        ));
     }
     if let Some(u) = url {
         parts.push(format!("location.href.includes({})", js(&json!(u))));
@@ -515,7 +528,9 @@ pub fn page_condition(text: Option<&str>, url: Option<&str>, load: Option<&str>)
     match load {
         None => {}
         Some("load" | "complete") => parts.push("document.readyState === 'complete'".into()),
-        Some("domcontentloaded" | "interactive") => parts.push("document.readyState !== 'loading'".into()),
+        Some("domcontentloaded" | "interactive") => {
+            parts.push("document.readyState !== 'loading'".into())
+        }
         Some(l) => bail!("--load must be interactive or complete, got {l:?}"),
     }
     Ok(condition(&parts.join(" && ")))
@@ -524,7 +539,8 @@ pub fn page_condition(text: Option<&str>, url: Option<&str>, load: Option<&str>)
 /// A script's result: the value, or the page's error.
 pub fn parse(out: &str) -> anyhow::Result<Value> {
     // wry hands back the JSON of the value, here a JSON string.
-    let inner: String = serde_json::from_str(out).map_err(|_| anyhow!("the page didn't run the script (is it still loading?)"))?;
+    let inner: String = serde_json::from_str(out)
+        .map_err(|_| anyhow!("the page didn't run the script (is it still loading?)"))?;
     let mut v: Value = serde_json::from_str(&inner)?;
     match v.get("error").and_then(Value::as_str) {
         Some(e) => bail!("{e}"),
@@ -538,8 +554,15 @@ mod tests {
 
     #[test]
     fn options_are_safe_js_literals() {
-        let s = script("fill", &json!({ "selector": "#q", "text": "a\"b\u{2028})</script>" }));
-        assert!(s.contains(r##"A.run("fill", {"selector":"#q","text":"a\"b\u2028)</script>"})"##), "{}", &s[s.len() - 120..]);
+        let s = script(
+            "fill",
+            &json!({ "selector": "#q", "text": "a\"b\u{2028})</script>" }),
+        );
+        assert!(
+            s.contains(r##"A.run("fill", {"selector":"#q","text":"a\"b\u2028)</script>"})"##),
+            "{}",
+            &s[s.len() - 120..]
+        );
         assert!(!s.contains("@NAME@") && !s.contains("@OPTS@"));
     }
 
@@ -547,14 +570,22 @@ mod tests {
     fn parses_results_and_errors() {
         assert_eq!(parse(r#""{\"result\":3}""#).unwrap(), json!(3));
         assert_eq!(parse(r#""{\"result\":null}""#).unwrap(), Value::Null);
-        assert_eq!(parse(r##""{\"error\":\"nothing matches #x\"}""##).unwrap_err().to_string(), "nothing matches #x");
+        assert_eq!(
+            parse(r##""{\"error\":\"nothing matches #x\"}""##)
+                .unwrap_err()
+                .to_string(),
+            "nothing matches #x"
+        );
         assert!(parse("").is_err());
     }
 
     #[test]
     fn page_conditions() {
         let c = page_condition(Some("Done"), None, Some("complete")).unwrap();
-        assert!(c.contains(r#"includes("Done") && document.readyState === 'complete'"#), "{c}");
+        assert!(
+            c.contains(r#"includes("Done") && document.readyState === 'complete'"#),
+            "{c}"
+        );
         assert!(page_condition(None, None, Some("soon")).is_err());
     }
 }

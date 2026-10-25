@@ -60,7 +60,11 @@ impl Default for Config {
                 .iter()
                 .filter_map(|(t, a)| {
                     let (key, mods) = parse_trigger(t)?;
-                    Some(KeyBind { key, mods, bytes: parse_action(a)? })
+                    Some(KeyBind {
+                        key,
+                        mods,
+                        bytes: parse_action(a)?,
+                    })
                 })
                 .collect(),
         }
@@ -80,9 +84,14 @@ const DEFAULT_KEYBINDS: &[(&str, &str)] = &[
 impl Config {
     pub fn load() -> Self {
         let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-        let xdg = std::env::var("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".config"));
+        let xdg = std::env::var("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| home.join(".config"));
         let mut entries = vec![];
-        for path in [xdg.join("ghostty/config"), home.join("Library/Application Support/com.mitchellh.ghostty/config")] {
+        for path in [
+            xdg.join("ghostty/config"),
+            home.join("Library/Application Support/com.mitchellh.ghostty/config"),
+        ] {
             read_file(&path, &mut entries, 0);
         }
         let mut theme = vec![];
@@ -150,20 +159,33 @@ impl Config {
     /// Bytes bound to this keystroke by a Ghostty `keybind`, if any.
     pub fn keybind(&self, ks: &Keystroke) -> Option<&[u8]> {
         let m = ks.modifiers;
-        let mods = Modifiers { control: m.control, alt: m.alt, shift: m.shift, platform: m.platform, function: false };
-        self.keybinds.iter().find(|b| b.key == ks.key && b.mods == mods).map(|b| b.bytes.as_slice())
+        let mods = Modifiers {
+            control: m.control,
+            alt: m.alt,
+            shift: m.shift,
+            platform: m.platform,
+            function: false,
+        };
+        self.keybinds
+            .iter()
+            .find(|b| b.key == ks.key && b.mods == mods)
+            .map(|b| b.bytes.as_slice())
     }
 }
 
 fn read_file(path: &Path, out: &mut Vec<(String, String)>, depth: usize) {
-    let Ok(text) = std::fs::read_to_string(path) else { return };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
     let mut includes = vec![];
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let Some((k, v)) = line.split_once('=') else { continue };
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
         let (k, v) = (k.trim().to_string(), v.trim().to_string());
         if k == "config-file" {
             includes.push(v);
@@ -177,7 +199,11 @@ fn read_file(path: &Path, out: &mut Vec<(String, String)>, depth: usize) {
             let inc = unquote(&inc);
             let inc = inc.strip_prefix('?').unwrap_or(inc);
             let p = Path::new(inc);
-            let p = if p.is_absolute() { p.to_path_buf() } else { path.parent().unwrap_or(Path::new("/")).join(p) };
+            let p = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                path.parent().unwrap_or(Path::new("/")).join(p)
+            };
             read_file(&p, out, depth + 1);
         }
     }
@@ -189,7 +215,14 @@ fn find_theme(value: &str, xdg: &Path) -> Option<PathBuf> {
     let name = value
         .split(',')
         .find_map(|p| p.trim().strip_prefix("dark:"))
-        .unwrap_or_else(|| value.split(',').next().unwrap_or(value).trim().trim_start_matches("light:"));
+        .unwrap_or_else(|| {
+            value
+                .split(',')
+                .next()
+                .unwrap_or(value)
+                .trim()
+                .trim_start_matches("light:")
+        });
     if Path::new(name).is_absolute() {
         return Some(name.into());
     }
@@ -202,7 +235,9 @@ fn find_theme(value: &str, xdg: &Path) -> Option<PathBuf> {
 }
 
 fn unquote(s: &str) -> &str {
-    s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
+    s.strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(s)
 }
 
 pub fn parse_color(s: &str) -> Option<Rgb> {
@@ -220,7 +255,10 @@ pub fn parse_color(s: &str) -> Option<Rgb> {
 fn parse_trigger(t: &str) -> Option<(String, Modifiers)> {
     let mut t = t.trim();
     while let Some((prefix, rest)) = t.split_once(':') {
-        if !matches!(prefix, "global" | "all" | "unconsumed" | "performable" | "physical") {
+        if !matches!(
+            prefix,
+            "global" | "all" | "unconsumed" | "performable" | "physical"
+        ) {
             break;
         }
         t = rest;
@@ -302,7 +340,10 @@ mod tests {
     use super::*;
 
     fn entries(s: &str) -> Vec<(String, String)> {
-        s.lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.trim().into(), v.trim().into())).collect()
+        s.lines()
+            .filter_map(|l| l.split_once('='))
+            .map(|(k, v)| (k.trim().into(), v.trim().into()))
+            .collect()
     }
 
     #[test]
@@ -317,12 +358,22 @@ mod tests {
         assert_eq!(c.background, Some(Rgb(0x1e, 0x1e, 0x2e)));
         assert_eq!(c.palette, vec![(1, Rgb(0xff, 0, 0))]);
         assert_eq!(c.cursor_style, Some(CursorStyle::Bar));
-        assert_eq!(c.keybinds.len(), DEFAULT_KEYBINDS.len() + 2, "non-text actions are ignored");
-        assert_eq!(c.keybind(&Keystroke::parse("cmd-backspace").unwrap()), Some(b"\x15".as_slice()));
+        assert_eq!(
+            c.keybinds.len(),
+            DEFAULT_KEYBINDS.len() + 2,
+            "non-text actions are ignored"
+        );
+        assert_eq!(
+            c.keybind(&Keystroke::parse("cmd-backspace").unwrap()),
+            Some(b"\x15".as_slice())
+        );
 
         let shift_enter = Keystroke::parse("shift-enter").unwrap();
         assert_eq!(c.keybind(&shift_enter), Some(b"\n".as_slice()));
-        assert_eq!(c.keybind(&Keystroke::parse("ctrl-k").unwrap()), Some(b"\x1b[2J".as_slice()));
+        assert_eq!(
+            c.keybind(&Keystroke::parse("ctrl-k").unwrap()),
+            Some(b"\x1b[2J".as_slice())
+        );
         assert_eq!(c.keybind(&Keystroke::parse("enter").unwrap()), None);
     }
 
@@ -334,7 +385,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("abromux-theme-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("ghostty/themes")).unwrap();
         std::fs::write(dir.join("ghostty/themes/Night"), "background = #000000\n").unwrap();
-        assert_eq!(find_theme("light:Day,dark:Night", &dir), Some(dir.join("ghostty/themes/Night")));
+        assert_eq!(
+            find_theme("light:Day,dark:Night", &dir),
+            Some(dir.join("ghostty/themes/Night"))
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

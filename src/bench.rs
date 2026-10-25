@@ -10,7 +10,10 @@ const CHUNK: usize = 64 * 1024;
 const FRAME: Duration = Duration::from_millis(16);
 
 pub fn vt(args: &[String]) -> i32 {
-    let passes: usize = std::env::var("ABROMUX_BENCH_PASSES").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    let passes: usize = std::env::var("ABROMUX_BENCH_PASSES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
     for path in args {
         let data = match std::fs::read(path) {
             Ok(d) => d,

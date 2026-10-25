@@ -31,7 +31,11 @@ fn rust_string(s: *mut Object) -> Option<String> {
         return None;
     }
     let p: *const std::ffi::c_char = unsafe { msg_send![s, UTF8String] };
-    (!p.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned())
+    (!p.is_null()).then(|| {
+        unsafe { std::ffi::CStr::from_ptr(p) }
+            .to_string_lossy()
+            .into_owned()
+    })
 }
 
 fn bundled() -> bool {
@@ -42,7 +46,8 @@ fn bundled() -> bool {
 
 fn center() -> Option<*mut Object> {
     // currentNotificationCenter throws outside a bundle.
-    bundled().then(|| unsafe { msg_send![class!(UNUserNotificationCenter), currentNotificationCenter] })
+    bundled()
+        .then(|| unsafe { msg_send![class!(UNUserNotificationCenter), currentNotificationCenter] })
 }
 
 /// Ask for permission and listen for clicks. The receiver yields the id
@@ -52,7 +57,8 @@ pub fn init() -> mpsc::UnboundedReceiver<usize> {
     *CLICKS.lock().unwrap() = Some(tx);
     let Some(center) = center() else { return rx };
     unsafe {
-        let mut decl = ClassDecl::new("AbroMuxNotificationDelegate", class!(NSObject)).expect("delegate class");
+        let mut decl = ClassDecl::new("AbroMuxNotificationDelegate", class!(NSObject))
+            .expect("delegate class");
         decl.add_method(
             sel!(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:),
             did_receive as extern "C" fn(&Object, Sel, *mut Object, *mut Object, *mut Object),
@@ -62,12 +68,19 @@ pub fn init() -> mpsc::UnboundedReceiver<usize> {
         let _: () = msg_send![center, setDelegate: delegate];
         let done = block::ConcreteBlock::new(|_granted: bool, _err: *mut Object| {}).copy();
         // UNAuthorizationOptionBadge | Sound | Alert.
-        let _: () = msg_send![center, requestAuthorizationWithOptions: 0b111u64 completionHandler: &*done];
+        let _: () =
+            msg_send![center, requestAuthorizationWithOptions: 0b111u64 completionHandler: &*done];
     }
     rx
 }
 
-extern "C" fn did_receive(_: &Object, _: Sel, _center: *mut Object, response: *mut Object, handler: *mut Object) {
+extern "C" fn did_receive(
+    _: &Object,
+    _: Sel,
+    _center: *mut Object,
+    response: *mut Object,
+    handler: *mut Object,
+) {
     unsafe {
         let notification: *mut Object = msg_send![response, notification];
         let request: *mut Object = msg_send![notification, request];
@@ -104,7 +117,11 @@ pub fn set_badge(count: usize) {
     unsafe {
         let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
         let tile: *mut Object = msg_send![app, dockTile];
-        let label = if count == 0 { std::ptr::null_mut() } else { nsstring(&count.to_string()) };
+        let label = if count == 0 {
+            std::ptr::null_mut()
+        } else {
+            nsstring(&count.to_string())
+        };
         let _: () = msg_send![tile, setBadgeLabel: label];
     }
 }

@@ -127,7 +127,9 @@ pub fn load() -> Option<Session> {
 /// truncated session behind.
 pub fn save(session: &Session) {
     let Some(path) = path() else { return };
-    let Ok(json) = serde_json::to_string(session) else { return };
+    let Ok(json) = serde_json::to_string(session) else {
+        return;
+    };
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -139,7 +141,10 @@ pub fn save(session: &Session) {
 
 impl WindowState {
     pub fn bounds(&self) -> Bounds<Pixels> {
-        Bounds::new(point(px(self.x), px(self.y)), size(px(self.width), px(self.height)))
+        Bounds::new(
+            point(px(self.x), px(self.y)),
+            size(px(self.width), px(self.height)),
+        )
     }
 }
 
@@ -158,49 +163,99 @@ impl AbroMux {
             .iter()
             .map(|ws| WorkspaceState {
                 name: ws.custom_name.clone(),
-                focused: ws.root.panes().iter().position(|p| p.id == ws.focused_pane).unwrap_or(0),
+                focused: ws
+                    .root
+                    .panes()
+                    .iter()
+                    .position(|p| p.id == ws.focused_pane)
+                    .unwrap_or(0),
                 root: node_state(&ws.root, scrollback, cx),
             })
             .collect();
-        Session { version: VERSION, window, active: self.active, sidebar: self.sidebar, sidebar_width: self.sidebar_width, workspaces }
+        Session {
+            version: VERSION,
+            window,
+            active: self.active,
+            sidebar: self.sidebar,
+            sidebar_width: self.sidebar_width,
+            workspaces,
+        }
     }
 
     /// Rebuild the saved workspaces. Returns false (and builds nothing) if
     /// the session holds none.
-    pub(crate) fn restore(&mut self, session: Session, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn restore(
+        &mut self,
+        session: Session,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         for state in session.workspaces {
             self.next_ws += 1;
             let id = self.next_ws;
-            let Some(root) = self.build_node(state.root, id, window, cx) else { continue };
+            let Some(root) = self.build_node(state.root, id, window, cx) else {
+                continue;
+            };
             let panes: Vec<usize> = root.panes().iter().map(|p| p.id).collect();
-            let focused_pane = panes.get(state.focused).or(panes.first()).copied().unwrap_or(0);
-            self.workspaces.push(Workspace::new(id, state.name, root, focused_pane));
+            let focused_pane = panes
+                .get(state.focused)
+                .or(panes.first())
+                .copied()
+                .unwrap_or(0);
+            self.workspaces
+                .push(Workspace::new(id, state.name, root, focused_pane));
         }
         if self.workspaces.is_empty() {
             return false;
         }
         self.sidebar = session.sidebar;
-        self.sidebar_width = session.sidebar_width.clamp(crate::SIDEBAR_MIN, crate::SIDEBAR_MAX);
+        self.sidebar_width = session
+            .sidebar_width
+            .clamp(crate::SIDEBAR_MIN, crate::SIDEBAR_MAX);
         self.select_workspace(session.active.min(self.workspaces.len() - 1), window, cx);
         true
     }
 
-    fn build_node(&mut self, state: NodeState, ws: usize, window: &mut Window, cx: &mut Context<Self>) -> Option<Node> {
+    fn build_node(
+        &mut self,
+        state: NodeState,
+        ws: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Node> {
         Some(match state {
             NodeState::Pane { active, tabs } => {
-                let tabs: Vec<Surface> = tabs.into_iter().map(|t| self.build_tab(t, ws, window, cx)).collect();
+                let tabs: Vec<Surface> = tabs
+                    .into_iter()
+                    .map(|t| self.build_tab(t, ws, window, cx))
+                    .collect();
                 if tabs.is_empty() {
                     return None;
                 }
-                Node::Leaf(Pane { id: self.pane_id(), active: active.min(tabs.len() - 1), tabs })
+                Node::Leaf(Pane {
+                    id: self.pane_id(),
+                    active: active.min(tabs.len() - 1),
+                    tabs,
+                })
             }
-            NodeState::Split { vertical, ratio, children } => {
+            NodeState::Split {
+                vertical,
+                ratio,
+                children,
+            } => {
                 let [a, b] = *children;
                 // A side that came back empty collapses into the other.
-                match (self.build_node(a, ws, window, cx), self.build_node(b, ws, window, cx)) {
+                match (
+                    self.build_node(a, ws, window, cx),
+                    self.build_node(b, ws, window, cx),
+                ) {
                     (Some(a), Some(b)) => Node::Split {
                         id: self.id(),
-                        axis: if vertical { Axis::Vertical } else { Axis::Horizontal },
+                        axis: if vertical {
+                            Axis::Vertical
+                        } else {
+                            Axis::Horizontal
+                        },
                         ratio: ratio.clamp(0.1, 0.9),
                         children: Box::new([a, b]),
                     },
@@ -210,13 +265,26 @@ impl AbroMux {
         })
     }
 
-    fn build_tab(&mut self, state: TabState, ws: usize, window: &mut Window, cx: &mut Context<Self>) -> Surface {
+    fn build_tab(
+        &mut self,
+        state: TabState,
+        ws: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Surface {
         match state {
-            TabState::Terminal { cwd, font_size, scrollback, agent } => {
+            TabState::Terminal {
+                cwd,
+                font_size,
+                scrollback,
+                agent,
+            } => {
                 let cwd = std::path::Path::new(&cwd).is_dir().then_some(cwd);
                 let s = self.make_terminal(cwd, ws, window, cx);
                 if let Surface::Terminal(t) = &s {
-                    t.update(cx, |t, cx| t.restore(scrollback.as_deref(), font_size, agent, cx));
+                    t.update(cx, |t, cx| {
+                        t.restore(scrollback.as_deref(), font_size, agent, cx)
+                    });
                 }
                 s
             }
@@ -227,11 +295,26 @@ impl AbroMux {
 
 fn node_state(node: &Node, scrollback: bool, cx: &App) -> NodeState {
     match node {
-        Node::Leaf(p) => NodeState::Pane { active: p.active, tabs: p.tabs.iter().map(|s| tab_state(s, scrollback, cx)).collect() },
-        Node::Split { axis, ratio, children, .. } => NodeState::Split {
+        Node::Leaf(p) => NodeState::Pane {
+            active: p.active,
+            tabs: p
+                .tabs
+                .iter()
+                .map(|s| tab_state(s, scrollback, cx))
+                .collect(),
+        },
+        Node::Split {
+            axis,
+            ratio,
+            children,
+            ..
+        } => NodeState::Split {
             vertical: *axis == Axis::Vertical,
             ratio: *ratio,
-            children: Box::new([node_state(&children[0], scrollback, cx), node_state(&children[1], scrollback, cx)]),
+            children: Box::new([
+                node_state(&children[0], scrollback, cx),
+                node_state(&children[1], scrollback, cx),
+            ]),
         },
     }
 }
@@ -243,11 +326,15 @@ fn tab_state(s: &Surface, scrollback: bool, cx: &App) -> TabState {
             TabState::Terminal {
                 cwd: t.live_cwd(),
                 font_size: Some(t.font_size()),
-                scrollback: scrollback.then(|| t.scrollback_vt(SCROLLBACK_LINES)).flatten(),
+                scrollback: scrollback
+                    .then(|| t.scrollback_vt(SCROLLBACK_LINES))
+                    .flatten(),
                 agent: t.agent.clone().filter(Agent::alive),
             }
         }
-        Surface::Browser(b) => TabState::Browser { url: b.read(cx).url.clone() },
+        Surface::Browser(b) => TabState::Browser {
+            url: b.read(cx).url.clone(),
+        },
     }
 }
 
@@ -259,7 +346,12 @@ mod tests {
     fn round_trips_and_tolerates_missing_fields() {
         let s = Session {
             version: VERSION,
-            window: Some(WindowState { x: 10., y: 20., width: 800., height: 600. }),
+            window: Some(WindowState {
+                x: 10.,
+                y: 20.,
+                width: 800.,
+                height: 600.,
+            }),
             active: 1,
             sidebar: false,
             sidebar_width: 300.,
@@ -270,8 +362,27 @@ mod tests {
                     vertical: false,
                     ratio: 0.3,
                     children: Box::new([
-                        NodeState::Pane { active: 0, tabs: vec![TabState::Terminal { cwd: "/tmp".into(), font_size: Some(14.), scrollback: Some("\x1b[1mhi\x1b[0m".into()), agent: Some(Agent { kind: "claude".into(), session_id: "abc".into(), cwd: "/tmp".into(), permission_mode: None, pid: None }) }] },
-                        NodeState::Pane { active: 0, tabs: vec![TabState::Browser { url: "https://example.com".into() }] },
+                        NodeState::Pane {
+                            active: 0,
+                            tabs: vec![TabState::Terminal {
+                                cwd: "/tmp".into(),
+                                font_size: Some(14.),
+                                scrollback: Some("\x1b[1mhi\x1b[0m".into()),
+                                agent: Some(Agent {
+                                    kind: "claude".into(),
+                                    session_id: "abc".into(),
+                                    cwd: "/tmp".into(),
+                                    permission_mode: None,
+                                    pid: None,
+                                }),
+                            }],
+                        },
+                        NodeState::Pane {
+                            active: 0,
+                            tabs: vec![TabState::Browser {
+                                url: "https://example.com".into(),
+                            }],
+                        },
                     ]),
                 },
             }],
@@ -281,6 +392,11 @@ mod tests {
 
         let minimal = r#"{"version":1,"active":0,"workspaces":[{"root":{"kind":"pane","tabs":[{"kind":"terminal","cwd":"/"}]}}]}"#;
         let m: Session = serde_json::from_str(minimal).unwrap();
-        assert!(m.sidebar && m.sidebar_width == crate::SIDEBAR_WIDTH && m.window.is_none() && m.workspaces[0].name.is_none());
+        assert!(
+            m.sidebar
+                && m.sidebar_width == crate::SIDEBAR_WIDTH
+                && m.window.is_none()
+                && m.workspaces[0].name.is_none()
+        );
     }
 }

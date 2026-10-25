@@ -21,7 +21,9 @@ pub fn request(window: &Window, cx: &mut App) {
     if skip_warning() {
         return cx.quit();
     }
-    let Some(ns_window) = ns_window(window) else { return cx.quit() };
+    let Some(ns_window) = ns_window(window) else {
+        return cx.quit();
+    };
     // A second ⌘Q while the sheet is up does nothing.
     if OPEN.replace(true) {
         return;
@@ -46,12 +48,15 @@ pub fn request(window: &Window, cx: &mut App) {
             let _: () = msg_send![alert, release];
         })
         .copy();
-        let _: () = msg_send![alert, beginSheetModalForWindow: ns_window completionHandler: &*handler];
+        let _: () =
+            msg_send![alert, beginSheetModalForWindow: ns_window completionHandler: &*handler];
     }
     cx.spawn(async move |cx| {
         let answer = rx.await;
         OPEN.set(false);
-        let Ok((quit, dont_warn)) = answer else { return };
+        let Ok((quit, dont_warn)) = answer else {
+            return;
+        };
         if quit {
             // Only a confirmed quit remembers the checkbox, as in cmux.
             if dont_warn {
@@ -64,7 +69,9 @@ pub fn request(window: &Window, cx: &mut App) {
 }
 
 fn ns_window(window: &Window) -> Option<*mut Object> {
-    let RawWindowHandle::AppKit(h) = HasWindowHandle::window_handle(window).ok()?.as_raw() else { return None };
+    let RawWindowHandle::AppKit(h) = HasWindowHandle::window_handle(window).ok()?.as_raw() else {
+        return None;
+    };
     let win: *mut Object = unsafe { msg_send![h.ns_view.as_ptr() as *mut Object, window] };
     (!win.is_null()).then_some(win)
 }

@@ -29,7 +29,11 @@ impl Surface {
         match self {
             Surface::Terminal(t) => {
                 let t = t.read(cx);
-                if !t.title.is_empty() { t.title.clone() } else { tilde(&t.cwd) }
+                if !t.title.is_empty() {
+                    t.title.clone()
+                } else {
+                    tilde(&t.cwd)
+                }
             }
             Surface::Browser(b) => {
                 let b = b.read(cx);
@@ -73,7 +77,12 @@ impl Pane {
 
 pub enum Node {
     Leaf(Pane),
-    Split { id: usize, axis: Axis, ratio: f32, children: Box<[Node; 2]> },
+    Split {
+        id: usize,
+        axis: Axis,
+        ratio: f32,
+        children: Box<[Node; 2]>,
+    },
 }
 
 impl Node {
@@ -94,7 +103,12 @@ impl Node {
     pub fn split_mut(&mut self, id: usize) -> Option<&mut f32> {
         match self {
             Node::Leaf(_) => None,
-            Node::Split { id: sid, ratio, children, .. } => {
+            Node::Split {
+                id: sid,
+                ratio,
+                children,
+                ..
+            } => {
                 if *sid == id {
                     Some(ratio)
                 } else {
@@ -106,12 +120,28 @@ impl Node {
 
     /// Replace pane `target` with a split of [target, new] ([new, target]
     /// with `before`, i.e. a left/up split).
-    pub fn split(&mut self, target: usize, axis: Axis, before: bool, new: Pane, split_id: usize) -> Result<(), Pane> {
+    pub fn split(
+        &mut self,
+        target: usize,
+        axis: Axis,
+        before: bool,
+        new: Pane,
+        split_id: usize,
+    ) -> Result<(), Pane> {
         match self {
             Node::Leaf(p) if p.id == target => {
                 let old = std::mem::replace(self, Node::Leaf(dummy()));
-                let children = if before { [Node::Leaf(new), old] } else { [old, Node::Leaf(new)] };
-                *self = Node::Split { id: split_id, axis, ratio: 0.5, children: Box::new(children) };
+                let children = if before {
+                    [Node::Leaf(new), old]
+                } else {
+                    [old, Node::Leaf(new)]
+                };
+                *self = Node::Split {
+                    id: split_id,
+                    axis,
+                    ratio: 0.5,
+                    children: Box::new(children),
+                };
                 Ok(())
             }
             Node::Leaf(_) => Err(new),
@@ -128,10 +158,17 @@ impl Node {
     /// Remove pane `target`, collapsing its parent split. Returns false if
     /// the target is the root leaf (caller decides what to do).
     pub fn remove(&mut self, target: usize) -> bool {
-        let Node::Split { children, .. } = self else { return false };
-        let hit = children.iter().position(|c| matches!(c, Node::Leaf(p) if p.id == target));
+        let Node::Split { children, .. } = self else {
+            return false;
+        };
+        let hit = children
+            .iter()
+            .position(|c| matches!(c, Node::Leaf(p) if p.id == target));
         if let Some(i) = hit {
-            let [a, b] = *std::mem::replace(children, Box::new([Node::Leaf(dummy()), Node::Leaf(dummy())]));
+            let [a, b] = *std::mem::replace(
+                children,
+                Box::new([Node::Leaf(dummy()), Node::Leaf(dummy())]),
+            );
             *self = if i == 0 { b } else { a };
             return true;
         }
@@ -141,16 +178,33 @@ impl Node {
     /// The innermost split along `axis` that holds pane `pane`: the one
     /// whose divider a resize of that pane along `axis` moves.
     pub fn split_along(&self, pane: usize, axis: Axis) -> Option<usize> {
-        let Node::Split { id, axis: a, children, .. } = self else { return None };
-        let child = children.iter().find(|c| c.panes().iter().any(|p| p.id == pane))?;
-        child.split_along(pane, axis).or((*a == axis).then_some(*id))
+        let Node::Split {
+            id,
+            axis: a,
+            children,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let child = children
+            .iter()
+            .find(|c| c.panes().iter().any(|p| p.id == pane))?;
+        child
+            .split_along(pane, axis)
+            .or((*a == axis).then_some(*id))
     }
 
     /// Each pane's rect `[x0, y0, x1, y1]` inside `r`, from the split ratios.
     fn layout(&self, r: [f32; 4], out: &mut Vec<(usize, [f32; 4])>) {
         match self {
             Node::Leaf(p) => out.push((p.id, r)),
-            Node::Split { axis, ratio, children, .. } => {
+            Node::Split {
+                axis,
+                ratio,
+                children,
+                ..
+            } => {
                 let [x0, y0, x1, y1] = r;
                 let (a, b) = if *axis == Axis::Horizontal {
                     let x = x0 + (x1 - x0) * ratio;
@@ -188,7 +242,11 @@ impl Node {
             .filter(|&(_, gap, overlap)| gap > -EPS && overlap > EPS)
             .collect();
         hits.sort_by(|a, b| {
-            if (a.1 - b.1).abs() > EPS { a.1.total_cmp(&b.1) } else { b.2.total_cmp(&a.2) }
+            if (a.1 - b.1).abs() > EPS {
+                a.1.total_cmp(&b.1)
+            } else {
+                b.2.total_cmp(&a.2)
+            }
         });
         hits.first().map(|h| h.0)
     }
@@ -203,7 +261,11 @@ pub enum Dir {
 }
 
 fn dummy() -> Pane {
-    Pane { id: usize::MAX, tabs: vec![], active: 0 }
+    Pane {
+        id: usize::MAX,
+        tabs: vec![],
+        active: 0,
+    }
 }
 
 pub struct Workspace {
@@ -287,11 +349,22 @@ pub fn parse_color(s: &str) -> Option<u32> {
 
 impl Workspace {
     pub fn new(id: usize, custom_name: Option<String>, root: Node, focused_pane: usize) -> Self {
-        Self { id, custom_name, root, focused_pane, status: vec![], progress: None, log: vec![] }
+        Self {
+            id,
+            custom_name,
+            root,
+            focused_pane,
+            status: vec![],
+            progress: None,
+            log: vec![],
+        }
     }
 
     pub fn focused(&self) -> Option<&Pane> {
-        self.root.panes().into_iter().find(|p| p.id == self.focused_pane)
+        self.root
+            .panes()
+            .into_iter()
+            .find(|p| p.id == self.focused_pane)
     }
 
     pub fn focused_surface(&self) -> Option<&Surface> {
@@ -299,14 +372,21 @@ impl Workspace {
     }
 
     pub fn contains(&self, id: EntityId) -> bool {
-        self.root.panes().iter().any(|p| p.tabs.iter().any(|s| s.entity_id() == id))
+        self.root
+            .panes()
+            .iter()
+            .any(|p| p.tabs.iter().any(|s| s.entity_id() == id))
     }
 
     /// cwd of the focused terminal, or of any terminal in the workspace.
     pub fn cwd(&self, cx: &App) -> Option<String> {
-        self.focused_surface()
-            .and_then(|s| s.cwd(cx))
-            .or_else(|| self.root.panes().iter().flat_map(|p| p.tabs.iter()).find_map(|s| s.cwd(cx)))
+        self.focused_surface().and_then(|s| s.cwd(cx)).or_else(|| {
+            self.root
+                .panes()
+                .iter()
+                .flat_map(|p| p.tabs.iter())
+                .find_map(|s| s.cwd(cx))
+        })
     }
 
     pub fn name(&self, cx: &App) -> String {
@@ -320,20 +400,31 @@ impl Workspace {
     /// focused terminal, or any terminal, else the cwd's folder name.
     pub fn auto_name(&self, cx: &App) -> String {
         let title = |s: &Surface| match s {
-            Surface::Terminal(t) => Some(t.read(cx).title.trim().to_string()).filter(|t| !t.is_empty()),
+            Surface::Terminal(t) => {
+                Some(t.read(cx).title.trim().to_string()).filter(|t| !t.is_empty())
+            }
             Surface::Browser(_) => None,
         };
-        if let Some(t) = self
-            .focused_surface()
-            .and_then(title)
-            .or_else(|| self.root.panes().iter().flat_map(|p| p.tabs.iter()).find_map(title))
-        {
+        if let Some(t) = self.focused_surface().and_then(title).or_else(|| {
+            self.root
+                .panes()
+                .iter()
+                .flat_map(|p| p.tabs.iter())
+                .find_map(title)
+        }) {
             return t;
         }
         self.cwd(cx)
             .map(|c| {
                 let t = tilde(&c);
-                if t == "~" { "Home".into() } else { c.rsplit('/').find(|s| !s.is_empty()).unwrap_or("/").to_string() }
+                if t == "~" {
+                    "Home".into()
+                } else {
+                    c.rsplit('/')
+                        .find(|s| !s.is_empty())
+                        .unwrap_or("/")
+                        .to_string()
+                }
             })
             .unwrap_or_else(|| format!("Workspace {}", self.id))
     }
@@ -374,13 +465,16 @@ fn read_head(path: &std::path::Path) -> Option<String> {
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn pane(id: usize) -> Pane {
-        Pane { id, tabs: vec![], active: 0 }
+        Pane {
+            id,
+            tabs: vec![],
+            active: 0,
+        }
     }
     fn ids(n: &Node) -> Vec<usize> {
         n.panes().iter().map(|p| p.id).collect()
@@ -403,7 +497,11 @@ mod tests {
         assert!(!root.remove(3), "root leaf is never removed");
 
         assert!(root.split(3, Axis::Horizontal, true, pane(5), 103).is_ok());
-        assert_eq!(ids(&root), vec![5, 3], "left/up splits put the new pane first");
+        assert_eq!(
+            ids(&root),
+            vec![5, 3],
+            "left/up splits put the new pane first"
+        );
     }
 
     #[test]
@@ -427,18 +525,30 @@ mod tests {
         assert!(root.split(3, Axis::Horizontal, false, pane(4), 102).is_ok());
         *root.split_mut(101).unwrap() = 0.3;
 
-        assert_eq!(root.neighbor(1, Dir::Right), Some(3), "more overlap with the bigger lower half");
+        assert_eq!(
+            root.neighbor(1, Dir::Right),
+            Some(3),
+            "more overlap with the bigger lower half"
+        );
         assert_eq!(root.neighbor(1, Dir::Left), None);
         assert_eq!(root.neighbor(2, Dir::Left), Some(1));
         assert_eq!(root.neighbor(2, Dir::Down), Some(3));
         assert_eq!(root.neighbor(3, Dir::Up), Some(2));
         assert_eq!(root.neighbor(4, Dir::Up), Some(2));
-        assert_eq!(root.neighbor(4, Dir::Left), Some(3), "nearest wins over farther pane 1");
+        assert_eq!(
+            root.neighbor(4, Dir::Left),
+            Some(3),
+            "nearest wins over farther pane 1"
+        );
         assert_eq!(root.neighbor(3, Dir::Left), Some(1));
         assert_eq!(root.neighbor(3, Dir::Down), None);
         assert_eq!(root.neighbor(9, Dir::Up), None);
 
-        assert_eq!(root.split_along(4, Axis::Horizontal), Some(102), "innermost split wins");
+        assert_eq!(
+            root.split_along(4, Axis::Horizontal),
+            Some(102),
+            "innermost split wins"
+        );
         assert_eq!(root.split_along(2, Axis::Horizontal), Some(100));
         assert_eq!(root.split_along(3, Axis::Vertical), Some(101));
         assert_eq!(root.split_along(1, Axis::Vertical), None);

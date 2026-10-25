@@ -37,13 +37,25 @@ impl Notification {
 impl AbroMux {
     /// Record a notification from `surface`. Returns its id, or None for a
     /// bell you were looking at.
-    pub(crate) fn add_notification(&mut self, surface: EntityId, title: String, body: String, bell: bool, window: &Window, cx: &mut Context<Self>) -> Option<usize> {
+    pub(crate) fn add_notification(
+        &mut self,
+        surface: EntityId,
+        title: String,
+        body: String,
+        bell: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
         let viewing = self.viewing(surface, window);
         if bell && viewing {
             return None;
         }
         if bell
-            && let Some(last) = self.notifications.iter_mut().rev().find(|n| n.surface == surface)
+            && let Some(last) = self
+                .notifications
+                .iter_mut()
+                .rev()
+                .find(|n| n.surface == surface)
             && last.bell
             && !last.read
         {
@@ -54,7 +66,11 @@ impl AbroMux {
         // both reporting it) is one notification.
         if !bell
             && !body.is_empty()
-            && let Some(last) = self.notifications.iter_mut().rev().find(|n| n.surface == surface)
+            && let Some(last) = self
+                .notifications
+                .iter_mut()
+                .rev()
+                .find(|n| n.surface == surface)
             && !last.read
             && last.body == body
             && last.at.elapsed().is_ok_and(|d| d < Duration::from_secs(10))
@@ -62,14 +78,38 @@ impl AbroMux {
             last.at = SystemTime::now();
             return Some(last.id);
         }
-        let title = if title.is_empty() { self.surface_title(surface, cx).unwrap_or_default() } else { title };
-        let body = if body.is_empty() && bell { "Bell".into() } else { body };
+        let title = if title.is_empty() {
+            self.surface_title(surface, cx).unwrap_or_default()
+        } else {
+            title
+        };
+        let body = if body.is_empty() && bell {
+            "Bell".into()
+        } else {
+            body
+        };
         self.next_notification += 1;
         let id = self.next_notification;
         if !bell && !window.is_window_active() {
-            banner::post(id, if title.is_empty() { crate::channel::app_name() } else { &title }, &body);
+            banner::post(
+                id,
+                if title.is_empty() {
+                    crate::channel::app_name()
+                } else {
+                    &title
+                },
+                &body,
+            );
         }
-        self.notifications.push(Notification { id, surface, title, body, at: SystemTime::now(), read: viewing, bell });
+        self.notifications.push(Notification {
+            id,
+            surface,
+            title,
+            body,
+            at: SystemTime::now(),
+            read: viewing,
+            bell,
+        });
         let excess = self.notifications.len().saturating_sub(KEEP);
         self.notifications.drain(..excess);
         cx.notify();
@@ -77,12 +117,21 @@ impl AbroMux {
     }
 
     fn surface_title(&self, surface: EntityId, cx: &App) -> Option<String> {
-        self.workspaces.iter().flat_map(|w| w.root.panes()).flat_map(|p| p.tabs.iter()).find(|s| s.entity_id() == surface).map(|s| s.title(cx))
+        self.workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| p.tabs.iter())
+            .find(|s| s.entity_id() == surface)
+            .map(|s| s.title(cx))
     }
 
     /// Whether you're looking at `surface` right now.
     fn viewing(&self, surface: EntityId, window: &Window) -> bool {
-        window.is_window_active() && self.ws().focused_surface().is_some_and(|s| s.entity_id() == surface)
+        window.is_window_active()
+            && self
+                .ws()
+                .focused_surface()
+                .is_some_and(|s| s.entity_id() == surface)
     }
 
     /// Mark what you're looking at as read and keep the dock badge current.
@@ -103,7 +152,9 @@ impl AbroMux {
     }
 
     pub(crate) fn surface_unread(&self, surface: EntityId) -> bool {
-        self.notifications.iter().any(|n| n.surface == surface && !n.read)
+        self.notifications
+            .iter()
+            .any(|n| n.surface == surface && !n.read)
     }
 
     pub(crate) fn ws_unread(&self, ws: &Workspace) -> bool {
@@ -111,7 +162,10 @@ impl AbroMux {
     }
 
     pub(crate) fn latest_unread(&self, ws: &Workspace) -> Option<&Notification> {
-        self.notifications.iter().rev().find(|n| !n.read && ws.contains(n.surface))
+        self.notifications
+            .iter()
+            .rev()
+            .find(|n| !n.read && ws.contains(n.surface))
     }
 
     /// A closed surface takes its notifications with it.
@@ -120,11 +174,20 @@ impl AbroMux {
     }
 
     /// Select the notification's terminal and mark it read.
-    pub(crate) fn open_notification(&mut self, id: usize, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(n) = self.notifications.iter_mut().find(|n| n.id == id) else { return false };
+    pub(crate) fn open_notification(
+        &mut self,
+        id: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(n) = self.notifications.iter_mut().find(|n| n.id == id) else {
+            return false;
+        };
         n.read = true;
         let surface = n.surface;
-        let Some(wi) = self.workspaces.iter().position(|w| w.contains(surface)) else { return false };
+        let Some(wi) = self.workspaces.iter().position(|w| w.contains(surface)) else {
+            return false;
+        };
         self.notifications_open = false;
         self.focus_surface(surface, cx);
         self.select_workspace(wi, window, cx);
@@ -133,7 +196,13 @@ impl AbroMux {
 
     /// ⌘⇧U: the newest unread notification. False if there's none.
     pub(crate) fn jump_to_unread(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        match self.notifications.iter().rev().find(|n| !n.read).map(|n| n.id) {
+        match self
+            .notifications
+            .iter()
+            .rev()
+            .find(|n| !n.read)
+            .map(|n| n.id)
+        {
             Some(id) => self.open_notification(id, window, cx),
             None => false,
         }
@@ -153,7 +222,12 @@ impl AbroMux {
             .rev()
             .map(|n| {
                 let id = n.id;
-                let place = self.workspaces.iter().find(|w| w.contains(n.surface)).map(|w| w.name(cx)).unwrap_or_default();
+                let place = self
+                    .workspaces
+                    .iter()
+                    .find(|w| w.contains(n.surface))
+                    .map(|w| w.name(cx))
+                    .unwrap_or_default();
                 let age = ago(now.duration_since(n.at).unwrap_or_default());
                 div()
                     .id(("notification", id))
@@ -168,7 +242,14 @@ impl AbroMux {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_notification(id, window, cx);
                     }))
-                    .child(div().mt(px(5.)).size(px(7.)).flex_none().rounded_full().when(!n.read, |d| d.bg(rgb(ACCENT_BRIGHT))))
+                    .child(
+                        div()
+                            .mt(px(5.))
+                            .size(px(7.))
+                            .flex_none()
+                            .rounded_full()
+                            .when(!n.read, |d| d.bg(rgb(ACCENT_BRIGHT))),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -176,9 +257,30 @@ impl AbroMux {
                             .flex()
                             .flex_col()
                             .gap(px(2.))
-                            .when(!n.title.is_empty(), |d| d.child(div().truncate().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).child(n.title.clone())))
-                            .when(!n.body.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(rgb(TEXT)).line_clamp(3).child(n.body.clone())))
-                            .child(div().text_size(px(10.5)).text_color(rgb(MUTED)).child(format!("{place} · {age}"))),
+                            .when(!n.title.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(12.5))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(n.title.clone()),
+                                )
+                            })
+                            .when(!n.body.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(TEXT))
+                                        .line_clamp(3)
+                                        .child(n.body.clone()),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(rgb(MUTED))
+                                    .child(format!("{place} · {age}")),
+                            ),
                     )
                     .into_any_element()
             })
@@ -189,13 +291,17 @@ impl AbroMux {
             .inset_0()
             // Clicking outside closes it.
             .child(
-                div().id("notifications-backdrop").absolute().inset_0().on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
-                        this.notifications_open = false;
-                        cx.notify();
-                    }),
-                ),
+                div()
+                    .id("notifications-backdrop")
+                    .absolute()
+                    .inset_0()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.notifications_open = false;
+                            cx.notify();
+                        }),
+                    ),
             )
             .child(
                 div()
@@ -224,7 +330,12 @@ impl AbroMux {
                             .justify_between()
                             .border_b_1()
                             .border_color(rgb(BORDER))
-                            .child(div().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).child("Notifications"))
+                            .child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Notifications"),
+                            )
                             .when(!empty, |d| {
                                 d.child(
                                     div()
@@ -236,7 +347,9 @@ impl AbroMux {
                                         .text_color(rgb(MUTED))
                                         .cursor_pointer()
                                         .hover(|s| s.bg(rgba(HOVER)).text_color(rgb(TEXT)))
-                                        .on_click(cx.listener(|this, _, _, cx| this.clear_notifications(cx)))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.clear_notifications(cx)
+                                        }))
                                         .child("Clear all"),
                                 )
                             }),
@@ -247,7 +360,15 @@ impl AbroMux {
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scroll()
-                            .when(empty, |d| d.child(div().p(px(16.)).text_size(px(12.)).text_color(rgb(MUTED)).child("No notifications")))
+                            .when(empty, |d| {
+                                d.child(
+                                    div()
+                                        .p(px(16.))
+                                        .text_size(px(12.))
+                                        .text_color(rgb(MUTED))
+                                        .child("No notifications"),
+                                )
+                            })
                             .children(rows),
                     ),
             )
@@ -271,6 +392,9 @@ mod tests {
     fn ages() {
         use std::time::Duration;
         let ago = |s| super::ago(Duration::from_secs(s));
-        assert_eq!([ago(5), ago(120), ago(7200), ago(200000)], ["now", "2m", "2h", "2d"]);
+        assert_eq!(
+            [ago(5), ago(120), ago(7200), ago(200000)],
+            ["now", "2m", "2h", "2d"]
+        );
     }
 }

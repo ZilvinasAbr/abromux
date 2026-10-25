@@ -45,7 +45,11 @@ enum Reply {
 }
 
 /// `rx`'s value, or an error once `limit` has passed.
-fn later(rx: oneshot::Receiver<anyhow::Result<Value>>, limit: Duration, what: &'static str) -> Reply {
+fn later(
+    rx: oneshot::Receiver<anyhow::Result<Value>>,
+    limit: Duration,
+    what: &'static str,
+) -> Reply {
     Reply::Later(
         async move {
             match select(rx, Timer::after(limit)).await {
@@ -60,7 +64,12 @@ fn later(rx: oneshot::Receiver<anyhow::Result<Value>>, limit: Duration, what: &'
 
 /// Run `js` in the page and wait up to `limit` for its JSON. None if the
 /// page didn't run it (still loading, or navigating away).
-async fn eval_json(b: &Entity<BrowserView>, js: &str, cx: &AsyncApp, limit: Duration) -> Option<String> {
+async fn eval_json(
+    b: &Entity<BrowserView>,
+    js: &str,
+    cx: &AsyncApp,
+    limit: Duration,
+) -> Option<String> {
     let rx = b.read_with(cx, |b, cx| b.eval_async(js, cx)).ok()?;
     match select(rx, Timer::after(limit)).await {
         Either::Left((Ok(out), _)) => Some(out),
@@ -74,7 +83,10 @@ pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> 
     let path = ipc::socket_path();
     if path.exists() {
         if UnixStream::connect(&path).is_ok() {
-            eprintln!("abromux: another instance is listening on {}; control socket disabled", path.display());
+            eprintln!(
+                "abromux: another instance is listening on {}; control socket disabled",
+                path.display()
+            );
             return None;
         }
         let _ = std::fs::remove_file(&path);
@@ -103,7 +115,11 @@ pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> 
             let id = req.get("id").cloned().unwrap_or(Value::Null);
             let method = req["method"].as_str().unwrap_or_default().to_string();
             let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
-            let Ok(out) = this.update_in(cx, |this, window, cx| this.handle(&method, &params, window, cx)) else { break };
+            let Ok(out) = this.update_in(cx, |this, window, cx| {
+                this.handle(&method, &params, window, cx)
+            }) else {
+                break;
+            };
             match out {
                 Ok(Reply::Now(v)) => {
                     let _ = reply.send(ipc::ok(&id, v));
@@ -134,7 +150,9 @@ pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> 
 }
 
 fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
-    let Ok(mut writer) = stream.try_clone() else { return };
+    let Ok(mut writer) = stream.try_clone() else {
+        return;
+    };
     for line in BufReader::new(stream).lines() {
         let Ok(line) = line else { return };
         if line.trim().is_empty() {
@@ -146,7 +164,8 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
                 if tx.unbounded_send((req, reply_tx)).is_err() {
                     return;
                 }
-                futures::executor::block_on(reply_rx).unwrap_or_else(|_| ipc::err(&Value::Null, "app closed"))
+                futures::executor::block_on(reply_rx)
+                    .unwrap_or_else(|_| ipc::err(&Value::Null, "app closed"))
             }
             Err(e) => ipc::err(&Value::Null, format!("bad request: {e}")),
         };
@@ -178,9 +197,13 @@ enum Sel {
 
 fn parse_sel(s: &str, kind: &str) -> anyhow::Result<Sel> {
     if let Some(n) = s.strip_prefix(kind).and_then(|r| r.strip_prefix(':')) {
-        return Ok(Sel::Ref(n.parse().with_context(|| format!("bad {kind} ref {s:?}"))?));
+        return Ok(Sel::Ref(
+            n.parse().with_context(|| format!("bad {kind} ref {s:?}"))?,
+        ));
     }
-    s.parse().map(Sel::Index).map_err(|_| anyhow!("expected {kind}:N or an index, got {s:?}"))
+    s.parse()
+        .map(Sel::Index)
+        .map_err(|_| anyhow!("expected {kind}:N or an index, got {s:?}"))
 }
 
 fn direction(d: &str) -> anyhow::Result<(Axis, bool)> {
@@ -218,11 +241,19 @@ fn unescape(s: &str) -> String {
 }
 
 impl AbroMux {
-    fn handle(&mut self, method: &str, p: &Value, window: &mut Window, cx: &mut Context<Self>) -> anyhow::Result<Reply> {
+    fn handle(
+        &mut self,
+        method: &str,
+        p: &Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Reply> {
         let v = match method {
             "system.ping" => json!("pong"),
             "system.identify" => {
-                let caller = self.caller(p).map(|(wi, _, s)| json!({ "workspace": self.ws_ref(wi), "surface": self.sref(&s) }));
+                let caller = self.caller(p).map(
+                    |(wi, _, s)| json!({ "workspace": self.ws_ref(wi), "surface": self.sref(&s) }),
+                );
                 let ws = self.ws();
                 json!({
                     "socket": self.socket.as_ref().map(|p| p.to_string_lossy().into_owned()),
@@ -235,7 +266,11 @@ impl AbroMux {
                 })
             }
 
-            "workspace.list" => json!((0..self.workspaces.len()).map(|i| self.describe_ws(i, false, cx)).collect::<Vec<_>>()),
+            "workspace.list" => json!(
+                (0..self.workspaces.len())
+                    .map(|i| self.describe_ws(i, false, cx))
+                    .collect::<Vec<_>>()
+            ),
             "workspace.current" => self.describe_ws(self.active, false, cx),
             "workspace.create" => {
                 let cwd = str_param(p, "cwd").map(String::from);
@@ -243,7 +278,10 @@ impl AbroMux {
                 if let Some(name) = str_param(p, "name") {
                     self.workspaces[wi].custom_name = Some(name.into());
                 }
-                if let (Some(cmd), Some(Surface::Terminal(t))) = (str_param(p, "command"), self.workspaces[wi].focused_surface()) {
+                if let (Some(cmd), Some(Surface::Terminal(t))) = (
+                    str_param(p, "command"),
+                    self.workspaces[wi].focused_surface(),
+                ) {
                     t.update(cx, |t, _| t.send(format!("{cmd}\r").as_bytes()));
                 }
                 self.describe_ws(wi, false, cx)
@@ -268,7 +306,11 @@ impl AbroMux {
             }
             "workspace.tree" => {
                 if bool_param(p, "all", false) {
-                    json!((0..self.workspaces.len()).map(|i| self.describe_ws(i, true, cx)).collect::<Vec<_>>())
+                    json!(
+                        (0..self.workspaces.len())
+                            .map(|i| self.describe_ws(i, true, cx))
+                            .collect::<Vec<_>>()
+                    )
                 } else {
                     json!([self.describe_ws(self.workspace_target(p)?, true, cx)])
                 }
@@ -297,7 +339,9 @@ impl AbroMux {
                     _ => bail!("direction must be left, right, up or down"),
                 };
                 let amount = match p.get("amount") {
-                    Some(Value::String(a)) => a.parse().with_context(|| format!("bad amount {a:?}"))?,
+                    Some(Value::String(a)) => {
+                        a.parse().with_context(|| format!("bad amount {a:?}"))?
+                    }
                     Some(v) => v.as_f64().context("amount must be a number")? as f32,
                     None => RESIZE_STEP,
                 };
@@ -309,18 +353,43 @@ impl AbroMux {
             "pane.create" => {
                 let wi = self.workspace_target(p)?;
                 let pane = self.workspaces[wi].focused_pane;
-                self.split_with(wi, pane, str_param(p, "direction").unwrap_or("right"), p, window, cx)?
+                self.split_with(
+                    wi,
+                    pane,
+                    str_param(p, "direction").unwrap_or("right"),
+                    p,
+                    window,
+                    cx,
+                )?
             }
 
             "surface.list" => {
                 let (wi, pane) = self.pane_target(p)?;
                 let ws = &self.workspaces[wi];
-                let pane = ws.root.panes().into_iter().find(|x| x.id == pane).context("no such pane")?;
-                json!(pane.tabs.iter().enumerate().map(|(i, s)| self.describe_surface(s, i == pane.active, cx)).collect::<Vec<_>>())
+                let pane = ws
+                    .root
+                    .panes()
+                    .into_iter()
+                    .find(|x| x.id == pane)
+                    .context("no such pane")?;
+                json!(
+                    pane.tabs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, s)| self.describe_surface(s, i == pane.active, cx))
+                        .collect::<Vec<_>>()
+                )
             }
             "surface.split" => {
                 let (wi, pane, _) = self.surface_target(p)?;
-                self.split_with(wi, pane, str_param(p, "direction").context("missing direction")?, p, window, cx)?
+                self.split_with(
+                    wi,
+                    pane,
+                    str_param(p, "direction").context("missing direction")?,
+                    p,
+                    window,
+                    cx,
+                )?
             }
             "surface.create" => {
                 let (wi, pane) = self.pane_target(p)?;
@@ -343,7 +412,11 @@ impl AbroMux {
             }
             "surface.send_text" => {
                 let t = self.terminal_target(p)?;
-                let text = unescape(p.get("text").and_then(Value::as_str).context("missing text")?);
+                let text = unescape(
+                    p.get("text")
+                        .and_then(Value::as_str)
+                        .context("missing text")?,
+                );
                 t.update(cx, |t, cx| {
                     t.send(text.as_bytes());
                     cx.notify();
@@ -353,9 +426,14 @@ impl AbroMux {
             "surface.send_key" => {
                 let t = self.terminal_target(p)?;
                 let key = str_param(p, "key").context("missing key")?;
-                let mut ks = Keystroke::parse(key).map_err(|e| anyhow!("bad key {key:?}: {e:?}"))?;
+                let mut ks =
+                    Keystroke::parse(key).map_err(|e| anyhow!("bad key {key:?}: {e:?}"))?;
                 if ks.key.chars().count() == 1 && ks.key_char.is_none() {
-                    ks.key_char = Some(if ks.modifiers.shift { ks.key.to_uppercase() } else { ks.key.clone() });
+                    ks.key_char = Some(if ks.modifiers.shift {
+                        ks.key.to_uppercase()
+                    } else {
+                        ks.key.clone()
+                    });
                 }
                 if !t.update(cx, |t, cx| t.send_keystroke(&ks, cx)) {
                     bail!("key {key:?} doesn't map to terminal input");
@@ -384,7 +462,10 @@ impl AbroMux {
                     // A nested `claude -p` ending mustn't drop the outer
                     // session; the outer one's next Stop reasserts it anyway.
                     (true, Some(a)) => {
-                        if t.agent.as_ref().is_some_and(|cur| cur.session_id == a.session_id) {
+                        if t.agent
+                            .as_ref()
+                            .is_some_and(|cur| cur.session_id == a.session_id)
+                        {
                             t.agent = None;
                         }
                     }
@@ -412,7 +493,14 @@ impl AbroMux {
                 let (wi, pane, _) = self.surface_target(p)?;
                 let mut p = p.clone();
                 p["type"] = json!("browser");
-                self.split_with(wi, pane, str_param(&p, "direction").unwrap_or("right"), &p, window, cx)?
+                self.split_with(
+                    wi,
+                    pane,
+                    str_param(&p, "direction").unwrap_or("right"),
+                    &p,
+                    window,
+                    cx,
+                )?
             }
             "browser.navigate" => {
                 let b = self.browser_target(p)?;
@@ -436,25 +524,45 @@ impl AbroMux {
             }
             "browser.eval" => {
                 let b = self.browser_target(p)?;
-                let script = p.get("script").and_then(Value::as_str).context("missing script")?.to_string();
+                let script = p
+                    .get("script")
+                    .and_then(Value::as_str)
+                    .context("missing script")?
+                    .to_string();
                 let acx = cx.to_async();
                 return Ok(Reply::Later(
                     async move {
-                        let out = eval_json(&b, &script, &acx, SCRIPT_TIMEOUT).await.context("the page didn't run the script (is it still loading?)")?;
+                        let out = eval_json(&b, &script, &acx, SCRIPT_TIMEOUT)
+                            .await
+                            .context("the page didn't run the script (is it still loading?)")?;
                         Ok(serde_json::from_str(&out).unwrap_or(Value::String(out)))
                     }
                     .boxed_local(),
                 ));
             }
-            "browser.snapshot" | "browser.click" | "browser.dblclick" | "browser.hover" | "browser.focus" | "browser.check"
-            | "browser.scroll_into_view" | "browser.fill" | "browser.type" | "browser.press" | "browser.select" | "browser.scroll"
-            | "browser.get" | "browser.is" | "browser.find" => {
+            "browser.snapshot"
+            | "browser.click"
+            | "browser.dblclick"
+            | "browser.hover"
+            | "browser.focus"
+            | "browser.check"
+            | "browser.scroll_into_view"
+            | "browser.fill"
+            | "browser.type"
+            | "browser.press"
+            | "browser.select"
+            | "browser.scroll"
+            | "browser.get"
+            | "browser.is"
+            | "browser.find" => {
                 let b = self.browser_target(p)?;
                 let js = browser_auto::script(method.trim_start_matches("browser."), p);
                 let acx = cx.to_async();
                 return Ok(Reply::Later(
                     async move {
-                        let out = eval_json(&b, &js, &acx, SCRIPT_TIMEOUT).await.context("the page didn't run the script (is it still loading?)")?;
+                        let out = eval_json(&b, &js, &acx, SCRIPT_TIMEOUT)
+                            .await
+                            .context("the page didn't run the script (is it still loading?)")?;
                         browser_auto::parse(&out)
                     }
                     .boxed_local(),
@@ -466,18 +574,29 @@ impl AbroMux {
                 let path = match str_param(p, "path") {
                     Some(path) => PathBuf::from(path),
                     None => {
-                        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
+                        let ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis();
                         std::env::temp_dir().join(format!("abromux-screenshot-{ms}.png"))
                     }
                 };
-                return Ok(later(b.read(cx).screenshot(path, cx), SCRIPT_TIMEOUT, "screenshot"));
+                return Ok(later(
+                    b.read(cx).screenshot(path, cx),
+                    SCRIPT_TIMEOUT,
+                    "screenshot",
+                ));
             }
 
             "notification.create" => {
                 let (_, _, s) = self.surface_target(p)?;
                 let mut title = str_param(p, "title").unwrap_or_default().to_string();
                 if let Some(sub) = str_param(p, "subtitle") {
-                    title = if title.is_empty() { sub.into() } else { format!("{title} — {sub}") };
+                    title = if title.is_empty() {
+                        sub.into()
+                    } else {
+                        format!("{title} — {sub}")
+                    };
                 }
                 let body = str_param(p, "body").unwrap_or_default().to_string();
                 if title.is_empty() && body.is_empty() {
@@ -527,10 +646,26 @@ impl AbroMux {
             "status.set" => {
                 let wi = self.workspace_target(p)?;
                 let key = str_param(p, "key").context("missing <key>")?.to_string();
-                let value = str_param(p, "value").context("missing <value>")?.to_string();
-                let color = str_param(p, "color").map(|c| parse_color(c).with_context(|| format!("bad color {c:?} (use #rrggbb)"))).transpose()?;
+                let value = str_param(p, "value")
+                    .context("missing <value>")?
+                    .to_string();
+                let color = str_param(p, "color")
+                    .map(|c| {
+                        parse_color(c).with_context(|| format!("bad color {c:?} (use #rrggbb)"))
+                    })
+                    .transpose()?;
                 let icon = str_param(p, "icon").map(String::from);
-                self.set_status(wi, Status { key, value, icon, color, owner: None }, cx);
+                self.set_status(
+                    wi,
+                    Status {
+                        key,
+                        value,
+                        icon,
+                        color,
+                        owner: None,
+                    },
+                    cx,
+                );
                 json!({ "workspace": self.ws_ref(wi) })
             }
             "status.clear" => {
@@ -540,12 +675,20 @@ impl AbroMux {
             }
             "status.list" => {
                 let wi = self.workspace_target(p)?;
-                json!(self.workspaces[wi].status.iter().map(status::status_json).collect::<Vec<_>>())
+                json!(
+                    self.workspaces[wi]
+                        .status
+                        .iter()
+                        .map(status::status_json)
+                        .collect::<Vec<_>>()
+                )
             }
             "progress.set" => {
                 let wi = self.workspace_target(p)?;
                 let value = match p.get("value") {
-                    Some(Value::String(v)) => v.parse::<f32>().with_context(|| format!("bad progress {v:?}"))?,
+                    Some(Value::String(v)) => v
+                        .parse::<f32>()
+                        .with_context(|| format!("bad progress {v:?}"))?,
                     Some(v) => v.as_f64().context("progress must be a number")? as f32,
                     None => bail!("missing <value> (0.0 to 1.0)"),
                 };
@@ -564,21 +707,38 @@ impl AbroMux {
             "log.add" => {
                 let wi = self.workspace_target(p)?;
                 let level = str_param(p, "level").unwrap_or("info");
-                let level = LogLevel::parse(level).with_context(|| format!("bad level {level:?} (info, progress, success, warning or error)"))?;
-                let message = str_param(p, "message").context("missing <message>")?.to_string();
-                self.add_log(wi, level, str_param(p, "source").map(String::from), message, cx);
+                let level = LogLevel::parse(level).with_context(|| {
+                    format!("bad level {level:?} (info, progress, success, warning or error)")
+                })?;
+                let message = str_param(p, "message")
+                    .context("missing <message>")?
+                    .to_string();
+                self.add_log(
+                    wi,
+                    level,
+                    str_param(p, "source").map(String::from),
+                    message,
+                    cx,
+                );
                 json!({ "workspace": self.ws_ref(wi) })
             }
             "log.list" => {
                 let wi = self.workspace_target(p)?;
                 let limit = match p.get("limit") {
-                    Some(Value::String(n)) => n.parse().with_context(|| format!("bad limit {n:?}"))?,
+                    Some(Value::String(n)) => {
+                        n.parse().with_context(|| format!("bad limit {n:?}"))?
+                    }
                     Some(n) => n.as_u64().context("limit must be a number")? as usize,
                     None => usize::MAX,
                 };
                 let log = &self.workspaces[wi].log;
                 let now = std::time::SystemTime::now();
-                json!(log[log.len().saturating_sub(limit)..].iter().map(|l| status::log_json(l, now)).collect::<Vec<_>>())
+                json!(
+                    log[log.len().saturating_sub(limit)..]
+                        .iter()
+                        .map(|l| status::log_json(l, now))
+                        .collect::<Vec<_>>()
+                )
             }
             "log.clear" => {
                 let wi = self.workspace_target(p)?;
@@ -602,7 +762,13 @@ impl AbroMux {
                 json!({ "window": "window:1" })
             }
             // For scripts/perf.py: frame timing and synthetic input.
-            "debug.frame" => return Ok(later(debug::after_next_frame(window, cx), Duration::from_secs(10), "debug.frame")),
+            "debug.frame" => {
+                return Ok(later(
+                    debug::after_next_frame(window, cx),
+                    Duration::from_secs(10),
+                    "debug.frame",
+                ));
+            }
             "debug.frames" => {
                 if bool_param(p, "record", true) {
                     debug::FrameLog::start(&self.frames, window);
@@ -618,7 +784,9 @@ impl AbroMux {
                 // is borrowed until the handler returns.
                 window.defer(cx, move |window, cx| {
                     for step in steps.split(';').map(str::trim).filter(|s| !s.is_empty()) {
-                        if let Err(e) = debug::run_step(&view, step, AbroMux::script_mouse, window, cx) {
+                        if let Err(e) =
+                            debug::run_step(&view, step, AbroMux::script_mouse, window, cx)
+                        {
                             eprintln!("abromux: debug.input: {e:#}");
                         }
                     }
@@ -637,15 +805,24 @@ impl AbroMux {
     /// `browser wait`: poll the page until the condition holds.
     fn browser_wait(&self, p: &Value, cx: &mut Context<Self>) -> anyhow::Result<Reply> {
         let b = self.browser_target(p)?;
-        let (text, url, load, js) = (str_param(p, "text"), str_param(p, "url"), str_param(p, "load"), str_param(p, "js"));
+        let (text, url, load, js) = (
+            str_param(p, "text"),
+            str_param(p, "url"),
+            str_param(p, "load"),
+            str_param(p, "js"),
+        );
         let script = match (str_param(p, "selector"), js) {
             (Some(_), _) => browser_auto::script("wait_for", p),
             (None, Some(js)) => browser_auto::condition(js),
-            (None, None) if text.is_some() || url.is_some() || load.is_some() => browser_auto::page_condition(text, url, load)?,
+            (None, None) if text.is_some() || url.is_some() || load.is_some() => {
+                browser_auto::page_condition(text, url, load)?
+            }
             _ => bail!("wait for what? give a selector or ref, --text, --url, --load or --js"),
         };
         let ms = match p.get("timeout") {
-            Some(Value::String(t)) => t.parse().with_context(|| format!("bad timeout {t:?} (milliseconds)"))?,
+            Some(Value::String(t)) => t
+                .parse()
+                .with_context(|| format!("bad timeout {t:?} (milliseconds)"))?,
             Some(t) => t.as_u64().context("timeout must be milliseconds")?,
             None => WAIT_TIMEOUT_MS,
         };
@@ -655,7 +832,9 @@ impl AbroMux {
                 let start = Instant::now();
                 let deadline = start + Duration::from_millis(ms);
                 loop {
-                    let left = deadline.saturating_duration_since(Instant::now()).max(WAIT_POLL);
+                    let left = deadline
+                        .saturating_duration_since(Instant::now())
+                        .max(WAIT_POLL);
                     // A page mid-navigation doesn't answer; try again.
                     if let Some(out) = eval_json(&b, &script, &acx, left).await
                         && serde_json::from_str::<String>(&out).is_ok()
@@ -674,16 +853,31 @@ impl AbroMux {
     }
 
     /// Status and notifications from a coding agent's hooks (agent.rs).
-    fn agent_event(&mut self, surface: gpui::EntityId, p: &Value, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(kind) = str_param(p, "kind").and_then(Kind::parse) else { return };
+    fn agent_event(
+        &mut self,
+        surface: gpui::EntityId,
+        p: &Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(kind) = str_param(p, "kind").and_then(Kind::parse) else {
+            return;
+        };
         let (label, title) = (kind.label(), kind.title());
         match str_param(p, "event").unwrap_or_default() {
-            "UserPromptSubmit" | "PostToolUse" => self.set_agent_status(surface, label, Some(("Running", RUNNING)), cx),
+            "UserPromptSubmit" | "PostToolUse" => {
+                self.set_agent_status(surface, label, Some(("Running", RUNNING)), cx)
+            }
             // Claude's Notification, Codex's PermissionRequest.
             event @ ("Notification" | "PermissionRequest") => {
-                let message = str_param(p, "message").map(String::from).unwrap_or_else(|| format!("{label} needs your attention"));
+                let message = str_param(p, "message")
+                    .map(String::from)
+                    .unwrap_or_else(|| format!("{label} needs your attention"));
                 // Claude also says so after a minute idle; Stop already did.
-                if event == "Notification" && (str_param(p, "notification_type") == Some("idle_prompt") || message.contains("waiting for your input")) {
+                if event == "Notification"
+                    && (str_param(p, "notification_type") == Some("idle_prompt")
+                        || message.contains("waiting for your input"))
+                {
                     return;
                 }
                 self.set_agent_status(surface, label, Some(("Needs input", WARNING)), cx);
@@ -706,7 +900,10 @@ impl AbroMux {
     }
 
     fn sref(&self, s: &Surface) -> String {
-        format!("surface:{}", self.surface_refs.get(&s.entity_id()).copied().unwrap_or(0))
+        format!(
+            "surface:{}",
+            self.surface_refs.get(&s.entity_id()).copied().unwrap_or(0)
+        )
     }
 
     fn find_workspace(&self, s: &str) -> anyhow::Result<usize> {
@@ -724,7 +921,9 @@ impl AbroMux {
 
     /// The terminal `abromux` was run from, if it still exists.
     fn caller(&self, p: &Value) -> Option<(usize, usize, Surface)> {
-        p["caller"]["surface"].as_str().and_then(|s| self.find_surface(s, None).ok())
+        p["caller"]["surface"]
+            .as_str()
+            .and_then(|s| self.find_surface(s, None).ok())
     }
 
     /// `--workspace`, else the caller's workspace, else the selected one.
@@ -736,10 +935,18 @@ impl AbroMux {
     }
 
     /// A surface ref, or an index into `within`'s surfaces in tree order.
-    fn find_surface(&self, s: &str, within: Option<usize>) -> anyhow::Result<(usize, usize, Surface)> {
+    fn find_surface(
+        &self,
+        s: &str,
+        within: Option<usize>,
+    ) -> anyhow::Result<(usize, usize, Surface)> {
         let all = |wi: usize| {
             let ws = &self.workspaces[wi];
-            ws.root.panes().into_iter().flat_map(|p| p.tabs.iter().map(move |t| (wi, p.id, t.clone()))).collect::<Vec<_>>()
+            ws.root
+                .panes()
+                .into_iter()
+                .flat_map(|p| p.tabs.iter().map(move |t| (wi, p.id, t.clone())))
+                .collect::<Vec<_>>()
         };
         match parse_sel(s, "surface")? {
             Sel::Ref(n) => (0..self.workspaces.len())
@@ -753,7 +960,9 @@ impl AbroMux {
     /// `--surface`, else the focused surface of `--workspace`, else the
     /// caller, else the focused surface of the selected workspace.
     fn surface_target(&self, p: &Value) -> anyhow::Result<(usize, usize, Surface)> {
-        let ws = str_param(p, "workspace").map(|w| self.find_workspace(w)).transpose()?;
+        let ws = str_param(p, "workspace")
+            .map(|w| self.find_workspace(w))
+            .transpose()?;
         if let Some(s) = str_param(p, "surface") {
             return self.find_surface(s, ws);
         }
@@ -764,7 +973,10 @@ impl AbroMux {
         }
         let wi = ws.unwrap_or(self.active);
         let w = &self.workspaces[wi];
-        let s = w.focused_surface().context("workspace has no surfaces")?.clone();
+        let s = w
+            .focused_surface()
+            .context("workspace has no surfaces")?
+            .clone();
         Ok((wi, w.focused_pane, s))
     }
 
@@ -791,7 +1003,13 @@ impl AbroMux {
         };
         ws.focused_surface()
             .and_then(browser)
-            .or_else(|| ws.root.panes().iter().flat_map(|p| p.tabs.iter()).find_map(browser))
+            .or_else(|| {
+                ws.root
+                    .panes()
+                    .iter()
+                    .flat_map(|p| p.tabs.iter())
+                    .find_map(browser)
+            })
             .context("no browser surface in this workspace (open one with `abromux browser open`)")
     }
 
@@ -803,11 +1021,13 @@ impl AbroMux {
             return Ok((wi, pane));
         };
         match parse_sel(s, "pane")? {
-            Sel::Ref(id) => self
-                .workspaces
-                .iter()
-                .enumerate()
-                .find_map(|(wi, w)| w.root.panes().iter().any(|p| p.id == id).then_some((wi, id))),
+            Sel::Ref(id) => self.workspaces.iter().enumerate().find_map(|(wi, w)| {
+                w.root
+                    .panes()
+                    .iter()
+                    .any(|p| p.id == id)
+                    .then_some((wi, id))
+            }),
             Sel::Index(i) => {
                 let wi = self.workspace_target(p)?;
                 self.workspaces[wi].root.panes().get(i).map(|p| (wi, p.id))
@@ -819,10 +1039,18 @@ impl AbroMux {
     // ---- actions --------------------------------------------------------
 
     /// A terminal (`--cwd`, `--command`) or browser (`--url`) for workspace `wi`.
-    fn make_surface(&mut self, wi: usize, p: &Value, window: &mut Window, cx: &mut Context<Self>) -> anyhow::Result<Surface> {
+    fn make_surface(
+        &mut self,
+        wi: usize,
+        p: &Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Surface> {
         Ok(match str_param(p, "type").unwrap_or("terminal") {
             "terminal" => {
-                let cwd = str_param(p, "cwd").map(String::from).or_else(|| self.workspaces[wi].cwd(cx));
+                let cwd = str_param(p, "cwd")
+                    .map(String::from)
+                    .or_else(|| self.workspaces[wi].cwd(cx));
                 let s = self.make_terminal(cwd, self.workspaces[wi].id, window, cx);
                 if let (Some(cmd), Surface::Terminal(t)) = (str_param(p, "command"), &s) {
                     t.update(cx, |t, _| t.send(format!("{cmd}\r").as_bytes()));
@@ -830,19 +1058,42 @@ impl AbroMux {
                 s
             }
             "browser" => {
-                let url = str_param(p, "url").map(normalize_url).unwrap_or_else(|| DEFAULT_URL.into());
+                let url = str_param(p, "url")
+                    .map(normalize_url)
+                    .unwrap_or_else(|| DEFAULT_URL.into());
                 self.make_browser(&url, window, cx)
             }
             t => bail!("unknown surface type {t:?} (terminal or browser)"),
         })
     }
 
-    fn split_with(&mut self, wi: usize, pane: usize, dir: &str, p: &Value, window: &mut Window, cx: &mut Context<Self>) -> anyhow::Result<Value> {
+    fn split_with(
+        &mut self,
+        wi: usize,
+        pane: usize,
+        dir: &str,
+        p: &Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Value> {
         let (axis, before) = direction(dir)?;
         let s = self.make_surface(wi, p, window, cx)?;
         let surface = self.describe_surface(&s, true, cx);
-        let new = self.split_pane(wi, pane, axis, before, s, bool_param(p, "focus", true), window, cx).context("pane not found")?;
-        Ok(json!({ "workspace": self.ws_ref(wi), "pane": format!("pane:{new}"), "surface": surface }))
+        let new = self
+            .split_pane(
+                wi,
+                pane,
+                axis,
+                before,
+                s,
+                bool_param(p, "focus", true),
+                window,
+                cx,
+            )
+            .context("pane not found")?;
+        Ok(
+            json!({ "workspace": self.ws_ref(wi), "pane": format!("pane:{new}"), "surface": surface }),
+        )
     }
 
     // ---- descriptions ---------------------------------------------------
@@ -912,7 +1163,10 @@ mod tests {
 
     #[test]
     fn selectors() {
-        assert!(matches!(parse_sel("workspace:3", "workspace"), Ok(Sel::Ref(3))));
+        assert!(matches!(
+            parse_sel("workspace:3", "workspace"),
+            Ok(Sel::Ref(3))
+        ));
         assert!(matches!(parse_sel("2", "pane"), Ok(Sel::Index(2))));
         assert!(parse_sel("pane:x", "pane").is_err());
         assert!(parse_sel("surface:1", "pane").is_err());
