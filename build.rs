@@ -38,7 +38,8 @@ fn main() {
 
 /// Sets ABROMUX_VERSION to the Cargo version plus the commit, e.g.
 /// `0.1.0+6dea3c2`, with `-dirty` when tracked files have uncommitted changes.
-/// Without git (a source tarball) it's just the Cargo version.
+/// A clean checkout of the release tag (`v0.1.0`) is just `0.1.0`, and so is a
+/// build without git (a source tarball).
 fn version(root: &Path) {
     let git = |args: &[&str]| {
         let o = Command::new("git")
@@ -53,12 +54,23 @@ fn version(root: &Path) {
     };
     let mut version = env::var("CARGO_PKG_VERSION").unwrap();
     if let Some(sha) = git(&["rev-parse", "--short", "HEAD"]) {
-        version += &format!("+{sha}");
-        if git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty()) {
+        let dirty =
+            git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
+        let tag = format!("v{version}^{{commit}}");
+        let release = !dirty && git(&["rev-parse", "--short", &tag]).is_some_and(|t| t == sha);
+        if !release {
+            version += &format!("+{sha}");
+        }
+        if dirty {
             version += "-dirty";
         }
-        // Rerun on commit, checkout, staging and edits.
-        let mut watch = vec!["HEAD".to_string(), "index".into(), "packed-refs".into()];
+        // Rerun on commit, checkout, staging, tagging and edits.
+        let mut watch = vec![
+            "HEAD".to_string(),
+            "index".into(),
+            "packed-refs".into(),
+            "refs/tags".into(),
+        ];
         watch.extend(git(&["symbolic-ref", "-q", "HEAD"]));
         for p in watch {
             if let Some(path) = git(&["rev-parse", "--path-format=absolute", "--git-path", &p]) {

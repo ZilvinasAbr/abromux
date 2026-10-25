@@ -4,9 +4,9 @@
 
 Every commit has its own version automatically. Don't bump anything by hand per commit.
 
-- `build.rs` builds the version from the `version` in `Cargo.toml` plus the short commit hash: `0.1.0+6dea3c2`. It adds `-dirty` when tracked files have uncommitted changes.
+- `build.rs` builds the version from the `version` in `Cargo.toml` plus the short commit hash: `0.1.0+6dea3c2`. It adds `-dirty` when tracked files have uncommitted changes. A clean checkout of the release tag `v<version>` is just `0.1.0`.
 - `abromux version` prints it. `scripts/bundle-app.sh` puts it in the app's `CFBundleShortVersionString`, and the commit count in `CFBundleVersion`.
-- Bump `version` in `Cargo.toml` (semver) only for a deliberate release, in its own commit, and only when asked.
+- Bump `version` in `Cargo.toml` (semver) only for a deliberate release, in its own commit, and only when asked. Tag that commit `v<version>`; `scripts/bundle-app.sh --dist` builds only from such a tag.
 - Use `env!("ABROMUX_VERSION")` in code, not `CARGO_PKG_VERSION`.
 
 ## Nightly app

@@ -4,6 +4,9 @@
 #   scripts/bundle-app.sh                 # installs /Applications/AbroMux.app
 #   scripts/bundle-app.sh ~/Applications  # or another folder
 #   scripts/bundle-app.sh --dist          # notarized dist/AbroMux-<version>.dmg
+#
+# --dist ships only a clean checkout of a release tag: bump `version` in
+# Cargo.toml, commit, `git tag v<version>`, then build.
 #   scripts/bundle-app.sh --nightly [dir] # "AbroMux Nightly.app" (scripts/nightly.sh)
 #
 # The nightly app has its own bundle id, name, neon icon and support folder,
@@ -53,12 +56,12 @@ if $dist && [[ -z "$identity" ]]; then
 fi
 
 cargo build --release
-# The binary's own version (0.1.0+<sha>[-dirty]), and the commit count as the
+# The binary's own version (0.1.0 on a release tag, else 0.1.0+<sha>[-dirty]), and the commit count as the
 # build number macOS compares to tell newer from older.
 version="$(target/release/abromux version | cut -d' ' -f2)"
 build="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
-if $dist && [[ "$version" == *-dirty ]]; then
-  echo "Refusing to ship a -dirty build; commit or stash first." >&2
+if $dist && [[ "$version" == *+* ]]; then
+  echo "Refusing to ship $version: --dist needs a clean checkout of tag v${version%%+*}." >&2
   exit 1
 fi
 
