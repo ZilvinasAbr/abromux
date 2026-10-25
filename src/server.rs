@@ -7,11 +7,11 @@
 //! terminal `abromux` runs in, from `ABROMUX_SURFACE_ID`), else on what's focused.
 
 use crate::{
-    AbroMux, DEFAULT_URL,
+    AbroMux, DEFAULT_URL, RESIZE_STEP,
     agent::Agent,
     browser::normalize_url,
     debug, ipc,
-    workspace::{Surface, Workspace, git_branch},
+    workspace::{Dir, Surface, Workspace, git_branch},
 };
 use anyhow::{Context as _, anyhow, bail};
 use futures::{
@@ -245,6 +245,25 @@ impl AbroMux {
                     self.focus_active(window, cx);
                 }
                 cx.notify();
+                json!({ "pane": format!("pane:{pane}") })
+            }
+            "pane.resize" => {
+                let (wi, pane) = self.pane_target(p)?;
+                let dir = match str_param(p, "direction").unwrap_or("right") {
+                    "left" => Dir::Left,
+                    "right" => Dir::Right,
+                    "up" => Dir::Up,
+                    "down" => Dir::Down,
+                    _ => bail!("direction must be left, right, up or down"),
+                };
+                let amount = match p.get("amount") {
+                    Some(Value::String(a)) => a.parse().with_context(|| format!("bad amount {a:?}"))?,
+                    Some(v) => v.as_f64().context("amount must be a number")? as f32,
+                    None => RESIZE_STEP,
+                };
+                if !self.resize_pane(wi, pane, dir, amount, cx) {
+                    bail!("pane:{pane} has no split to resize in that direction");
+                }
                 json!({ "pane": format!("pane:{pane}") })
             }
             "pane.create" => {

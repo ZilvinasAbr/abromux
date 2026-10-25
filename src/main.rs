@@ -77,6 +77,10 @@ actions!(
         FocusRight,
         FocusUp,
         FocusDown,
+        ResizeLeft,
+        ResizeRight,
+        ResizeUp,
+        ResizeDown,
         FlashPane,
         ToggleNotifications,
         JumpToUnread
@@ -85,6 +89,8 @@ actions!(
 
 /// New browsers open blank, with the address bar focused.
 const DEFAULT_URL: &str = "";
+/// Pixels a divider moves per ⌃⇧H/J/K/L press (cmux's `paneResizeStepPixels` default).
+pub const RESIZE_STEP: f32 = 20.;
 /// How long a lone ⌘ or ⌃ must be held before shortcut hints show (cmux's value).
 const HINT_DELAY: Duration = Duration::from_millis(300);
 /// Sidebar width: default and the range its edge can be dragged within.
@@ -644,6 +650,31 @@ impl AbroMux {
             self.focus_active(window, cx);
             cx.notify();
         }
+    }
+
+    /// Move the divider of pane `pane`'s innermost split along `dir`'s axis
+    /// by `px` toward `dir`, as tmux's `resize-pane` does. False if the pane
+    /// has no such split.
+    fn resize_pane(&mut self, wi: usize, pane: usize, dir: Dir, px: f32, cx: &mut Context<Self>) -> bool {
+        let (axis, sign) = match dir {
+            Dir::Left => (Axis::Horizontal, -1.),
+            Dir::Right => (Axis::Horizontal, 1.),
+            Dir::Up => (Axis::Vertical, -1.),
+            Dir::Down => (Axis::Vertical, 1.),
+        };
+        let root = &mut self.workspaces[wi].root;
+        let Some(id) = root.split_along(pane, axis) else { return false };
+        let Some(b) = self.split_bounds.borrow().get(&id).copied() else { return false };
+        let size = f32::from(if axis == Axis::Horizontal { b.size.width } else { b.size.height });
+        let Some(ratio) = root.split_mut(id) else { return false };
+        *ratio = (*ratio + sign * px / size.max(1.)).clamp(0.1, 0.9);
+        cx.notify();
+        true
+    }
+
+    fn resize_focused(&mut self, dir: Dir, cx: &mut Context<Self>) {
+        let (wi, pane) = (self.active, self.ws().focused_pane);
+        self.resize_pane(wi, pane, dir, RESIZE_STEP, cx);
     }
 
     fn flash_pane(&mut self, cx: &mut Context<Self>) {
@@ -1272,6 +1303,10 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &FocusRight, w, cx| this.focus_dir(Dir::Right, w, cx)))
             .on_action(cx.listener(|this, _: &FocusUp, w, cx| this.focus_dir(Dir::Up, w, cx)))
             .on_action(cx.listener(|this, _: &FocusDown, w, cx| this.focus_dir(Dir::Down, w, cx)))
+            .on_action(cx.listener(|this, _: &ResizeLeft, _, cx| this.resize_focused(Dir::Left, cx)))
+            .on_action(cx.listener(|this, _: &ResizeRight, _, cx| this.resize_focused(Dir::Right, cx)))
+            .on_action(cx.listener(|this, _: &ResizeUp, _, cx| this.resize_focused(Dir::Up, cx)))
+            .on_action(cx.listener(|this, _: &ResizeDown, _, cx| this.resize_focused(Dir::Down, cx)))
             .on_action(cx.listener(|this, _: &FlashPane, _, cx| this.flash_pane(cx)))
             .on_action(cx.listener(|this, _: &ToggleNotifications, _, cx| {
                 this.notifications_open = !this.notifications_open;
@@ -1467,6 +1502,10 @@ fn run_app(cwd: Option<String>) {
             KeyBinding::new("alt-cmd-right", FocusRight, None),
             KeyBinding::new("alt-cmd-up", FocusUp, None),
             KeyBinding::new("alt-cmd-down", FocusDown, None),
+            KeyBinding::new("ctrl-shift-h", ResizeLeft, None),
+            KeyBinding::new("ctrl-shift-j", ResizeDown, None),
+            KeyBinding::new("ctrl-shift-k", ResizeUp, None),
+            KeyBinding::new("ctrl-shift-l", ResizeRight, None),
             KeyBinding::new("cmd-shift-h", FlashPane, None),
             KeyBinding::new("cmd-i", ToggleNotifications, None),
             KeyBinding::new("cmd-shift-u", JumpToUnread, None),

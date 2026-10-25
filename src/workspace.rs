@@ -138,6 +138,14 @@ impl Node {
         children.iter_mut().any(|c| c.remove(target))
     }
 
+    /// The innermost split along `axis` that holds pane `pane`: the one
+    /// whose divider a resize of that pane along `axis` moves.
+    pub fn split_along(&self, pane: usize, axis: Axis) -> Option<usize> {
+        let Node::Split { id, axis: a, children, .. } = self else { return None };
+        let child = children.iter().find(|c| c.panes().iter().any(|p| p.id == pane))?;
+        child.split_along(pane, axis).or((*a == axis).then_some(*id))
+    }
+
     /// Each pane's rect `[x0, y0, x1, y1]` inside `r`, from the split ratios.
     fn layout(&self, r: [f32; 4], out: &mut Vec<(usize, [f32; 4])>) {
         match self {
@@ -345,5 +353,11 @@ mod tests {
         assert_eq!(root.neighbor(3, Dir::Left), Some(1));
         assert_eq!(root.neighbor(3, Dir::Down), None);
         assert_eq!(root.neighbor(9, Dir::Up), None);
+
+        assert_eq!(root.split_along(4, Axis::Horizontal), Some(102), "innermost split wins");
+        assert_eq!(root.split_along(2, Axis::Horizontal), Some(100));
+        assert_eq!(root.split_along(3, Axis::Vertical), Some(101));
+        assert_eq!(root.split_along(1, Axis::Vertical), None);
+        assert_eq!(root.split_along(9, Axis::Horizontal), None);
     }
 }

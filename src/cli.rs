@@ -29,6 +29,7 @@ Commands:
   tree [--all] [--workspace <id|ref|index>]
   list-panes [--workspace <id|ref|index>]
   focus-pane --pane <id|ref|index> [--workspace <id|ref|index>]
+  resize-pane [--pane <id|ref|index>] [--workspace <id|ref|index>] [-L|-R|-U|-D] [--amount <px>]   (default -R, 20px)
   new-pane [--type <terminal|browser>] [--direction <left|right|up|down>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>]
   new-split <left|right|up|down> [--surface <ref>] [--workspace <ref>] [--type <terminal|browser>] [--url <url>] [--command <text>] [--focus <true|false>]
   list-pane-surfaces [--workspace <ref>] [--pane <ref>]
@@ -164,6 +165,17 @@ fn dispatch(cmd: &str, mut pos: Vec<String>, mut opts: Map<String, Value>, as_js
         "tree" => ("workspace.tree", tree),
         "list-panes" => ("pane.list", |v| lines(v, pane_line)),
         "focus-pane" => ("pane.focus", |v| format!("OK {}", s(&v["pane"]))),
+        "resize-pane" => {
+            let dir = match pos.first().map(String::as_str) {
+                None | Some("-R") => "right",
+                Some("-L") => "left",
+                Some("-U") => "up",
+                Some("-D") => "down",
+                Some(d) => return Err(format!("resize-pane: expected -L, -R, -U or -D, got {d:?}")),
+            };
+            opts.insert("direction".into(), json!(dir));
+            ("pane.resize", |v| format!("OK {}", s(&v["pane"])))
+        }
         "new-pane" => ("pane.create", created),
         "new-split" => {
             first("direction", &mut opts)?;
