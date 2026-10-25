@@ -322,7 +322,7 @@ impl AbroMux {
             }
             "pane.focus" => {
                 let (wi, pane) = self.pane_target(p)?;
-                self.workspaces[wi].focused_pane = pane;
+                self.workspaces[wi].focus_pane(pane);
                 if wi == self.active {
                     self.focus_active(window, cx);
                 }

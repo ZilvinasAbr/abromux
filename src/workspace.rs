@@ -175,6 +175,21 @@ impl Node {
         children.iter_mut().any(|c| c.remove(target))
     }
 
+    /// First pane of the subtree that takes `target`'s place when it is
+    /// removed.
+    pub fn sibling(&self, target: usize) -> Option<usize> {
+        let Node::Split { children, .. } = self else {
+            return None;
+        };
+        let hit = children
+            .iter()
+            .position(|c| matches!(c, Node::Leaf(p) if p.id == target));
+        match hit {
+            Some(i) => Some(children[1 - i].panes()[0].id),
+            None => children.iter().find_map(|c| c.sibling(target)),
+        }
+    }
+
     /// Put `new` beside the whole tree on side `dir`: a full-width (or
     /// full-height) split.
     pub fn wrap(&mut self, dir: Dir, new: Pane, split_id: usize) {
@@ -310,7 +325,12 @@ pub struct Workspace {
     pub id: usize,
     pub custom_name: Option<String>,
     pub root: Node,
+    /// Set it with `focus_pane`, which records it in `recent`.
     pub focused_pane: usize,
+    /// Pane ids in the order last focused, most recent last: closing the
+    /// focused pane returns to the one used before it, as cmux, tmux and
+    /// Zellij do.
+    recent: Vec<usize>,
     /// Sidebar pills from `set-status` and agent hooks, in the order first set.
     pub status: Vec<Status>,
     pub progress: Option<Progress>,
@@ -392,10 +412,41 @@ impl Workspace {
             custom_name,
             root,
             focused_pane,
+            recent: vec![focused_pane],
             status: vec![],
             progress: None,
             log: vec![],
         }
+    }
+
+    pub fn focus_pane(&mut self, id: usize) {
+        self.focused_pane = id;
+        self.recent.retain(|&p| p != id);
+        self.recent.push(id);
+    }
+
+    /// Remove pane `id`. If it had focus, focus moves to the remaining pane
+    /// focused most recently, else to its sibling. Returns false if it is
+    /// the last pane.
+    pub fn close_pane(&mut self, id: usize) -> bool {
+        let sibling = self.root.sibling(id);
+        if !self.root.remove(id) {
+            return false;
+        }
+        self.recent.retain(|&p| p != id);
+        if self.focused_pane == id {
+            let alive: Vec<usize> = self.root.panes().iter().map(|p| p.id).collect();
+            let next = self
+                .recent
+                .iter()
+                .rev()
+                .find(|p| alive.contains(p))
+                .copied()
+                .or(sibling)
+                .unwrap_or(alive[0]);
+            self.focus_pane(next);
+        }
+        true
     }
 
     pub fn focused(&self) -> Option<&Pane> {
@@ -510,8 +561,9 @@ impl Workspace {
         if alone {
             // Not the root leaf: the drop always leaves another pane.
             self.root.remove(from);
+            self.recent.retain(|&p| p != from);
         }
-        self.focused_pane = dest;
+        self.focus_pane(dest);
         true
     }
 
@@ -615,6 +667,41 @@ mod tests {
     }
     fn ids(n: &Node) -> Vec<usize> {
         n.panes().iter().map(|p| p.id).collect()
+    }
+
+    #[test]
+    fn closing_the_focused_pane_returns_to_the_previous_one() {
+        let mut root = Node::Leaf(pane(1));
+        assert!(root.split(1, Axis::Horizontal, false, pane(2), 100).is_ok());
+        assert!(root.split(2, Axis::Vertical, false, pane(3), 101).is_ok());
+        let mut ws = Workspace::new(0, None, root, 1);
+        ws.focus_pane(3);
+        ws.focus_pane(2);
+        assert!(ws.close_pane(2));
+        assert_eq!(ws.focused_pane, 3, "the pane used before, not the first");
+
+        // A pane closed while another has focus leaves focus alone.
+        assert!(
+            ws.root
+                .split(3, Axis::Vertical, false, pane(4), 102)
+                .is_ok()
+        );
+        assert!(ws.close_pane(4));
+        assert_eq!(ws.focused_pane, 3);
+
+        assert!(ws.close_pane(3));
+        assert_eq!(ws.focused_pane, 1);
+        assert!(!ws.close_pane(1), "the last pane stays");
+    }
+
+    #[test]
+    fn closing_a_never_focused_layout_falls_back_to_the_sibling() {
+        let mut root = Node::Leaf(pane(1));
+        assert!(root.split(1, Axis::Horizontal, false, pane(2), 100).is_ok());
+        assert!(root.split(2, Axis::Vertical, false, pane(3), 101).is_ok());
+        let mut ws = Workspace::new(0, None, root, 3);
+        assert!(ws.close_pane(3));
+        assert_eq!(ws.focused_pane, 2);
     }
 
     #[test]

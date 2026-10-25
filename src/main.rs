@@ -331,7 +331,7 @@ impl AbroMux {
         send(self.ws().focused_surface(), "ls -la\r", cx);
         self.split(Axis::Horizontal, true, window, cx);
         let first = self.ws().root.panes()[0].id;
-        self.workspaces[self.active].focused_pane = first;
+        self.workspaces[self.active].focus_pane(first);
         self.split(Axis::Vertical, false, window, cx);
         send(
             self.ws().focused_surface(),
@@ -340,7 +340,7 @@ impl AbroMux {
             ),
             cx,
         );
-        self.workspaces[self.active].focused_pane = first;
+        self.workspaces[self.active].focus_pane(first);
 
         self.new_workspace(Some(repo.clone()), window, cx);
         self.workspaces[self.active].custom_name = Some("abromux".into());
@@ -526,7 +526,7 @@ impl AbroMux {
                     .map(|t| (p.id, t))
             });
             if let Some((pane, tab)) = hit {
-                ws.focused_pane = pane;
+                ws.focus_pane(pane);
                 if let Some(p) = ws.root.pane_mut(pane) {
                     p.active = tab;
                 }
@@ -561,15 +561,10 @@ impl AbroMux {
         } else if idx < pane.active {
             pane.active -= 1;
         }
-        if pane.tabs.is_empty() {
-            if !ws.root.remove(pane_id) {
-                // Last pane in the workspace: closing it closes the workspace.
-                self.close_workspace(wi, window, cx);
-                return;
-            }
-            if ws.focused_pane == pane_id {
-                ws.focused_pane = ws.root.panes()[0].id;
-            }
+        if pane.tabs.is_empty() && !ws.close_pane(pane_id) {
+            // Last pane in the workspace: closing it closes the workspace.
+            self.close_workspace(wi, window, cx);
+            return;
         }
         self.focus_active(window, cx);
         cx.notify();
@@ -724,7 +719,7 @@ impl AbroMux {
         pane.tabs.insert(at, surface);
         if focus {
             pane.active = at;
-            ws.focused_pane = pane_id;
+            ws.focus_pane(pane_id);
             if wi == self.active {
                 self.focus_active(window, cx);
             }
@@ -767,7 +762,7 @@ impl AbroMux {
         let ws = &mut self.workspaces[wi];
         ws.root.split(pane_id, axis, before, pane, split_id).ok()?;
         if focus {
-            ws.focused_pane = new_id;
+            ws.focus_pane(new_id);
             if wi == self.active {
                 self.focus_active(window, cx);
             }
@@ -888,7 +883,7 @@ impl AbroMux {
     fn focus_dir(&mut self, dir: Dir, window: &mut Window, cx: &mut Context<Self>) {
         let ws = &mut self.workspaces[self.active];
         if let Some(id) = ws.root.neighbor(ws.focused_pane, dir) {
-            ws.focused_pane = id;
+            ws.focus_pane(id);
             self.focus_active(window, cx);
             cx.notify();
         }
@@ -1456,7 +1451,7 @@ impl AbroMux {
                     MouseButton::Left,
                     cx.listener(move |this, _, window, cx| {
                         let ws = &mut this.workspaces[this.active];
-                        ws.focused_pane = pane_id;
+                        ws.focus_pane(pane_id);
                         if let Some(p) = ws.root.pane_mut(pane_id) {
                             p.active = ti;
                         }
@@ -1529,7 +1524,7 @@ impl AbroMux {
         });
 
         let focus_pane = move |this: &mut Self, cx: &mut Context<Self>| {
-            this.workspaces[this.active].focused_pane = pane_id;
+            this.workspaces[this.active].focus_pane(pane_id);
             cx.notify();
         };
         let tab_bar =
