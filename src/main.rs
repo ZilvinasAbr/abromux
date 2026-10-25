@@ -22,6 +22,7 @@ mod sprite;
 mod status;
 mod terminal;
 mod theme;
+mod titlebar;
 mod workspace;
 
 use browser::{BrowserEvent, BrowserView};
@@ -1244,6 +1245,7 @@ impl AbroMux {
                     .justify_end()
                     .gap_1()
                     .pr(px(10.))
+                    .on_mouse_down(MouseButton::Left, |ev, window, _| titlebar::drag_or_zoom(ev, window))
                     .children(self.titlebar_buttons(cx)),
             )
             .child(
@@ -1552,11 +1554,7 @@ impl AbroMux {
                     div()
                         .flex_1()
                         .h_full()
-                        .on_mouse_down(MouseButton::Left, |ev, window, _| {
-                            if ev.click_count == 2 {
-                                window.titlebar_double_click();
-                            }
-                        })
+                        .on_mouse_down(MouseButton::Left, |ev, window, _| titlebar::drag_or_zoom(ev, window))
                         .drag_over::<DraggedTab>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
                         .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
                             this.move_tab(
@@ -1903,11 +1901,7 @@ impl Render for AbroMux {
                                 .bg(rgb(TABBAR_BG))
                                 .border_b_1()
                                 .border_color(rgb(BORDER))
-                                .on_mouse_down(MouseButton::Left, |ev, window, _| {
-                                    if ev.click_count == 2 {
-                                        window.titlebar_double_click();
-                                    }
-                                })
+                                .on_mouse_down(MouseButton::Left, |ev, window, _| titlebar::drag_or_zoom(ev, window))
                                 .children(self.titlebar_buttons(cx))
                                 .child(
                                     div()
@@ -2192,6 +2186,8 @@ fn run_app(cwd: Option<String>) {
                     traffic_light_position: Some(point(px(14.), px(13.))),
                 }),
                 window_background: WindowBackgroundAppearance::Blurred,
+                // Only empty titlebar areas move it (titlebar.rs), not tab drags.
+                is_movable: false,
                 ..Default::default()
             },
             |window, cx| {
