@@ -6,7 +6,11 @@ use crate::{
     terminal::{Find, FindNext, FindPrevious, UseSelectionForFind},
     theme::*,
 };
-use futures::{StreamExt, channel::mpsc};
+use futures::{
+    StreamExt,
+    channel::{mpsc, oneshot},
+};
+use std::sync::Mutex;
 use gpui::{prelude::*, *};
 use gpui_component::{
     input::{self, Input, InputEvent, InputState},
@@ -325,6 +329,39 @@ impl BrowserView {
     pub fn eval(&self, js: &str, cx: &App, done: impl Fn(String) + Send + 'static) -> anyhow::Result<()> {
         Ok(self.webview.read(cx).raw().evaluate_script_with_callback(js, done)?)
     }
+
+    /// `eval`, as a future of the JSON. Canceled if the page drops the script.
+    pub fn eval_async(&self, js: &str, cx: &App) -> oneshot::Receiver<String> {
+        let (tx, rx) = oneshot::channel();
+        let tx = Mutex::new(Some(tx));
+        let _ = self.eval(js, cx, move |out| {
+            if let Some(tx) = tx.lock().unwrap().take() {
+                let _ = tx.send(out);
+            }
+        });
+        rx
+    }
+
+    /// Save a PNG of the page as shown (WKWebView's own snapshot) to `path`.
+    pub fn screenshot(&self, path: std::path::PathBuf, cx: &App) -> oneshot::Receiver<anyhow::Result<serde_json::Value>> {
+        let (tx, rx) = oneshot::channel();
+        let tx = Mutex::new(Some(tx));
+        let handler = block::ConcreteBlock::new(move |image: *mut Object, _error: *mut Object| {
+            let out = unsafe { png_data(image) }.ok_or_else(|| anyhow::anyhow!("WebKit couldn't snapshot the page (is it on screen?)")).and_then(|png| {
+                std::fs::write(&path, &png).map_err(|e| anyhow::anyhow!("can't write {}: {e}", path.display()))?;
+                Ok(serde_json::json!({ "path": path, "bytes": png.len() }))
+            });
+            if let Some(tx) = tx.lock().unwrap().take() {
+                let _ = tx.send(out);
+            }
+        })
+        .copy();
+        let webview = self.webview.read(cx).raw().webview();
+        let webview = &*webview as *const _ as *mut Object;
+        let nil: *mut Object = std::ptr::null_mut();
+        let _: () = unsafe { msg_send![webview, takeSnapshotWithConfiguration: nil completionHandler: &*handler] };
+        rx
+    }
 }
 
 impl Render for BrowserView {
@@ -391,6 +428,32 @@ pub fn watch_clicks() -> mpsc::UnboundedReceiver<()> {
     // NSEventMaskLeftMouseDown. AppKit copies the block and keeps the monitor.
     let _: *mut Object = unsafe { msg_send![objc::class!(NSEvent), addLocalMonitorForEventsMatchingMask: 1u64 << 1 handler: &*handler] };
     rx
+}
+
+/// An NSImage as PNG bytes.
+unsafe fn png_data(image: *mut Object) -> Option<Vec<u8>> {
+    if image.is_null() {
+        return None;
+    }
+    unsafe {
+        let tiff: *mut Object = msg_send![image, TIFFRepresentation];
+        if tiff.is_null() {
+            return None;
+        }
+        let rep: *mut Object = msg_send![objc::class!(NSBitmapImageRep), imageRepWithData: tiff];
+        if rep.is_null() {
+            return None;
+        }
+        let props: *mut Object = msg_send![objc::class!(NSDictionary), dictionary];
+        // NSBitmapImageFileTypePNG
+        let png: *mut Object = msg_send![rep, representationUsingType: 4u64 properties: props];
+        if png.is_null() {
+            return None;
+        }
+        let len: usize = msg_send![png, length];
+        let bytes: *const u8 = msg_send![png, bytes];
+        (!bytes.is_null()).then(|| std::slice::from_raw_parts(bytes, len).to_vec())
+    }
 }
 
 pub fn normalize_url(text: &str) -> String {

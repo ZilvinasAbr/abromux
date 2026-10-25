@@ -211,9 +211,85 @@ pub struct Workspace {
     pub custom_name: Option<String>,
     pub root: Node,
     pub focused_pane: usize,
+    /// Sidebar pills from `set-status` and agent hooks, in the order first set.
+    pub status: Vec<Status>,
+    pub progress: Option<Progress>,
+    /// `abromux log` entries, oldest first; the sidebar shows the newest.
+    pub log: Vec<LogEntry>,
+}
+
+pub struct Status {
+    pub key: String,
+    pub value: String,
+    pub icon: Option<String>,
+    pub color: Option<u32>,
+    /// The terminal it describes (an agent's status), cleared when it closes.
+    pub owner: Option<EntityId>,
+}
+
+pub struct Progress {
+    /// 0.0–1.0.
+    pub value: f32,
+    pub label: Option<String>,
+}
+
+pub struct LogEntry {
+    pub level: LogLevel,
+    pub source: Option<String>,
+    pub message: String,
+    pub at: std::time::SystemTime,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum LogLevel {
+    Info,
+    Progress,
+    Success,
+    Warning,
+    Error,
+}
+
+impl LogLevel {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "info" => Self::Info,
+            "progress" => Self::Progress,
+            "success" => Self::Success,
+            "warning" | "warn" => Self::Warning,
+            "error" => Self::Error,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Progress => "progress",
+            Self::Success => "success",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+}
+
+/// `#rgb` or `#rrggbb` (the `#` is optional).
+pub fn parse_color(s: &str) -> Option<u32> {
+    let h = s.strip_prefix('#').unwrap_or(s);
+    if !h.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    match h.len() {
+        6 => u32::from_str_radix(h, 16).ok(),
+        3 => u32::from_str_radix(&h.chars().flat_map(|c| [c, c]).collect::<String>(), 16).ok(),
+        _ => None,
+    }
 }
 
 impl Workspace {
+    pub fn new(id: usize, custom_name: Option<String>, root: Node, focused_pane: usize) -> Self {
+        Self { id, custom_name, root, focused_pane, status: vec![], progress: None, log: vec![] }
+    }
+
     pub fn focused(&self) -> Option<&Pane> {
         self.root.panes().into_iter().find(|p| p.id == self.focused_pane)
     }
@@ -328,6 +404,14 @@ mod tests {
 
         assert!(root.split(3, Axis::Horizontal, true, pane(5), 103).is_ok());
         assert_eq!(ids(&root), vec![5, 3], "left/up splits put the new pane first");
+    }
+
+    #[test]
+    fn colors() {
+        assert_eq!(parse_color("#ff9500"), Some(0xff9500));
+        assert_eq!(parse_color("0a0"), Some(0x00aa00));
+        assert_eq!(parse_color("#ff95"), None);
+        assert_eq!(parse_color("orange"), None);
     }
 
     #[test]

@@ -66,9 +66,9 @@ So the list below reads in context:
   - [ ] linked PR status and number
   - [ ] listening ports
   - [x] the latest notification's text
-  - [ ] status pills set by scripts (`set-status`, `clear-status`, `list-status`)
-  - [ ] a progress bar (`set-progress`, `clear-progress`)
-  - [ ] a per-workspace log (`log`, `list-log`, `clear-log`)
+  - [x] status pills set by scripts (`set-status`, `clear-status`, `list-status`) *(partial: `--icon` only knows abromux's bundled icons; not saved with the session)*
+  - [x] a progress bar (`set-progress`, `clear-progress`)
+  - [x] a per-workspace log (`log`, `list-log`, `clear-log`) *(partial: the sidebar shows only the newest entry)*
 - [ ] **Sidebar settings**: font size, hiding details, wrapping titles, branch layout, last path segment only, tint and opacity.
 - [ ] **New workspaces inherit the cwd** (a setting). *(partial: ⌘N already uses the focused terminal's cwd)*
 - [ ] **Auto-naming workspaces** from what the agent is doing.
@@ -99,14 +99,14 @@ So the list below reads in context:
 - [ ] **Importing from other browsers**: cookies, history and sessions from Chrome, Firefox, Arc and others.
 - [ ] **Discarding hidden webviews**: memory budgeting for background tabs.
 - [ ] **Link-hover preview** of the URL.
-- [ ] **Browser automation in the CLI** (abromux only has `open`, `navigate`, `back`, `forward`, `reload`, `url` and `eval`):
-  - [ ] `snapshot`: an accessibility or DOM snapshot with element refs (`--interactive`, `--compact`, `--selector`)
-  - [ ] `click`, `dblclick`, `hover`, `focus`, `check`, `uncheck`, `scroll-into-view`
-  - [ ] `type`, `fill`, `press`, `keydown`, `keyup`, `select`, `scroll`
-  - [ ] `wait`: for a selector, text, URL, load state or JS condition
-  - [ ] `get`: url, title, text, html, value, attr, count, box or styles; and `is`: visible, enabled or checked
-  - [ ] `find`: by role, text, label, placeholder, alt, title or testid
-  - [ ] `screenshot`
+- [x] **Browser automation in the CLI**: *(partial: events are synthesized with JavaScript, so they aren't trusted input; no iframes)*
+  - [x] `snapshot`: an accessibility or DOM snapshot with element refs (`--interactive`, `--compact`, `--selector`)
+  - [x] `click`, `dblclick`, `hover`, `focus`, `check`, `uncheck`, `scroll-into-view`
+  - [x] `type`, `fill`, `press`, `keydown`, `keyup`, `select`, `scroll` *(partial: no separate `keydown` / `keyup`)*
+  - [x] `wait`: for a selector, text, URL, load state or JS condition
+  - [x] `get`: url, title, text, html, value, attr, count, box or styles; and `is`: visible, enabled or checked
+  - [x] `find`: by role, text, label, placeholder, alt, title or testid
+  - [x] `screenshot` *(partial: the page must be on screen)*
   - [ ] `console`, `errors` and network activity
   - [ ] `cookies`, `storage`, `state save/load`, `addinitscript`, `dialog`, `frame`, `highlight`
   - [ ] `tab`: new, list, switch or close
@@ -149,7 +149,7 @@ What's missing beyond the browser commands above:
 
 ## 9. Coding-agent integrations
 
-- [x] **Agent hooks**: `hooks setup` for Claude Code, Codex, OpenCode, Gemini, Kiro, Amp, Cursor, Pi and others. They feed notifications, status and session IDs. *(partial: `hooks install` for Claude Code only, and it feeds session IDs only)*
+- [x] **Agent hooks**: `hooks setup` for Claude Code, Codex, OpenCode, Gemini, Kiro, Amp, Cursor, Pi and others. They feed notifications, status and session IDs. *(partial: `hooks install` for Claude Code only; it feeds session IDs, the sidebar status and notifications)*
 - [x] **Agent session resume**: `restore` and `fork` from checkpoints, plus `surface resume` commands. *(partial: session restore resumes Claude Code sessions; no `fork` or CLI commands)*
 - [ ] **Agent hibernation**: put idle agents to sleep under memory pressure and wake them later.
 - [ ] **Feed**: an approval inbox for agent permission prompts and turn-complete events.
@@ -162,8 +162,8 @@ What's missing beyond the browser commands above:
 ## 10. App and platform
 
 - [ ] **Multiple windows**: ⌘⇧N.
-- [ ] **App bundle and distribution**: a `.app` with an icon, DMG, Homebrew cask, auto-update (Sparkle) and a nightly channel. abromux currently runs from `cargo run`.
-- [ ] **CLI installed on PATH**: abromux's CLI lives inside the binary but isn't symlinked anywhere.
+- [ ] **App bundle and distribution**: a `.app` with an icon, DMG, Homebrew cask, auto-update (Sparkle) and a nightly channel. *(partial: `scripts/bundle-app.sh` builds the `.app` with an icon; no DMG, cask or updates)*
+- [x] **CLI installed on PATH**: abromux's CLI lives inside the binary. *(partial: the README's `ln -sf` puts it on PATH; nothing does it for you)*
 - [ ] **Menu bar menus**: File, Edit, View, Window and Help.
 - [ ] **Sleepy Mode**: an idle screen. Cosmetic.
 
@@ -180,11 +180,11 @@ What's missing beyond the browser commands above:
 
 If the goal is daily-driver parity, a reasonable sequence is:
 
-1. **Ghostty config, font size and clear scrollback.** These are cheap and visible straight away.
-2. **IME and mouse reporting.** Without them, vim, htop and non-English input are broken.
-3. **Session restore.**
-4. **OSC notifications, the pane ring, the notifications panel and jump-to-unread.** This is the core of cmux's agent workflow.
-5. **Find in terminal, and directional focus and resize.**
-6. **Browser automation** (`snapshot`/`click`/`type`/`wait`/`screenshot`), which makes `abromux browser` useful to agents.
-7. **Config file, customizable shortcuts, command palette.**
-8. **Agent hooks and SSH/tmux**, as the workspace model matures.
+Done so far: Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; Claude Code status and notifications; sidebar status, progress and log.
+
+Next:
+
+1. **Command palette and a config file**, then customizable shortcuts.
+2. **Quick wins**: renaming tabs, a focused-pane border, safe paste, respawning a pane, dropping files on a terminal.
+3. **Hooks for other agents** (Codex, OpenCode, Gemini, …).
+4. **Dragging tabs, multiple windows, SSH/tmux**, as the workspace model matures.

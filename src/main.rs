@@ -2,6 +2,7 @@ mod agent;
 mod banner;
 mod bench;
 mod browser;
+mod browser_auto;
 mod browser_find;
 mod cli;
 mod config;
@@ -16,6 +17,7 @@ mod quit;
 mod server;
 mod session;
 mod sprite;
+mod status;
 mod terminal;
 mod theme;
 mod workspace;
@@ -431,6 +433,7 @@ impl AbroMux {
     fn close_surface(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(wi) = self.workspaces.iter().position(|w| w.contains(id)) else { return };
         self.forget_notifications(id);
+        self.forget_status(id);
         let ws = &mut self.workspaces[wi];
         self.surface_refs.remove(&id);
         let pane_id = ws.root.panes().iter().find(|p| p.tabs.iter().any(|s| s.entity_id() == id)).map(|p| p.id).unwrap();
@@ -472,7 +475,8 @@ impl AbroMux {
         let id = self.next_ws;
         let surface = self.make_terminal(cwd, id, window, cx);
         let pane = Pane { id: self.pane_id(), tabs: vec![surface], active: 0 };
-        let ws = Workspace { id, custom_name: None, focused_pane: pane.id, root: Node::Leaf(pane) };
+        let focused = pane.id;
+        let ws = Workspace::new(id, None, Node::Leaf(pane), focused);
         self.workspaces.push(ws);
         let index = self.workspaces.len() - 1;
         if select {
@@ -779,6 +783,7 @@ impl AbroMux {
                 let group: SharedString = format!("ws-{}", ws.id).into();
                 let hint = shortcut_digit(i, self.workspaces.len()).filter(|_| self.hints == Some(Hints::Command));
                 let latest = self.latest_unread(ws).map(|n| n.text());
+                let status = self.render_ws_status(ws, active);
 
                 div()
                     .id(("ws", ws.id))
@@ -874,6 +879,7 @@ impl AbroMux {
                                 .child(div().flex_1().min_w_0().line_clamp(2).child(text)),
                         )
                     })
+                    .children(status)
                     .when_some(hint, |s, d| s.child(hint_pill(format!("⌘{d}")).absolute().top(px(6.)).right(px(8.))))
                     .when(!meta.is_empty(), |s| {
                         s.child(

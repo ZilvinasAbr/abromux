@@ -46,10 +46,18 @@ Commands:
   open-notification <id>                                     (select its terminal and mark it read)
   jump-to-unread                                             (the newest unread notification, like ⌘⇧U)
   clear-notifications
+  set-status <key> <value> [--icon <name>] [--color <#rrggbb>] [--workspace <ref>]   (a pill under the workspace in the sidebar)
+  clear-status <key> [--workspace <ref>]
+  list-status [--workspace <ref>]
+  set-progress <0.0-1.0> [--label <text>] [--workspace <ref>]
+  clear-progress [--workspace <ref>]
+  log [--level <info|progress|success|warning|error>] [--source <name>] [--workspace <ref>] <message>
+  list-log [--limit <n>] [--workspace <ref>]
+  clear-log [--workspace <ref>]
   open <path-or-url>...                                      (directories open workspaces, URLs open browser splits)
   focus-window [--window <ref>]                              (bring abromux to the front; there is one window)
   sidebar <toggle|show|hide>
-  hooks install|uninstall                                    (Claude Code hooks, so restore resumes Claude sessions)
+  hooks install|uninstall                                    (Claude Code hooks: agent status, notifications, resume on restore)
   quit
   rpc <method> [json-params]
 
@@ -60,10 +68,25 @@ Commands:
   browser back|forward|reload
   browser url|get-url
   browser eval <script>
+
+  Automation (<sel> is a CSS selector or a ref like e3 from the last snapshot):
+  browser snapshot [--interactive] [--compact] [--selector <sel>]   (accessibility tree with refs)
+  browser click|dblclick|hover|focus|check|uncheck|scroll-into-view <sel>
+  browser fill <sel> <text>                                  (replace the field's value)
+  browser type <sel> <text>                                  (key by key, into what's there)
+  browser press <key> [--selector <sel>]                     (Enter, Tab, Escape, ArrowDown, ctrl+a, ...)
+  browser select <sel> <value>...
+  browser scroll [up|down|left|right] [px] [--selector <sel>]   (default down 500)
+  browser get url|title|text|html|value|attr|count|box|styles [<sel>] [<attr or style names>...]
+  browser is visible|hidden|enabled|disabled|checked|editable|focused <sel>
+  browser find role|text|label|placeholder|alt|title|testid <value> [--name <name>] [--exact]
+  browser wait [<sel>] [--state visible|hidden|attached|detached] [--text <t>] [--url <part>]
+               [--load interactive|complete] [--js <expr>] [--timeout <ms>]   (default 10000)
+  browser screenshot [<path.png>]                            (default: a file in $TMPDIR)
 ";
 
 /// Flags that take no value.
-const SWITCHES: &[&str] = &["json", "scrollback", "all", "help"];
+const SWITCHES: &[&str] = &["json", "scrollback", "all", "help", "interactive", "compact", "exact"];
 
 struct Args {
     pos: Vec<String>,
@@ -217,6 +240,43 @@ fn dispatch(cmd: &str, mut pos: Vec<String>, mut opts: Map<String, Value>, as_js
         }
         "jump-to-unread" => ("notification.jump_unread", |v| if v["jumped"] == true { "OK".into() } else { "OK no unread notifications".into() }),
         "clear-notifications" => ("notification.clear", |_| "OK".into()),
+        "set-status" => {
+            first("key", &mut opts)?;
+            if pos.is_empty() {
+                return Err("set-status: missing <value>".into());
+            }
+            opts.insert("value".into(), json!(pos.join(" ")));
+            ("status.set", |v| format!("OK {}", s(&v["workspace"])))
+        }
+        "clear-status" => {
+            first("key", &mut opts)?;
+            ("status.clear", |v| if v["cleared"] == true { "OK".into() } else { "OK (no such status)".into() })
+        }
+        "list-status" => ("status.list", |v| {
+            lines(v, |st| {
+                let color = st["color"].as_str().map(|c| format!("  {c}")).unwrap_or_default();
+                format!("{}  {}{color}", s(&st["key"]), s(&st["value"]))
+            })
+        }),
+        "set-progress" => {
+            first("value", &mut opts)?;
+            ("progress.set", |v| format!("OK {}", s(&v["workspace"])))
+        }
+        "clear-progress" => ("progress.clear", |_| "OK".into()),
+        "log" => {
+            if pos.is_empty() {
+                return Err("log: missing <message>".into());
+            }
+            opts.insert("message".into(), json!(pos.join(" ")));
+            ("log.add", |_| "OK".into())
+        }
+        "list-log" => ("log.list", |v| {
+            lines(v, |l| {
+                let source = l["source"].as_str().map(|s| format!("[{s}] ")).unwrap_or_default();
+                format!("{:<8} {}s ago  {source}{}", s(&l["level"]), l["age_seconds"], s(&l["message"]))
+            })
+        }),
+        "clear-log" => ("log.clear", |_| "OK".into()),
         "sidebar" => {
             opts.insert("state".into(), json!(pos.first().map(String::as_str).unwrap_or("toggle")));
             ("app.sidebar", |v| format!("OK visible={}", v["visible"]))
@@ -279,15 +339,153 @@ fn browser(mut pos: Vec<String>, mut opts: Map<String, Value>, as_json: bool) ->
                 return Err("browser eval: missing <script>".into());
             }
             opts.insert("script".into(), json!(arg));
-            ("browser.eval", |v| match v {
-                Value::String(s) => s.clone(),
-                v => v.to_string(),
+            ("browser.eval", raw)
+        }
+        "snapshot" => {
+            if let Some(sel) = pos.first() {
+                opts.insert("selector".into(), json!(sel));
+            }
+            ("browser.snapshot", |v| s(&v["snapshot"]))
+        }
+        "click" | "dblclick" | "hover" | "focus" | "check" | "uncheck" | "scroll-into-view" => {
+            selector(&mut pos, &mut opts, &sub)?;
+            let method = match sub.as_str() {
+                "click" => "browser.click",
+                "dblclick" => "browser.dblclick",
+                "hover" => "browser.hover",
+                "focus" => "browser.focus",
+                "check" => "browser.check",
+                "uncheck" => {
+                    opts.insert("checked".into(), json!(false));
+                    "browser.check"
+                }
+                _ => "browser.scroll_into_view",
+            };
+            (method, |_| "OK".into())
+        }
+        "fill" | "type" => {
+            selector(&mut pos, &mut opts, &sub)?;
+            if pos.is_empty() && sub == "type" {
+                return Err("browser type: missing <text>".into());
+            }
+            opts.insert("text".into(), json!(pos.join(" ")));
+            (if sub == "fill" { "browser.fill" } else { "browser.type" }, |_| "OK".into())
+        }
+        "press" => {
+            if arg.is_empty() {
+                return Err("browser press: missing <key>".into());
+            }
+            opts.insert("key".into(), json!(arg));
+            ("browser.press", |_| "OK".into())
+        }
+        "select" => {
+            selector(&mut pos, &mut opts, &sub)?;
+            if pos.is_empty() {
+                return Err("browser select: missing <value>".into());
+            }
+            opts.insert("values".into(), json!(pos));
+            ("browser.select", |v| format!("OK {}", lines(v, s)))
+        }
+        "scroll" => {
+            let dir = pos.first().filter(|d| ["up", "down", "left", "right"].contains(&d.as_str())).cloned();
+            if dir.is_some() {
+                pos.remove(0);
+            }
+            let amount: f64 = match pos.first() {
+                Some(n) => n.parse().map_err(|_| format!("browser scroll: bad amount {n:?}"))?,
+                None => 500.,
+            };
+            let (dx, dy) = match dir.as_deref().unwrap_or("down") {
+                "up" => (0., -amount),
+                "down" => (0., amount),
+                "left" => (-amount, 0.),
+                _ => (amount, 0.),
+            };
+            opts.insert("dx".into(), json!(dx));
+            opts.insert("dy".into(), json!(dy));
+            ("browser.scroll", |_| "OK".into())
+        }
+        "get" => {
+            if pos.is_empty() {
+                return Err("browser get: missing what to get (url, title, text, html, value, attr, count, box or styles)".into());
+            }
+            let what = pos.remove(0);
+            if !pos.is_empty() {
+                opts.insert("selector".into(), json!(pos.remove(0)));
+            }
+            match what.as_str() {
+                "attr" => {
+                    opts.insert("name".into(), json!(pos.first().ok_or("browser get attr: missing <attribute>")?));
+                }
+                "styles" => {
+                    opts.insert("names".into(), json!(pos));
+                }
+                _ => {}
+            }
+            opts.insert("what".into(), json!(what));
+            ("browser.get", |v| match v {
+                Value::Object(_) => pretty(v),
+                v => raw(v),
             })
+        }
+        "is" => {
+            if pos.is_empty() {
+                return Err("browser is: missing <state>".into());
+            }
+            opts.insert("state".into(), json!(pos.remove(0)));
+            selector(&mut pos, &mut opts, &sub)?;
+            ("browser.is", raw)
+        }
+        "find" => {
+            if pos.len() < 2 {
+                return Err("browser find: expected <by> <value>".into());
+            }
+            opts.insert("by".into(), json!(pos.remove(0)));
+            opts.insert("value".into(), json!(pos.join(" ")));
+            ("browser.find", |v| {
+                lines(v, |e| match e["name"].as_str().filter(|n| !n.is_empty()) {
+                    Some(n) => format!("- {} {} [ref={}]", s(&e["role"]), json!(n), s(&e["ref"])),
+                    None => format!("- {} [ref={}]", s(&e["role"]), s(&e["ref"])),
+                })
+            })
+        }
+        "wait" => {
+            if let Some(sel) = pos.first() {
+                opts.insert("selector".into(), json!(sel));
+            }
+            ("browser.wait", |v| format!("OK {}ms", v["waited_ms"]))
+        }
+        "screenshot" => {
+            if let Some(path) = pos.first() {
+                let path = Path::new(path);
+                let path = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().map_err(|e| e.to_string())?.join(path) };
+                opts.insert("path".into(), json!(path));
+            }
+            ("browser.screenshot", |v| s(&v["path"]))
         }
         _ => return Err(format!("unknown browser subcommand {sub:?}")),
     };
     print_result(&call(method, opts)?, fmt, as_json);
     Ok(())
+}
+
+/// The first positional as `--selector`, unless that was given.
+fn selector(pos: &mut Vec<String>, opts: &mut Map<String, Value>, sub: &str) -> Result<(), String> {
+    if !opts.contains_key("selector") {
+        if pos.is_empty() {
+            return Err(format!("browser {sub}: missing <selector or ref>"));
+        }
+        opts.insert("selector".into(), json!(pos.remove(0)));
+    }
+    Ok(())
+}
+
+/// Strings as they are, anything else as JSON.
+fn raw(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        v => v.to_string(),
+    }
 }
 
 /// `open` each argument: directories become workspaces, anything else a browser split.

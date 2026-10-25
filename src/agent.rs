@@ -1,12 +1,16 @@
 //! Coding agents running in a terminal, so session restore can resume them.
 //!
-//! `abromux hooks install` adds Claude Code hooks (SessionStart,
-//! UserPromptSubmit, Stop, SessionEnd) to `~/.claude/settings.json` (or
-//! `$CLAUDE_CONFIG_DIR/settings.json`). Each runs `abromux hooks claude-event`,
-//! which forwards the session id to the app as `agent.report` for the terminal
-//! it runs in (`$ABROMUX_SURFACE_ID`). Outside abromux the hook is a no-op.
-//! On restore, a terminal that had Claude running types `claude --resume <id>`
-//! into its new shell.
+//! `abromux hooks install` adds Claude Code hooks (see `EVENTS`) to
+//! `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`). Each
+//! runs `abromux hooks claude-event`, which forwards the event to the app as
+//! `agent.report` for the terminal it runs in (`$ABROMUX_SURFACE_ID`).
+//! Outside abromux the hook is a no-op.
+//!
+//! The app keeps the session id, so on restore a terminal that had Claude
+//! running types `claude --resume <id>` into its new shell. It also shows
+//! the agent's state in the sidebar ("Running", "Needs input") and notifies
+//! when Claude asks for something (Notification) or finishes a turn (Stop,
+//! with the start of its last reply).
 
 use crate::ipc;
 use anyhow::{Context as _, bail};
@@ -25,8 +29,12 @@ pub struct Agent {
     pub permission_mode: Option<String>,
 }
 
-/// Hook events that (re)assert the session, and the one that ends it.
-const EVENTS: &[&str] = &["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"];
+/// Hook events: all (re)assert the session but SessionEnd, which ends it.
+/// PostToolUse marks the agent running again after a permission prompt.
+const EVENTS: &[&str] = &["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop", "SessionEnd"];
+
+/// Longest Stop summary sent to the app.
+const SUMMARY_CHARS: usize = 160;
 
 /// Session ids and modes go into a shell command line, so keep them to safe
 /// characters.
@@ -83,16 +91,58 @@ pub fn claude_event() -> i32 {
         return 0;
     }
     let Ok(payload) = serde_json::from_str::<Value>(&input) else { return 0 };
-    let params = json!({
+    let mut params = json!({
         "surface": surface,
         "kind": "claude",
         "event": payload["hook_event_name"],
         "session_id": payload["session_id"],
         "cwd": payload["cwd"],
         "permission_mode": payload["permission_mode"],
+        "message": payload["message"],
+        "notification_type": payload["notification_type"],
     });
+    if payload["hook_event_name"] == "Stop"
+        && let Some(summary) = payload["transcript_path"].as_str().and_then(last_reply)
+    {
+        params["summary"] = json!(summary);
+    }
     let _ = ipc::call_timeout("agent.report", params, Duration::from_secs(2));
     0
+}
+
+/// The start of Claude's last reply in a transcript (JSON lines), on one line.
+fn last_reply(path: &str) -> Option<String> {
+    use std::io::{Seek, SeekFrom};
+    // Only the tail: transcripts grow to megabytes.
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(256 * 1024))).ok()?;
+    let mut bytes = vec![];
+    f.read_to_end(&mut bytes).ok()?;
+    summary(&String::from_utf8_lossy(&bytes))
+}
+
+fn summary(jsonl: &str) -> Option<String> {
+    jsonl.lines().rev().filter_map(|l| serde_json::from_str::<Value>(l).ok()).find_map(|v| {
+        if v["type"] != "assistant" {
+            return None;
+        }
+        let text = v["message"]["content"]
+            .as_array()?
+            .iter()
+            .filter(|c| c["type"] == "text")
+            .filter_map(|c| c["text"].as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if text.is_empty() {
+            return None;
+        }
+        Some(match text.char_indices().nth(SUMMARY_CHARS) {
+            Some((i, _)) => format!("{}…", text[..i].trim_end()),
+            None => text,
+        })
+    })
 }
 
 fn claude_settings_path() -> anyhow::Result<PathBuf> {
@@ -183,6 +233,24 @@ mod tests {
         let a = Agent { kind: "claude".into(), session_id: "abc-1".into(), cwd: "/it's here".into(), permission_mode: Some("auto".into()) };
         assert_eq!(a.resume_command("/it's here").unwrap(), "claude --resume abc-1 --permission-mode auto");
         assert_eq!(a.resume_command("/tmp").unwrap(), r"cd -- '/it'\''s here' && claude --resume abc-1 --permission-mode auto");
+    }
+
+    #[test]
+    fn summary_is_the_last_reply_with_text() {
+        let jsonl = [
+            json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "old" }] } }),
+            json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "All\n  tests pass." }, { "type": "tool_use" }] } }),
+            json!({ "type": "assistant", "message": { "content": [{ "type": "tool_use" }] } }),
+            json!({ "type": "user", "message": { "content": "thanks" } }),
+        ]
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+        assert_eq!(summary(&(jsonl + "\n{truncated")).as_deref(), Some("All tests pass."));
+        let long = json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "é".repeat(300) }] } }).to_string();
+        assert_eq!(summary(&long).unwrap().chars().count(), SUMMARY_CHARS + 1);
+        assert_eq!(summary(""), None);
     }
 
     #[test]

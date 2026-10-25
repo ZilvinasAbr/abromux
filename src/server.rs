@@ -7,32 +7,65 @@
 //! terminal `abromux` runs in, from `ABROMUX_SURFACE_ID`), else on what's focused.
 
 use crate::{
-    AbroMux, DEFAULT_URL, RESIZE_STEP,
+    AbroMux, BrowserView, DEFAULT_URL, RESIZE_STEP,
     agent::Agent,
     browser::normalize_url,
-    debug, ipc,
-    workspace::{Dir, Surface, Workspace, git_branch},
+    browser_auto, debug, ipc,
+    status::{self, RUNNING, WARNING},
+    workspace::{Dir, LogLevel, Progress, Status, Surface, Workspace, git_branch, parse_color},
 };
 use anyhow::{Context as _, anyhow, bail};
 use futures::{
-    StreamExt,
+    FutureExt, StreamExt,
     channel::{mpsc, oneshot},
+    future::{Either, LocalBoxFuture, select},
 };
-use gpui::{App, Axis, Context, Keystroke, Window};
+use gpui::{App, AsyncApp, Axis, Context, Entity, Keystroke, Timer, Window};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Write},
     os::unix::net::{UnixListener, UnixStream},
     path::PathBuf,
-    sync::Mutex,
+    time::{Duration, Instant},
 };
 
 type Request = (Value, oneshot::Sender<Value>);
 
+/// How long a page gets to answer one script.
+const SCRIPT_TIMEOUT: Duration = Duration::from_secs(30);
+/// `browser wait`'s default timeout, and how often it checks.
+const WAIT_TIMEOUT_MS: u64 = 10_000;
+const WAIT_POLL: Duration = Duration::from_millis(100);
+
 enum Reply {
     Now(Value),
-    /// Answered later, off the main thread (e.g. a webview script result).
-    Later(oneshot::Receiver<anyhow::Result<Value>>),
+    /// Answered later (e.g. a webview script result). Other requests are
+    /// served meanwhile.
+    Later(LocalBoxFuture<'static, anyhow::Result<Value>>),
+}
+
+/// `rx`'s value, or an error once `limit` has passed.
+fn later(rx: oneshot::Receiver<anyhow::Result<Value>>, limit: Duration, what: &'static str) -> Reply {
+    Reply::Later(
+        async move {
+            match select(rx, Timer::after(limit)).await {
+                Either::Left((Ok(v), _)) => v,
+                Either::Left((Err(_), _)) => Err(anyhow!("{what}: request dropped")),
+                Either::Right(_) => Err(anyhow!("{what}: no answer after {}s", limit.as_secs())),
+            }
+        }
+        .boxed_local(),
+    )
+}
+
+/// Run `js` in the page and wait up to `limit` for its JSON. None if the
+/// page didn't run it (still loading, or navigating away).
+async fn eval_json(b: &Entity<BrowserView>, js: &str, cx: &AsyncApp, limit: Duration) -> Option<String> {
+    let rx = b.read_with(cx, |b, cx| b.eval_async(js, cx)).ok()?;
+    match select(rx, Timer::after(limit)).await {
+        Either::Left((Ok(out), _)) => Some(out),
+        _ => None,
+    }
 }
 
 /// Bind the socket and start serving. Returns the path, or None if another
@@ -71,16 +104,23 @@ pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> 
             let method = req["method"].as_str().unwrap_or_default().to_string();
             let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
             let Ok(out) = this.update_in(cx, |this, window, cx| this.handle(&method, &params, window, cx)) else { break };
-            let resp = match out {
-                Ok(Reply::Now(v)) => ipc::ok(&id, v),
-                Ok(Reply::Later(rx)) => match rx.await {
-                    Ok(Ok(v)) => ipc::ok(&id, v),
-                    Ok(Err(e)) => ipc::err(&id, e),
-                    Err(_) => ipc::err(&id, "request dropped"),
-                },
-                Err(e) => ipc::err(&id, format!("{e:#}")),
-            };
-            let _ = reply.send(resp);
+            match out {
+                Ok(Reply::Now(v)) => {
+                    let _ = reply.send(ipc::ok(&id, v));
+                }
+                Ok(Reply::Later(fut)) => cx
+                    .spawn(async move |_| {
+                        let resp = match fut.await {
+                            Ok(v) => ipc::ok(&id, v),
+                            Err(e) => ipc::err(&id, format!("{e:#}")),
+                        };
+                        let _ = reply.send(resp);
+                    })
+                    .detach(),
+                Err(e) => {
+                    let _ = reply.send(ipc::err(&id, format!("{e:#}")));
+                }
+            }
         }
     })
     .detach();
@@ -364,6 +404,7 @@ impl AbroMux {
                     }
                     (_, None) => {}
                 });
+                self.agent_event(t.entity_id(), p, window, cx);
                 json!(null)
             }
 
@@ -395,15 +436,41 @@ impl AbroMux {
             }
             "browser.eval" => {
                 let b = self.browser_target(p)?;
-                let script = p.get("script").and_then(Value::as_str).context("missing script")?;
-                let (tx, rx) = oneshot::channel();
-                let tx = Mutex::new(Some(tx));
-                b.read(cx).eval(script, cx, move |out| {
-                    if let Some(tx) = tx.lock().unwrap().take() {
-                        let _ = tx.send(Ok(serde_json::from_str(&out).unwrap_or(Value::String(out))));
+                let script = p.get("script").and_then(Value::as_str).context("missing script")?.to_string();
+                let acx = cx.to_async();
+                return Ok(Reply::Later(
+                    async move {
+                        let out = eval_json(&b, &script, &acx, SCRIPT_TIMEOUT).await.context("the page didn't run the script (is it still loading?)")?;
+                        Ok(serde_json::from_str(&out).unwrap_or(Value::String(out)))
                     }
-                })?;
-                return Ok(Reply::Later(rx));
+                    .boxed_local(),
+                ));
+            }
+            "browser.snapshot" | "browser.click" | "browser.dblclick" | "browser.hover" | "browser.focus" | "browser.check"
+            | "browser.scroll_into_view" | "browser.fill" | "browser.type" | "browser.press" | "browser.select" | "browser.scroll"
+            | "browser.get" | "browser.is" | "browser.find" => {
+                let b = self.browser_target(p)?;
+                let js = browser_auto::script(method.trim_start_matches("browser."), p);
+                let acx = cx.to_async();
+                return Ok(Reply::Later(
+                    async move {
+                        let out = eval_json(&b, &js, &acx, SCRIPT_TIMEOUT).await.context("the page didn't run the script (is it still loading?)")?;
+                        browser_auto::parse(&out)
+                    }
+                    .boxed_local(),
+                ));
+            }
+            "browser.wait" => return self.browser_wait(p, cx),
+            "browser.screenshot" => {
+                let b = self.browser_target(p)?;
+                let path = match str_param(p, "path") {
+                    Some(path) => PathBuf::from(path),
+                    None => {
+                        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
+                        std::env::temp_dir().join(format!("abromux-screenshot-{ms}.png"))
+                    }
+                };
+                return Ok(later(b.read(cx).screenshot(path, cx), SCRIPT_TIMEOUT, "screenshot"));
             }
 
             "notification.create" => {
@@ -457,6 +524,69 @@ impl AbroMux {
                 json!(null)
             }
 
+            "status.set" => {
+                let wi = self.workspace_target(p)?;
+                let key = str_param(p, "key").context("missing <key>")?.to_string();
+                let value = str_param(p, "value").context("missing <value>")?.to_string();
+                let color = str_param(p, "color").map(|c| parse_color(c).with_context(|| format!("bad color {c:?} (use #rrggbb)"))).transpose()?;
+                let icon = str_param(p, "icon").map(String::from);
+                self.set_status(wi, Status { key, value, icon, color, owner: None }, cx);
+                json!({ "workspace": self.ws_ref(wi) })
+            }
+            "status.clear" => {
+                let wi = self.workspace_target(p)?;
+                let key = str_param(p, "key").context("missing <key>")?;
+                json!({ "cleared": self.clear_status(wi, key, cx) })
+            }
+            "status.list" => {
+                let wi = self.workspace_target(p)?;
+                json!(self.workspaces[wi].status.iter().map(status::status_json).collect::<Vec<_>>())
+            }
+            "progress.set" => {
+                let wi = self.workspace_target(p)?;
+                let value = match p.get("value") {
+                    Some(Value::String(v)) => v.parse::<f32>().with_context(|| format!("bad progress {v:?}"))?,
+                    Some(v) => v.as_f64().context("progress must be a number")? as f32,
+                    None => bail!("missing <value> (0.0 to 1.0)"),
+                };
+                if !(0. ..=1.).contains(&value) {
+                    bail!("progress must be between 0.0 and 1.0");
+                }
+                let label = str_param(p, "label").map(String::from);
+                self.set_progress(wi, Some(Progress { value, label }), cx);
+                json!({ "workspace": self.ws_ref(wi) })
+            }
+            "progress.clear" => {
+                let wi = self.workspace_target(p)?;
+                self.set_progress(wi, None, cx);
+                json!(null)
+            }
+            "log.add" => {
+                let wi = self.workspace_target(p)?;
+                let level = str_param(p, "level").unwrap_or("info");
+                let level = LogLevel::parse(level).with_context(|| format!("bad level {level:?} (info, progress, success, warning or error)"))?;
+                let message = str_param(p, "message").context("missing <message>")?.to_string();
+                self.add_log(wi, level, str_param(p, "source").map(String::from), message, cx);
+                json!({ "workspace": self.ws_ref(wi) })
+            }
+            "log.list" => {
+                let wi = self.workspace_target(p)?;
+                let limit = match p.get("limit") {
+                    Some(Value::String(n)) => n.parse().with_context(|| format!("bad limit {n:?}"))?,
+                    Some(n) => n.as_u64().context("limit must be a number")? as usize,
+                    None => usize::MAX,
+                };
+                let log = &self.workspaces[wi].log;
+                let now = std::time::SystemTime::now();
+                json!(log[log.len().saturating_sub(limit)..].iter().map(|l| status::log_json(l, now)).collect::<Vec<_>>())
+            }
+            "log.clear" => {
+                let wi = self.workspace_target(p)?;
+                self.workspaces[wi].log.clear();
+                cx.notify();
+                json!(null)
+            }
+
             "app.sidebar" => {
                 self.sidebar = match str_param(p, "state").unwrap_or("toggle") {
                     "show" => true,
@@ -472,7 +602,7 @@ impl AbroMux {
                 json!({ "window": "window:1" })
             }
             // For scripts/perf.py: frame timing and synthetic input.
-            "debug.frame" => return Ok(Reply::Later(debug::after_next_frame(window, cx))),
+            "debug.frame" => return Ok(later(debug::after_next_frame(window, cx), Duration::from_secs(10), "debug.frame")),
             "debug.frames" => {
                 if bool_param(p, "record", true) {
                     debug::FrameLog::start(&self.frames, window);
@@ -502,6 +632,70 @@ impl AbroMux {
             _ => bail!("unknown method {method:?}"),
         };
         Ok(Reply::Now(v))
+    }
+
+    /// `browser wait`: poll the page until the condition holds.
+    fn browser_wait(&self, p: &Value, cx: &mut Context<Self>) -> anyhow::Result<Reply> {
+        let b = self.browser_target(p)?;
+        let (text, url, load, js) = (str_param(p, "text"), str_param(p, "url"), str_param(p, "load"), str_param(p, "js"));
+        let script = match (str_param(p, "selector"), js) {
+            (Some(_), _) => browser_auto::script("wait_for", p),
+            (None, Some(js)) => browser_auto::condition(js),
+            (None, None) if text.is_some() || url.is_some() || load.is_some() => browser_auto::page_condition(text, url, load)?,
+            _ => bail!("wait for what? give a selector or ref, --text, --url, --load or --js"),
+        };
+        let ms = match p.get("timeout") {
+            Some(Value::String(t)) => t.parse().with_context(|| format!("bad timeout {t:?} (milliseconds)"))?,
+            Some(t) => t.as_u64().context("timeout must be milliseconds")?,
+            None => WAIT_TIMEOUT_MS,
+        };
+        let acx = cx.to_async();
+        Ok(Reply::Later(
+            async move {
+                let start = Instant::now();
+                let deadline = start + Duration::from_millis(ms);
+                loop {
+                    let left = deadline.saturating_duration_since(Instant::now()).max(WAIT_POLL);
+                    // A page mid-navigation doesn't answer; try again.
+                    if let Some(out) = eval_json(&b, &script, &acx, left).await
+                        && serde_json::from_str::<String>(&out).is_ok()
+                        && browser_auto::parse(&out)? == json!(true)
+                    {
+                        return Ok(json!({ "waited_ms": start.elapsed().as_millis() as u64 }));
+                    }
+                    if Instant::now() >= deadline {
+                        bail!("timed out after {ms} ms");
+                    }
+                    Timer::after(WAIT_POLL).await;
+                }
+            }
+            .boxed_local(),
+        ))
+    }
+
+    /// Status and notifications from a coding agent's hooks (agent.rs).
+    fn agent_event(&mut self, surface: gpui::EntityId, p: &Value, window: &mut Window, cx: &mut Context<Self>) {
+        const LABEL: &str = "Claude";
+        const TITLE: &str = "Claude Code";
+        match str_param(p, "event").unwrap_or_default() {
+            "UserPromptSubmit" | "PostToolUse" => self.set_agent_status(surface, LABEL, Some(("Running", RUNNING)), cx),
+            "Notification" => {
+                let message = str_param(p, "message").unwrap_or("Claude needs your attention");
+                // Claude also says so after a minute idle; Stop already did.
+                if str_param(p, "notification_type") == Some("idle_prompt") || message.contains("waiting for your input") {
+                    return;
+                }
+                self.set_agent_status(surface, LABEL, Some(("Needs input", WARNING)), cx);
+                self.add_notification(surface, TITLE.into(), message.into(), false, window, cx);
+            }
+            "Stop" => {
+                self.set_agent_status(surface, LABEL, None, cx);
+                let body = str_param(p, "summary").unwrap_or("Finished").to_string();
+                self.add_notification(surface, TITLE.into(), body, false, window, cx);
+            }
+            "SessionEnd" => self.set_agent_status(surface, LABEL, None, cx),
+            _ => {}
+        }
     }
 
     // ---- targets --------------------------------------------------------
@@ -573,7 +767,7 @@ impl AbroMux {
         Ok((wi, w.focused_pane, s))
     }
 
-    fn terminal_target(&self, p: &Value) -> anyhow::Result<gpui::Entity<crate::TerminalView>> {
+    fn terminal_target(&self, p: &Value) -> anyhow::Result<Entity<crate::TerminalView>> {
         match self.surface_target(p)?.2 {
             Surface::Terminal(t) => Ok(t),
             Surface::Browser(_) => bail!("that surface is a browser, not a terminal"),
@@ -582,7 +776,7 @@ impl AbroMux {
 
     /// `--surface`, else the workspace's focused surface if it's a browser,
     /// else its first browser.
-    fn browser_target(&self, p: &Value) -> anyhow::Result<gpui::Entity<crate::BrowserView>> {
+    fn browser_target(&self, p: &Value) -> anyhow::Result<Entity<BrowserView>> {
         if str_param(p, "surface").is_some() {
             return match self.surface_target(p)?.2 {
                 Surface::Browser(b) => Ok(b),
@@ -695,6 +889,8 @@ impl AbroMux {
             "cwd": cwd,
             "branch": cwd.as_deref().and_then(git_branch),
             "pane_count": ws.root.panes().len(),
+            "status": ws.status.iter().map(status::status_json).collect::<Vec<_>>(),
+            "progress": ws.progress.as_ref().map(|p| json!({ "value": (p.value as f64 * 1000.).round() / 1000., "label": p.label })),
         });
         if panes {
             v["panes"] = json!(self.panes_json(ws, cx));

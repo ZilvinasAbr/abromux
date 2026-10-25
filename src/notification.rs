@@ -50,6 +50,18 @@ impl AbroMux {
             last.at = SystemTime::now();
             return Some(last.id);
         }
+        // The same message twice in a row (an agent's hook and its own OSC 9
+        // both reporting it) is one notification.
+        if !bell
+            && !body.is_empty()
+            && let Some(last) = self.notifications.iter_mut().rev().find(|n| n.surface == surface)
+            && !last.read
+            && last.body == body
+            && last.at.elapsed().is_ok_and(|d| d < Duration::from_secs(10))
+        {
+            last.at = SystemTime::now();
+            return Some(last.id);
+        }
         let title = if title.is_empty() { self.surface_title(surface, cx).unwrap_or_default() } else { title };
         let body = if body.is_empty() && bell { "Bell".into() } else { body };
         self.next_notification += 1;

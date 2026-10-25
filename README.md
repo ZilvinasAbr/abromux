@@ -4,7 +4,8 @@ A proof-of-concept of [cmux](https://cmux.com) built with Rust and [GPUI](https:
 
 - **Terminal panes** use [libghostty-vt](https://github.com/ghostty-org/ghostty) for all terminal state: VT parsing, screen and scrollback, colors, selection and key encoding. It is linked statically through a bindgen FFI layer. A shell runs in a PTY (`portable-pty`) and GPUI draws each cell. Text goes through the macOS input system, so IMEs and dead keys compose as usual. Mouse clicks, drags and the wheel go to TUI apps that ask for them (vim, htop, lazygit); hold Shift to select or scroll locally. Full-screen apps without mouse support get arrow keys from the wheel, like Ghostty's alternate scroll.
 - **Browser panes** are native WKWebViews (wry, via `gpui-component`). Each has an address bar with back, forward and reload.
-- **Workspaces** sit in a left sidebar, cmux style. Each entry shows the name, the focused tab's title, the git branch and the cwd.
+- **Workspaces** sit in a left sidebar, cmux style. Each entry shows the name, the focused tab's title, the git branch and the cwd, plus whatever scripts report through the CLI: status pills (`set-status`), a progress bar (`set-progress`) and the newest `log` line.
+- **Claude Code** shows up in the sidebar once you've run `abromux hooks install`: a "Running" pill while it works and "Needs input" when it asks for permission. When it asks, or finishes a turn, its terminal gets a notification ("Claude Code: <the start of its reply>").
 - **Notifications** come from terminal programs (OSC 9, OSC 99 and OSC 777, as Claude Code, Codex and others send them), from the bell, and from `abromux notify`. One you aren't looking at rings its pane, puts a dot on its tab and on its workspace, shows its text under the workspace in the sidebar, counts on the dock icon, and, while AbroMux is in the background, shows a macOS banner that takes you to it when clicked (banners need AbroMux.app; a `cargo run` build has the rest). It's read once you look at that terminal. ⌘I lists them all; ⌘⇧U jumps to the newest unread one.
 - **Links** in terminal output underline while you hold ⌘ over them: URLs, OSC 8 hyperlinks, and paths to files that exist (relative ones from the shell's directory, `path:line` too). ⌘-click opens web links in a browser to the right of the terminal (a new tab there if that pane already shows one) and anything else with its default app.
 - **Panes** split right or down, and each pane has a tab bar of terminal and browser tabs. Drag a divider to resize.
@@ -35,7 +36,7 @@ Run from the bundle, a bare `abromux` brings the running app to the front, or op
 
 ## Session restore
 
-Quitting saves the session to `~/Library/Application Support/abromux/session.json` (the layout is also saved every few seconds, so a crash loses little). The next launch restores the window frame, workspaces and their names, the split layout and ratios, tabs, each terminal's working directory and font size, browser URLs, and up to 2000 lines of each terminal's output (with colors). Shells start fresh: running programs aren't kept alive. Claude Code sessions are the exception. Run `abromux hooks install` once and abromux learns, through Claude Code hooks, which session runs in which terminal. On restore, it types `claude --resume <id>` (with the same permission mode) into that terminal's new shell. The hooks go into `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) and do nothing outside abromux. They point at the binary you ran `install` from, so run it from the installed app; `abromux hooks uninstall` removes them. `ABROMUX_NO_RESTORE=1` skips it; `ABROMUX_SESSION_PATH` uses another file. `ABROMUX_DEMO` and `ABROMUX_SCRIPT` runs don't touch the session unless `ABROMUX_SESSION_PATH` is set.
+Quitting saves the session to `~/Library/Application Support/abromux/session.json` (the layout is also saved every few seconds, so a crash loses little). The next launch restores the window frame, workspaces and their names, the split layout and ratios, tabs, each terminal's working directory and font size, browser URLs, and up to 2000 lines of each terminal's output (with colors). Shells start fresh: running programs aren't kept alive. Claude Code sessions are the exception. Run `abromux hooks install` once and abromux learns, through Claude Code hooks, which session runs in which terminal (the same hooks feed its sidebar status and notifications; rerun `install` after updating abromux to pick up new hook events). On restore, it types `claude --resume <id>` (with the same permission mode) into that terminal's new shell. The hooks go into `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) and do nothing outside abromux. They point at the binary you ran `install` from, so run it from the installed app; `abromux hooks uninstall` removes them. `ABROMUX_NO_RESTORE=1` skips it; `ABROMUX_SESSION_PATH` uses another file. `ABROMUX_DEMO` and `ABROMUX_SCRIPT` runs don't touch the session unless `ABROMUX_SESSION_PATH` is set.
 
 ## Ghostty config
 
@@ -58,8 +59,24 @@ abromux browser eval 'document.title'
 abromux notify --title 'Tests' --body 'all green'   # rings the pane it runs in
 abromux list-notifications
 abromux jump-to-unread
+abromux set-status build compiling --color '#e0a84f'   # a pill under the workspace
+abromux set-progress 0.4 --label 'Building'
+abromux log --level error --source build 'Build failed'
 abromux --json list-panes
 ```
+
+`abromux browser` also automates pages, for agents and scripts. `snapshot` prints the page as an accessibility tree with a ref per element, and the action commands take a ref from the latest snapshot (`e3`) or a CSS selector:
+
+```bash
+abromux browser snapshot --interactive        # - textbox "Username" [ref=e2] ...
+abromux browser fill e2 'alice@example.com'
+abromux browser click 'button[type=submit]'
+abromux browser wait --text 'Welcome' --timeout 5000
+abromux browser get text '#result'
+abromux browser screenshot page.png
+```
+
+There are also `dblclick`, `hover`, `focus`, `check`/`uncheck`, `type`, `press`, `select`, `scroll`, `get`, `is`, `find` (by role, text, label, placeholder, alt, title or test id) and `wait` for selectors, URLs and load states. The events are synthesized in the page with JavaScript, so sites that only react to real input won't respond to them.
 
 Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each shell gets `ABROMUX_SOCKET_PATH`, `ABROMUX_WORKSPACE_ID` and `ABROMUX_SURFACE_ID`, so `abromux` run inside a pane acts on that pane by default (otherwise on what's focused). The wire format is one JSON object per line (`{"id":1,"method":"workspace.list","params":{}}`); `abromux rpc <method> [json]` sends one directly.
 
