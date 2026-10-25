@@ -440,6 +440,24 @@ impl AbroMux {
                 }
                 json!({ "key": key })
             }
+            "surface.rename" => {
+                let (_, _, s) = self.surface_target(p)?;
+                // An empty title goes back to the program's or page's own.
+                let title = str_param(p, "title").map(String::from);
+                s.set_custom_title(title, cx);
+                cx.notify();
+                self.describe_surface(&s, true, cx)
+            }
+            "surface.respawn" => {
+                let t = self.terminal_target(p)?;
+                t.update(cx, |t, cx| {
+                    t.respawn(cx);
+                    if let Some(cmd) = str_param(p, "command") {
+                        t.send(format!("{cmd}\r").as_bytes());
+                    }
+                });
+                self.describe_surface(&Surface::Terminal(t), true, cx)
+            }
             "surface.clear_history" => {
                 let t = self.terminal_target(p)?;
                 t.update(cx, |t, cx| t.clear_scrollback(cx));

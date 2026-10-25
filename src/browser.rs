@@ -42,6 +42,8 @@ pub struct BrowserView {
     address: Entity<InputState>,
     pub title: String,
     pub url: String,
+    /// Set by `rename-tab`; shown instead of the page title.
+    pub custom_title: Option<String>,
     focus: FocusHandle,
     shown: bool,
     tx: mpsc::UnboundedSender<WebMsg>,
@@ -156,6 +158,7 @@ impl BrowserView {
             address,
             title: String::new(),
             url: url.into(),
+            custom_title: None,
             focus: cx.focus_handle(),
             shown: true,
             tx,

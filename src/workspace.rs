@@ -26,6 +26,9 @@ impl Surface {
     }
 
     pub fn title(&self, cx: &App) -> String {
+        if let Some(t) = self.custom_title(cx) {
+            return t;
+        }
         match self {
             Surface::Terminal(t) => {
                 let t = t.read(cx);
@@ -45,6 +48,31 @@ impl Surface {
                     "New Tab".into()
                 }
             }
+        }
+    }
+
+    /// The name the tab was given (`rename-tab`), if any.
+    pub fn custom_title(&self, cx: &App) -> Option<String> {
+        match self {
+            Surface::Terminal(t) => t.read(cx).custom_title.clone(),
+            Surface::Browser(b) => b.read(cx).custom_title.clone(),
+        }
+    }
+
+    /// Name the tab, or with None go back to the program's or page's title.
+    pub fn set_custom_title(&self, title: Option<String>, cx: &mut App) {
+        let title = title
+            .map(|t| t.replace(['\n', '\r'], " ").trim().to_string())
+            .filter(|t| !t.is_empty());
+        match self {
+            Surface::Terminal(t) => t.update(cx, |t, cx| {
+                t.custom_title = title;
+                cx.notify();
+            }),
+            Surface::Browser(b) => b.update(cx, |b, cx| {
+                b.custom_title = title;
+                cx.notify();
+            }),
         }
     }
 

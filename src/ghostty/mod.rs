@@ -344,6 +344,68 @@ impl Terminal {
         on
     }
 
+    /// Whether the program turned on bracketed paste (mode 2004).
+    pub fn bracketed_paste(&self) -> bool {
+        // GHOSTTY_MODE_BRACKETED_PASTE: ghostty_mode_new(2004, false) is an
+        // inline function, so bindgen doesn't see it.
+        let mut q = GhosttyTerminalModeConfig {
+            mode: 2004,
+            value: false,
+        };
+        unsafe {
+            ghostty_terminal_get(
+                self.raw,
+                GHOSTTY_TERMINAL_DATA_MODE,
+                &mut q as *mut _ as *mut c_void,
+            )
+        };
+        q.value
+    }
+
+    /// Whether pasting `text` could run commands the user didn't mean to,
+    /// as Ghostty judges it: a newline outside a bracketed paste (with
+    /// `bracketed_safe`, as Ghostty's `clipboard-paste-bracketed-safe`), or
+    /// the bracketed paste terminator anywhere.
+    pub fn paste_is_safe(&self, text: &str, bracketed_safe: bool) -> bool {
+        if unsafe { ghostty_paste_is_safe(text.as_ptr() as *const _, text.len()) } {
+            return true;
+        }
+        bracketed_safe && self.bracketed_paste() && !text.contains("\x1b[201~")
+    }
+
+    /// `text` as the program should receive it: wrapped in bracketed paste
+    /// if it asked for that, else with newlines as carriage returns, and
+    /// control bytes that could inject escapes blanked out.
+    pub fn encode_paste(&self, text: &str) -> Vec<u8> {
+        let mut data = text.as_bytes().to_vec();
+        let bracketed = self.bracketed_paste();
+        let mut out = vec![0u8; data.len() + 16];
+        let mut written = 0usize;
+        unsafe {
+            let r = ghostty_paste_encode(
+                data.as_mut_ptr() as *mut _,
+                data.len(),
+                bracketed,
+                out.as_mut_ptr() as *mut _,
+                out.len(),
+                &mut written,
+            );
+            if r == GHOSTTY_OUT_OF_SPACE {
+                out.resize(written, 0);
+                ghostty_paste_encode(
+                    data.as_mut_ptr() as *mut _,
+                    data.len(),
+                    bracketed,
+                    out.as_mut_ptr() as *mut _,
+                    out.len(),
+                    &mut written,
+                );
+            }
+        }
+        out.truncate(written);
+        out
+    }
+
     /// Kitty keyboard protocol flags the program enabled (0 = legacy keys).
     pub fn kitty_flags(&self) -> u8 {
         let mut flags: u8 = 0;

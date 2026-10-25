@@ -1,6 +1,7 @@
 //! Reads the user's Ghostty config so terminals look and type like their
 //! Ghostty: font, colors, palette, theme, cursor style and `text:`/`csi:`/
-//! `esc:` keybinds. Everything else in the file is ignored.
+//! `esc:` keybinds, and paste protection (`clipboard-paste-protection`,
+//! `clipboard-paste-bracketed-safe`). Everything else in the file is ignored.
 //!
 //! Files, in load order (later wins): `$XDG_CONFIG_HOME/ghostty/config`
 //! (default `~/.config/ghostty/config`), then
@@ -39,6 +40,11 @@ pub struct Config {
     pub palette: Vec<(u8, Rgb)>,
     pub cursor_style: Option<CursorStyle>,
     pub keybinds: Vec<KeyBind>,
+    /// Ask before pasting text that could run commands (Ghostty's
+    /// `clipboard-paste-protection`).
+    pub paste_protection: bool,
+    /// Newlines are safe when the program has bracketed paste on.
+    pub paste_bracketed_safe: bool,
 }
 
 impl Global for Config {}
@@ -67,6 +73,8 @@ impl Default for Config {
                     })
                 })
                 .collect(),
+            paste_protection: true,
+            paste_bracketed_safe: true,
         }
     }
 }
@@ -135,6 +143,12 @@ impl Config {
                         "block_hollow" => Some(CursorStyle::BlockHollow),
                         _ => c.cursor_style,
                     }
+                }
+                "clipboard-paste-protection" => {
+                    c.paste_protection = parse_bool(v).unwrap_or(c.paste_protection)
+                }
+                "clipboard-paste-bracketed-safe" => {
+                    c.paste_bracketed_safe = parse_bool(v).unwrap_or(c.paste_bracketed_safe)
                 }
                 "keybind" if v == "clear" => c.keybinds.clear(),
                 "keybind" => {
@@ -232,6 +246,14 @@ fn find_theme(value: &str, xdg: &Path) -> Option<PathBuf> {
     }
     dirs.push("/Applications/Ghostty.app/Contents/Resources/ghostty/themes".into());
     dirs.into_iter().map(|d| d.join(name)).find(|p| p.is_file())
+}
+
+fn parse_bool(s: &str) -> Option<bool> {
+    match unquote(s) {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
 }
 
 fn unquote(s: &str) -> &str {
@@ -375,6 +397,12 @@ mod tests {
             Some(b"\x1b[2J".as_slice())
         );
         assert_eq!(c.keybind(&Keystroke::parse("enter").unwrap()), None);
+        assert!(c.paste_protection && c.paste_bracketed_safe);
+
+        let c = Config::from_entries(&entries(
+            "clipboard-paste-protection = false\nclipboard-paste-bracketed-safe = nope",
+        ));
+        assert!(!c.paste_protection && c.paste_bracketed_safe);
     }
 
     #[test]

@@ -36,6 +36,8 @@ Commands:
   new-surface [--type <terminal|browser>] [--pane <ref>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>]
   close-surface [--surface <ref>] [--workspace <ref>]
   focus-surface --surface <ref>
+  rename-tab [--surface <ref>] [--workspace <ref>] [<title>]  (no title: back to the program's own)
+  respawn-pane [--surface <ref>] [--workspace <ref>] [--command <text>]   (kill the shell and start a fresh one in its cwd)
   send [--surface <ref>] [--workspace <ref>] <text>          (\\n presses enter; also \\t \\e \\\\)
   send-key [--surface <ref>] [--workspace <ref>] <key>       (enter, tab, escape, up, ctrl-c, alt-b, ...)
   read-screen [--surface <ref>] [--workspace <ref>] [--scrollback] [--lines <n>]
@@ -230,6 +232,15 @@ fn dispatch(
         "new-surface" => ("surface.create", |v| format!("OK {}", s(&v["ref"]))),
         "close-surface" => ("surface.close", |v| format!("OK {}", s(&v["closed"]))),
         "focus-surface" => ("surface.focus", |v| format!("OK {}", s(&v["ref"]))),
+        "rename-tab" => {
+            if !pos.is_empty() {
+                opts.insert("title".into(), json!(pos.join(" ")));
+            }
+            ("surface.rename", |v| {
+                format!("OK {} {}", s(&v["ref"]), s(&v["title"]))
+            })
+        }
+        "respawn-pane" => ("surface.respawn", |v| format!("OK {}", s(&v["ref"]))),
         "send" => {
             first("text", &mut opts)?;
             ("surface.send_text", |_| "OK".into())

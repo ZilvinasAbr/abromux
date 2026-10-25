@@ -32,7 +32,8 @@ actions!(
         Find,
         FindNext,
         FindPrevious,
-        UseSelectionForFind
+        UseSelectionForFind,
+        RestartShell
     ]
 );
 
@@ -53,6 +54,8 @@ pub enum TerminalEvent {
     OpenLink(link::Target),
     Exited,
     Focused,
+    /// The shell was restarted in place (`respawn-pane`).
+    Respawned,
 }
 
 /// The link under the pointer while ⌘ is held: its viewport row, columns
@@ -106,6 +109,14 @@ pub struct TerminalView {
     /// Last pointer position over the terminal, for ⌘ pressed without moving.
     pointer: Option<Point<Pixels>>,
     link: Option<HoverLink>,
+    /// Set by `rename-tab`; shown instead of the program's title.
+    pub custom_title: Option<String>,
+    /// Text held back by paste protection until the user confirms it.
+    pending_paste: Option<String>,
+    /// Kept to start the shell again the same way (`respawn-pane`).
+    env: Vec<(String, String)>,
+    /// Bumped on respawn so the old shell's output and exit are ignored.
+    generation: usize,
 }
 
 impl EventEmitter<TerminalEvent> for TerminalView {}
@@ -119,84 +130,14 @@ impl Focusable for TerminalView {
 impl TerminalView {
     pub fn new(cwd: Option<String>, env: Vec<(String, String)>, cx: &mut Context<Self>) -> Self {
         let (cols, rows) = (80, 24);
-        let pty = native_pty_system()
-            .openpty(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .expect("openpty");
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        let mut cmd = CommandBuilder::new(shell);
-        cmd.arg("-l");
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("COLORTERM", "truecolor");
-        cmd.env("TERM_PROGRAM", "abromux");
-        for (k, v) in env {
-            cmd.env(k, v);
-        }
         let cwd = cwd.unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
-        cmd.cwd(&cwd);
-        let child = pty.slave.spawn_command(cmd).expect("spawn shell");
-        drop(pty.slave);
-
-        let mut reader = pty.master.try_clone_reader().expect("pty reader");
-        let writer = pty.master.take_writer().expect("pty writer");
-        let (tx, mut rx) = mpsc::unbounded::<Vec<u8>>();
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 64 * 1024];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if tx.unbounded_send(buf[..n].to_vec()).is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-
-        // Drain PTY output on the main thread; batch whatever is queued so a
-        // flood of output costs one repaint.
-        cx.spawn(async move |this, cx| {
-            while let Some(first) = rx.next().await {
-                let mut chunk = first;
-                while let Ok(more) = rx.try_recv() {
-                    chunk.extend_from_slice(&more);
-                }
-                if this
-                    .update(cx, |this, cx| this.process(&chunk, cx))
-                    .is_err()
-                {
-                    return;
-                }
-            }
-            let _ = this.update(cx, |_, cx| cx.emit(TerminalEvent::Exited));
-        })
-        .detach();
-
+        let (writer, master, child) = spawn_shell(&cwd, &env, (cols, rows), 0, cx);
         let focus = cx.focus_handle();
         let config = cx.try_global::<Config>().cloned().unwrap_or_default();
-        let mut term = ghostty::Terminal::new(cols, rows).expect("libghostty-vt terminal");
-        term.set_colors(
-            config.foreground,
-            config.background,
-            config.cursor_color,
-            &config.palette,
-        );
-        // DECSCUSR as the starting cursor; programs can still change it.
-        match config.cursor_style {
-            Some(ConfigCursor::Block) => term.write(b"\x1b[2 q"),
-            Some(ConfigCursor::Underline) => term.write(b"\x1b[4 q"),
-            Some(ConfigCursor::Bar) => term.write(b"\x1b[6 q"),
-            _ => {}
-        }
         Self {
-            term,
+            term: new_term(cols, rows, &config),
             writer,
-            master: pty.master,
+            master,
             child,
             focus,
             frame: Frame::default(),
@@ -224,7 +165,42 @@ impl TerminalView {
             osc99: Default::default(),
             pointer: None,
             link: None,
+            custom_title: None,
+            pending_paste: None,
+            env,
+            generation: 0,
         }
+    }
+
+    /// Kill the shell (and whatever it runs) and start a fresh one in its
+    /// cwd, on a clean screen, like `tmux respawn-pane -k`.
+    pub fn respawn(&mut self, cx: &mut Context<Self>) {
+        let cwd = self.live_cwd();
+        let _ = self.child.kill();
+        self.generation += 1;
+        let (writer, master, child) = spawn_shell(&cwd, &self.env, self.grid, self.generation, cx);
+        (self.writer, self.master, self.child) = (writer, master, child);
+        self.term = new_term(self.grid.0, self.grid.1, &self.config);
+        // Size the new PTY and terminal to the pane, cell pixels included.
+        let (cols, rows) = std::mem::take(&mut self.grid);
+        self.resize(cols, rows);
+        self.cwd = cwd;
+        self.osc7 = false;
+        self.title.clear();
+        self.agent = None;
+        self.clear_pending = false;
+        self.marked = None;
+        self.mouse_buttons = 0;
+        self.selecting = None;
+        self.link = None;
+        self.pending_paste = None;
+        self.find_open = false;
+        self.find_count = (0, None);
+        self.osc99 = Default::default();
+        self.dirty = true;
+        cx.emit(TerminalEvent::Respawned);
+        cx.emit(TerminalEvent::TitleChanged);
+        cx.notify();
     }
 
     fn process(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
@@ -290,13 +266,50 @@ impl TerminalView {
         cx.notify();
     }
 
+    /// Paste from the clipboard. Text that could run commands waits for a
+    /// confirmation first, as with Ghostty's `clipboard-paste-protection`.
     pub fn paste(&mut self, text: &str, cx: &mut Context<Self>) {
-        // Bracketed paste is harmless when the shell doesn't enable it for
-        // plain text; zsh/bash/fish all enable it.
-        let mut bytes = b"\x1b[200~".to_vec();
-        bytes.extend_from_slice(text.replace("\x1b[201~", "").as_bytes());
-        bytes.extend_from_slice(b"\x1b[201~");
+        if self.config.paste_protection
+            && !self
+                .term
+                .paste_is_safe(text, self.config.paste_bracketed_safe)
+        {
+            self.pending_paste = Some(text.to_string());
+            cx.notify();
+            return;
+        }
+        self.paste_now(text, cx);
+    }
+
+    fn paste_now(&mut self, text: &str, cx: &mut Context<Self>) {
+        let bytes = self.term.encode_paste(text);
         self.input(&bytes, cx);
+    }
+
+    /// Answer the paste confirmation: paste the held text or drop it.
+    fn confirm_paste(&mut self, paste: bool, cx: &mut Context<Self>) {
+        if let Some(text) = self.pending_paste.take() {
+            if paste {
+                self.paste_now(&text, cx);
+            }
+            cx.notify();
+        }
+    }
+
+    /// Files dropped on the terminal: type their paths, shell-escaped, as
+    /// Ghostty does.
+    fn drop_paths(&mut self, paths: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
+        let text: Vec<String> = paths
+            .paths()
+            .iter()
+            .map(|p| shell_escape(&p.to_string_lossy()))
+            .collect();
+        if text.is_empty() {
+            return;
+        }
+        window.focus(&self.focus);
+        cx.emit(TerminalEvent::Focused);
+        self.paste_now(&format!("{} ", text.join(" ")), cx);
     }
 
     pub fn copy(&self, cx: &mut App) -> bool {
@@ -608,12 +621,116 @@ impl TerminalView {
             )
     }
 
+    /// The paste protection prompt, over the top of the terminal.
+    fn render_paste_prompt(&self, text: &str, cx: &mut Context<Self>) -> Stateful<Div> {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut preview = lines
+            .iter()
+            .take(6)
+            .map(|l| l.chars().take(200).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if lines.len() > 6 {
+            preview.push_str(&format!("\n… {} more lines", lines.len() - 6));
+        }
+        let title = match lines.len() {
+            0 | 1 => "Paste this text?".to_string(),
+            n => format!("Paste {n} lines?"),
+        };
+        let button = |id: &'static str, label: &'static str, primary: bool| {
+            div()
+                .id(id)
+                .px(px(12.))
+                .py(px(4.))
+                .rounded(px(6.))
+                .cursor_pointer()
+                .when(primary, |d| d.bg(rgb(ACCENT)).text_color(rgb(0xffffff)))
+                .when(!primary, |d| {
+                    d.border_1()
+                        .border_color(rgb(BORDER))
+                        .hover(|d| d.bg(rgba(HOVER)))
+                })
+                .child(label)
+        };
+        div()
+            .id("paste-prompt")
+            .absolute()
+            .top(px(PADDING * 2.))
+            .left(px(PADDING * 2.))
+            .right(px(PADDING * 2.))
+            .max_w(px(520.))
+            .mx_auto()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .rounded(px(8.))
+            .bg(rgb(TABBAR_BG))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .shadow_md()
+            .cursor_default()
+            .text_size(px(12.))
+            .text_color(rgb(TEXT))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+            .child(
+                div()
+                    .text_color(rgb(MUTED))
+                    .child("It could run commands as soon as it lands in the shell."),
+            )
+            .child(
+                div()
+                    .p_2()
+                    .rounded(px(5.))
+                    .bg(rgba(0x0000004d))
+                    .font_family(self.config.font_family.clone())
+                    .text_size(px(11.))
+                    .max_h(px(140.))
+                    .overflow_hidden()
+                    .children(preview.lines().map(|l| {
+                        div().w_full().overflow_hidden().whitespace_nowrap().child(
+                            if l.is_empty() {
+                                " ".into()
+                            } else {
+                                l.to_string()
+                            },
+                        )
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        button("paste-cancel", "Cancel", false)
+                            .on_click(cx.listener(|this, _, _, cx| this.confirm_paste(false, cx))),
+                    )
+                    .child(
+                        button("paste-confirm", "Paste", true)
+                            .on_click(cx.listener(|this, _, _, cx| this.confirm_paste(true, cx))),
+                    ),
+            )
+    }
+
     fn on_key_down(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         // Keys typed into the find bar bubble up here; they aren't the shell's.
         if !self.focus.is_focused(window) {
             return;
         }
         let ks = &ev.keystroke;
+        // The paste confirmation takes the keyboard while it shows.
+        if self.pending_paste.is_some() {
+            match ks.key.as_str() {
+                "enter" => self.confirm_paste(true, cx),
+                "escape" => self.confirm_paste(false, cx),
+                _ => {}
+            }
+            cx.stop_propagation();
+            return;
+        }
         // Plain text is left to the input handler (TerminalInput) so IMEs and
         // dead keys can compose it, unless a keybind or the kitty keyboard
         // protocol needs the key itself.
@@ -845,6 +962,10 @@ impl Render for TerminalView {
             .clone()
             .filter(|_| self.find_open)
             .map(|input| self.render_find_bar(input, cx));
+        let paste_prompt = self
+            .pending_paste
+            .as_deref()
+            .map(|text| self.render_paste_prompt(text, cx));
         div()
             .id("terminal")
             .relative()
@@ -870,6 +991,9 @@ impl Render for TerminalView {
                 this.set_font_size(this.config.font_size, cx)
             }))
             .on_action(cx.listener(|this, _: &ClearScrollback, _, cx| this.clear_scrollback(cx)))
+            .on_action(cx.listener(|this, _: &RestartShell, _, cx| this.respawn(cx)))
+            .on_drop(cx.listener(Self::drop_paths))
+            .drag_over::<ExternalPaths>(|s, _, _, _| s.bg(rgba(0x1f6fe522)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.find_step(true, cx)))
             .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.find_step(false, cx)))
@@ -920,6 +1044,7 @@ impl Render for TerminalView {
             })
             .child(TerminalElement { view: cx.entity() })
             .children(find_bar)
+            .children(paste_prompt)
     }
 }
 
@@ -1433,6 +1558,125 @@ fn sprite_char(c: &ghostty::Cell) -> Option<char> {
     (chars.next().is_none() && !c.invisible && sprite::covers(ch)).then_some(ch)
 }
 
+/// Start the user's login shell on a new PTY of `size`, and drain its output
+/// into the view on the main thread. Output and the exit of a shell from
+/// an older `generation` (one `respawn` replaced) are dropped.
+#[allow(clippy::type_complexity)]
+fn spawn_shell(
+    cwd: &str,
+    env: &[(String, String)],
+    (cols, rows): (u16, u16),
+    generation: usize,
+    cx: &mut Context<TerminalView>,
+) -> (
+    Box<dyn Write + Send>,
+    Box<dyn MasterPty + Send>,
+    Box<dyn portable_pty::Child + Send + Sync>,
+) {
+    let pty = native_pty_system()
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("openpty");
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let mut cmd = CommandBuilder::new(shell);
+    cmd.arg("-l");
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("TERM_PROGRAM", "abromux");
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    cmd.cwd(cwd);
+    let child = pty.slave.spawn_command(cmd).expect("spawn shell");
+    drop(pty.slave);
+
+    let mut reader = pty.master.try_clone_reader().expect("pty reader");
+    let writer = pty.master.take_writer().expect("pty writer");
+    let (tx, mut rx) = mpsc::unbounded::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.unbounded_send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Drain PTY output on the main thread; batch whatever is queued so a
+    // flood of output costs one repaint.
+    cx.spawn(async move |this, cx| {
+        while let Some(first) = rx.next().await {
+            let mut chunk = first;
+            while let Ok(more) = rx.try_recv() {
+                chunk.extend_from_slice(&more);
+            }
+            let live = this.update(cx, |this, cx| {
+                let live = this.generation == generation;
+                if live {
+                    this.process(&chunk, cx);
+                }
+                live
+            });
+            if !matches!(live, Ok(true)) {
+                return;
+            }
+        }
+        let _ = this.update(cx, |this, cx| {
+            if this.generation == generation {
+                cx.emit(TerminalEvent::Exited)
+            }
+        });
+    })
+    .detach();
+    (writer, pty.master, child)
+}
+
+/// A libghostty-vt terminal with the config's colors and cursor.
+fn new_term(cols: u16, rows: u16, config: &Config) -> ghostty::Terminal {
+    let mut term = ghostty::Terminal::new(cols, rows).expect("libghostty-vt terminal");
+    term.set_colors(
+        config.foreground,
+        config.background,
+        config.cursor_color,
+        &config.palette,
+    );
+    // DECSCUSR as the starting cursor; programs can still change it.
+    match config.cursor_style {
+        Some(ConfigCursor::Block) => term.write(b"\x1b[2 q"),
+        Some(ConfigCursor::Underline) => term.write(b"\x1b[4 q"),
+        Some(ConfigCursor::Bar) => term.write(b"\x1b[6 q"),
+        _ => {}
+    }
+    term
+}
+
+/// A path as a shell word: Ghostty's backslash escapes for the characters
+/// shells treat specially. Control characters (a newline in a file name)
+/// become `?`, which globs back to the same file instead of running it.
+fn shell_escape(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        if c.is_control() {
+            out.push('?');
+            continue;
+        }
+        if " \t\\'\"`!#$&;|*?()[]{}<>~".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// A process's current directory, via libproc's PROC_PIDVNODEPATHINFO.
 fn process_cwd(pid: u32) -> Option<String> {
     unsafe extern "C" {
@@ -1527,7 +1771,9 @@ impl InputHandler for TerminalInput {
     ) {
         self.0.update(cx, |t, cx| {
             t.marked = None;
-            t.input(text.as_bytes(), cx);
+            if t.pending_paste.is_none() {
+                t.input(text.as_bytes(), cx);
+            }
         });
     }
 
@@ -1640,6 +1886,16 @@ fn map_key(key: &str) -> Option<(ffi::GhosttyKey, u32)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dropped_paths_are_shell_words() {
+        assert_eq!(super::shell_escape("/tmp/a b/c.txt"), "/tmp/a\\ b/c.txt");
+        assert_eq!(
+            super::shell_escape("/x/it's (1)$.md"),
+            "/x/it\\'s\\ \\(1\\)\\$.md"
+        );
+        assert_eq!(super::shell_escape("/x/a\nb"), "/x/a?b");
+    }
+
     #[test]
     fn reads_a_process_cwd() {
         let here = std::env::current_dir().unwrap().canonicalize().unwrap();

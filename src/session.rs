@@ -91,9 +91,14 @@ pub enum TabState {
         /// A coding agent to resume (see agent.rs).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent: Option<Agent>,
+        /// The tab's name from `rename-tab`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
     Browser {
         url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
 }
 
@@ -272,12 +277,13 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Surface {
-        match state {
+        let (s, name) = match state {
             TabState::Terminal {
                 cwd,
                 font_size,
                 scrollback,
                 agent,
+                name,
             } => {
                 let cwd = std::path::Path::new(&cwd).is_dir().then_some(cwd);
                 let s = self.make_terminal(cwd, ws, window, cx);
@@ -286,10 +292,14 @@ impl AbroMux {
                         t.restore(scrollback.as_deref(), font_size, agent, cx)
                     });
                 }
-                s
+                (s, name)
             }
-            TabState::Browser { url } => self.make_browser(&url, window, cx),
+            TabState::Browser { url, name } => (self.make_browser(&url, window, cx), name),
+        };
+        if name.is_some() {
+            s.set_custom_title(name, cx);
         }
+        s
     }
 }
 
@@ -330,10 +340,12 @@ fn tab_state(s: &Surface, scrollback: bool, cx: &App) -> TabState {
                     .then(|| t.scrollback_vt(SCROLLBACK_LINES))
                     .flatten(),
                 agent: t.agent.clone().filter(Agent::alive),
+                name: t.custom_title.clone(),
             }
         }
         Surface::Browser(b) => TabState::Browser {
             url: b.read(cx).url.clone(),
+            name: b.read(cx).custom_title.clone(),
         },
     }
 }
@@ -375,12 +387,14 @@ mod tests {
                                     permission_mode: None,
                                     pid: None,
                                 }),
+                                name: Some("server".into()),
                             }],
                         },
                         NodeState::Pane {
                             active: 0,
                             tabs: vec![TabState::Browser {
                                 url: "https://example.com".into(),
+                                name: None,
                             }],
                         },
                     ]),

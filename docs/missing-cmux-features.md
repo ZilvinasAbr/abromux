@@ -29,13 +29,13 @@ So the list below reads in context:
 - [ ] **Find in directory**: ⌘⇧F, a ripgrep-backed project search.
 - [ ] **Scrollbar**, plus a scroll-speed setting.
 - [ ] **Copy options**: copy-on-select, a copy confirmation, reflowing hard wraps on copy.
-- [ ] **Safe paste**: confirm before pasting multi-line or otherwise unsafe text.
+- [x] **Safe paste**: confirm before pasting multi-line or otherwise unsafe text. *(Ghostty's rule and its `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` settings: a newline only counts as unsafe when the program hasn't turned on bracketed paste)*
 - [x] **Clickable links**: URLs and file paths, opening in a browser pane. *(partial: ⌘-click; a URL wrapped onto the next row isn't found, and `path:line` opens the file without going to the line)*
 - [ ] **Password input indicator**: shows when the terminal is in no-echo mode.
-- [ ] **Text-editing gestures**: ⌥←/→ word movement and ⌘←/→ line movement in the shell prompt.
+- [x] **Text-editing gestures**: ⌥←/→ word movement and ⌘←/→ line movement in the shell prompt. *(Ghostty's default macOS text keybinds, plus ⌘⌫)*
 - [ ] **Max content width and alignment**, for wide displays.
-- [ ] **Terminal drag & drop**: drop files to paste their paths.
-- [ ] **Respawning a pane**: restart a dead shell in the same surface (`respawn-pane`).
+- [x] **Terminal drag & drop**: drop files to paste their paths.
+- [x] **Respawning a pane**: restart a dead shell in the same surface (`respawn-pane`). *(partial: always kills and starts the login shell again, like tmux's `respawn-pane -k`, with an optional `--command`; a shell that exits still closes its tab)*
 - [ ] **Piping pane output**: tee terminal output to a command (`pipe-pane`).
 
 ## 2. Panes, tabs and layout
@@ -46,11 +46,11 @@ So the list below reads in context:
 - [x] **Flash the focused panel**: ⌘⇧H, plus `trigger-flash` in the CLI. *(partial: no `trigger-flash`)*
 - [x] **Jump to tab N**: ⌃1–8, and ⌃9 for the last tab.
 - [x] **Tab cycling with ⌃Tab / ⌃⇧Tab.**
-- [ ] **Renaming tabs**: `rename-tab`, overriding the shell's title.
+- [x] **Renaming tabs**: `rename-tab`, overriding the shell's title. *(double-click a tab, the palette, or `rename-tab`; saved with the session)*
 - [ ] **Dragging tabs**: reorder them within a pane, move them to another pane, or drop them on an edge to make a new split. The CLI equivalents are `move-surface`, `reorder-surface`, `split-off` and `drag-surface-to-split`.
 - [ ] **Moving tabs to a new workspace** (`move-tab-to-new-workspace`, `break-pane`).
 - [ ] **Joining or swapping panes** (`join-pane`, `swap-pane`), and switching to the last pane (`last-pane`).
-- [ ] **Focused-pane border**: an active-pane border color and a configurable divider color.
+- [x] **Focused-pane border**: an active-pane border color and a configurable divider color. *(partial: the color is fixed until there's a config file)*
 - [ ] **Keeping the workspace open when its last tab closes** (a setting).
 - [ ] **Canvas layout**: a freeform canvas workspace with pane gaps and snapping. This is beta in cmux.
 - [ ] **Built-in viewers as surfaces**: a Markdown viewer with live reload (`cmux markdown`), a diff viewer for unstaged, staged, branch or last-turn changes (`cmux diff`), and a file editor with syntax highlighting.
@@ -162,7 +162,7 @@ What's missing beyond the browser commands above:
 ## 10. App and platform
 
 - [ ] **Multiple windows**: ⌘⇧N.
-- [ ] **App bundle and distribution**: a `.app` with an icon, DMG, Homebrew cask, auto-update (Sparkle) and a nightly channel. *(partial: `scripts/bundle-app.sh` builds the `.app` with an icon; no DMG, cask or updates)*
+- [ ] **App bundle and distribution**: a `.app` with an icon, DMG, Homebrew cask, auto-update (Sparkle) and a nightly channel. *(partial: `scripts/bundle-app.sh` builds the `.app`, a notarized DMG with `--dist`, and the Nightly app; no cask or updates)*
 - [x] **CLI installed on PATH**: abromux's CLI lives inside the binary. *(partial: the README's `ln -sf` puts it on PATH; nothing does it for you)*
 - [ ] **Menu bar menus**: File, Edit, View, Window and Help.
 - [ ] **Sleepy Mode**: an idle screen. Cosmetic.
@@ -180,11 +180,11 @@ What's missing beyond the browser commands above:
 
 If the goal is daily-driver parity, a reasonable sequence is:
 
-Done so far: command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; Claude Code and Codex status and notifications; sidebar status, progress and log.
+Done so far: renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; Claude Code and Codex status and notifications; sidebar status, progress and log.
 
 Next:
 
 1. **A config file**, then customizable shortcuts (the palette's command list is the place to name actions for them).
-2. **Quick wins**: renaming tabs, a focused-pane border, safe paste, respawning a pane, dropping files on a terminal.
+2. **Quick wins**: copy-on-select, a password input indicator, a scrollbar, `last-pane` / `swap-pane`.
 3. **Hooks for other agents** (OpenCode, Gemini, …).
 4. **Dragging tabs, multiple windows, SSH/tmux**, as the workspace model matures.

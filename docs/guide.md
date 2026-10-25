@@ -51,11 +51,11 @@ AbroMux Nightly runs next to AbroMux. It has a neon icon (`assets/app/abromux-ni
 
 ## Session restore
 
-Quitting saves the session to `~/Library/Application Support/abromux/session.json` (the layout is also saved every few seconds, so a crash loses little). The next launch restores the window frame, workspaces and their names, the split layout and ratios, tabs, each terminal's working directory and font size, browser URLs, and up to 2000 lines of each terminal's output (with colors). Shells start fresh: running programs aren't kept alive. Claude Code and Codex sessions are the exception. Run `abromux hooks install` once and abromux learns, through the agents' hooks, which session runs in which terminal (the same hooks feed the sidebar status and notifications; rerun `install` after updating abromux to pick up new hook events). On restore, it types `claude --resume <id>` (with the same permission mode) or `codex resume <id>` into that terminal's new shell; a Codex you had quit isn't resumed. The hooks go into `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) and `~/.codex/hooks.json` (or `$CODEX_HOME`; skipped if Codex isn't set up), after any hooks already there, and do nothing outside abromux. Codex asks you once to review new hooks: trust them when it does. They point at the binary you ran `install` from, so run it from the installed app; `abromux hooks uninstall` removes them. `ABROMUX_NO_RESTORE=1` skips it; `ABROMUX_SESSION_PATH` uses another file. `ABROMUX_DEMO` and `ABROMUX_SCRIPT` runs don't touch the session unless `ABROMUX_SESSION_PATH` is set.
+Quitting saves the session to `~/Library/Application Support/abromux/session.json` (the layout is also saved every few seconds, so a crash loses little). The next launch restores the window frame, workspaces and their names, the split layout and ratios, tabs and their names, each terminal's working directory and font size, browser URLs, and up to 2000 lines of each terminal's output (with colors). Shells start fresh: running programs aren't kept alive. Claude Code and Codex sessions are the exception. Run `abromux hooks install` once and abromux learns, through the agents' hooks, which session runs in which terminal (the same hooks feed the sidebar status and notifications; rerun `install` after updating abromux to pick up new hook events). On restore, it types `claude --resume <id>` (with the same permission mode) or `codex resume <id>` into that terminal's new shell; a Codex you had quit isn't resumed. The hooks go into `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) and `~/.codex/hooks.json` (or `$CODEX_HOME`; skipped if Codex isn't set up), after any hooks already there, and do nothing outside abromux. Codex asks you once to review new hooks: trust them when it does. They point at the binary you ran `install` from, so run it from the installed app; `abromux hooks uninstall` removes them. `ABROMUX_NO_RESTORE=1` skips it; `ABROMUX_SESSION_PATH` uses another file. `ABROMUX_DEMO` and `ABROMUX_SCRIPT` runs don't touch the session unless `ABROMUX_SESSION_PATH` is set.
 
 ## Ghostty config
 
-Terminals read your Ghostty config: `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`), then `~/Library/Application Support/com.mitchellh.ghostty/config`, plus their `config-file` includes. abromux uses `theme` (from `~/.config/ghostty/themes` or Ghostty.app), `font-family`, `font-size`, `foreground`, `background`, `palette`, `cursor-color`, `cursor-text`, `cursor-style`, `selection-background`/`-foreground`, and `keybind`s whose action is `text:`, `csi:` or `esc:`. Other keys are ignored for now. Changes apply to new terminals.
+Terminals read your Ghostty config: `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`), then `~/Library/Application Support/com.mitchellh.ghostty/config`, plus their `config-file` includes. abromux uses `theme` (from `~/.config/ghostty/themes` or Ghostty.app), `font-family`, `font-size`, `foreground`, `background`, `palette`, `cursor-color`, `cursor-text`, `cursor-style`, `selection-background`/`-foreground`, `keybind`s whose action is `text:`, `csi:` or `esc:`, and `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` (on by default, as in Ghostty: pasting text that could run commands, such as a newline when the program hasn't turned on bracketed paste, asks first; Enter pastes, Esc cancels). Other keys are ignored for now. Changes apply to new terminals.
 
 ## CLI
 
@@ -69,6 +69,8 @@ abromux new-split right --command 'cargo watch -x test'
 abromux send --surface surface:3 'ls -la\n'
 abromux send-key --surface surface:3 ctrl-c
 abromux read-screen --surface surface:3 --scrollback --lines 50
+abromux rename-tab --surface surface:3 'dev server'   # no title: back to the program's own
+abromux respawn-pane --surface surface:3 --command 'npm run dev'   # kill the shell, start a fresh one
 abromux browser open https://example.com
 abromux browser eval 'document.title'
 abromux notify --title 'Tests' --body 'all green'   # rings the pane it runs in
@@ -109,6 +111,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | New browser tab | globe icon | ⌘⇧L (⌘L focuses address bar) |
 | Split right / down | split icons | ⌘D / ⌘⇧D |
 | Move tab / split by dragging | drag a tab onto a tab bar, a pane's edge or the window's edge | |
+| Rename tab | double-click it (Enter saves, Esc cancels; an empty name goes back to the program's title) | ⌘⇧P → Rename Tab… |
 | Close tab | tab `×` / middle-click | ⌘W (last tab closes the pane; last pane closes the workspace) |
 | Cycle tabs | | ⌘⇧[ / ⌘⇧], ⌃Tab / ⌃⇧Tab |
 | Select tab in focused pane | click | ⌃1…⌃8, ⌃9 for the last (hold ⌃ to see the numbers) |
@@ -121,7 +124,9 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Jump to newest unread notification | click it in the list | ⌘⇧U |
 | Open a link in a terminal | ⌘-click | |
 | Toggle sidebar | sidebar icon | ⌘B |
-| Copy / paste in terminal | drag to select, double-click selects a word | ⌘C / ⌘V |
+| Copy / paste in terminal | drag to select, double-click selects a word | ⌘C / ⌘V (asks first if the text could run commands) |
+| Paste file paths | drop files on a terminal (shell-escaped) | |
+| Restart the shell (kills what runs in it) | | ⌘⇧P → Restart Shell |
 | Font size (per terminal) | | ⌘+ / ⌘- / ⌘0 |
 | Clear screen and scrollback | | ⌘K |
 | Find in terminal (screen and scrollback) | | ⌘F, then ⌘G / ⇧⌘G or Enter / ⇧Enter, Esc to close; ⌘E finds the selection |

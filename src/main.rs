@@ -92,7 +92,8 @@ actions!(
         ToggleNotifications,
         JumpToUnread,
         CommandPalette,
-        WorkspaceSwitcher
+        WorkspaceSwitcher,
+        RenameTab
     ]
 );
 
@@ -175,6 +176,8 @@ struct AbroMux {
     /// Last seen window frame, for the session file.
     window_bounds: Option<Bounds<Pixels>>,
     renaming: Option<(usize, Entity<InputState>)>,
+    /// The tab being renamed in its tab bar.
+    renaming_tab: Option<(EntityId, Entity<InputState>)>,
     sidebar: bool,
     sidebar_width: f32,
     resizing_sidebar: bool,
@@ -223,6 +226,7 @@ impl AbroMux {
             socket: None,
             window_bounds: None,
             renaming: None,
+            renaming_tab: None,
             sidebar: true,
             sidebar_width: SIDEBAR_WIDTH,
             resizing_sidebar: false,
@@ -449,6 +453,11 @@ impl AbroMux {
                     this.add_notification(id, title.clone(), body.clone(), false, window, cx);
                 }
                 TerminalEvent::TitleChanged => cx.notify(),
+                TerminalEvent::Respawned => {
+                    // Status pills described what ran in the old shell.
+                    this.forget_status(id);
+                    cx.notify();
+                }
             }
         })
         .detach();
@@ -658,7 +667,7 @@ impl AbroMux {
             window,
             move |this, input, ev: &InputEvent, window, cx| match ev {
                 InputEvent::PressEnter { .. } => {
-                    let name = input.read(cx).value().trim().to_string();
+                    let name = one_line(&input.read(cx).value());
                     if let Some(ws) = this.workspaces.iter_mut().find(|w| w.id == id) {
                         // Leaving the name as it was keeps it following the agent's title.
                         let changed = !name.is_empty() && name != ws.auto_name(cx);
@@ -682,6 +691,52 @@ impl AbroMux {
         window.on_next_frame(|window, cx| window.dispatch_action(Box::new(SelectAll), cx));
         self.renaming = Some((id, input));
         cx.notify();
+    }
+
+    /// Rename tab `id` inline in its tab bar. An empty name goes back to the
+    /// program's title.
+    fn start_tab_rename(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(surface) = self.find_tab(id) else {
+            return;
+        };
+        let name = surface.title(cx);
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(name));
+        cx.subscribe_in(
+            &input,
+            window,
+            move |this, input, ev: &InputEvent, window, cx| match ev {
+                InputEvent::PressEnter { .. } => {
+                    let name = one_line(&input.read(cx).value());
+                    if let Some(s) = this.find_tab(id) {
+                        // Leaving the title as it was keeps it following the program.
+                        let unchanged = s.custom_title(cx).is_none() && name == s.title(cx);
+                        s.set_custom_title((!unchanged).then_some(name), cx);
+                    }
+                    this.renaming_tab = None;
+                    this.focus_active(window, cx);
+                    cx.notify();
+                }
+                InputEvent::Blur => {
+                    this.renaming_tab = None;
+                    cx.notify();
+                }
+                _ => {}
+            },
+        )
+        .detach();
+        input.update(cx, |i, cx| i.focus(window, cx));
+        window.on_next_frame(|window, cx| window.dispatch_action(Box::new(SelectAll), cx));
+        self.renaming_tab = Some((id, input));
+        cx.notify();
+    }
+
+    fn find_tab(&self, id: EntityId) -> Option<Surface> {
+        self.workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| p.tabs.iter())
+            .find(|s| s.entity_id() == id)
+            .cloned()
     }
 
     fn focus_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1246,7 +1301,9 @@ impl AbroMux {
                     .justify_end()
                     .gap_1()
                     .pr(px(10.))
-                    .on_mouse_down(MouseButton::Left, |ev, window, _| titlebar::drag_or_zoom(ev, window))
+                    .on_mouse_down(MouseButton::Left, |ev, window, _| {
+                        titlebar::drag_or_zoom(ev, window)
+                    })
                     .children(self.titlebar_buttons(cx)),
             )
             .child(
@@ -1431,6 +1488,11 @@ impl AbroMux {
             let hint = shortcut_digit(ti, tab_count).filter(|_| tab_hints);
             let sid = s.entity_id();
             let unread = self.surface_unread(sid);
+            let renaming = self
+                .renaming_tab
+                .as_ref()
+                .filter(|(id, _)| *id == sid)
+                .map(|(_, input)| input.clone());
             let group: SharedString = format!("tab-{sid}").into();
             div()
                 .id(("tab", sid))
@@ -1455,13 +1517,17 @@ impl AbroMux {
                 })
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |this, _, window, cx| {
+                    cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
                         let ws = &mut this.workspaces[this.active];
                         ws.focused_pane = pane_id;
                         if let Some(p) = ws.root.pane_mut(pane_id) {
                             p.active = ti;
                         }
-                        this.focus_active(window, cx);
+                        if ev.click_count >= 2 {
+                            this.start_tab_rename(sid, window, cx);
+                        } else {
+                            this.focus_active(window, cx);
+                        }
                         cx.notify();
                     }),
                 )
@@ -1507,9 +1573,44 @@ impl AbroMux {
                             rgb(MUTED)
                         }),
                 )
-                .child(div().flex_1().min_w_0().truncate().child(s.title(cx)))
+                .child(match renaming.clone() {
+                    Some(input) => div()
+                        .flex_1()
+                        .min_w(px(60.))
+                        .h(px(20.))
+                        .px(px(4.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(4.))
+                        .bg(rgba(0x0000004d))
+                        .border_1()
+                        .border_color(rgb(ACCENT))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                            if ev.keystroke.key == "escape" {
+                                this.renaming_tab = None;
+                                this.focus_active(window, cx);
+                                cx.notify();
+                            }
+                        }))
+                        .child(
+                            Input::new(&input)
+                                .appearance(false)
+                                .text_size(px(12.))
+                                .h_full()
+                                .px_0()
+                                .py_0(),
+                        )
+                        .into_any_element(),
+                    None => div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(s.title(cx))
+                        .into_any_element(),
+                })
                 .when_some(hint, |d, n| d.child(hint_pill(format!("⌃{n}"))))
-                .when(hint.is_none(), |d| {
+                .when(hint.is_none() && renaming.is_none(), |d| {
                     d.child(
                         div()
                             .id(("tab-close", sid))
@@ -1555,7 +1656,9 @@ impl AbroMux {
                     div()
                         .flex_1()
                         .h_full()
-                        .on_mouse_down(MouseButton::Left, |ev, window, _| titlebar::drag_or_zoom(ev, window))
+                        .on_mouse_down(MouseButton::Left, |ev, window, _| {
+                            titlebar::drag_or_zoom(ev, window)
+                        })
                         .drag_over::<DraggedTab>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
                         .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
                             this.move_tab(
@@ -1687,6 +1790,16 @@ impl AbroMux {
                         .border_color(rgb(ACCENT_BRIGHT)),
                 )
             })
+            // Which split has the keyboard, at a glance.
+            .when(multi && focused && !ring, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .border_1()
+                        .border_color(rgba(ACCENT << 8 | 0xb0)),
+                )
+            })
             .into_any_element()
     }
 }
@@ -1809,6 +1922,11 @@ impl Render for AbroMux {
                 cx.listener(|this, _: &ResizeDown, _, cx| this.resize_focused(Dir::Down, cx)),
             )
             .on_action(cx.listener(|this, _: &FlashPane, _, cx| this.flash_pane(cx)))
+            .on_action(cx.listener(|this, _: &RenameTab, window, cx| {
+                if let Some(id) = this.ws().focused_surface().map(|s| s.entity_id()) {
+                    this.start_tab_rename(id, window, cx)
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToggleNotifications, window, cx| {
                 this.close_palette(window, cx);
                 this.notifications_open = !this.notifications_open;
@@ -1902,7 +2020,9 @@ impl Render for AbroMux {
                                 .bg(rgb(TABBAR_BG))
                                 .border_b_1()
                                 .border_color(rgb(BORDER))
-                                .on_mouse_down(MouseButton::Left, |ev, window, _| titlebar::drag_or_zoom(ev, window))
+                                .on_mouse_down(MouseButton::Left, |ev, window, _| {
+                                    titlebar::drag_or_zoom(ev, window)
+                                })
                                 .children(self.titlebar_buttons(cx))
                                 .child(
                                     div()
@@ -1978,6 +2098,16 @@ impl Render for DraggedTab {
             .child(icon(self.icon).size(px(12.)).text_color(rgb(TEXT)))
             .child(div().min_w_0().truncate().child(self.title.clone()))
     }
+}
+
+/// A name typed into a single-line field: a newline that slipped in would
+/// panic gpui's line shaping wherever the name is drawn.
+fn one_line(s: &str) -> String {
+    s.split(['\n', '\r'])
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The ⌘/⌃ digit that selects item `index` of `count`: 1–8 for the first

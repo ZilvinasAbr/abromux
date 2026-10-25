@@ -5,11 +5,7 @@
 //! and only the empty titlebar areas move it, through `drag_or_zoom`.
 
 use gpui::{MouseDownEvent, Window};
-use objc::{
-    class, msg_send,
-    runtime::Object,
-    sel, sel_impl,
-};
+use objc::{class, msg_send, runtime::Object, sel, sel_impl};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 fn ns_view(window: &Window) -> Option<*mut Object> {

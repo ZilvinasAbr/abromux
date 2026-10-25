@@ -57,8 +57,8 @@ fn commands() -> Vec<(&'static str, Box<dyn Action>)> {
     use crate::{
         CloseTab, CloseWorkspace, FlashPane, FocusAddressBar, FocusDown, FocusLeft, FocusRight,
         FocusUp, JumpToUnread, NewBrowser, NewTerminal, NewWorkspace, NextTab, NextWorkspace,
-        PrevTab, PrevWorkspace, Quit, RenameWorkspace, ResizeDown, ResizeLeft, ResizeRight,
-        ResizeUp, SplitDown, SplitRight, ToggleNotifications, ToggleSidebar,
+        PrevTab, PrevWorkspace, Quit, RenameTab, RenameWorkspace, ResizeDown, ResizeLeft,
+        ResizeRight, ResizeUp, SplitDown, SplitRight, ToggleNotifications, ToggleSidebar,
     };
     vec![
         ("New Workspace", Box::new(NewWorkspace)),
@@ -70,6 +70,7 @@ fn commands() -> Vec<(&'static str, Box<dyn Action>)> {
         ("New Browser Tab", Box::new(NewBrowser)),
         ("Split Right", Box::new(SplitRight)),
         ("Split Down", Box::new(SplitDown)),
+        ("Rename Tab…", Box::new(RenameTab)),
         ("Close Tab", Box::new(CloseTab)),
         ("Next Tab", Box::new(NextTab)),
         ("Previous Tab", Box::new(PrevTab)),
@@ -95,6 +96,7 @@ fn commands() -> Vec<(&'static str, Box<dyn Action>)> {
             Box::new(terminal::UseSelectionForFind),
         ),
         ("Clear Scrollback", Box::new(terminal::ClearScrollback)),
+        ("Restart Shell", Box::new(terminal::RestartShell)),
         ("Increase Font Size", Box::new(terminal::IncreaseFontSize)),
         ("Decrease Font Size", Box::new(terminal::DecreaseFontSize)),
         ("Reset Font Size", Box::new(terminal::ResetFontSize)),
