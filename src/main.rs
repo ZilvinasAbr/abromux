@@ -24,6 +24,7 @@ mod status;
 mod terminal;
 mod theme;
 mod titlebar;
+mod webauthn;
 mod workspace;
 
 use browser::{BrowserEvent, BrowserView};

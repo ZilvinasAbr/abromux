@@ -9,6 +9,7 @@ dependencies = [
  "anyhow",
  "bindgen",
  "block",
+ "cc",
  "futures",
  "gpui",
  "gpui-component",

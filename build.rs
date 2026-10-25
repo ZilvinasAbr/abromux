@@ -4,6 +4,7 @@ fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     version(&root);
+    webauthn();
 
     let vt = root.join("vendor/ghostty-vt-out");
     let lib = vt.join("lib/libghostty-vt.a");
@@ -81,6 +82,19 @@ fn version(root: &Path) {
     }
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rustc-env=ABROMUX_VERSION={version}");
+}
+
+/// The native WebAuthn bridge (src/webauthn.m), linked with the frameworks it uses.
+fn webauthn() {
+    println!("cargo:rerun-if-changed=src/webauthn.m");
+    cc::Build::new()
+        .file("src/webauthn.m")
+        .flag("-fobjc-arc")
+        .flag("-mmacosx-version-min=13.0")
+        .compile("abromux-webauthn");
+    for framework in ["AuthenticationServices", "CoreBluetooth", "Security", "WebKit"] {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
 }
 
 fn newer(out: &Path, inputs: &[&Path]) -> bool {
