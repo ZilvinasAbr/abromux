@@ -29,7 +29,7 @@ pub fn request(window: &Window, cx: &mut App) {
     let (tx, rx) = oneshot::channel();
     unsafe {
         let alert: *mut Object = msg_send![class!(NSAlert), new];
-        let _: () = msg_send![alert, setMessageText: ns_string("Quit AbroMux?")];
+        let _: () = msg_send![alert, setMessageText: ns_string(&format!("Quit {}?", crate::channel::app_name()))];
         let _: () = msg_send![alert, setInformativeText: ns_string("This will close all windows and workspaces.")];
         let _: *mut Object = msg_send![alert, addButtonWithTitle: ns_string("Quit")];
         let _: *mut Object = msg_send![alert, addButtonWithTitle: ns_string("Cancel")];

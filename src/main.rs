@@ -4,6 +4,7 @@ mod bench;
 mod browser;
 mod browser_auto;
 mod browser_find;
+mod channel;
 mod cli;
 mod config;
 mod debug;
@@ -1552,7 +1553,7 @@ fn run_app(cwd: Option<String>) {
         // the only way the browser's WKWebView gets ⌘C/⌘V/⌘A/⌘X. gpui views
         // handle those keys through their own bindings before the menu sees them.
         cx.set_menus(vec![
-            Menu { name: "AbroMux".into(), items: vec![MenuItem::action("Quit AbroMux", Quit)] },
+            Menu { name: channel::app_name().into(), items: vec![MenuItem::action(format!("Quit {}", channel::app_name()), Quit)] },
             Menu {
                 name: "Edit".into(),
                 items: vec![
@@ -1581,7 +1582,7 @@ fn run_app(cwd: Option<String>) {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(640.), px(400.))),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("AbroMux".into()),
+                    title: Some(channel::app_name().into()),
                     appears_transparent: true,
                     traffic_light_position: Some(point(px(14.), px(13.))),
                 }),

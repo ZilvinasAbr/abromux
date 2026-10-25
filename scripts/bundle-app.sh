@@ -4,6 +4,10 @@
 #   scripts/bundle-app.sh                 # installs /Applications/AbroMux.app
 #   scripts/bundle-app.sh ~/Applications  # or another folder
 #   scripts/bundle-app.sh --dist          # notarized dist/AbroMux-<version>.dmg
+#   scripts/bundle-app.sh --nightly [dir] # "AbroMux Nightly.app" (scripts/nightly.sh)
+#
+# The nightly app has its own bundle id, name, neon icon and support folder,
+# so it runs next to the release one.
 #
 # Signs with the first "Developer ID Application" certificate in the keychain
 # (or $ABROMUX_SIGN_IDENTITY), falling back to an ad-hoc signature. --dist
@@ -17,10 +21,27 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 dist=false
-if [[ "${1:-}" == "--dist" ]]; then
-  dist=true
+nightly=false
+dest=/Applications
+for arg in "$@"; do
+  case "$arg" in
+    --dist) dist=true ;;
+    --nightly) nightly=true ;;
+    *) dest="$arg" ;;
+  esac
+done
+if $dist && $nightly; then
+  echo "--dist builds the release app only." >&2
+  exit 1
+fi
+if $nightly; then
+  name="AbroMux Nightly"
+  bundle_id=dev.abromux.nightly
+  icon=abromux-nightly
 else
-  dest="${1:-/Applications}"
+  name=AbroMux
+  bundle_id=dev.abromux.app
+  icon=abromux
 fi
 
 identity="${ABROMUX_SIGN_IDENTITY:-$(security find-identity -v -p codesigning |
@@ -42,19 +63,19 @@ if $dist && [[ "$version" == *-dirty ]]; then
 fi
 
 tmp="$(mktemp -d)"
-app="$tmp/AbroMux.app"
+app="$tmp/$name.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/abromux "$app/Contents/MacOS/abromux"
-cp assets/app/abromux.icns "$app/Contents/Resources/abromux.icns"
+cp "assets/app/$icon.icns" "$app/Contents/Resources/abromux.icns"
 
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>AbroMux</string>
-  <key>CFBundleDisplayName</key><string>AbroMux</string>
-  <key>CFBundleIdentifier</key><string>dev.abromux.app</string>
+  <key>CFBundleName</key><string>$name</string>
+  <key>CFBundleDisplayName</key><string>$name</string>
+  <key>CFBundleIdentifier</key><string>$bundle_id</string>
   <key>CFBundleExecutable</key><string>abromux</string>
   <key>CFBundleIconFile</key><string>abromux</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -63,9 +84,9 @@ cat > "$app/Contents/Info.plist" <<EOF
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
-  <key>NSAppleEventsUsageDescription</key><string>A program running in AbroMux wants to control other apps.</string>
-  <key>NSCameraUsageDescription</key><string>A program running in AbroMux wants to use the camera.</string>
-  <key>NSMicrophoneUsageDescription</key><string>A program running in AbroMux wants to use the microphone.</string>
+  <key>NSAppleEventsUsageDescription</key><string>A program running in $name wants to control other apps.</string>
+  <key>NSCameraUsageDescription</key><string>A program running in $name wants to use the camera.</string>
+  <key>NSMicrophoneUsageDescription</key><string>A program running in $name wants to use the microphone.</string>
 </dict>
 </plist>
 EOF
@@ -98,10 +119,10 @@ if $dist; then
   exit 0
 fi
 
-rm -rf "$dest/AbroMux.app"
-mv "$app" "$dest/AbroMux.app"
+rm -rf "$dest/$name.app"
+mv "$app" "$dest/$name.app"
 rm -rf "$tmp"
 # Make Finder and the Dock pick up the new icon instead of a cached one.
-touch "$dest/AbroMux.app"
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$dest/AbroMux.app" || true
-echo "Installed $dest/AbroMux.app ($version)"
+touch "$dest/$name.app"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$dest/$name.app" || true
+echo "Installed $dest/$name.app ($version)"

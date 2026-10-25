@@ -12,13 +12,13 @@ use std::{
     time::Duration,
 };
 
-/// `$ABROMUX_SOCKET_PATH`, else `~/Library/Application Support/abromux/abromux.sock`.
+/// `$ABROMUX_SOCKET_PATH`, else `~/Library/Application Support/abromux/abromux.sock`
+/// (`abromux-nightly/` for the nightly app).
 pub fn socket_path() -> PathBuf {
     if let Ok(p) = std::env::var("ABROMUX_SOCKET_PATH") {
         return p.into();
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(home).join("Library/Application Support/abromux/abromux.sock")
+    crate::channel::support_dir().join("abromux.sock")
 }
 
 pub fn ok(id: &Value, result: Value) -> Value {

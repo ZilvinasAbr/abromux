@@ -67,7 +67,7 @@ impl AbroMux {
         self.next_notification += 1;
         let id = self.next_notification;
         if !bell && !window.is_window_active() {
-            banner::post(id, if title.is_empty() { "AbroMux" } else { &title }, &body);
+            banner::post(id, if title.is_empty() { crate::channel::app_name() } else { &title }, &body);
         }
         self.notifications.push(Notification { id, surface, title, body, at: SystemTime::now(), read: viewing, bell });
         let excess = self.notifications.len().saturating_sub(KEEP);

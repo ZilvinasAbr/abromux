@@ -6,7 +6,8 @@
 //! session that was running in one is resumed there.
 //!
 //! `$ABROMUX_SESSION_PATH` overrides the file
-//! (default `~/Library/Application Support/abromux/session.json`).
+//! (default `~/Library/Application Support/abromux/session.json`, or
+//! `abromux-nightly/` for the nightly app).
 //! `ABROMUX_NO_RESTORE=1` turns it off, as do `ABROMUX_DEMO`/`ABROMUX_SCRIPT` unless
 //! a session path is given, so test runs never touch the real session.
 
@@ -106,8 +107,8 @@ pub fn path() -> Option<PathBuf> {
     if std::env::var("ABROMUX_DEMO").is_ok() || std::env::var("ABROMUX_SCRIPT").is_ok() {
         return None;
     }
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join("Library/Application Support/abromux/session.json"))
+    std::env::var("HOME").ok()?;
+    Some(crate::channel::support_dir().join("session.json"))
 }
 
 pub fn load() -> Option<Session> {
