@@ -17,7 +17,7 @@ use gpui_component::{
     wry::{self, WebViewExtMacOS},
 };
 use objc::{msg_send, runtime::Object, sel, sel_impl};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 actions!(
     browser,
@@ -74,6 +74,7 @@ impl BrowserView {
             builder.with_url(url)
         };
         let raw = builder
+            .with_user_agent(user_agent())
             .with_devtools(true)
             .with_document_title_changed_handler(move |t| {
                 let _ = tx_title.unbounded_send(WebMsg::Title(t));
@@ -546,6 +547,55 @@ unsafe fn png_data(image: *mut Object) -> Option<Vec<u8>> {
     }
 }
 
+/// A bare WKWebView's user agent lacks Safari's `Version/… Safari/…` part,
+/// and sites like Google then serve their legacy pages. So the pane claims
+/// to be the installed Safari.
+fn user_agent() -> &'static str {
+    static UA: OnceLock<String> = OnceLock::new();
+    UA.get_or_init(|| {
+        format!(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 \
+             (KHTML, like Gecko) Version/{} Safari/605.1.15",
+            safari_version(installed_safari_version().as_deref())
+        )
+    })
+}
+
+/// The Safari version to claim: the installed one, but never older than
+/// 26.6, as Google Workspace supports only the two latest versions.
+fn safari_version(installed: Option<&str>) -> String {
+    const FLOOR: [u32; 2] = [26, 6];
+    let parsed: Option<Vec<u32>> =
+        installed.and_then(|v| v.split('.').map(|n| n.parse().ok()).collect());
+    match parsed {
+        Some(v) if v.as_slice() >= FLOOR.as_slice() => installed.unwrap().into(),
+        _ => format!("{}.{}", FLOOR[0], FLOOR[1]),
+    }
+}
+
+fn installed_safari_version() -> Option<String> {
+    let path = std::ffi::CString::new("/Applications/Safari.app").ok()?;
+    let key = std::ffi::CString::new("CFBundleShortVersionString").ok()?;
+    unsafe {
+        let path: *mut Object =
+            msg_send![objc::class!(NSString), stringWithUTF8String: path.as_ptr()];
+        let bundle: *mut Object = msg_send![objc::class!(NSBundle), bundleWithPath: path];
+        if bundle.is_null() {
+            return None;
+        }
+        let key: *mut Object =
+            msg_send![objc::class!(NSString), stringWithUTF8String: key.as_ptr()];
+        let version: *mut Object = msg_send![bundle, objectForInfoDictionaryKey: key];
+        let is_string: bool =
+            !version.is_null() && msg_send![version, isKindOfClass: objc::class!(NSString)];
+        if !is_string {
+            return None;
+        }
+        let p: *const std::ffi::c_char = msg_send![version, UTF8String];
+        (!p.is_null()).then(|| std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned())
+    }
+}
+
 pub fn normalize_url(text: &str) -> String {
     if text.contains("://") || text.starts_with("about:") {
         text.into()
@@ -563,5 +613,27 @@ pub fn normalize_url(text: &str) -> String {
             })
             .collect();
         format!("https://www.google.com/search?q={q}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{safari_version, user_agent};
+
+    #[test]
+    fn safari_version_keeps_installed_but_not_below_floor() {
+        assert_eq!(safari_version(Some("26.6")), "26.6");
+        assert_eq!(safari_version(Some("26.6.1")), "26.6.1");
+        assert_eq!(safari_version(Some("27.0")), "27.0");
+        assert_eq!(safari_version(Some("26")), "26.6");
+        assert_eq!(safari_version(Some("18.5")), "26.6");
+        assert_eq!(safari_version(Some("bogus")), "26.6");
+        assert_eq!(safari_version(None), "26.6");
+    }
+
+    #[test]
+    fn user_agent_looks_like_safari() {
+        let ua = user_agent();
+        assert!(ua.contains(" Version/") && ua.ends_with(" Safari/605.1.15"), "{ua}");
     }
 }
