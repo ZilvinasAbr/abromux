@@ -26,6 +26,8 @@ raw-window-handle = "0.6"
 
 [build-dependencies]
 bindgen = "0.71"
+# the native WebAuthn bridge (src/webauthn.m)
+cc = "1"
 
 [profile.dev]
 debug = 0

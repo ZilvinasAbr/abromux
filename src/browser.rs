@@ -3,6 +3,7 @@
 
 use crate::{
     browser_find,
+    webauthn,
     terminal::{Find, FindNext, FindPrevious, UseSelectionForFind},
     theme::*,
 };
@@ -67,11 +68,12 @@ impl BrowserView {
         let (tx, mut rx) = mpsc::unbounded::<WebMsg>();
         let (tx_title, tx_url) = (tx.clone(), tx.clone());
         let builder = wry::WebViewBuilder::new();
-        // A blank page gets the pane's background rather than white.
+        // A blank page gets the pane's background rather than white. A URL
+        // loads once the WebAuthn bridge is in, so its first page has it.
         let builder = if url.is_empty() {
             builder.with_html(format!("<html style=\"background:#{PANE_BG:06x}\"></html>"))
         } else {
-            builder.with_url(url)
+            builder
         };
         let raw = builder
             .with_devtools(true)
@@ -83,6 +85,10 @@ impl BrowserView {
             })
             .build_as_child(window)
             .expect("create webview");
+        webauthn::install(&raw);
+        if !url.is_empty() {
+            let _ = raw.load_url(url);
+        }
         let webview = cx.new(|cx| WebView::new(raw, window, cx));
 
         let address = cx.new(|cx| {

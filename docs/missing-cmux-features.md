@@ -90,6 +90,7 @@ So the list below reads in context:
 
 - [x] **Find in page**: ⌘F in browser panes, with the same bar and keys as find in terminal. cmux does it with injected JavaScript that wraps matches in `<mark>`; so does abromux. See [browser-find.md](browser-find.md). *(partial: the bar is a row under the address bar, not floating over the page)*
 - [x] **Browser shortcuts**: ⌘[ / ⌘] for back and forward, ⌘R to reload, ⌥⌘I for devtools, ⌥⌘C for the JS console.
+- [x] **Passkeys, WebAuthn and security keys**: a JS bridge to AuthenticationServices, as in cmux. *(partial: needs Apple's web-browser entitlement in a provisioning profile, see "Passkeys" in guide.md; no conditional/autofill UI)*
 - [ ] **Shortcuts while a webview has focus**: gpui's view gets ⌘ keys first (`performKeyEquivalent:`) even when the WKWebView is first responder, and a click into a page moves gpui focus to its `Browser` context, so ⌘ shortcuts should reach the app. Not yet confirmed with real keystrokes; keys without ⌘ still go only to the page.
 - [ ] **Popovers over webviews**: native webviews draw on top of everything, so UI can't overlap a visible browser.
 - [ ] **Zoom**: in, out, reset, or a set factor.
