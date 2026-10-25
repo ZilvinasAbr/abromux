@@ -14,6 +14,7 @@ use gpui_component::input::{self, Input, InputEvent, InputState};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
 use std::ops::Range;
+use std::rc::Rc;
 
 /// UI monospace font (sidebar metadata); terminals use the Ghostty config's.
 pub const FONT_FAMILY: &str = "JetBrains Mono";
@@ -73,7 +74,8 @@ pub struct TerminalView {
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     focus: FocusHandle,
-    frame: Frame,
+    /// Shared with the paint that draws it, so a paint doesn't copy it.
+    frame: Rc<Frame>,
     dirty: bool,
     grid: (u16, u16),
     cell: Size<Pixels>,
@@ -140,7 +142,7 @@ impl TerminalView {
             master,
             child,
             focus,
-            frame: Frame::default(),
+            frame: Rc::default(),
             dirty: true,
             grid: (cols, rows),
             cell: size(px(8.), px(16.)),
@@ -341,9 +343,13 @@ impl TerminalView {
         self.dirty = true;
     }
 
-    fn frame(&mut self) -> &Frame {
+    fn frame(&mut self) -> &Rc<Frame> {
         if self.dirty {
-            self.frame = self.term.frame();
+            // Refill in place unless the last paint still holds it.
+            match Rc::get_mut(&mut self.frame) {
+                Some(frame) => self.term.update_frame(frame),
+                None => self.frame = Rc::new(self.term.frame()),
+            }
             self.dirty = false;
         }
         &self.frame
@@ -1062,7 +1068,7 @@ impl IntoElement for TerminalElement {
 
 struct Prepaint {
     marked: Option<String>,
-    frame: Frame,
+    frame: Rc<Frame>,
     cell: Size<Pixels>,
     font: Font,
     font_size: Pixels,
@@ -1408,7 +1414,7 @@ impl Element for TerminalElement {
                                 strikethrough: None,
                             };
                             let line = window.text_system().shape_line(
-                                c.text.clone().into(),
+                                c.text.to_string().into(),
                                 font_size,
                                 &[run],
                                 None,

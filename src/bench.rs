@@ -31,17 +31,20 @@ pub fn vt(args: &[String]) -> i32 {
                     return 1;
                 }
             };
+            let mut frame = Default::default();
             let start = Instant::now();
             let mut last_frame = start;
             for chunk in data.chunks(CHUNK) {
                 term.write(chunk);
                 term.take_effects();
                 if last_frame.elapsed() >= FRAME {
-                    std::hint::black_box(term.frame());
+                    term.update_frame(&mut frame);
+                    std::hint::black_box(&frame);
                     last_frame = Instant::now();
                 }
             }
-            std::hint::black_box(term.frame());
+            term.update_frame(&mut frame);
+            std::hint::black_box(&frame);
             println!("{path} {} {:.6}", data.len(), start.elapsed().as_secs_f64());
         }
     }

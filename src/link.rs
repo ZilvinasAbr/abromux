@@ -140,9 +140,9 @@ mod tests {
         s.chars()
             .map(|c| Cell {
                 text: if c == ' ' {
-                    String::new()
+                    Default::default()
                 } else {
-                    c.to_string()
+                    c.to_string().into()
                 },
                 ..Default::default()
             })

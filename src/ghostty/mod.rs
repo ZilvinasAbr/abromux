@@ -14,6 +14,7 @@ pub mod ffi {
 }
 
 use ffi::*;
+use smol_str::SmolStr;
 use std::{ffi::c_void, mem, ptr};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -27,8 +28,9 @@ impl From<GhosttyColorRgb> for Rgb {
 
 #[derive(Clone, Debug, Default)]
 pub struct Cell {
-    /// Empty for blank cells and wide-char spacer tails.
-    pub text: String,
+    /// Empty for blank cells and wide-char spacer tails. Inline up to 23
+    /// bytes, so a cell's text doesn't allocate.
+    pub text: SmolStr,
     pub fg: Option<Rgb>,
     pub bg: Option<Rgb>,
     pub bold: bool,
@@ -914,10 +916,21 @@ impl Terminal {
 
     /// Snapshot the visible viewport for drawing.
     pub fn frame(&mut self) -> Frame {
+        let mut frame = Frame::default();
+        self.update_frame(&mut frame);
+        frame
+    }
+
+    /// Snapshot the visible viewport into `frame`, reusing its row buffers.
+    pub fn update_frame(&mut self, frame: &mut Frame) {
+        frame.cols = 0;
+        frame.cursor = None;
+        frame.cursor_color = None;
+        frame.matches.clear();
         unsafe {
-            let mut frame = Frame::default();
             if ghostty_render_state_update(self.render, self.raw) != GHOSTTY_SUCCESS {
-                return frame;
+                frame.rows.clear();
+                return;
             }
             let rs = self.render;
             let mut colors = sized!(GhosttyRenderStateColors);
@@ -967,13 +980,19 @@ impl Terminal {
                 &mut self.row_iter as *mut _ as *mut c_void,
             );
             let mut utf8 = [0u8; 64];
+            let mut rows = 0;
             while ghostty_render_state_row_iterator_next(self.row_iter) {
                 ghostty_render_state_row_get(
                     self.row_iter,
                     GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
                     &mut self.row_cells as *mut _ as *mut c_void,
                 );
-                let mut row = Vec::with_capacity(cols as usize);
+                if frame.rows.len() == rows {
+                    frame.rows.push(Vec::with_capacity(cols as usize));
+                }
+                let row = &mut frame.rows[rows];
+                row.clear();
+                rows += 1;
                 let cells = self.row_cells;
                 while ghostty_render_state_row_cells_next(cells) {
                     let mut cell = Cell::default();
@@ -1005,7 +1024,7 @@ impl Terminal {
                     ) == GHOSTTY_SUCCESS
                         && buf.len > 0
                     {
-                        cell.text = String::from_utf8_lossy(&utf8[..buf.len]).into_owned();
+                        cell.text = SmolStr::new(String::from_utf8_lossy(&utf8[..buf.len]));
                     }
 
                     let mut c = GhosttyColorRgb::default();
@@ -1053,11 +1072,10 @@ impl Terminal {
                     );
                     row.push(cell);
                 }
-                frame.rows.push(row);
             }
+            frame.rows.truncate(rows);
             ghostty_render_state_clean(rs);
             frame.matches = self.viewport_matches(cols, frame.rows.len() as u32);
-            frame
         }
     }
 }
