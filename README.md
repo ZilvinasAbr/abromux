@@ -108,6 +108,8 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Focus pane in a direction | click | ⌥⌘← → ↑ ↓ |
 | Resize focused pane | drag a divider | ⌃⇧H / J / K / L (20 px a press) |
 | Flash focused pane | | ⌘⇧H |
+| Command palette: every command that applies to the focused terminal or browser, with its shortcut | | ⌘⇧P, type to filter, ↑/↓ or ⌃N/⌃P, Enter runs, Esc closes |
+| Switch workspace by name | | ⌘P |
 | Notifications list | bell icon in the titlebar | ⌘I (Esc closes) |
 | Jump to newest unread notification | click it in the list | ⌘⇧U |
 | Open a link in a terminal | ⌘-click | |

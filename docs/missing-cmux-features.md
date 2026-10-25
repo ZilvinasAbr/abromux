@@ -136,7 +136,7 @@ What's missing beyond the browser commands above:
 - [ ] **Settings window**: ⌘,.
 - [ ] **Customizable keyboard shortcuts**, including two-step chords and `when` conditions.
 - [ ] **Custom commands and actions**: project-specific commands and workspace layouts that you launch from the palette, tab-bar buttons or the plus-button menu. Also packs and setting presets.
-- [ ] **Command palette.**
+- [x] **Command palette**: ⌘⇧P for commands, ⌘P to switch workspaces. *(partial: the switcher lists workspaces, not surfaces; no custom commands or rename/description modes)*
 - [ ] **App preferences**: light/dark/system appearance, accent color, app icon, window-title template, menu-bar-only mode, minimal mode.
 - [ ] **Themes**: `themes list/set/clear`.
 
@@ -180,11 +180,11 @@ What's missing beyond the browser commands above:
 
 If the goal is daily-driver parity, a reasonable sequence is:
 
-Done so far: Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; Claude Code and Codex status and notifications; sidebar status, progress and log.
+Done so far: command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; Claude Code and Codex status and notifications; sidebar status, progress and log.
 
 Next:
 
-1. **Command palette and a config file**, then customizable shortcuts.
+1. **A config file**, then customizable shortcuts (the palette's command list is the place to name actions for them).
 2. **Quick wins**: renaming tabs, a focused-pane border, safe paste, respawning a pane, dropping files on a terminal.
 3. **Hooks for other agents** (OpenCode, Gemini, …).
 4. **Dragging tabs, multiple windows, SSH/tmux**, as the workspace model matures.

@@ -14,6 +14,7 @@ mod ipc;
 mod link;
 mod notification;
 mod osc99;
+mod palette;
 mod quit;
 mod server;
 mod session;
@@ -87,7 +88,9 @@ actions!(
         ResizeDown,
         FlashPane,
         ToggleNotifications,
-        JumpToUnread
+        JumpToUnread,
+        CommandPalette,
+        WorkspaceSwitcher
     ]
 );
 
@@ -171,6 +174,8 @@ struct AbroMux {
     notifications_open: bool,
     /// Unread count last put on the dock icon.
     badge: usize,
+    /// The ⌘⇧P / ⌘P palette, while open.
+    palette: Option<palette::Palette>,
 }
 
 impl AbroMux {
@@ -201,6 +206,7 @@ impl AbroMux {
             next_notification: 0,
             notifications_open: false,
             badge: 0,
+            palette: None,
         };
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
@@ -739,7 +745,7 @@ impl AbroMux {
             for p in ws.root.panes() {
                 for (ti, s) in p.tabs.iter().enumerate() {
                     if let Surface::Browser(b) = s {
-                        let shown = wi == self.active && ti == p.active && self.renaming.is_none() && !self.notifications_open;
+                        let shown = wi == self.active && ti == p.active && self.renaming.is_none() && !self.notifications_open && self.palette.is_none();
                         b.update(cx, |b, cx| b.set_shown(shown, cx));
                     }
                 }
@@ -1226,6 +1232,7 @@ impl Render for AbroMux {
         self.mark_viewed(window);
         self.sync_webviews(cx);
         let notifications = self.notifications_open.then(|| self.render_notifications(cx));
+        let palette = self.render_palette(cx);
         let ws = self.ws();
         let multi = ws.root.panes().len() > 1;
         let main = self.render_node(&self.ws().root, multi, cx);
@@ -1316,10 +1323,14 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &ResizeUp, _, cx| this.resize_focused(Dir::Up, cx)))
             .on_action(cx.listener(|this, _: &ResizeDown, _, cx| this.resize_focused(Dir::Down, cx)))
             .on_action(cx.listener(|this, _: &FlashPane, _, cx| this.flash_pane(cx)))
-            .on_action(cx.listener(|this, _: &ToggleNotifications, _, cx| {
+            .on_action(cx.listener(|this, _: &ToggleNotifications, window, cx| {
+                this.close_palette(window, cx);
                 this.notifications_open = !this.notifications_open;
                 cx.notify()
             }))
+            .on_action(cx.listener(|this, _: &CommandPalette, window, cx| this.toggle_palette(palette::Mode::Commands, window, cx)))
+            .on_action(cx.listener(|this, _: &WorkspaceSwitcher, window, cx| this.toggle_palette(palette::Mode::Workspaces, window, cx)))
+            .map(|d| self.palette_actions(d, cx))
             .on_action(cx.listener(|this, _: &JumpToUnread, window, cx| {
                 this.jump_to_unread(window, cx);
             }))
@@ -1407,6 +1418,7 @@ impl Render for AbroMux {
             )
             .relative()
             .children(notifications)
+            .children(palette)
     }
 }
 
@@ -1517,6 +1529,14 @@ fn run_app(cwd: Option<String>) {
             KeyBinding::new("cmd-shift-h", FlashPane, None),
             KeyBinding::new("cmd-i", ToggleNotifications, None),
             KeyBinding::new("cmd-shift-u", JumpToUnread, None),
+            KeyBinding::new("cmd-shift-p", CommandPalette, None),
+            KeyBinding::new("cmd-p", WorkspaceSwitcher, None),
+            KeyBinding::new("down", palette::SelectNext, Some("CommandPalette > Input")),
+            KeyBinding::new("ctrl-n", palette::SelectNext, Some("CommandPalette > Input")),
+            KeyBinding::new("up", palette::SelectPrev, Some("CommandPalette > Input")),
+            KeyBinding::new("ctrl-p", palette::SelectPrev, Some("CommandPalette > Input")),
+            KeyBinding::new("enter", palette::Confirm, Some("CommandPalette > Input")),
+            KeyBinding::new("escape", palette::Dismiss, Some("CommandPalette > Input")),
             // Keybindings run before key listeners; let these reach the PTY.
             KeyBinding::new("tab", NoAction, Some("Terminal")),
             KeyBinding::new("shift-tab", NoAction, Some("Terminal")),
