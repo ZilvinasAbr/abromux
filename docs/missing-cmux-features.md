@@ -128,7 +128,7 @@ What's missing beyond the browser commands above:
 - [ ] **`surface-health`, `refresh-surfaces`, `debug-terminals`.**
 - [ ] **tmux-style buffers and hooks**: `set-buffer`, `list-buffers`, `paste-buffer`, `set-hook`, `display-message`, `find-window`.
 - [ ] **Shell completion scripts** for the CLI.
-- [ ] **`guide` / `--skill`**: an agent-facing usage guide.
+- [x] **`guide` / `--skill`**: an agent-facing usage guide. *(as agent skills: `abromux skills install`, `abromux skills show`)*
 
 ## 7. Configuration
 

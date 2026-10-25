@@ -1,7 +1,7 @@
 //! `abromux <command>`: drive a running abromux over its control socket. Command
 //! names and flags follow cmux's CLI where the two overlap.
 
-use crate::{agent, ipc};
+use crate::{agent, ipc, skills};
 use serde_json::{Map, Value, json};
 use std::{io::IsTerminal, path::Path};
 
@@ -58,6 +58,8 @@ Commands:
   focus-window [--window <ref>]                              (bring abromux to the front; there is one window)
   sidebar <toggle|show|hide>
   hooks install|uninstall                                    (Claude Code and Codex hooks: agent status, notifications, resume on restore)
+  skills install|uninstall                                   (Claude Code and Codex skills that teach them this CLI)
+  skills show [abromux|abromux-browser]                      (print a skill: an agent-facing guide)
   quit
   rpc <method> [json-params]
 
@@ -338,6 +340,10 @@ fn dispatch(
                 _ => return Err("hooks: expected install or uninstall".into()),
             };
             println!("{}", msg.map_err(|e| format!("{e:#}"))?);
+            return Ok(());
+        }
+        "skills" => {
+            println!("{}", skills::run(&pos).map_err(|e| format!("{e:#}"))?);
             return Ok(());
         }
         "open" => return open(pos, opts),

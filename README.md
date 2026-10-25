@@ -19,11 +19,12 @@ I love [cmux](https://cmux.com) and use it every day. But with many agents and b
 
 Download `AbroMux-<version>.dmg` from the [latest release](https://github.com/ZilvinasAbr/abromux/releases/latest), open it and drag AbroMux to Applications. It needs macOS 13 or later on Apple Silicon.
 
-Optionally, put the `abromux` CLI on your PATH and turn on Claude Code and Codex integration:
+Optionally, put the `abromux` CLI on your PATH, turn on Claude Code and Codex integration, and teach those agents the CLI with skills:
 
 ```bash
 sudo ln -sf /Applications/AbroMux.app/Contents/MacOS/abromux /usr/local/bin/abromux
 abromux hooks install
+abromux skills install
 ```
 
 ## Learn more
