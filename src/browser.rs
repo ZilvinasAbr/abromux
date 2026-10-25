@@ -1,15 +1,21 @@
 #![allow(unexpected_cfgs)]
 //! A browser pane: address bar + native WKWebView (via wry / gpui-component).
 
-use crate::theme::*;
+use crate::{
+    browser_find,
+    terminal::{Find, FindNext, FindPrevious, UseSelectionForFind},
+    theme::*,
+};
 use futures::{StreamExt, channel::mpsc};
 use gpui::{prelude::*, *};
 use gpui_component::{
-    input::{Input, InputEvent, InputState},
+    input::{self, Input, InputEvent, InputState},
     webview::WebView,
     wry::{self, WebViewExtMacOS},
 };
 use objc::{msg_send, runtime::Object, sel, sel_impl};
+
+actions!(browser, [Back, Forward, Reload, ToggleDevTools, ShowConsole]);
 
 pub enum BrowserEvent {
     TitleChanged,
@@ -19,6 +25,9 @@ pub enum BrowserEvent {
 enum WebMsg {
     Title(String),
     Url(String),
+    /// A find script's result, or the page selection for ⌘E.
+    Find(String),
+    Selection(String),
 }
 
 pub struct BrowserView {
@@ -28,6 +37,12 @@ pub struct BrowserView {
     pub url: String,
     focus: FocusHandle,
     shown: bool,
+    tx: mpsc::UnboundedSender<WebMsg>,
+    /// The find bar's input, kept after closing so ⌘F brings the last search back.
+    find_input: Option<Entity<InputState>>,
+    find_open: bool,
+    /// Match count and selected index, for the find bar.
+    find_count: (usize, Option<usize>),
 }
 
 impl EventEmitter<BrowserEvent> for BrowserView {}
@@ -41,7 +56,7 @@ impl Focusable for BrowserView {
 impl BrowserView {
     pub fn new(url: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (tx, mut rx) = mpsc::unbounded::<WebMsg>();
-        let (tx_title, tx_url) = (tx.clone(), tx);
+        let (tx_title, tx_url) = (tx.clone(), tx.clone());
         let builder = wry::WebViewBuilder::new();
         // A blank page gets the pane's background rather than white.
         let builder = if url.is_empty() {
@@ -84,6 +99,22 @@ impl BrowserView {
                             let u = if u.starts_with("about:blank") { String::new() } else { u };
                             this.url = u.clone();
                             this.address.update(cx, |a, cx| a.set_value(u, window, cx));
+                            // A new document has no highlights; search it afresh.
+                            this.run_find(cx);
+                        }
+                        WebMsg::Find(json) => {
+                            this.find_count = browser_find::parse_count(&json).unwrap_or_default();
+                        }
+                        WebMsg::Selection(json) => {
+                            let text: String = serde_json::from_str(&json).unwrap_or_default();
+                            let text = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default().to_string();
+                            if !text.is_empty() {
+                                this.open_find(window, cx);
+                                if let Some(input) = &this.find_input {
+                                    input.update(cx, |i, cx| i.set_value(text, window, cx));
+                                }
+                                this.run_find(cx);
+                            }
                         }
                     }
                     cx.emit(BrowserEvent::TitleChanged);
@@ -96,7 +127,18 @@ impl BrowserView {
         })
         .detach();
 
-        Self { webview, address, title: String::new(), url: url.into(), focus: cx.focus_handle(), shown: true }
+        Self {
+            webview,
+            address,
+            title: String::new(),
+            url: url.into(),
+            focus: cx.focus_handle(),
+            shown: true,
+            tx,
+            find_input: None,
+            find_open: false,
+            find_count: (0, None),
+        }
     }
 
     pub fn navigate(&mut self, url: &str, cx: &mut Context<Self>) {
@@ -159,6 +201,126 @@ impl BrowserView {
         let _ = self.webview.read(cx).raw().reload();
     }
 
+    /// ⌥⌘I opens WebKit's inspector, ⌥⌘C its console.
+    fn show_inspector(&self, console: bool, cx: &App) {
+        let webview = self.webview.read(cx).raw().webview();
+        let webview = &*webview as *const _ as *mut Object;
+        unsafe {
+            let inspector: *mut Object = msg_send![webview, _inspector];
+            if inspector.is_null() {
+                return;
+            }
+            let action = if console { sel!(showConsole) } else { sel!(show) };
+            let ok: bool = msg_send![inspector, respondsToSelector: action];
+            if ok {
+                let _: () = msg_send![inspector, performSelector: action];
+            }
+        }
+    }
+
+    /// Run a find script and send its count back to the main thread.
+    fn find_script(&self, js: &str, cx: &App) {
+        let tx = self.tx.clone();
+        let _ = self.eval(js, cx, move |json| {
+            let _ = tx.unbounded_send(WebMsg::Find(json));
+        });
+    }
+
+    /// ⌘F: show the find bar (or focus it) with its last search.
+    fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = match &self.find_input {
+            Some(input) => input.clone(),
+            None => {
+                let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in page"));
+                cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, _, cx| match ev {
+                    InputEvent::Change => this.run_find(cx),
+                    InputEvent::PressEnter { .. } => this.find_step(true, cx),
+                    InputEvent::Focus => cx.emit(BrowserEvent::Focused),
+                    _ => {}
+                })
+                .detach();
+                self.find_input = Some(input.clone());
+                input
+            }
+        };
+        if !self.find_open {
+            self.find_open = true;
+            self.run_find(cx);
+        }
+        // Take native focus back from the page so typing reaches the field.
+        let _ = self.webview.read(cx).raw().focus_parent();
+        input.update(cx, |i, cx| i.focus(window, cx));
+        // Runs once the input has focus, so retyping replaces the old search.
+        window.dispatch_action(Box::new(input::SelectAll), cx);
+        cx.notify();
+    }
+
+    /// Search the page for the find bar's text, if the bar is open.
+    fn run_find(&mut self, cx: &mut Context<Self>) {
+        if !self.find_open {
+            return;
+        }
+        let needle = self.find_input.as_ref().map(|i| i.read(cx).value().to_string()).unwrap_or_default();
+        if needle.is_empty() {
+            self.find_count = (0, None);
+            self.find_script(&browser_find::clear(), cx);
+        } else {
+            self.find_script(&browser_find::search(&needle), cx);
+        }
+        cx.notify();
+    }
+
+    /// ⌘G / ⇧⌘G (Return / ⇧Return in the bar): the next or previous match.
+    fn find_step(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.find_open {
+            self.find_script(&browser_find::step(forward), cx);
+        }
+    }
+
+    /// ⌘E: search for the page's selected text.
+    fn find_selection(&mut self, cx: &mut Context<Self>) {
+        let tx = self.tx.clone();
+        let _ = self.eval(browser_find::SELECTION, cx, move |json| {
+            let _ = tx.unbounded_send(WebMsg::Selection(json));
+        });
+    }
+
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.find_open = false;
+        self.find_count = (0, None);
+        self.find_script(&browser_find::clear(), cx);
+        self.focus_page(window, cx);
+        cx.notify();
+    }
+
+    fn render_find_bar(&self, input: Entity<InputState>, cx: &mut Context<Self>) -> Stateful<Div> {
+        let count = match self.find_count {
+            (total, Some(i)) => format!("{}/{total}", i + 1),
+            (total, None) => format!("-/{total}"),
+        };
+        div()
+            .id("find-bar")
+            .key_context("FindBar")
+            .h(px(32.))
+            .flex_none()
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_1()
+            .border_b_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(TABBAR_BG))
+            .text_size(px(12.))
+            .text_color(rgb(TEXT))
+            .on_action(cx.listener(|this, _: &input::Escape, window, cx| this.close_find(window, cx)))
+            .child(icon("search"))
+            .child(div().flex_1().min_w_0().child(Input::new(&input).appearance(false).text_size(px(12.))))
+            .child(div().flex_none().text_color(rgb(MUTED)).child(count))
+            .child(icon_button("find-up", "chevron-up").on_click(cx.listener(|this, _, _, cx| this.find_step(false, cx))))
+            .child(icon_button("find-down", "chevron-down").on_click(cx.listener(|this, _, _, cx| this.find_step(true, cx))))
+            .child(icon_button("find-close", "x").on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))))
+    }
+
     /// Run `js` and hand its JSON-encoded result to `done` (on a wry thread).
     pub fn eval(&self, js: &str, cx: &App, done: impl Fn(String) + Send + 'static) -> anyhow::Result<()> {
         Ok(self.webview.read(cx).raw().evaluate_script_with_callback(js, done)?)
@@ -168,8 +330,19 @@ impl BrowserView {
 impl Render for BrowserView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let nav = |id: &'static str, icon: &'static str| icon_button(id, icon).size(px(24.));
+        let find_bar = self.find_input.clone().filter(|_| self.find_open).map(|input| self.render_find_bar(input, cx));
         div()
+            .key_context("Browser")
             .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &Back, _, cx| this.script("history.back()", cx)))
+            .on_action(cx.listener(|this, _: &Forward, _, cx| this.script("history.forward()", cx)))
+            .on_action(cx.listener(|this, _: &Reload, _, cx| this.reload(cx)))
+            .on_action(cx.listener(|this, _: &ToggleDevTools, _, cx| this.show_inspector(false, cx)))
+            .on_action(cx.listener(|this, _: &ShowConsole, _, cx| this.show_inspector(true, cx)))
+            .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
+            .on_action(cx.listener(|this, _: &FindNext, _, cx| this.find_step(true, cx)))
+            .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.find_step(false, cx)))
+            .on_action(cx.listener(|this, _: &UseSelectionForFind, _, cx| this.find_selection(cx)))
             .size_full()
             .flex()
             .flex_col()
@@ -201,6 +374,7 @@ impl Render for BrowserView {
                             .child(Input::new(&self.address).appearance(false).text_size(px(12.))),
                     ),
             )
+            .children(find_bar)
             .child(div().flex_1().min_h_0().child(self.webview.clone()))
     }
 }

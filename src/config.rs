@@ -47,7 +47,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             font_family: "JetBrains Mono".into(),
-            font_size: 12.,
+            font_size: 14.,
             foreground: None,
             background: None,
             cursor_color: None,

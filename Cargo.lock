@@ -12,6 +12,7 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-component",
+ "lb-wry",
  "objc",
  "portable-pty",
  "raw-window-handle",

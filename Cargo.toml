@@ -11,6 +11,8 @@ publish = false
 [dependencies]
 gpui = { version = "=0.2.2", default-features = false, features = ["runtime_shaders"] }
 gpui-component = { version = "=0.5.1", features = ["webview"] }
+# WebKit inspector in release builds (⌥⌘I); same crate gpui-component uses
+lb-wry = { version = "=0.53.3", features = ["devtools"] }
 portable-pty = "0.9"
 anyhow = "1"
 futures = { version = "0.3", features = ["executor"] }

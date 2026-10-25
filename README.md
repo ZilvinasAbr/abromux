@@ -78,6 +78,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Cycle tabs | | ⌘⇧[ / ⌘⇧], ⌃Tab / ⌃⇧Tab |
 | Select tab in focused pane | click | ⌃1…⌃8, ⌃9 for the last (hold ⌃ to see the numbers) |
 | Focus pane in a direction | click | ⌥⌘← → ↑ ↓ |
+| Resize focused pane | drag a divider | ⌃⇧H / J / K / L (20 px a press) |
 | Flash focused pane | | ⌘⇧H |
 | Notifications list | bell icon in the titlebar | ⌘I (Esc closes) |
 | Jump to newest unread notification | click it in the list | ⌘⇧U |
@@ -87,6 +88,9 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Font size (per terminal) | | ⌘+ / ⌘- / ⌘0 |
 | Clear screen and scrollback | | ⌘K |
 | Find in terminal (screen and scrollback) | | ⌘F, then ⌘G / ⇧⌘G or Enter / ⇧Enter, Esc to close; ⌘E finds the selection |
+| Find in page (browser) | | ⌘F, same keys as find in terminal |
+| Browser back / forward / reload | arrows and ↻ next to the address bar | ⌘[ / ⌘], ⌘R |
+| Web inspector / JS console | | ⌥⌘I / ⌥⌘C |
 
 ## Performance
 

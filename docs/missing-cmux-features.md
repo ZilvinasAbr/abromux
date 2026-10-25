@@ -25,7 +25,7 @@ So the list below reads in context:
 - [x] **Reading the Ghostty config** (`~/.config/ghostty/config`): theme, font family and size, colors, cursor style, background opacity and blur, keybinds, including leader sequences and key tables. *(partial: theme, font, colors, palette, cursor and `text:`/`csi:`/`esc:` keybinds; not opacity, blur, padding, leader sequences or other actions)*
 - [x] **Font size controls**: ⌘+ / ⌘- / ⌘0.
 - [x] **Clear scrollback**: ⌘K, plus `clear-history` in the CLI.
-- [x] **Find in terminal**: ⌘F, find next/previous (⌘G / ⌥⌘G), use selection for find (⌘E), hide the find bar. *(terminal panes only, not browser pages)*
+- [x] **Find in terminal**: ⌘F, find next/previous (⌘G / ⌥⌘G), use selection for find (⌘E), hide the find bar. *(browser pages have their own, see Find in page)*
 - [ ] **Find in directory**: ⌘⇧F, a ripgrep-backed project search.
 - [ ] **Scrollbar**, plus a scroll-speed setting.
 - [ ] **Copy options**: copy-on-select, a copy confirmation, reflowing hard wraps on copy.
@@ -88,9 +88,9 @@ So the list below reads in context:
 
 ## 5. Browser
 
-- [ ] **Find in page**: ⌘F in browser panes, with the same bar and keys as find in terminal. cmux does it with injected JavaScript that wraps matches in `<mark>`. See [browser-find.md](browser-find.md) for how cmux does it and a plan to copy it.
-- [ ] **Browser shortcuts**: ⌘[ / ⌘] for back and forward, ⌘R to reload, ⌥⌘I for devtools, ⌥⌘C for the JS console.
-- [ ] **Shortcuts while a webview has focus**: keystrokes currently go to the webview, so ⌘ shortcuts can miss the app. This is a known POC limit.
+- [x] **Find in page**: ⌘F in browser panes, with the same bar and keys as find in terminal. cmux does it with injected JavaScript that wraps matches in `<mark>`; so does abromux. See [browser-find.md](browser-find.md). *(partial: the bar is a row under the address bar, not floating over the page)*
+- [x] **Browser shortcuts**: ⌘[ / ⌘] for back and forward, ⌘R to reload, ⌥⌘I for devtools, ⌥⌘C for the JS console.
+- [ ] **Shortcuts while a webview has focus**: gpui's view gets ⌘ keys first (`performKeyEquivalent:`) even when the WKWebView is first responder, and a click into a page moves gpui focus to its `Browser` context, so ⌘ shortcuts should reach the app. Not yet confirmed with real keystrokes; keys without ⌘ still go only to the page.
 - [ ] **Popovers over webviews**: native webviews draw on top of everything, so UI can't overlap a visible browser.
 - [ ] **Zoom**: in, out, reset, or a set factor.
 - [ ] **Search-engine settings and search suggestions.**

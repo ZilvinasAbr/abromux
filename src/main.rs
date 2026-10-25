@@ -2,6 +2,7 @@ mod agent;
 mod banner;
 mod bench;
 mod browser;
+mod browser_find;
 mod cli;
 mod config;
 mod debug;
@@ -1526,6 +1527,20 @@ fn run_app(cwd: Option<String>) {
             KeyBinding::new("alt-cmd-g", terminal::FindPrevious, Some("Terminal")),
             KeyBinding::new("cmd-e", terminal::UseSelectionForFind, Some("Terminal")),
             KeyBinding::new("shift-enter", terminal::FindPrevious, Some("FindBar")),
+            KeyBinding::new("cmd-[", browser::Back, Some("Browser")),
+            KeyBinding::new("cmd-]", browser::Forward, Some("Browser")),
+            KeyBinding::new("cmd-r", browser::Reload, Some("Browser")),
+            KeyBinding::new("alt-cmd-i", browser::ToggleDevTools, Some("Browser")),
+            KeyBinding::new("alt-cmd-c", browser::ShowConsole, Some("Browser")),
+            KeyBinding::new("cmd-f", terminal::Find, Some("Browser")),
+            KeyBinding::new("cmd-g", terminal::FindNext, Some("Browser")),
+            KeyBinding::new("cmd-shift-g", terminal::FindPrevious, Some("Browser")),
+            KeyBinding::new("alt-cmd-g", terminal::FindPrevious, Some("Browser")),
+            KeyBinding::new("cmd-e", terminal::UseSelectionForFind, Some("Browser")),
+            // The address and find fields take these for search and indent.
+            KeyBinding::new("cmd-f", terminal::Find, Some("Browser > Input")),
+            KeyBinding::new("cmd-[", browser::Back, Some("Browser > Input")),
+            KeyBinding::new("cmd-]", browser::Forward, Some("Browser > Input")),
         ]);
         // The Edit items send copy:/paste:/… down the responder chain, which is
         // the only way the browser's WKWebView gets ⌘C/⌘V/⌘A/⌘X. gpui views
