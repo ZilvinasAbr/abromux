@@ -57,7 +57,7 @@ Commands:
   open <path-or-url>...                                      (directories open workspaces, URLs open browser splits)
   focus-window [--window <ref>]                              (bring abromux to the front; there is one window)
   sidebar <toggle|show|hide>
-  hooks install|uninstall                                    (Claude Code hooks: agent status, notifications, resume on restore)
+  hooks install|uninstall                                    (Claude Code and Codex hooks: agent status, notifications, resume on restore)
   quit
   rpc <method> [json-params]
 
@@ -122,9 +122,12 @@ fn parse(args: &[String]) -> Result<Args, String> {
 }
 
 pub fn run(argv: Vec<String>) -> i32 {
-    // Runs on every Claude Code hook event, so skip the usual parsing.
-    if argv.len() == 2 && argv[0] == "hooks" && argv[1] == "claude-event" {
-        return agent::claude_event();
+    // Runs on every agent hook event, so skip the usual parsing.
+    if argv.len() == 2
+        && argv[0] == "hooks"
+        && let Some(kind) = argv[1].strip_suffix("-event").and_then(agent::Kind::parse)
+    {
+        return agent::hook_event(kind);
     }
     let Args { mut pos, mut opts } = match parse(&argv) {
         Ok(a) => a,

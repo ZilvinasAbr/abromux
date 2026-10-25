@@ -8,7 +8,7 @@
 
 use crate::{
     AbroMux, BrowserView, DEFAULT_URL, RESIZE_STEP,
-    agent::Agent,
+    agent::{Agent, Kind},
     browser::normalize_url,
     browser_auto, debug, ipc,
     status::{self, RUNNING, WARNING},
@@ -675,25 +675,26 @@ impl AbroMux {
 
     /// Status and notifications from a coding agent's hooks (agent.rs).
     fn agent_event(&mut self, surface: gpui::EntityId, p: &Value, window: &mut Window, cx: &mut Context<Self>) {
-        const LABEL: &str = "Claude";
-        const TITLE: &str = "Claude Code";
+        let Some(kind) = str_param(p, "kind").and_then(Kind::parse) else { return };
+        let (label, title) = (kind.label(), kind.title());
         match str_param(p, "event").unwrap_or_default() {
-            "UserPromptSubmit" | "PostToolUse" => self.set_agent_status(surface, LABEL, Some(("Running", RUNNING)), cx),
-            "Notification" => {
-                let message = str_param(p, "message").unwrap_or("Claude needs your attention");
+            "UserPromptSubmit" | "PostToolUse" => self.set_agent_status(surface, label, Some(("Running", RUNNING)), cx),
+            // Claude's Notification, Codex's PermissionRequest.
+            event @ ("Notification" | "PermissionRequest") => {
+                let message = str_param(p, "message").map(String::from).unwrap_or_else(|| format!("{label} needs your attention"));
                 // Claude also says so after a minute idle; Stop already did.
-                if str_param(p, "notification_type") == Some("idle_prompt") || message.contains("waiting for your input") {
+                if event == "Notification" && (str_param(p, "notification_type") == Some("idle_prompt") || message.contains("waiting for your input")) {
                     return;
                 }
-                self.set_agent_status(surface, LABEL, Some(("Needs input", WARNING)), cx);
-                self.add_notification(surface, TITLE.into(), message.into(), false, window, cx);
+                self.set_agent_status(surface, label, Some(("Needs input", WARNING)), cx);
+                self.add_notification(surface, title.into(), message, false, window, cx);
             }
             "Stop" => {
-                self.set_agent_status(surface, LABEL, None, cx);
+                self.set_agent_status(surface, label, None, cx);
                 let body = str_param(p, "summary").unwrap_or("Finished").to_string();
-                self.add_notification(surface, TITLE.into(), body, false, window, cx);
+                self.add_notification(surface, title.into(), body, false, window, cx);
             }
-            "SessionEnd" => self.set_agent_status(surface, LABEL, None, cx),
+            "SessionEnd" => self.set_agent_status(surface, label, None, cx),
             _ => {}
         }
     }

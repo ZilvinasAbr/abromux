@@ -243,7 +243,7 @@ fn tab_state(s: &Surface, scrollback: bool, cx: &App) -> TabState {
                 cwd: t.live_cwd(),
                 font_size: Some(t.font_size()),
                 scrollback: scrollback.then(|| t.scrollback_vt(SCROLLBACK_LINES)).flatten(),
-                agent: t.agent.clone(),
+                agent: t.agent.clone().filter(Agent::alive),
             }
         }
         Surface::Browser(b) => TabState::Browser { url: b.read(cx).url.clone() },
@@ -269,7 +269,7 @@ mod tests {
                     vertical: false,
                     ratio: 0.3,
                     children: Box::new([
-                        NodeState::Pane { active: 0, tabs: vec![TabState::Terminal { cwd: "/tmp".into(), font_size: Some(14.), scrollback: Some("\x1b[1mhi\x1b[0m".into()), agent: Some(Agent { kind: "claude".into(), session_id: "abc".into(), cwd: "/tmp".into(), permission_mode: None }) }] },
+                        NodeState::Pane { active: 0, tabs: vec![TabState::Terminal { cwd: "/tmp".into(), font_size: Some(14.), scrollback: Some("\x1b[1mhi\x1b[0m".into()), agent: Some(Agent { kind: "claude".into(), session_id: "abc".into(), cwd: "/tmp".into(), permission_mode: None, pid: None }) }] },
                         NodeState::Pane { active: 0, tabs: vec![TabState::Browser { url: "https://example.com".into() }] },
                     ]),
                 },

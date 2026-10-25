@@ -149,8 +149,8 @@ What's missing beyond the browser commands above:
 
 ## 9. Coding-agent integrations
 
-- [x] **Agent hooks**: `hooks setup` for Claude Code, Codex, OpenCode, Gemini, Kiro, Amp, Cursor, Pi and others. They feed notifications, status and session IDs. *(partial: `hooks install` for Claude Code only; it feeds session IDs, the sidebar status and notifications)*
-- [x] **Agent session resume**: `restore` and `fork` from checkpoints, plus `surface resume` commands. *(partial: session restore resumes Claude Code sessions; no `fork` or CLI commands)*
+- [x] **Agent hooks**: `hooks setup` for Claude Code, Codex, OpenCode, Gemini, Kiro, Amp, Cursor, Pi and others. They feed notifications, status and session IDs. *(partial: `hooks install` for Claude Code and Codex; it feeds session IDs, the sidebar status and notifications)*
+- [x] **Agent session resume**: `restore` and `fork` from checkpoints, plus `surface resume` commands. *(partial: session restore resumes Claude Code and Codex sessions; no `fork` or CLI commands)*
 - [ ] **Agent hibernation**: put idle agents to sleep under memory pressure and wake them later.
 - [ ] **Feed**: an approval inbox for agent permission prompts and turn-complete events.
 - [ ] **Multi-agent teams as panes**: `claude-teams`, `codex-teams`, and oh-my-opencode (`omo`/`omx`/`omc`). Subagents become native splits.
@@ -180,11 +180,11 @@ What's missing beyond the browser commands above:
 
 If the goal is daily-driver parity, a reasonable sequence is:
 
-Done so far: Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; Claude Code status and notifications; sidebar status, progress and log.
+Done so far: Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; Claude Code and Codex status and notifications; sidebar status, progress and log.
 
 Next:
 
 1. **Command palette and a config file**, then customizable shortcuts.
 2. **Quick wins**: renaming tabs, a focused-pane border, safe paste, respawning a pane, dropping files on a terminal.
-3. **Hooks for other agents** (Codex, OpenCode, Gemini, …).
+3. **Hooks for other agents** (OpenCode, Gemini, …).
 4. **Dragging tabs, multiple windows, SSH/tmux**, as the workspace model matures.
