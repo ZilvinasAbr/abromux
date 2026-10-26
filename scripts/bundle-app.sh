@@ -8,9 +8,11 @@
 # --dist ships only a clean checkout of a release tag: bump `version` in
 # Cargo.toml, commit, `git tag v<version>`, then build.
 #   scripts/bundle-app.sh --nightly [dir] # "AbroMux Nightly.app" (scripts/nightly.sh)
+#   scripts/bundle-app.sh --nightly --name zoom [dir]  # "AbroMux Nightly zoom.app"
 #
 # The nightly app has its own bundle id, name, neon icon and support folder,
-# so it runs next to the release one.
+# so it runs next to the release one. A named nightly gets its own again, so
+# several can run beside the shared one.
 #
 # Signs with the first "Developer ID Application" certificate in the keychain
 # (or $ABROMUX_SIGN_IDENTITY), falling back to an ad-hoc signature. --dist
@@ -33,20 +35,27 @@ cd "$(dirname "$0")/.."
 dist=false
 nightly=false
 dest=/Applications
-for arg in "$@"; do
-  case "$arg" in
+flavor=
+while (($#)); do
+  case "$1" in
     --dist) dist=true ;;
     --nightly) nightly=true ;;
-    *) dest="$arg" ;;
+    --name) flavor="${2:-}"; shift ;;
+    *) dest="$1" ;;
   esac
+  shift
 done
 if $dist && $nightly; then
   echo "--dist builds the release app only." >&2
   exit 1
 fi
+if [[ -n "$flavor" ]] && { ! $nightly || [[ ! "$flavor" =~ ^[a-z0-9-]+$ ]]; }; then
+  echo "--name needs --nightly and a name of a-z, 0-9 and -." >&2
+  exit 1
+fi
 if $nightly; then
-  name="AbroMux Nightly"
-  bundle_id=dev.abromux.nightly
+  name="AbroMux Nightly${flavor:+ $flavor}"
+  bundle_id="dev.abromux.nightly${flavor:+.$flavor}"
   icon=abromux-nightly
 else
   name=AbroMux
