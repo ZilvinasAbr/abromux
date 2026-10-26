@@ -24,6 +24,11 @@ pub fn icon(name: &str) -> Svg {
 }
 
 pub fn icon_button(id: impl Into<ElementId>, name: &str) -> Stateful<Div> {
+    tinted_icon_button(id, name, MUTED)
+}
+
+/// An [`icon_button`] whose icon is `color` rather than muted.
+pub fn tinted_icon_button(id: impl Into<ElementId>, name: &str, color: u32) -> Stateful<Div> {
     div()
         .id(id)
         .flex()
@@ -36,5 +41,5 @@ pub fn icon_button(id: impl Into<ElementId>, name: &str) -> Stateful<Div> {
         .cursor_pointer()
         .hover(|s| s.bg(rgba(HOVER)).text_color(rgb(TEXT)))
         .active(|s| s.opacity(0.7))
-        .child(icon(name).text_color(rgb(MUTED)))
+        .child(icon(name).text_color(rgb(color)))
 }

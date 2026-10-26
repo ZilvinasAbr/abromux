@@ -59,6 +59,7 @@ fn commands() -> Vec<(&'static str, Box<dyn Action>)> {
         FocusUp, JumpToUnread, NewBrowser, NewTerminal, NewWorkspace, NextTab, NextWorkspace,
         PrevTab, PrevWorkspace, Quit, RenameTab, RenameWorkspace, ResizeDown, ResizeLeft,
         ResizeRight, ResizeUp, SplitDown, SplitRight, ToggleNotifications, ToggleSidebar,
+        ToggleZoom,
     };
     vec![
         ("New Workspace", Box::new(NewWorkspace)),
@@ -83,6 +84,7 @@ fn commands() -> Vec<(&'static str, Box<dyn Action>)> {
         ("Resize Pane Up", Box::new(ResizeUp)),
         ("Resize Pane Down", Box::new(ResizeDown)),
         ("Flash Focused Pane", Box::new(FlashPane)),
+        ("Toggle Pane Zoom", Box::new(ToggleZoom)),
         ("Toggle Sidebar", Box::new(ToggleSidebar)),
         ("Show Notifications", Box::new(ToggleNotifications)),
         ("Jump to Latest Unread", Box::new(JumpToUnread)),

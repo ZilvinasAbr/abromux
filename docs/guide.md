@@ -130,6 +130,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Focus pane in a direction | click | ⌥⌘← → ↑ ↓ |
 | Resize focused pane | drag a divider | ⌃⇧H / J / K / L (20 px a press) |
 | Flash focused pane | | ⌘⇧H |
+| Zoom focused pane to fill the workspace, or unzoom | | ⌘⇧↩ (focusing another pane unzooms) |
 | Command palette: every command that applies to the focused terminal or browser, with its shortcut | | ⌘⇧P, type to filter, ↑/↓ or ⌃N/⌃P, Enter runs, Esc closes |
 | Switch workspace by name | | ⌘P |
 | Notifications list | bell icon in the titlebar | ⌘I (Esc closes) |
