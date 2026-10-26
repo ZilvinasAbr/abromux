@@ -15,6 +15,7 @@ pub mod ffi {
 
 use ffi::*;
 use smol_str::SmolStr;
+use std::time::{Duration, Instant};
 use std::{ffi::c_void, mem, ptr};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -94,6 +95,19 @@ pub struct Effects {
     pub notifications: Vec<(String, String)>,
 }
 
+/// What the terminal's callbacks write to (its userdata).
+struct Userdata {
+    fx: Effects,
+    /// The render state, so a hold can capture the frame it starts on.
+    render: GhosttyRenderState,
+    /// When the program started holding the screen (synchronized output).
+    held_since: Option<Instant>,
+}
+
+/// How long a program may hold the screen before it's drawn anyway, in
+/// case it never ends the hold.
+pub const HOLD_TIMEOUT: Duration = Duration::from_secs(1);
+
 pub struct Terminal {
     raw: GhosttyTerminal,
     render: GhosttyRenderState,
@@ -105,7 +119,7 @@ pub struct Terminal {
     mouse_event: GhosttyMouseEvent,
     /// The find bar's search; null while it's closed.
     search: GhosttySearch,
-    effects: Box<Effects>,
+    ud: Box<Userdata>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,18 +154,18 @@ unsafe extern "C" fn on_write_pty(
     data: *const u8,
     len: usize,
 ) {
-    let fx = unsafe { &mut *(ud as *mut Effects) };
+    let fx = unsafe { &mut (*(ud as *mut Userdata)).fx };
     fx.pty_response
         .extend_from_slice(unsafe { std::slice::from_raw_parts(data, len) });
 }
 unsafe extern "C" fn on_title(_: GhosttyTerminal, ud: *mut c_void) {
-    unsafe { (*(ud as *mut Effects)).title_changed = true };
+    unsafe { (*(ud as *mut Userdata)).fx.title_changed = true };
 }
 unsafe extern "C" fn on_pwd(_: GhosttyTerminal, ud: *mut c_void) {
-    unsafe { (*(ud as *mut Effects)).pwd_changed = true };
+    unsafe { (*(ud as *mut Userdata)).fx.pwd_changed = true };
 }
 unsafe extern "C" fn on_bell(_: GhosttyTerminal, ud: *mut c_void) {
-    unsafe { (*(ud as *mut Effects)).bell = true };
+    unsafe { (*(ud as *mut Userdata)).fx.bell = true };
 }
 unsafe fn ghostty_str(s: &GhosttyString) -> String {
     if s.ptr.is_null() {
@@ -165,9 +179,20 @@ unsafe extern "C" fn on_notification(
     ud: *mut c_void,
     n: *const GhosttyTerminalDesktopNotification,
 ) {
-    let (fx, n) = unsafe { (&mut *(ud as *mut Effects), &*n) };
+    let (fx, n) = unsafe { (&mut (*(ud as *mut Userdata)).fx, &*n) };
     fx.notifications
         .push(unsafe { (ghostty_str(&n.title), ghostty_str(&n.body)) });
+}
+/// Synchronized output began or ended. At the start the terminal holds
+/// the last finished frame, so capture it and draw only that until the end.
+unsafe extern "C" fn on_render_hold(t: GhosttyTerminal, ud: *mut c_void, held: bool) {
+    let ud = unsafe { &mut *(ud as *mut Userdata) };
+    if held {
+        unsafe { ghostty_render_state_update(ud.render, t) };
+        ud.held_since = Some(Instant::now());
+    } else {
+        ud.held_since = None;
+    }
 }
 
 impl Terminal {
@@ -202,9 +227,13 @@ impl Terminal {
                 &track_last_cell as *const _ as *const c_void,
             );
 
-            let mut effects = Box::new(Effects::default());
-            let ud: *mut Effects = &mut *effects;
-            ghostty_terminal_set(raw, GHOSTTY_TERMINAL_OPT_USERDATA, ud as *const c_void);
+            let mut ud = Box::new(Userdata {
+                fx: Effects::default(),
+                render,
+                held_since: None,
+            });
+            let ud_ptr: *mut Userdata = &mut *ud;
+            ghostty_terminal_set(raw, GHOSTTY_TERMINAL_OPT_USERDATA, ud_ptr as *const c_void);
             let set_cb = |opt, f: *const c_void| ghostty_terminal_set(raw, opt, f);
             set_cb(
                 GHOSTTY_TERMINAL_OPT_WRITE_PTY,
@@ -220,6 +249,10 @@ impl Terminal {
                 GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
                 on_notification as *const c_void,
             );
+            set_cb(
+                GHOSTTY_TERMINAL_OPT_RENDER_HOLD,
+                on_render_hold as *const c_void,
+            );
 
             let t = Self {
                 raw,
@@ -231,7 +264,7 @@ impl Terminal {
                 mouse_encoder,
                 mouse_event,
                 search: ptr::null_mut(),
-                effects,
+                ud,
             };
             t.apply_theme();
             Ok(t)
@@ -510,7 +543,13 @@ impl Terminal {
     }
 
     pub fn take_effects(&mut self) -> Effects {
-        mem::take(&mut *self.effects)
+        mem::take(&mut self.ud.fx)
+    }
+
+    /// Whether the program is holding the screen mid-redraw (synchronized
+    /// output), so drawing shows the frame from before it.
+    pub fn held(&self) -> bool {
+        self.ud.held_since.is_some()
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16, cell_w: u32, cell_h: u32) {
@@ -928,7 +967,26 @@ impl Terminal {
         frame.cursor_color = None;
         frame.matches.clear();
         unsafe {
-            if ghostty_render_state_update(self.render, self.raw) != GHOSTTY_SUCCESS {
+            if let Some(t) = self.ud.held_since
+                && t.elapsed() >= HOLD_TIMEOUT
+            {
+                // Given up on: drop the hold and draw what's there.
+                let mode = GhosttyTerminalModeConfig {
+                    mode: 2026,
+                    value: false,
+                };
+                ghostty_terminal_set(
+                    self.raw,
+                    GHOSTTY_TERMINAL_OPT_MODE,
+                    &mode as *const _ as *const c_void,
+                );
+                self.ud.held_since = None;
+            }
+            // While held, the render state keeps the frame captured when the
+            // hold began.
+            if self.ud.held_since.is_none()
+                && ghostty_render_state_update(self.render, self.raw) != GHOSTTY_SUCCESS
+            {
                 frame.rows.clear();
                 return;
             }
@@ -1131,6 +1189,25 @@ mod tests {
         assert_eq!(row.trim_end(), "hi world");
         assert!(f.rows[0][3].bold && f.rows[0][3].fg.is_some());
         assert_eq!(f.cursor.map(|c| (c.x, c.y)), Some((0, 1)));
+    }
+
+    #[test]
+    fn synchronized_output_draws_only_finished_frames() {
+        let mut t = Terminal::new(10, 2).unwrap();
+        let first = |t: &mut Terminal| t.frame().rows[0][0].text.to_string();
+        t.write(b"old");
+        assert_eq!(first(&mut t), "o");
+        // The hold starts after "new" in the same write: that frame is kept.
+        t.write(b"\x1b[Hnew\x1b[?2026h\x1b[2J\x1b[Hx");
+        assert!(t.held());
+        assert_eq!(first(&mut t), "n", "half-drawn frame isn't shown");
+        t.write(b"yz\x1b[?2026l");
+        assert!(!t.held());
+        assert_eq!(first(&mut t), "x");
+        // A resize ends the hold, so the new size is drawn right away.
+        t.write(b"\x1b[?2026h");
+        t.resize(8, 2, 10, 20);
+        assert!(!t.held());
     }
 
     #[test]

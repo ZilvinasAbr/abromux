@@ -119,6 +119,8 @@ pub struct TerminalView {
     env: Vec<(String, String)>,
     /// Bumped on respawn so the old shell's output and exit are ignored.
     generation: usize,
+    /// A task will repaint once the program's hold on the screen times out.
+    hold_timer: bool,
 }
 
 impl EventEmitter<TerminalEvent> for TerminalView {}
@@ -171,6 +173,7 @@ impl TerminalView {
             pending_paste: None,
             env,
             generation: 0,
+            hold_timer: false,
         }
     }
 
@@ -244,6 +247,7 @@ impl TerminalView {
             cx.emit(TerminalEvent::Notification { title, body });
         }
         self.run_search(cx);
+        self.watch_hold(cx);
         self.dirty = true;
         if self.link.is_some() {
             // Output may have moved the text under the pointer.
@@ -544,6 +548,30 @@ impl TerminalView {
         self.find_count = self.term.search_count();
         self.dirty = true;
         cx.notify();
+    }
+
+    /// While the program holds the screen (synchronized output), repaint
+    /// now and then so a hold it never ends still times out and gets drawn.
+    fn watch_hold(&mut self, cx: &mut Context<Self>) {
+        if !self.term.held() || self.hold_timer {
+            return;
+        }
+        self.hold_timer = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(ghostty::HOLD_TIMEOUT).await;
+                let held = this.update(cx, |this, cx| {
+                    this.dirty = true;
+                    cx.notify();
+                    this.hold_timer = this.term.held();
+                    this.hold_timer
+                });
+                if !held.unwrap_or(false) {
+                    return;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Step the search until it has caught up with the terminal, a slice at
