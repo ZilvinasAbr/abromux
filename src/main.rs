@@ -90,6 +90,7 @@ actions!(
         ResizeUp,
         ResizeDown,
         FlashPane,
+        ToggleZoom,
         ToggleNotifications,
         JumpToUnread,
         CommandPalette,
@@ -154,7 +155,8 @@ impl AssetSource for Assets {
             "folder",
             "search",
             "circle-x",
-            "pencil"
+            "pencil",
+            "maximize-2"
         );
         Ok(bytes.map(Cow::Borrowed))
     }
@@ -1049,7 +1051,7 @@ impl AbroMux {
             for p in ws.root.panes() {
                 for (ti, s) in p.tabs.iter().enumerate() {
                     if let Surface::Browser(b) = s {
-                        let shown = wi == self.active && ti == p.active && self.renaming.is_none() && !self.notifications_open
+                        let shown = wi == self.active && ti == p.active && ws.shows(p.id) && self.renaming.is_none() && !self.notifications_open
                             && self.palette.is_none()
                             // Hidden while dragging a tab so drop targets show
                             // over them and get the mouse.
@@ -1679,6 +1681,16 @@ impl AbroMux {
                         .items_center()
                         .gap(px(2.))
                         .px(px(6.))
+                        // Shown while this pane is zoomed (⌘⇧↩); a click unzooms.
+                        .when(self.ws().zoom == Some(pane_id), |d| {
+                            d.child(
+                                tinted_icon_button(("pane-zoom", pane_id), "maximize-2", ACCENT)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.workspaces[this.active].toggle_zoom();
+                                        cx.notify();
+                                    })),
+                            )
+                        })
                         .child(icon_button(("pane-term", pane_id), "terminal").on_click(
                             cx.listener(move |this, _, window, cx| {
                                 focus_pane(this, cx);
@@ -1809,6 +1821,9 @@ impl Render for AbroMux {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window_bounds = Some(window.window_bounds().get_bounds());
         self.mark_viewed(window);
+        for ws in &mut self.workspaces {
+            ws.zoomed();
+        }
         if !cx.has_active_drag() {
             self.tab_drop = None;
         }
@@ -1819,7 +1834,13 @@ impl Render for AbroMux {
         let palette = self.render_palette(cx);
         let ws = self.ws();
         let multi = ws.root.panes().len() > 1;
-        let main = self.render_node(&self.ws().root, multi, cx);
+        let main = match ws
+            .zoom
+            .and_then(|z| ws.root.panes().into_iter().find(|p| p.id == z))
+        {
+            Some(p) => self.render_pane(p, multi, cx),
+            None => self.render_node(&ws.root, multi, cx),
+        };
         let sidebar = if self.sidebar {
             Some(self.render_sidebar(cx))
         } else {
@@ -1923,6 +1944,11 @@ impl Render for AbroMux {
                 cx.listener(|this, _: &ResizeDown, _, cx| this.resize_focused(Dir::Down, cx)),
             )
             .on_action(cx.listener(|this, _: &FlashPane, _, cx| this.flash_pane(cx)))
+            .on_action(cx.listener(|this, _: &ToggleZoom, _, cx| {
+                if this.workspaces[this.active].toggle_zoom() {
+                    cx.notify()
+                }
+            }))
             .on_action(cx.listener(|this, _: &RenameTab, window, cx| {
                 if let Some(id) = this.ws().focused_surface().map(|s| s.entity_id()) {
                     this.start_tab_rename(id, window, cx)
@@ -2220,6 +2246,7 @@ fn run_app(cwd: Option<String>) {
             KeyBinding::new("ctrl-shift-k", ResizeUp, None),
             KeyBinding::new("ctrl-shift-l", ResizeRight, None),
             KeyBinding::new("cmd-shift-h", FlashPane, None),
+            KeyBinding::new("cmd-shift-enter", ToggleZoom, None),
             KeyBinding::new("cmd-i", ToggleNotifications, None),
             KeyBinding::new("cmd-shift-u", JumpToUnread, None),
             KeyBinding::new("cmd-shift-p", CommandPalette, None),

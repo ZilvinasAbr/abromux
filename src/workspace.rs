@@ -339,6 +339,9 @@ pub struct Workspace {
     pub custom_name: Option<String>,
     pub root: Node,
     pub focused_pane: usize,
+    /// The pane filling the workspace (⌘⇧↩), hiding the others. Only holds
+    /// while that pane keeps focus; see [`zoomed`](Self::zoomed).
+    pub zoom: Option<usize>,
     /// Sidebar pills from `set-status` and agent hooks, in the order first set.
     pub status: Vec<Status>,
     pub progress: Option<Progress>,
@@ -420,6 +423,7 @@ impl Workspace {
             custom_name,
             root,
             focused_pane,
+            zoom: None,
             status: vec![],
             progress: None,
             log: vec![],
@@ -431,6 +435,34 @@ impl Workspace {
             .panes()
             .into_iter()
             .find(|p| p.id == self.focused_pane)
+    }
+
+    /// The zoomed pane, if zoom still applies: it is the focused pane and
+    /// there is more than one. Clears a zoom that no longer does, so focusing
+    /// another pane (or splitting, which focuses the new one) ends it.
+    pub fn zoomed(&mut self) -> Option<usize> {
+        let multi = matches!(self.root, Node::Split { .. });
+        if self.zoom != Some(self.focused_pane) || !multi {
+            self.zoom = None;
+        }
+        self.zoom
+    }
+
+    /// Zoom the focused pane, or unzoom. False when there's nothing to zoom.
+    pub fn toggle_zoom(&mut self) -> bool {
+        if self.zoomed().is_some() {
+            self.zoom = None;
+        } else if matches!(self.root, Node::Split { .. }) {
+            self.zoom = Some(self.focused_pane);
+        } else {
+            return false;
+        }
+        true
+    }
+
+    /// Whether pane `id` is on screen: every pane is, unless another is zoomed.
+    pub fn shows(&self, id: usize) -> bool {
+        self.zoom.is_none_or(|z| z == id)
     }
 
     pub fn focused_surface(&self) -> Option<&Surface> {
@@ -691,6 +723,33 @@ mod tests {
             "left/up wraps put the new pane first"
         );
         assert_eq!(root.neighbor(3, Dir::Left), Some(4));
+    }
+
+    #[test]
+    fn zoom_follows_focus() {
+        let mut ws = Workspace::new(0, None, Node::Leaf(pane(1)), 1);
+        assert!(!ws.toggle_zoom(), "a lone pane has nothing to zoom");
+        assert!(
+            ws.root
+                .split(1, Axis::Horizontal, false, pane(2), 100)
+                .is_ok()
+        );
+        assert!(ws.toggle_zoom());
+        assert_eq!(ws.zoomed(), Some(1));
+        assert!(ws.shows(1) && !ws.shows(2));
+        assert!(ws.toggle_zoom());
+        assert_eq!(ws.zoomed(), None);
+        assert!(ws.shows(2));
+
+        ws.toggle_zoom();
+        ws.focused_pane = 2;
+        assert_eq!(ws.zoomed(), None, "focusing another pane unzooms");
+        ws.focused_pane = 1;
+        assert_eq!(ws.zoomed(), None, "and coming back doesn't rezoom");
+
+        ws.toggle_zoom();
+        ws.root.remove(2);
+        assert_eq!(ws.zoomed(), None, "the last pane left isn't zoomed");
     }
 
     #[test]

@@ -44,6 +44,7 @@ So the list below reads in context:
 - [x] **Shortcut hints**: holding ⌘ shows each workspace's ⌘N, holding ⌃ shows the focused pane's ⌃N tab numbers.
 - [x] **Keyboard pane resizing**: ⌃⇧ H J K L with a configurable step, plus `resize-pane` in the CLI. *(partial: the 20 px step is fixed until there's a config file)*
 - [x] **Flash the focused panel**: ⌘⇧H, plus `trigger-flash` in the CLI. *(partial: no `trigger-flash`)*
+- [x] **Pane zoom**: ⌘⇧↩ makes the focused pane fill the workspace, and again restores the split. *(partial: no `zoom-pane` in the CLI)*
 - [x] **Jump to tab N**: ⌃1–8, and ⌃9 for the last tab.
 - [x] **Tab cycling with ⌃Tab / ⌃⇧Tab.**
 - [x] **Renaming tabs**: `rename-tab`, overriding the shell's title. *(double-click a tab, the palette, or `rename-tab`; saved with the session)*
