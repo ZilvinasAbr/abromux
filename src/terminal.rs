@@ -1637,6 +1637,7 @@ fn spawn_shell(
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    crate::activity::output();
                     if tx.unbounded_send(buf[..n].to_vec()).is_err() {
                         break;
                     }
