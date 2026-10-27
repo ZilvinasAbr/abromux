@@ -18,12 +18,24 @@ use gpui_component::{
     wry::{self, WebViewExtMacOS},
 };
 use objc::{msg_send, runtime::Object, sel, sel_impl};
-use std::sync::{Mutex, OnceLock};
+use std::{
+    f32::consts::PI,
+    sync::{Mutex, OnceLock},
+    time::Duration,
+};
 
 actions!(
     browser,
     [Back, Forward, Reload, ToggleDevTools, ShowConsole]
 );
+
+/// A toolbar button, indexing `BrowserView::nav_presses`.
+#[derive(Clone, Copy, PartialEq)]
+enum Nav {
+    Back,
+    Forward,
+    Reload,
+}
 
 pub enum BrowserEvent {
     TitleChanged,
@@ -53,6 +65,12 @@ pub struct BrowserView {
     find_open: bool,
     /// Match count and selected index, for the find bar.
     find_count: (usize, Option<usize>),
+    /// Presses per toolbar button; each new one replays its animation.
+    /// Reload's counts swaps between its reload and stop icons instead.
+    nav_presses: [usize; 3],
+    /// WKWebView's `isLoading`, while `watch_loading` polls it.
+    loading: bool,
+    polling: bool,
 }
 
 impl EventEmitter<BrowserEvent> for BrowserView {}
@@ -126,6 +144,7 @@ impl BrowserView {
                                 u
                             };
                             this.url = u.clone();
+                            this.watch_loading(cx);
                             this.address.update(cx, |a, cx| a.set_value(u, window, cx));
                             // A new document has no highlights; search it afresh.
                             this.run_find(cx);
@@ -172,12 +191,16 @@ impl BrowserView {
             find_input: None,
             find_open: false,
             find_count: (0, None),
+            nav_presses: [0; 3],
+            loading: false,
+            polling: false,
         }
     }
 
     pub fn navigate(&mut self, url: &str, cx: &mut Context<Self>) {
         self.url = url.into();
         self.webview.update(cx, |w, _| w.load_url(url));
+        self.watch_loading(cx);
     }
 
     pub fn focus_address(this: &Entity<Self>, window: &mut Window, cx: &mut App) {
@@ -235,6 +258,64 @@ impl BrowserView {
 
     pub fn reload(&self, cx: &App) {
         let _ = self.webview.read(cx).raw().reload();
+    }
+
+    fn stop(&self, cx: &App) {
+        let _: () = unsafe { msg_send![self.wk_webview(cx), stopLoading] };
+    }
+
+    fn wk_webview(&self, cx: &App) -> *mut Object {
+        let webview = self.webview.read(cx).raw().webview();
+        &*webview as *const _ as *mut Object
+    }
+
+    /// Follow WKWebView's `isLoading` for the reload button's stop icon.
+    /// wry's load events miss failed loads and fire only once the server
+    /// answers, so this polls from anything that may start a load until a
+    /// second passes with none.
+    pub fn watch_loading(&mut self, cx: &mut Context<Self>) {
+        if self.polling {
+            return;
+        }
+        self.polling = true;
+        cx.spawn(async move |this, cx| {
+            let mut idle = 0;
+            loop {
+                let polling = this.update(cx, |this, cx| {
+                    let loading: bool =
+                        unsafe { msg_send![this.wk_webview(cx), isLoading] };
+                    if loading != this.loading {
+                        this.loading = loading;
+                        this.nav_presses[Nav::Reload as usize] += 1;
+                        cx.notify();
+                    }
+                    idle = if loading { 0 } else { idle + 1 };
+                    this.polling = idle < 20;
+                    this.polling
+                });
+                if !polling.unwrap_or(false) {
+                    return;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(50))
+                    .await;
+            }
+        })
+        .detach();
+    }
+
+    /// Run a toolbar button's command (or its shortcut's) and animate the button.
+    fn nav(&mut self, nav: Nav, cx: &mut Context<Self>) {
+        match nav {
+            Nav::Back => self.script("history.back()", cx),
+            Nav::Forward => self.script("history.forward()", cx),
+            Nav::Reload => self.reload(cx),
+        }
+        if nav != Nav::Reload {
+            self.nav_presses[nav as usize] += 1;
+        }
+        self.watch_loading(cx);
+        cx.notify();
     }
 
     /// ⌥⌘I opens WebKit's inspector, ⌥⌘C its console.
@@ -438,11 +519,59 @@ impl BrowserView {
         };
         rx
     }
+
+    /// A toolbar button. Back and forward nudge their chevron that way and
+    /// back; reload turns into stop while the page loads, as in cmux, and
+    /// the new icon grows in.
+    fn render_nav(&self, nav: Nav, cx: &mut Context<Self>) -> Stateful<Div> {
+        let (id, name) = match nav {
+            Nav::Back => ("back", "chevron-left"),
+            Nav::Forward => ("fwd", "chevron-right"),
+            Nav::Reload if self.loading => ("reload", "x"),
+            Nav::Reload => ("reload", "rotate-cw"),
+        };
+        let icon = icon(name).text_color(rgb(MUTED));
+        let presses = self.nav_presses[nav as usize];
+        // Nothing plays before the first press.
+        let icon = if presses == 0 {
+            icon.into_any_element()
+        } else {
+            let animation = match nav {
+                Nav::Reload => Animation::new(Duration::from_millis(180))
+                    .with_easing(ease_out_quint()),
+                _ => Animation::new(Duration::from_millis(250)),
+            };
+            icon.with_animation((id, presses), animation, move |icon, t| {
+                let nudge = 3. * (PI * t).sin();
+                match nav {
+                    Nav::Back => icon
+                        .with_transformation(Transformation::translate(point(px(-nudge), px(0.)))),
+                    Nav::Forward => icon
+                        .with_transformation(Transformation::translate(point(px(nudge), px(0.)))),
+                    Nav::Reload => {
+                        let scale = 0.5 + 0.5 * t;
+                        icon.opacity(t)
+                            .with_transformation(Transformation::scale(size(scale, scale)))
+                    }
+                }
+            })
+            .into_any_element()
+        };
+        button_frame(id)
+            .size(px(24.))
+            .child(icon)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if nav == Nav::Reload && this.loading {
+                    this.stop(cx);
+                } else {
+                    this.nav(nav, cx);
+                }
+            }))
+    }
 }
 
 impl Render for BrowserView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let nav = |id: &'static str, icon: &'static str| icon_button(id, icon).size(px(24.));
         let find_bar = self
             .find_input
             .clone()
@@ -451,9 +580,9 @@ impl Render for BrowserView {
         div()
             .key_context("Browser")
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &Back, _, cx| this.script("history.back()", cx)))
-            .on_action(cx.listener(|this, _: &Forward, _, cx| this.script("history.forward()", cx)))
-            .on_action(cx.listener(|this, _: &Reload, _, cx| this.reload(cx)))
+            .on_action(cx.listener(|this, _: &Back, _, cx| this.nav(Nav::Back, cx)))
+            .on_action(cx.listener(|this, _: &Forward, _, cx| this.nav(Nav::Forward, cx)))
+            .on_action(cx.listener(|this, _: &Reload, _, cx| this.nav(Nav::Reload, cx)))
             .on_action(
                 cx.listener(|this, _: &ToggleDevTools, _, cx| this.show_inspector(false, cx)),
             )
@@ -476,18 +605,9 @@ impl Render for BrowserView {
                     .px_2()
                     .border_b_1()
                     .border_color(rgb(BORDER))
-                    .child(
-                        nav("back", "chevron-left").on_click(
-                            cx.listener(|this, _, _, cx| this.script("history.back()", cx)),
-                        ),
-                    )
-                    .child(nav("fwd", "chevron-right").on_click(
-                        cx.listener(|this, _, _, cx| this.script("history.forward()", cx)),
-                    ))
-                    .child(
-                        nav("reload", "rotate-cw")
-                            .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
-                    )
+                    .child(self.render_nav(Nav::Back, cx))
+                    .child(self.render_nav(Nav::Forward, cx))
+                    .child(self.render_nav(Nav::Reload, cx))
                     .child(
                         div()
                             .flex_1()

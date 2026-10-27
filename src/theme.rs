@@ -29,6 +29,11 @@ pub fn icon_button(id: impl Into<ElementId>, name: &str) -> Stateful<Div> {
 
 /// An [`icon_button`] whose icon is `color` rather than muted.
 pub fn tinted_icon_button(id: impl Into<ElementId>, name: &str, color: u32) -> Stateful<Div> {
+    button_frame(id).child(icon(name).text_color(rgb(color)))
+}
+
+/// An [`icon_button`] without its icon, for a child of the caller's own.
+pub fn button_frame(id: impl Into<ElementId>) -> Stateful<Div> {
     div()
         .id(id)
         .flex()
@@ -41,5 +46,4 @@ pub fn tinted_icon_button(id: impl Into<ElementId>, name: &str, color: u32) -> S
         .cursor_pointer()
         .hover(|s| s.bg(rgba(HOVER)).text_color(rgb(TEXT)))
         .active(|s| s.opacity(0.7))
-        .child(icon(name).text_color(rgb(color)))
 }

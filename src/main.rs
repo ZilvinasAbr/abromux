@@ -314,6 +314,8 @@ impl AbroMux {
                 _ => None,
             });
         if let Some(b) = hit {
+            // The click may have followed a link.
+            b.update(cx, |b, cx| b.watch_loading(cx));
             let focus = b.focus_handle(cx);
             if !focus.is_focused(window) {
                 b.update(cx, |b, cx| b.page_focused(window, cx));
