@@ -2132,7 +2132,11 @@ impl Render for DraggedTab {
             .text_size(px(12.))
             .text_color(rgb(TEXT))
             .font_family(".AppleSystemUIFont")
-            .child(icon(self.icon).size(px(12.)).text_color(icon_color(self.icon, true)))
+            .child(
+                icon(self.icon)
+                    .size(px(12.))
+                    .text_color(icon_color(self.icon, true)),
+            )
             .child(div().min_w_0().truncate().child(self.title.clone()))
     }
 }

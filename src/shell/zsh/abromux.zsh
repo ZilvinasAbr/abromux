@@ -57,3 +57,23 @@ _abromux_preexec() {
 builtin typeset -ag precmd_functions preexec_functions
 precmd_functions+=(_abromux_precmd)
 preexec_functions+=(_abromux_preexec)
+
+# Codex's TUI otherwise joins a shared background server, which runs every
+# session's hooks with the environment of the terminal that started it, so
+# they all report to that one tab. --no-daemon keeps them in this terminal.
+# Older Codex has no daemon and no such flag. (`function` so that an alias
+# named codex can't expand here.)
+function codex {
+    builtin emulate -L zsh
+    if (( ! $+_abromux_codex_no_daemon )); then
+        builtin typeset -gi _abromux_codex_no_daemon=0
+        [[ $(builtin command codex --help 2>/dev/null) != *--no-daemon* ]] ||
+            _abromux_codex_no_daemon=1
+    fi
+    case ${1-} in
+        # These work with the daemon itself.
+        agents|app|app-server|remote-control) ;;
+        *) (( ! _abromux_codex_no_daemon )) || builtin set -- --no-daemon "$@" ;;
+    esac
+    builtin command codex "$@"
+}
