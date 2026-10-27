@@ -3,6 +3,8 @@
 //! their `.zshenv` and adds OSC 133 prompt marks (`src/shell/zsh`). With the
 //! marks, libghostty-vt blanks the prompt on resize for zsh to redraw instead
 //! of reflowing it, which otherwise leaves copies of the prompt line behind.
+//! It also wraps `codex` to run without Codex's shared background server, so
+//! Codex's hooks report to the terminal they run in (`agent.rs`).
 //! Off with `shell-integration = none` in the Ghostty config.
 
 use portable_pty::CommandBuilder;
@@ -131,6 +133,48 @@ mod tests {
         let _ = child.kill();
         let _ = std::fs::remove_dir_all(&home);
         screens
+    }
+
+    /// The arguments a fake `codex` gets when `line` runs in an interactive
+    /// zsh with the integration. The fake knows `--no-daemon` if `new`.
+    fn codex_args(line: &str, new: bool) -> String {
+        let home =
+            std::env::temp_dir().join(format!("abromux-codex-test-{}-{new}", std::process::id()));
+        let dir = home.join("integration");
+        write_files(&dir, ZSH).unwrap();
+        let bin = home.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let help = if new { "--no-daemon" } else { "--remote" };
+        let fake = bin.join("codex");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\n[ \"$1\" = --help ] && {{ echo '{help}'; exit; }}\necho \"$@\"\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let out = std::process::Command::new("zsh")
+            .args(["-i", "-c", line])
+            .env("HOME", &home)
+            .env("ZDOTDIR", &dir)
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&home);
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    #[ignore = "runs a real zsh"]
+    fn zsh_runs_codex_without_its_daemon() {
+        assert_eq!(codex_args("codex", true), "--no-daemon");
+        assert_eq!(
+            codex_args("codex resume abc", true),
+            "--no-daemon resume abc"
+        );
+        assert_eq!(codex_args("codex agents", true), "agents");
+        // A Codex without the flag gets the command unchanged.
+        assert_eq!(codex_args("codex resume abc", false), "resume abc");
     }
 
     #[test]

@@ -15,6 +15,9 @@
 //!
 //! Codex has no SessionEnd hook, so its hooks also pass the Codex process id
 //! (`$PPID` of the hook's shell): an agent whose process is gone isn't saved.
+//! Newer Codex runs hooks in a shared background server instead, with the
+//! environment of whichever terminal started it; the zsh integration runs
+//! `codex` with `--no-daemon` so they run here (`src/shell/zsh/abromux.zsh`).
 
 use crate::ipc;
 use anyhow::{Context as _, bail};
