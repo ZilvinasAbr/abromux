@@ -166,7 +166,7 @@ What's missing beyond the browser commands above:
 - [ ] **Multiple windows**: ⌘⇧N.
 - [ ] **App bundle and distribution**: a `.app` with an icon, DMG, Homebrew cask, auto-update (Sparkle) and a nightly channel. *(partial: `scripts/bundle-app.sh` builds the `.app`, a notarized DMG with `--dist`, and the Nightly app; no cask or updates)*
 - [x] **CLI installed on PATH**: abromux's CLI lives inside the binary. *(partial: the README's `ln -sf` puts it on PATH; nothing does it for you)*
-- [ ] **Menu bar menus**: File, Edit, View, Window and Help.
+- [x] **Menu bar menus**: File, Edit, View, Window and Help. *(partial: abromux has these plus Notifications, built from its existing actions; no Settings, Check for Updates, History or "Open in…" items)*
 - [ ] **Sleepy Mode**: an idle screen. Cosmetic.
 
 ## 11. cmux Cloud and paid extras (probably out of scope)

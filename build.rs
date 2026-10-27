@@ -40,7 +40,9 @@ fn main() {
 /// Sets ABROMUX_VERSION to the Cargo version plus the commit, e.g.
 /// `0.1.0+6dea3c2`, with `-dirty` when tracked files have uncommitted changes.
 /// A clean checkout of the release tag (`v0.1.0`) is just `0.1.0`, and so is a
-/// build without git (a source tarball).
+/// build without git (a source tarball). Also sets ABROMUX_COMMIT (the short
+/// hash) and ABROMUX_BUILD (the commit count, as in `CFBundleVersion`) for the
+/// About window; both are empty without git.
 fn version(root: &Path) {
     let git = |args: &[&str]| {
         let o = Command::new("git")
@@ -54,7 +56,10 @@ fn version(root: &Path) {
             .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
     };
     let mut version = env::var("CARGO_PKG_VERSION").unwrap();
+    let (mut commit, mut build) = (String::new(), String::new());
     if let Some(sha) = git(&["rev-parse", "--short", "HEAD"]) {
+        commit = sha.clone();
+        build = git(&["rev-list", "--count", "HEAD"]).unwrap_or_default();
         let dirty =
             git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
         let tag = format!("v{version}^{{commit}}");
@@ -82,6 +87,8 @@ fn version(root: &Path) {
     }
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rustc-env=ABROMUX_VERSION={version}");
+    println!("cargo:rustc-env=ABROMUX_COMMIT={commit}");
+    println!("cargo:rustc-env=ABROMUX_BUILD={build}");
 }
 
 /// The native WebAuthn bridge (src/webauthn.m), linked with the frameworks it uses.
@@ -92,7 +99,12 @@ fn webauthn() {
         .flag("-fobjc-arc")
         .flag("-mmacosx-version-min=13.0")
         .compile("abromux-webauthn");
-    for framework in ["AuthenticationServices", "CoreBluetooth", "Security", "WebKit"] {
+    for framework in [
+        "AuthenticationServices",
+        "CoreBluetooth",
+        "Security",
+        "WebKit",
+    ] {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
 }

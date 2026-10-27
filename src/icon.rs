@@ -8,12 +8,17 @@ use objc::{class, msg_send, runtime::Object, sel, sel_impl};
 static PNG: &[u8] = include_bytes!("../assets/app/abromux.png");
 static NIGHTLY_PNG: &[u8] = include_bytes!("../assets/app/abromux-nightly.png");
 
-pub fn set_dock_icon() {
-    let png = if crate::channel::nightly() {
+/// This channel's icon art.
+pub fn png() -> &'static [u8] {
+    if crate::channel::nightly() {
         NIGHTLY_PNG
     } else {
         PNG
-    };
+    }
+}
+
+pub fn set_dock_icon() {
+    let png = png();
     unsafe {
         let data: *mut Object =
             msg_send![class!(NSData), dataWithBytes: png.as_ptr() length: png.len()];

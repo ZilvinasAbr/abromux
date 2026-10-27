@@ -1,3 +1,4 @@
+mod about;
 mod activity;
 mod agent;
 mod banner;
@@ -13,6 +14,7 @@ mod ghostty;
 mod icon;
 mod ipc;
 mod link;
+mod menu;
 mod notification;
 mod osc99;
 mod palette;
@@ -50,6 +52,7 @@ use workspace::{Dir, Node, Pane, Surface, TabDrop, Workspace, git_branch, tilde}
 actions!(
     abromux,
     [
+        About,
         Quit,
         NewWorkspace,
         CloseWorkspace,
@@ -2203,8 +2206,11 @@ fn run_app(cwd: Option<String>) {
                 None => cx.quit(),
             }
         });
+        cx.on_action(|_: &About, cx| about::show(cx));
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("cmd-w", about::CloseAbout, Some("About")),
+            KeyBinding::new("escape", about::CloseAbout, Some("About")),
             KeyBinding::new("cmd-n", NewWorkspace, None),
             KeyBinding::new("cmd-shift-w", CloseWorkspace, None),
             KeyBinding::new("cmd-shift-r", RenameWorkspace, None),
@@ -2301,31 +2307,7 @@ fn run_app(cwd: Option<String>) {
             KeyBinding::new("cmd-[", browser::Back, Some("Browser > Input")),
             KeyBinding::new("cmd-]", browser::Forward, Some("Browser > Input")),
         ]);
-        // The Edit items send copy:/paste:/… down the responder chain, which is
-        // the only way the browser's WKWebView gets ⌘C/⌘V/⌘A/⌘X. gpui views
-        // handle those keys through their own bindings before the menu sees them.
-        cx.set_menus(vec![
-            Menu {
-                name: channel::app_name().into(),
-                items: vec![MenuItem::action(
-                    format!("Quit {}", channel::app_name()),
-                    Quit,
-                )],
-            },
-            Menu {
-                name: "Edit".into(),
-                items: vec![
-                    MenuItem::os_action("Cut", gpui_component::input::Cut, OsAction::Cut),
-                    MenuItem::os_action("Copy", terminal::Copy, OsAction::Copy),
-                    MenuItem::os_action("Paste", terminal::Paste, OsAction::Paste),
-                    MenuItem::os_action(
-                        "Select All",
-                        gpui_component::input::SelectAll,
-                        OsAction::SelectAll,
-                    ),
-                ],
-            },
-        ]);
+        menu::init(cx);
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
                 cx.quit();
