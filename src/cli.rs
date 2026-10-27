@@ -1,7 +1,7 @@
 //! `abromux <command>`: drive a running abromux over its control socket. Command
 //! names and flags follow cmux's CLI where the two overlap.
 
-use crate::{agent, ipc, skills};
+use crate::{agent, ipc, settings, skills};
 use serde_json::{Map, Value, json};
 use std::{io::IsTerminal, path::Path};
 
@@ -29,7 +29,7 @@ Commands:
   tree [--all] [--workspace <id|ref|index>]
   list-panes [--workspace <id|ref|index>]
   focus-pane --pane <id|ref|index> [--workspace <id|ref|index>]
-  resize-pane [--pane <id|ref|index>] [--workspace <id|ref|index>] [-L|-R|-U|-D] [--amount <px>]   (default -R, 20px)
+  resize-pane [--pane <id|ref|index>] [--workspace <id|ref|index>] [-L|-R|-U|-D] [--amount <px>]   (default -R, panes.resizeStep: 20px)
   new-pane [--type <terminal|browser>] [--direction <left|right|up|down>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>]
   new-split <left|right|up|down> [--surface <ref>] [--workspace <ref>] [--type <terminal|browser>] [--url <url>] [--command <text>] [--focus <true|false>]
   list-pane-surfaces [--workspace <ref>] [--pane <ref>]
@@ -59,6 +59,9 @@ Commands:
   open <path-or-url>...                                      (directories open workspaces, URLs open browser splits)
   focus-window [--window <ref>]                              (bring abromux to the front; there is one window)
   sidebar <toggle|show|hide>
+  reload-config                                              (read the config file again, like ⌘⇧,)
+  config path                                                (where abromux's config.json lives)
+  config check [<file>]                                      (validate the config file; needs no running app)
   hooks install|uninstall                                    (Claude Code and Codex hooks: agent status, notifications, resume on restore)
   skills install|uninstall                                   (Claude Code and Codex skills that teach them this CLI)
   skills show [abromux|abromux-browser]                      (print a skill: an agent-facing guide)
@@ -343,6 +346,8 @@ fn dispatch(
             ("app.sidebar", |v| format!("OK visible={}", v["visible"]))
         }
         "quit" => ("app.quit", |_| "OK".into()),
+        "reload-config" => ("app.reload_config", |v| format!("OK {}", s(&v["path"]))),
+        "config" => return config(&pos),
         "focus-window" => ("window.focus", |v| format!("OK {}", s(&v["window"]))),
         "hooks" => {
             let msg = match pos.first().map(String::as_str) {
@@ -379,6 +384,25 @@ fn dispatch(
         _ => return Err(format!("unknown command {cmd:?} (see `abromux --help`)")),
     };
     print_result(&call(method, opts)?, fmt, as_json);
+    Ok(())
+}
+
+/// `config path` and `config check [<file>]`, which need no running app.
+fn config(pos: &[String]) -> Result<(), String> {
+    match pos.first().map(String::as_str) {
+        Some("path") => println!("{}", settings::path().display()),
+        Some("check") => {
+            let path = pos.get(1).map_or_else(settings::path, Into::into);
+            settings::read(&path)?;
+            let note = if path.exists() {
+                ""
+            } else {
+                " (no file; using defaults)"
+            };
+            println!("OK {}{note}", path.display());
+        }
+        _ => return Err("config: expected path or check".into()),
+    }
     Ok(())
 }
 

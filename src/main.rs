@@ -21,6 +21,7 @@ mod palette;
 mod quit;
 mod server;
 mod session;
+mod settings;
 mod shell;
 mod skills;
 mod sprite;
@@ -35,8 +36,9 @@ use browser::{BrowserEvent, BrowserView};
 use futures::StreamExt;
 use gpui::{prelude::*, *};
 use gpui_component::{
-    Root, Theme, ThemeMode,
+    Root, Theme, ThemeMode, WindowExt,
     input::{Input, InputEvent, InputState, SelectAll},
+    notification::Notification,
 };
 use std::{
     borrow::Cow,
@@ -100,14 +102,13 @@ actions!(
         JumpToUnread,
         CommandPalette,
         WorkspaceSwitcher,
-        RenameTab
+        RenameTab,
+        ReloadConfig
     ]
 );
 
 /// New browsers open blank, with the address bar focused.
 const DEFAULT_URL: &str = "";
-/// Pixels a divider moves per ⌃⇧H/J/K/L press (cmux's `paneResizeStepPixels` default).
-pub const RESIZE_STEP: f32 = 20.;
 /// How long a lone ⌘ or ⌃ must be held before shortcut hints show (cmux's value).
 const HINT_DELAY: Duration = Duration::from_millis(300);
 /// Sidebar width: default and the range its edge can be dragged within.
@@ -999,7 +1000,29 @@ impl AbroMux {
 
     fn resize_focused(&mut self, dir: Dir, cx: &mut Context<Self>) {
         let (wi, pane) = (self.active, self.ws().focused_pane);
-        self.resize_pane(wi, pane, dir, RESIZE_STEP, cx);
+        let step = cx.global::<settings::Settings>().panes.resize_step;
+        self.resize_pane(wi, pane, dir, step, cx);
+    }
+
+    /// ⌘⇧, and `abromux reload-config`: read the config file again. A file
+    /// that doesn't parse keeps the current settings.
+    fn reload_settings(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let result = settings::load().map(|s| cx.set_global(s));
+        let note = match &result {
+            Ok(()) => Notification::success(format!(
+                "Reloaded {}",
+                tilde(&settings::path().to_string_lossy())
+            ))
+            .id::<settings::Settings>(),
+            Err(e) => settings::error_notification(e.clone()),
+        };
+        window.push_notification(note, cx);
+        cx.notify();
+        result
     }
 
     fn flash_pane(&mut self, cx: &mut Context<Self>) {
@@ -1436,7 +1459,7 @@ impl AbroMux {
                 let divider = div()
                     .id(("divider", id))
                     .flex_none()
-                    .bg(rgb(BORDER))
+                    .bg(cx.global::<settings::Settings>().panes.divider_color)
                     .when(horizontal, |s| s.w(px(1.)).h_full().cursor_col_resize())
                     .when(!horizontal, |s| s.h(px(1.)).w_full().cursor_row_resize())
                     .child(
@@ -1817,7 +1840,7 @@ impl AbroMux {
                         .absolute()
                         .inset_0()
                         .border_1()
-                        .border_color(rgba(ACCENT << 8 | 0xb0)),
+                        .border_color(cx.global::<settings::Settings>().panes.focus_border_color),
                 )
             })
             .into_any_element()
@@ -1839,6 +1862,7 @@ impl Render for AbroMux {
             .notifications_open
             .then(|| self.render_notifications(cx));
         let palette = self.render_palette(cx);
+        let toasts = Root::render_notification_layer(window, cx);
         let ws = self.ws();
         let multi = ws.root.panes().len() > 1;
         let main = match ws
@@ -1976,6 +2000,10 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &JumpToUnread, window, cx| {
                 this.jump_to_unread(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &ReloadConfig, window, cx| {
+                // A toast says how it went.
+                let _ = this.reload_settings(window, cx);
+            }))
             .when(self.notifications_open, |d| {
                 d.capture_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
                     if ev.keystroke.key == "escape" {
@@ -2101,6 +2129,7 @@ impl Render for AbroMux {
             .relative()
             .children(notifications)
             .children(palette)
+            .children(toasts)
     }
 }
 
@@ -2198,6 +2227,12 @@ fn run_app(cwd: Option<String>) {
         theme.mono_font_family = terminal::FONT_FAMILY.into();
 
         cx.set_global(config::Config::load());
+        // A broken config file starts with the defaults, and says so once the window is up.
+        let (settings, settings_error) = match settings::load() {
+            Ok(s) => (s, None),
+            Err(e) => (settings::Settings::default(), Some(e)),
+        };
+        cx.set_global(settings);
         cx.on_action(|_: &Quit, cx| {
             match cx.active_window().or_else(|| cx.windows().first().copied()) {
                 Some(w) => w
@@ -2261,6 +2296,8 @@ fn run_app(cwd: Option<String>) {
             KeyBinding::new("cmd-shift-u", JumpToUnread, None),
             KeyBinding::new("cmd-shift-p", CommandPalette, None),
             KeyBinding::new("cmd-p", WorkspaceSwitcher, None),
+            // ⌘⇧, arrives as cmd-< (see cmd-} below).
+            KeyBinding::new("cmd-<", ReloadConfig, None),
             KeyBinding::new("down", palette::SelectNext, Some("CommandPalette > Input")),
             KeyBinding::new(
                 "ctrl-n",
@@ -2336,6 +2373,11 @@ fn run_app(cwd: Option<String>) {
                 ..Default::default()
             },
             |window, cx| {
+                if let Some(e) = settings_error {
+                    window.defer(cx, move |window, cx| {
+                        window.push_notification(settings::error_notification(e), cx)
+                    });
+                }
                 let view = cx.new(|cx| AbroMux::new(cwd, session, window, cx));
                 cx.new(|cx| Root::new(view, window, cx))
             },

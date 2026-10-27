@@ -6,8 +6,9 @@
 use crate::{
     About, CloseTab, CloseWorkspace, CommandPalette, FlashPane, FocusAddressBar, FocusDown,
     FocusLeft, FocusRight, FocusUp, JumpToUnread, NewBrowser, NewTerminal, NewWorkspace, NextTab,
-    NextWorkspace, PrevTab, PrevWorkspace, Quit, RenameTab, RenameWorkspace, SplitDown, SplitRight,
-    ToggleNotifications, ToggleSidebar, ToggleZoom, WorkspaceSwitcher, browser, channel, terminal,
+    NextWorkspace, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab, RenameWorkspace,
+    SplitDown, SplitRight, ToggleNotifications, ToggleSidebar, ToggleZoom, WorkspaceSwitcher,
+    browser, channel, terminal,
 };
 use gpui::*;
 
@@ -65,6 +66,7 @@ pub fn init(cx: &mut App) {
             name: app.into(),
             items: vec![
                 MenuItem::action(format!("About {app}"), About),
+                MenuItem::action("Reload Configuration", ReloadConfig),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
                 MenuItem::separator(),
