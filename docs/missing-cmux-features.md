@@ -42,7 +42,7 @@ So the list below reads in context:
 
 - [x] **Directional pane focus**: ⌥⌘ ← → ↑ ↓.
 - [x] **Shortcut hints**: holding ⌘ shows each workspace's ⌘N, holding ⌃ shows the focused pane's ⌃N tab numbers.
-- [x] **Keyboard pane resizing**: ⌃⇧ H J K L with a configurable step, plus `resize-pane` in the CLI. *(partial: the 20 px step is fixed until there's a config file)*
+- [x] **Keyboard pane resizing**: ⌃⇧ H J K L with a configurable step, plus `resize-pane` in the CLI. *(the step is `panes.resizeStep` in the config file)*
 - [x] **Flash the focused panel**: ⌘⇧H, plus `trigger-flash` in the CLI. *(partial: no `trigger-flash`)*
 - [x] **Pane zoom**: ⌘⇧↩ makes the focused pane fill the workspace, and again restores the split. *(partial: no `zoom-pane` in the CLI)*
 - [x] **Jump to tab N**: ⌃1–8, and ⌃9 for the last tab.
@@ -51,7 +51,7 @@ So the list below reads in context:
 - [ ] **Dragging tabs**: reorder them within a pane, move them to another pane, or drop them on an edge to make a new split. The CLI equivalents are `move-surface`, `reorder-surface`, `split-off` and `drag-surface-to-split`.
 - [ ] **Moving tabs to a new workspace** (`move-tab-to-new-workspace`, `break-pane`).
 - [ ] **Joining or swapping panes** (`join-pane`, `swap-pane`), and switching to the last pane (`last-pane`).
-- [x] **Focused-pane border**: an active-pane border color and a configurable divider color. *(partial: the color is fixed until there's a config file)*
+- [x] **Focused-pane border**: an active-pane border color and a configurable divider color. *(`panes.focusBorderColor` and `panes.dividerColor` in the config file)*
 - [ ] **Keeping the workspace open when its last tab closes** (a setting).
 - [ ] **Canvas layout**: a freeform canvas workspace with pane gaps and snapping. This is beta in cmux.
 - [ ] **Built-in viewers as surfaces**: a Markdown viewer with live reload (`cmux markdown`), a diff viewer for unstaged, staged, branch or last-turn changes (`cmux diff`), and a file editor with syntax highlighting.
@@ -134,7 +134,7 @@ What's missing beyond the browser commands above:
 
 ## 7. Configuration
 
-- [ ] **A `cmux.json`-style config file** with a JSON schema, `config doctor`/`check`/`validate`, and `reload-config` (⌘⇧,), which reloads in place with no restart.
+- [x] **A `cmux.json`-style config file** with a JSON schema, `config doctor`/`check`/`validate`, and `reload-config` (⌘⇧,), which reloads in place with no restart. *(partial: `~/.config/abromux/config.json` with `config check`, `config path` and `reload-config`; only pane settings so far, no JSON schema, no project-level file)*
 - [ ] **Settings window**: ⌘,.
 - [ ] **Customizable keyboard shortcuts**, including two-step chords and `when` conditions.
 - [ ] **Custom commands and actions**: project-specific commands and workspace layouts that you launch from the palette, tab-bar buttons or the plus-button menu. Also packs and setting presets.
@@ -182,11 +182,11 @@ What's missing beyond the browser commands above:
 
 If the goal is daily-driver parity, a reasonable sequence is:
 
-Done so far: renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; Claude Code and Codex status and notifications; sidebar status, progress and log.
+Done so far: a config file with reload; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; Claude Code and Codex status and notifications; sidebar status, progress and log.
 
 Next:
 
-1. **A config file**, then customizable shortcuts (the palette's command list is the place to name actions for them).
+1. **Customizable shortcuts** in the config file (the palette's command list is the place to name actions for them), then custom palette commands with their own shortcuts.
 2. **Quick wins**: copy-on-select, a password input indicator, a scrollbar, `last-pane` / `swap-pane`.
 3. **Hooks for other agents** (OpenCode, Gemini, …).
 4. **Dragging tabs, multiple windows, SSH/tmux**, as the workspace model matures.

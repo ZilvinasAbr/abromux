@@ -68,6 +68,24 @@ The first passkey request asks to let AbroMux use passkeys (System Settings › 
 
 Quitting saves the session to `~/Library/Application Support/abromux/session.json` (the layout is also saved every few seconds, so a crash loses little). The next launch restores the window frame, workspaces and their names, the split layout and ratios, tabs and their names, each terminal's working directory and font size, browser URLs, and up to 2000 lines of each terminal's output (with colors). Shells start fresh: running programs aren't kept alive. Claude Code and Codex sessions are the exception. Run `abromux hooks install` once and abromux learns, through the agents' hooks, which session runs in which terminal (the same hooks feed the sidebar status and notifications; rerun `install` after updating abromux to pick up new hook events). On restore, it types `claude --resume <id>` (with the same permission mode) or `codex resume <id>` into that terminal's new shell; a Codex you had quit isn't resumed. The hooks go into `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) and `~/.codex/hooks.json` (or `$CODEX_HOME`; skipped if Codex isn't set up), after any hooks already there, and do nothing outside abromux. Codex asks you once to review new hooks: trust them when it does. They point at the binary you ran `install` from, so run it from the installed app; `abromux hooks uninstall` removes them. `ABROMUX_NO_RESTORE=1` skips it; `ABROMUX_SESSION_PATH` uses another file. `ABROMUX_DEMO` and `ABROMUX_SCRIPT` runs don't touch the session unless `ABROMUX_SESSION_PATH` is set.
 
+## Config file
+
+abromux's own settings live in `~/.config/abromux/config.json` (or `$XDG_CONFIG_HOME/abromux/config.json`), shared by the release and nightly apps. Every key is optional:
+
+```json
+{
+  "panes": {
+    "resizeStep": 20,
+    "dividerColor": "#3a3935",
+    "focusBorderColor": "#c96442b0"
+  }
+}
+```
+
+`resizeStep` is how many pixels ⌃⇧H/J/K/L and `resize-pane` move a divider. `dividerColor` is the line between split panes, and `focusBorderColor` the border around the focused one. Colors are `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`. Unknown keys are errors, so a typo doesn't go unnoticed.
+
+⌘⇧, (or ⌘⇧P → Reload Config, or `abromux reload-config`) reads the file again without a restart. If it doesn't parse, the current settings stay and a toast shows the error with its line and column, and it does the same at launch. `abromux config check [<file>]` validates a file without the app, and `abromux config path` prints where it's read from. The Ghostty config below is separate and is still read only at launch.
+
 ## Ghostty config
 
 Terminals read your Ghostty config: `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`), then `~/Library/Application Support/com.mitchellh.ghostty/config`, plus their `config-file` includes. abromux uses `theme` (from `~/.config/ghostty/themes` or Ghostty.app), `font-family`, `font-size`, `foreground`, `background`, `palette`, `cursor-color`, `cursor-text`, `cursor-style`, `selection-background`/`-foreground`, `keybind`s whose action is `text:`, `csi:` or `esc:`, and `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` (on by default, as in Ghostty: pasting text that could run commands, such as a newline when the program hasn't turned on bracketed paste, asks first; Enter pastes, Esc cancels). `shell-integration = none` turns off abromux's shell integration (below). Other keys are ignored for now. Changes apply to new terminals.
@@ -135,7 +153,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Cycle tabs | | ⌘⇧[ / ⌘⇧], ⌃Tab / ⌃⇧Tab |
 | Select tab in focused pane | click | ⌃1…⌃8, ⌃9 for the last (hold ⌃ to see the numbers) |
 | Focus pane in a direction | click | ⌥⌘← → ↑ ↓ |
-| Resize focused pane | drag a divider | ⌃⇧H / J / K / L (20 px a press) |
+| Resize focused pane | drag a divider | ⌃⇧H / J / K / L (20 px a press, `panes.resizeStep` in the [config file](#config-file)) |
 | Flash focused pane | | ⌘⇧H |
 | Zoom focused pane to fill the workspace, or unzoom | | ⌘⇧↩ (focusing another pane unzooms) |
 | Command palette: every command that applies to the focused terminal or browser, with its shortcut | | ⌘⇧P, type to filter, ↑/↓ or ⌃N/⌃P, Enter runs, Esc closes |
@@ -153,6 +171,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Find in page (browser) | | ⌘F, same keys as find in terminal |
 | Browser back / forward / reload | arrows and ↻ next to the address bar | ⌘[ / ⌘], ⌘R |
 | Web inspector / JS console | | ⌥⌘I / ⌥⌘C |
+| Reload the config file | | ⌘⇧, |
 
 ## Performance
 

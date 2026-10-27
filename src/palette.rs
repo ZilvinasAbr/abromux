@@ -57,9 +57,9 @@ fn commands() -> Vec<(&'static str, Box<dyn Action>)> {
     use crate::{
         CloseTab, CloseWorkspace, FlashPane, FocusAddressBar, FocusDown, FocusLeft, FocusRight,
         FocusUp, JumpToUnread, NewBrowser, NewTerminal, NewWorkspace, NextTab, NextWorkspace,
-        PrevTab, PrevWorkspace, Quit, RenameTab, RenameWorkspace, ResizeDown, ResizeLeft,
-        ResizeRight, ResizeUp, SplitDown, SplitRight, ToggleNotifications, ToggleSidebar,
-        ToggleZoom,
+        PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab, RenameWorkspace, ResizeDown,
+        ResizeLeft, ResizeRight, ResizeUp, SplitDown, SplitRight, ToggleNotifications,
+        ToggleSidebar, ToggleZoom,
     };
     vec![
         ("New Workspace", Box::new(NewWorkspace)),
@@ -88,6 +88,7 @@ fn commands() -> Vec<(&'static str, Box<dyn Action>)> {
         ("Toggle Sidebar", Box::new(ToggleSidebar)),
         ("Show Notifications", Box::new(ToggleNotifications)),
         ("Jump to Latest Unread", Box::new(JumpToUnread)),
+        ("Reload Config", Box::new(ReloadConfig)),
         ("Copy", Box::new(terminal::Copy)),
         ("Paste", Box::new(terminal::Paste)),
         ("Find…", Box::new(terminal::Find)),
@@ -494,6 +495,7 @@ fn key_label(m: &Modifiers, key: &str) -> String {
     let (shift, key) = match key {
         "{" => (true, "["),
         "}" => (true, "]"),
+        "<" => (true, ","),
         k => (m.shift, k),
     };
     let mut s = String::new();
@@ -641,6 +643,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(key_label(&cmd, "}"), "⇧⌘]");
+        assert_eq!(key_label(&cmd, "<"), "⇧⌘,");
         assert_eq!(key_label(&cmd_shift, "p"), "⇧⌘P");
         assert_eq!(key_label(&ctrl_shift, "h"), "⌃⇧H");
         assert_eq!(

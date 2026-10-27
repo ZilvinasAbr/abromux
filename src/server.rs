@@ -7,7 +7,7 @@
 //! terminal `abromux` runs in, from `ABROMUX_SURFACE_ID`), else on what's focused.
 
 use crate::{
-    AbroMux, BrowserView, DEFAULT_URL, RESIZE_STEP,
+    AbroMux, BrowserView, DEFAULT_URL,
     agent::{Agent, Kind},
     browser::normalize_url,
     browser_auto, debug, ipc,
@@ -343,7 +343,7 @@ impl AbroMux {
                         a.parse().with_context(|| format!("bad amount {a:?}"))?
                     }
                     Some(v) => v.as_f64().context("amount must be a number")? as f32,
-                    None => RESIZE_STEP,
+                    None => cx.global::<crate::settings::Settings>().panes.resize_step,
                 };
                 if !self.resize_pane(wi, pane, dir, amount, cx) {
                     bail!("pane:{pane} has no split to resize in that direction");
@@ -767,6 +767,11 @@ impl AbroMux {
                 json!(null)
             }
 
+            "app.reload_config" => {
+                self.reload_settings(window, cx)
+                    .map_err(anyhow::Error::msg)?;
+                json!({ "path": crate::settings::path() })
+            }
             "app.sidebar" => {
                 self.sidebar = match str_param(p, "state").unwrap_or("toggle") {
                     "show" => true,
