@@ -19,6 +19,7 @@ mod palette;
 mod quit;
 mod server;
 mod session;
+mod shell;
 mod skills;
 mod sprite;
 mod status;

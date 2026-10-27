@@ -1421,4 +1421,47 @@ mod tests {
             b"\x03"
         );
     }
+
+    /// What zsh does on SIGWINCH: it still thinks its prompt is one row, so
+    /// it goes to column 0, erases down and prints the prompt again.
+    fn zsh_resize(t: &mut Terminal, cols: u16, prompt: &str) {
+        t.resize(cols, 6, 10, 20);
+        t.write(b"\r\x1b[J");
+        t.write(prompt.as_bytes());
+    }
+
+    /// The prompt as `src/shell/zsh/abromux.zsh` marks it.
+    fn marked(cmd: &str) -> String {
+        format!("\x1b]133;A;redraw=1\x07~/repos ❯ \x1b]133;B\x07{cmd}")
+    }
+
+    #[test]
+    fn unmarked_prompt_leaves_a_copy_on_resize() {
+        let line = "~/repos ❯ echo zilvinas";
+        let mut t = Terminal::new(30, 6).unwrap();
+        t.write(line.as_bytes());
+        zsh_resize(&mut t, 18, line);
+        assert_eq!(t.screen_text().matches("~/repos").count(), 2);
+    }
+
+    #[test]
+    fn marked_prompt_is_redrawn_on_wider_resize() {
+        let mut t = Terminal::new(18, 6).unwrap();
+        t.write(b"some output\r\n");
+        t.write(marked("echo zilvinas").as_bytes());
+        zsh_resize(&mut t, 30, &marked("echo zilvinas"));
+        assert_eq!(
+            t.screen_text().trim_end(),
+            "some output\n~/repos ❯ echo zilvinas"
+        );
+    }
+
+    #[test]
+    fn command_output_still_reflows() {
+        let mut t = Terminal::new(30, 6).unwrap();
+        t.write(marked("ls").as_bytes());
+        t.write(b"\r\n\x1b]133;C\x07a-file-name-that-is-long");
+        t.resize(18, 6, 10, 20);
+        assert!(t.screen_text().contains("a-file-name-that-is-long"));
+    }
 }

@@ -1616,13 +1616,19 @@ fn spawn_shell(
         })
         .expect("openpty");
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let mut cmd = CommandBuilder::new(shell);
+    let mut cmd = CommandBuilder::new(&shell);
     cmd.arg("-l");
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "abromux");
     for (k, v) in env {
         cmd.env(k, v);
+    }
+    if cx
+        .try_global::<Config>()
+        .is_none_or(|c| c.shell_integration)
+    {
+        crate::shell::inject(&mut cmd, &shell, env);
     }
     cmd.cwd(cwd);
     let child = pty.slave.spawn_command(cmd).expect("spawn shell");

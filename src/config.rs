@@ -1,7 +1,8 @@
 //! Reads the user's Ghostty config so terminals look and type like their
 //! Ghostty: font, colors, palette, theme, cursor style and `text:`/`csi:`/
-//! `esc:` keybinds, and paste protection (`clipboard-paste-protection`,
-//! `clipboard-paste-bracketed-safe`). Everything else in the file is ignored.
+//! `esc:` keybinds, paste protection (`clipboard-paste-protection`,
+//! `clipboard-paste-bracketed-safe`) and `shell-integration = none`.
+//! Everything else in the file is ignored.
 //!
 //! Files, in load order (later wins): `$XDG_CONFIG_HOME/ghostty/config`
 //! (default `~/.config/ghostty/config`), then
@@ -45,6 +46,9 @@ pub struct Config {
     pub paste_protection: bool,
     /// Newlines are safe when the program has bracketed paste on.
     pub paste_bracketed_safe: bool,
+    /// Load abromux's shell integration (`crate::shell`); off with
+    /// `shell-integration = none`.
+    pub shell_integration: bool,
 }
 
 impl Global for Config {}
@@ -75,6 +79,7 @@ impl Default for Config {
                 .collect(),
             paste_protection: true,
             paste_bracketed_safe: true,
+            shell_integration: true,
         }
     }
 }
@@ -150,6 +155,7 @@ impl Config {
                 "clipboard-paste-bracketed-safe" => {
                     c.paste_bracketed_safe = parse_bool(v).unwrap_or(c.paste_bracketed_safe)
                 }
+                "shell-integration" => c.shell_integration = v != "none",
                 "keybind" if v == "clear" => c.keybinds.clear(),
                 "keybind" => {
                     if let Some((trigger, action)) = v.split_once('=')
@@ -403,6 +409,10 @@ mod tests {
             "clipboard-paste-protection = false\nclipboard-paste-bracketed-safe = nope",
         ));
         assert!(!c.paste_protection && c.paste_bracketed_safe);
+
+        assert!(Config::default().shell_integration);
+        let c = Config::from_entries(&entries("shell-integration = none"));
+        assert!(!c.shell_integration);
     }
 
     #[test]
