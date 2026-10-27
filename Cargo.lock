@@ -14,6 +14,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "lb-wry",
+ "memchr",
  "objc",
  "portable-pty",
  "raw-window-handle",

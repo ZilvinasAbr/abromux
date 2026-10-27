@@ -20,6 +20,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # inline terminal cell text (already a gpui dependency)
 smol_str = "0.2"
+# OSC 99 scan for ESC (already a dependency of several crates)
+memchr = "2"
 # debug window snapshots (ABROMUX_SNAPSHOT)
 objc = "0.2"
 # page click monitor (browser.rs)

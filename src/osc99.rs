@@ -34,11 +34,18 @@ impl Scanner {
         let mut done = vec![];
         let mut i = 0;
         while i < bytes.len() {
-            // Most output is outside any escape: skip to the next ESC.
+            // Most output is outside any OSC: skip to the next `ESC ]`,
+            // passing over other escapes (colours, cursor moves) in place.
             if matches!(self.state, State::Ground) {
-                match bytes[i..].iter().position(|&b| b == 0x1b) {
-                    Some(n) => i += n,
-                    None => break,
+                loop {
+                    match memchr::memchr(0x1b, &bytes[i..]) {
+                        Some(n) => i += n,
+                        None => return done,
+                    }
+                    match bytes.get(i + 1) {
+                        Some(b']') | None => break,
+                        Some(_) => i += 1,
+                    }
                 }
             }
             let b = bytes[i];
@@ -177,6 +184,15 @@ mod tests {
         assert!(
             s.feed(b"\x1b]99;;cut \x1b[0m").is_empty(),
             "another escape cancels it"
+        );
+        // Colours right before one, and an ESC that ends a read.
+        assert!(s.feed(b"\x1b[31mred\x1b[0m\x1b").is_empty());
+        assert_eq!(
+            s.feed(b"]99;;Split\x07\x1b\x1b]99;;Again\x07"),
+            [
+                ("Split".to_string(), String::new()),
+                ("Again".to_string(), String::new())
+            ]
         );
     }
 }
