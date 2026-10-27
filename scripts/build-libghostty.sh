@@ -2,7 +2,7 @@
 # Builds libghostty-vt (static) into vendor/ghostty-vt-out using a local Zig.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-GHOSTTY_REV=${GHOSTTY_REV:-8ef0ec1}
+GHOSTTY_REV=${GHOSTTY_REV:-v1.4.0}
 ZIG_VERSION=0.17.0
 
 mkdir -p vendor
