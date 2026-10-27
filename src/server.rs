@@ -503,6 +503,8 @@ impl AbroMux {
                     }
                     (_, None) => {}
                 });
+                // The tab's icon follows the agent.
+                cx.notify();
                 self.agent_event(t.entity_id(), p, window, cx);
                 json!(null)
             }

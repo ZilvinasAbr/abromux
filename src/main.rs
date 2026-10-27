@@ -140,6 +140,8 @@ impl AssetSource for Assets {
         }
         let bytes = embed!(
             "terminal",
+            "claude",
+            "codex",
             "globe",
             "plus",
             "close",
@@ -1543,7 +1545,7 @@ impl AbroMux {
                 .on_drag(
                     DraggedTab {
                         sid,
-                        icon: s.icon(),
+                        icon: s.icon(cx),
                         title: s.title(cx).into(),
                     },
                     |d, _, _, cx| cx.new(|_| d.clone()),
@@ -1570,13 +1572,9 @@ impl AbroMux {
                     )
                 })
                 .child(
-                    icon(s.icon())
+                    icon(s.icon(cx))
                         .size(px(12.))
-                        .text_color(if active || unread {
-                            rgb(TEXT)
-                        } else {
-                            rgb(MUTED)
-                        }),
+                        .text_color(icon_color(s.icon(cx), active || unread)),
                 )
                 .child(match renaming.clone() {
                     Some(input) => div()
@@ -2099,6 +2097,16 @@ impl Render for AbroMux {
     }
 }
 
+/// A tab icon's colour: Claude's logo keeps its orange, others are muted
+/// unless the tab is active.
+fn icon_color(name: &str, bright: bool) -> Rgba {
+    match name {
+        "claude" => rgb(ACCENT_BRIGHT),
+        _ if bright => rgb(TEXT),
+        _ => rgb(MUTED),
+    }
+}
+
 /// A tab being dragged, drawn as a chip under the cursor.
 #[derive(Clone)]
 struct DraggedTab {
@@ -2124,7 +2132,7 @@ impl Render for DraggedTab {
             .text_size(px(12.))
             .text_color(rgb(TEXT))
             .font_family(".AppleSystemUIFont")
-            .child(icon(self.icon).size(px(12.)).text_color(rgb(TEXT)))
+            .child(icon(self.icon).size(px(12.)).text_color(icon_color(self.icon, true)))
             .child(div().min_w_0().truncate().child(self.title.clone()))
     }
 }

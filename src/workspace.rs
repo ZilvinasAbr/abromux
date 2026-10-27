@@ -1,7 +1,7 @@
 //! Workspace model: each workspace owns a tree of split panes; each pane
 //! holds tabs ("surfaces") that are either terminals or browsers.
 
-use crate::{browser::BrowserView, terminal::TerminalView};
+use crate::{agent::Kind, browser::BrowserView, terminal::TerminalView};
 use gpui::{App, Axis, Entity, EntityId, Focusable, Window};
 
 #[derive(Clone)]
@@ -18,9 +18,17 @@ impl Surface {
         }
     }
 
-    pub fn icon(&self) -> &'static str {
+    /// A terminal running a coding agent shows the agent's logo.
+    pub fn icon(&self, cx: &App) -> &'static str {
         match self {
-            Surface::Terminal(_) => "terminal",
+            Surface::Terminal(t) => match t.read(cx).agent.as_ref() {
+                Some(a) if a.alive() => match Kind::parse(&a.kind) {
+                    Some(Kind::Claude) => "claude",
+                    Some(Kind::Codex) => "codex",
+                    None => "terminal",
+                },
+                _ => "terminal",
+            },
             Surface::Browser(_) => "globe",
         }
     }
