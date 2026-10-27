@@ -27,7 +27,7 @@ impl From<GhosttyColorRgb> for Rgb {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Cell {
     /// Empty for blank cells and wide-char spacer tails. Inline up to 23
     /// bytes, so a cell's text doesn't allocate.
@@ -65,6 +65,9 @@ pub struct Cursor {
 pub struct Frame {
     pub cols: u16,
     pub rows: Vec<Vec<Cell>>,
+    /// Per row, libghostty's row id: a row that isn't dirty is carried
+    /// over from the previous frame by id instead of being read again.
+    row_ids: Vec<[u64; 2]>,
     pub background: Rgb,
     pub foreground: Rgb,
     pub cursor_color: Option<Rgb>,
@@ -960,8 +963,11 @@ impl Terminal {
         frame
     }
 
-    /// Snapshot the visible viewport into `frame`, reusing its row buffers.
+    /// Snapshot the visible viewport into `frame`. Only rows libghostty
+    /// marks dirty are read again; the rest are moved over from what
+    /// `frame` held, by row id.
     pub fn update_frame(&mut self, frame: &mut Frame) {
+        let old_cols = frame.cols;
         frame.cols = 0;
         frame.cursor = None;
         frame.cursor_color = None;
@@ -988,6 +994,7 @@ impl Terminal {
                 && ghostty_render_state_update(self.render, self.raw) != GHOSTTY_SUCCESS
             {
                 frame.rows.clear();
+                frame.row_ids.clear();
                 return;
             }
             let rs = self.render;
@@ -1037,20 +1044,53 @@ impl Terminal {
                 GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
                 &mut self.row_iter as *mut _ as *mut c_void,
             );
+            let mut dirty: GhosttyRenderStateDirty = GHOSTTY_RENDER_STATE_DIRTY_FULL;
+            ghostty_render_state_get(
+                rs,
+                GHOSTTY_RENDER_STATE_DATA_DIRTY,
+                &mut dirty as *mut _ as *mut c_void,
+            );
+            let full = dirty == GHOSTTY_RENDER_STATE_DIRTY_FULL || cols != old_cols;
+            let mut old_rows = mem::take(&mut frame.rows);
+            let mut old_ids = mem::take(&mut frame.row_ids);
+
             let mut utf8 = [0u8; 64];
-            let mut rows = 0;
             while ghostty_render_state_row_iterator_next(self.row_iter) {
+                let mut id = GhosttyRenderStateRowId { bits: [0; 2] };
+                ghostty_render_state_row_get(
+                    self.row_iter,
+                    GHOSTTY_RENDER_STATE_ROW_DATA_ID,
+                    &mut id as *mut _ as *mut c_void,
+                );
+                let mut row_dirty = true;
+                ghostty_render_state_row_get(
+                    self.row_iter,
+                    GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY,
+                    &mut row_dirty as *mut _ as *mut c_void,
+                );
+                // Rows usually stay put or shift by a few, so look near
+                // where this one sits now first.
+                let at = frame.rows.len();
+                let kept = (!full && !row_dirty && id.bits != [0; 2])
+                    .then(|| {
+                        (at..old_ids.len())
+                            .chain(0..at.min(old_ids.len()))
+                            .find(|&j| old_ids[j] == id.bits)
+                    })
+                    .flatten();
+                frame.row_ids.push(id.bits);
+                if let Some(j) = kept {
+                    old_ids[j] = [0; 2];
+                    frame.rows.push(mem::take(&mut old_rows[j]));
+                    continue;
+                }
+                frame.rows.push(Vec::with_capacity(cols as usize));
+                let row = frame.rows.last_mut().unwrap();
                 ghostty_render_state_row_get(
                     self.row_iter,
                     GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
                     &mut self.row_cells as *mut _ as *mut c_void,
                 );
-                if frame.rows.len() == rows {
-                    frame.rows.push(Vec::with_capacity(cols as usize));
-                }
-                let row = &mut frame.rows[rows];
-                row.clear();
-                rows += 1;
                 let cells = self.row_cells;
                 while ghostty_render_state_row_cells_next(cells) {
                     let mut cell = Cell::default();
@@ -1131,7 +1171,6 @@ impl Terminal {
                     row.push(cell);
                 }
             }
-            frame.rows.truncate(rows);
             ghostty_render_state_clean(rs);
             frame.matches = self.viewport_matches(cols, frame.rows.len() as u32);
         }
@@ -1329,6 +1368,37 @@ mod tests {
         t.write(b"see \x1b]8;;https://example.com/a\x1b\\link\x1b]8;;\x1b\\ here");
         assert_eq!(t.hyperlink(5, 0).as_deref(), Some("https://example.com/a"));
         assert_eq!(t.hyperlink(1, 0), None);
+    }
+
+    #[test]
+    fn incremental_frame_matches_a_fresh_one() {
+        let mut t = Terminal::new(20, 4).unwrap();
+        let mut inc = Frame::default();
+        let steps: &[&dyn Fn(&mut Terminal)] = &[
+            &|t| t.write(b"one\r\ntwo\r\nthree"),
+            &|t| t.write(b"\r\nfour\r\nfive\r\nsix"),
+            &|t| t.write(b"\x1b[2;1H\x1b[31mred\x1b[0m"),
+            &|t| t.select((0, 0), (3, 1)),
+            &|t| t.write(b"\x1b[2;3r\x1b[2;1H\x1bM"),
+            &|t| t.write(b"\x1b[r\x1b[4;1H\r\nseven\r\neight"),
+            &|t| t.write(b"\x1b[2J\x1b[H"),
+            &|t| t.resize(12, 3, 8, 16),
+            &|t| t.write(b"after\r\nresize"),
+        ];
+        for (i, step) in steps.iter().enumerate() {
+            step(&mut t);
+            t.update_frame(&mut inc);
+            let fresh = t.frame();
+            assert_eq!(inc.rows, fresh.rows, "after step {i}");
+        }
+
+        // Rows nothing touched are carried over (same buffer), not read
+        // again. (Row 1 is dirty too: the cursor left it.)
+        let before: Vec<_> = inc.rows.iter().map(|r| r.as_ptr()).collect();
+        t.write(b"\x1b[1;1Hx");
+        t.update_frame(&mut inc);
+        assert_ne!(inc.rows[0].as_ptr(), before[0]);
+        assert_eq!(inc.rows[2].as_ptr(), before[2]);
     }
 
     #[test]
