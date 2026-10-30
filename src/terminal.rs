@@ -4,7 +4,10 @@
 use crate::{
     agent::Agent,
     config::{Config, CursorStyle as ConfigCursor},
-    ghostty::{self, CursorStyle as Caret, Frame, MouseAction, MouseGeometry, Rgb, ffi},
+    ghostty::{
+        self, CursorStyle as Caret, Frame, ImageLayer, ImagePixels, MouseAction, MouseGeometry,
+        Rgb, ffi,
+    },
     link, osc99, sprite,
     theme::*,
 };
@@ -12,9 +15,11 @@ use futures::{StreamExt, channel::mpsc};
 use gpui::{prelude::*, *};
 use gpui_component::input::{self, Input, InputEvent, InputState};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// UI monospace font (sidebar metadata); terminals use the Ghostty config's.
 pub const FONT_FAMILY: &str = "JetBrains Mono";
@@ -79,6 +84,18 @@ pub struct TerminalView {
     dirty: bool,
     grid: (u16, u16),
     cell: Size<Pixels>,
+    /// The cell size the program is told, in device pixels, so images it
+    /// sends are sharp on Retina screens.
+    cell_px: (u32, u32),
+    scale: f32,
+    /// Textures of the Kitty images on screen, by (generation, source rect).
+    images: HashMap<(u64, [u32; 4]), Arc<RenderImage>>,
+    /// Textures no longer on screen, freed at the next paint.
+    stale_images: Vec<Arc<RenderImage>>,
+    /// The window whose atlas holds the textures, to free them on close.
+    window: Option<AnyWindowHandle>,
+    /// A task will repaint when an animated image's next frame is due.
+    animation_timer: bool,
     bounds: Bounds<Pixels>,
     pub title: String,
     pub cwd: String,
@@ -138,6 +155,7 @@ impl TerminalView {
         let (writer, master, child) = spawn_shell(&cwd, &env, (cols, rows), 0, cx);
         let focus = cx.focus_handle();
         let config = cx.try_global::<Config>().cloned().unwrap_or_default();
+        cx.on_release(Self::free_images).detach();
         Self {
             term: new_term(cols, rows, &config),
             writer,
@@ -148,6 +166,12 @@ impl TerminalView {
             dirty: true,
             grid: (cols, rows),
             cell: size(px(8.), px(16.)),
+            cell_px: (0, 0),
+            scale: 1.,
+            images: HashMap::new(),
+            stale_images: Vec::new(),
+            window: None,
+            animation_timer: false,
             bounds: Bounds::default(),
             title: String::new(),
             cwd,
@@ -174,6 +198,28 @@ impl TerminalView {
             env,
             generation: 0,
             hold_timer: false,
+        }
+    }
+
+    /// Free the closed terminal's image textures from its window's atlas
+    /// (after this update, while the window isn't borrowed).
+    fn free_images(&mut self, cx: &mut App) {
+        let textures: Vec<_> = self
+            .images
+            .drain()
+            .map(|(_, t)| t)
+            .chain(self.stale_images.drain(..))
+            .collect();
+        if let Some(w) = self.window
+            && !textures.is_empty()
+        {
+            cx.defer(move |cx| {
+                let _ = w.update(cx, |_, window, _| {
+                    for t in textures {
+                        let _ = window.drop_image(t);
+                    }
+                });
+            });
         }
     }
 
@@ -329,14 +375,15 @@ impl TerminalView {
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
-        if (cols, rows) == self.grid {
+        let (cw, ch) = (
+            (f32::from(self.cell.width) * self.scale).round().max(1.) as u32,
+            (f32::from(self.cell.height) * self.scale).round().max(1.) as u32,
+        );
+        if (cols, rows) == self.grid && (cw, ch) == self.cell_px {
             return;
         }
         self.grid = (cols, rows);
-        let (cw, ch) = (
-            f32::from(self.cell.width) as u32,
-            f32::from(self.cell.height) as u32,
-        );
+        self.cell_px = (cw, ch);
         self.term.resize(cols, rows, cw, ch);
         let _ = self.master.resize(PtySize {
             rows,
@@ -355,8 +402,31 @@ impl TerminalView {
                 None => self.frame = Rc::new(self.term.frame()),
             }
             self.dirty = false;
+            self.load_images();
         }
         &self.frame
+    }
+
+    /// Make textures for the frame's images that don't have one yet; the
+    /// pixels are only readable until the next write to the terminal.
+    fn load_images(&mut self) {
+        let mut kept = HashMap::new();
+        for im in &self.frame.images {
+            let key = (im.generation, im.src);
+            if kept.contains_key(&key) {
+                continue;
+            }
+            let texture = match self.images.remove(&key) {
+                Some(t) => t,
+                None => match self.term.image_pixels(im.id, im.src) {
+                    Some(p) => render_image(p),
+                    None => continue,
+                },
+            };
+            kept.insert(key, texture);
+        }
+        let gone = std::mem::replace(&mut self.images, kept);
+        self.stale_images.extend(gone.into_values());
     }
 
     fn cell_at(&self, pos: Point<Pixels>) -> (u16, u16) {
@@ -552,6 +622,29 @@ impl TerminalView {
 
     /// While the program holds the screen (synchronized output), repaint
     /// now and then so a hold it never ends still times out and gets drawn.
+    /// Show the frame each playing Kitty animation is on, and repaint when
+    /// the next one is due.
+    fn animate(&mut self, cx: &mut Context<Self>) {
+        let Some(delay) = self.term.tick_animations() else {
+            return;
+        };
+        self.dirty = true;
+        if self.animation_timer {
+            return;
+        }
+        self.animation_timer = true;
+        cx.spawn(async move |this, cx| {
+            // No faster than a 120 Hz display draws.
+            let delay = delay.max(std::time::Duration::from_millis(8));
+            cx.background_executor().timer(delay).await;
+            let _ = this.update(cx, |this, cx| {
+                this.animation_timer = false;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn watch_hold(&mut self, cx: &mut Context<Self>) {
         if !self.term.held() || self.hold_timer {
             return;
@@ -869,7 +962,13 @@ impl TerminalView {
         m: Modifiers,
         pos: Point<Pixels>,
     ) {
-        let (geometry, at) = mouse_space(pos - self.bounds.origin, self.cell, self.grid);
+        let (geometry, at) = mouse_space(
+            pos - self.bounds.origin,
+            self.cell,
+            self.cell_px,
+            self.scale,
+            self.grid,
+        );
         let bytes = self.term.encode_mouse(
             action,
             button,
@@ -1097,6 +1196,10 @@ impl IntoElement for TerminalElement {
 struct Prepaint {
     marked: Option<String>,
     frame: Rc<Frame>,
+    /// Each of the frame's images with its texture, in drawing order.
+    images: Vec<(ghostty::Image, Arc<RenderImage>)>,
+    /// Logical pixels per image pixel, across and down.
+    image_scale: (f32, f32),
     cell: Size<Pixels>,
     font: Font,
     font_size: Pixels,
@@ -1164,11 +1267,26 @@ impl Element for TerminalElement {
             .floor()
             .max(1.) as u16;
         let focused = self.view.read(cx).focus.is_focused(window);
-        let (frame, marked) = self.view.update(cx, |v, _| {
+        let (frame, marked, images, image_scale) = self.view.update(cx, |v, cx| {
             v.bounds = bounds;
             v.cell = cell;
+            v.scale = window.scale_factor();
+            v.window = Some(window.window_handle());
             v.resize(cols, rows);
+            v.animate(cx);
             let frame = v.frame().clone();
+            for texture in v.stale_images.drain(..) {
+                let _ = window.drop_image(texture);
+            }
+            let images = frame
+                .images
+                .iter()
+                .filter_map(|im| Some((*im, v.images.get(&(im.generation, im.src))?.clone())))
+                .collect::<Vec<_>>();
+            let image_scale = (
+                f32::from(cell.width) / v.cell_px.0 as f32,
+                f32::from(cell.height) / v.cell_px.1 as f32,
+            );
             if let Some(c) = frame.cursor {
                 let origin = bounds.origin + point(px(PADDING), px(PADDING));
                 v.ime_cursor = Bounds::new(
@@ -1179,11 +1297,13 @@ impl Element for TerminalElement {
                     cell,
                 );
             }
-            (frame, v.marked.clone())
+            (frame, v.marked.clone(), images, image_scale)
         });
         Prepaint {
             marked,
             frame,
+            images,
+            image_scale,
             cell,
             font,
             font_size,
@@ -1207,6 +1327,8 @@ impl Element for TerminalElement {
         let Prepaint {
             marked,
             frame,
+            images,
+            image_scale,
             cell,
             font,
             font_size,
@@ -1223,180 +1345,207 @@ impl Element for TerminalElement {
         let default_bg = frame.background;
         let (selection_bg, selection_fg) = *selection;
 
+        let paint_images = |layers: &[ImageLayer], window: &mut Window| {
+            for (im, texture) in images.iter().filter(|(im, _)| layers.contains(&im.layer)) {
+                let (sx, sy) = *image_scale;
+                let b = Bounds::new(
+                    point(
+                        origin.x + cell.width * im.col as f32 + px(im.offset.0 as f32 * sx),
+                        origin.y + cell.height * im.row as f32 + px(im.offset.1 as f32 * sy),
+                    ),
+                    size(px(im.size.0 as f32 * sx), px(im.size.1 as f32 * sy)),
+                );
+                let _ = window.paint_image(b, Corners::default(), texture.clone(), 0, false);
+            }
+        };
+
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             window.paint_quad(fill(bounds, rgb_to_hsla(default_bg)));
+            paint_images(&[ImageLayer::BelowBackground], window);
 
-            for (y, row) in frame.rows.iter().enumerate() {
-                let row_y = origin.y + cell.height * y as f32;
-                // Some(selected) for cells inside a find-bar match.
-                let mut hits = vec![None; row.len()];
-                for m in frame.matches.iter().filter(|m| m.y as usize == y) {
-                    for h in hits
-                        .iter_mut()
-                        .take(m.x.end as usize)
-                        .skip(m.x.start as usize)
-                    {
-                        *h = Some(m.selected);
-                    }
+            // Two passes: all cell backgrounds, then images meant to sit
+            // between backgrounds and text, then all text.
+            for text_pass in [false, true] {
+                if text_pass {
+                    paint_images(&[ImageLayer::BelowText], window);
                 }
-                let colors = |x: usize, c: &ghostty::Cell| {
-                    let (mut fg, mut bg) = (c.fg.unwrap_or(default_fg), c.bg);
-                    if c.inverse {
-                        (fg, bg) = (bg.unwrap_or(default_bg), Some(fg));
+                for (y, row) in frame.rows.iter().enumerate() {
+                    let row_y = origin.y + cell.height * y as f32;
+                    // Some(selected) for cells inside a find-bar match.
+                    let mut hits = vec![None; row.len()];
+                    for m in frame.matches.iter().filter(|m| m.y as usize == y) {
+                        for h in hits
+                            .iter_mut()
+                            .take(m.x.end as usize)
+                            .skip(m.x.start as usize)
+                        {
+                            *h = Some(m.selected);
+                        }
                     }
-                    if let Some(selected) = hits[x] {
-                        bg = Some(if selected {
-                            MATCH_SELECTED_BG
-                        } else {
-                            MATCH_BG
-                        });
-                        fg = MATCH_FG;
-                    }
-                    if c.selected {
-                        bg = Some(selection_bg);
-                        fg = selection_fg.unwrap_or(fg);
-                    }
-                    (fg, bg)
-                };
+                    let colors = |x: usize, c: &ghostty::Cell| {
+                        let (mut fg, mut bg) = (c.fg.unwrap_or(default_fg), c.bg);
+                        if c.inverse {
+                            (fg, bg) = (bg.unwrap_or(default_bg), Some(fg));
+                        }
+                        if let Some(selected) = hits[x] {
+                            bg = Some(if selected {
+                                MATCH_SELECTED_BG
+                            } else {
+                                MATCH_BG
+                            });
+                            fg = MATCH_FG;
+                        }
+                        if c.selected {
+                            bg = Some(selection_bg);
+                            fg = selection_fg.unwrap_or(fg);
+                        }
+                        (fg, bg)
+                    };
 
-                // Backgrounds: merge runs of equal colour into one quad.
-                let mut x = 0;
-                while x < row.len() {
-                    let (_, bg) = colors(x, &row[x]);
-                    let start = x;
-                    while x < row.len() && colors(x, &row[x]).1 == bg {
-                        x += 1;
+                    // Backgrounds: merge runs of equal colour into one quad.
+                    let mut x = 0;
+                    while !text_pass && x < row.len() {
+                        let (_, bg) = colors(x, &row[x]);
+                        let start = x;
+                        while x < row.len() && colors(x, &row[x]).1 == bg {
+                            x += 1;
+                        }
+                        if let Some(bg) = bg {
+                            let b = Bounds::new(
+                                point(origin.x + cell.width * start as f32, row_y),
+                                size(cell.width * (x - start) as f32, cell.height),
+                            );
+                            window.paint_quad(fill(b, rgb_to_hsla(bg)));
+                        }
                     }
-                    if let Some(bg) = bg {
-                        let b = Bounds::new(
-                            point(origin.x + cell.width * start as f32, row_y),
-                            size(cell.width * (x - start) as f32, cell.height),
-                        );
-                        window.paint_quad(fill(b, rgb_to_hsla(bg)));
-                    }
-                }
-
-                // Text: one shaped line per chunk, each glyph snapped onto the
-                // cell grid (fallback fonts have other advances, e.g. ⎿ or ⏺).
-                // Snapping goes by glyph index, so wide cells and multi-codepoint
-                // cells get their own chunk.
-                let mut text = String::new();
-                let mut runs: Vec<TextRun> = Vec::new();
-                let mut chunk_col = 0usize;
-                // `span` is set for a cell shaped alone: its glyphs are centred
-                // across that many columns as a whole.
-                let flush = |text: &mut String,
-                             runs: &mut Vec<TextRun>,
-                             col: usize,
-                             span: Option<usize>,
-                             window: &mut Window,
-                             cx: &mut App| {
-                    if text.trim().is_empty() {
-                        text.clear();
-                        runs.clear();
-                        return;
-                    }
-                    let mut line = window.text_system().shape_line(
-                        SharedString::from(std::mem::take(text)),
-                        font_size,
-                        runs,
-                        None,
-                    );
-                    runs.clear();
-                    *line = std::sync::Arc::new(snap_to_grid(&line, cell.width, span));
-                    let _ = line.paint(
-                        point(origin.x + cell.width * col as f32, row_y),
-                        cell.height,
-                        window,
-                        cx,
-                    );
-                };
-                for (x, c) in row.iter().enumerate() {
-                    if c.spacer {
+                    if !text_pass {
                         continue;
                     }
-                    // Box drawing and blocks are drawn, not shaped, so they
-                    // fill the cell and join up with their neighbours.
-                    if let Some(ch) = sprite_char(c) {
-                        flush(&mut text, &mut runs, chunk_col, None, window, cx);
-                        chunk_col = x + 1;
-                        let (fg, bg) = colors(x, c);
+
+                    // Text: one shaped line per chunk, each glyph snapped onto the
+                    // cell grid (fallback fonts have other advances, e.g. ⎿ or ⏺).
+                    // Snapping goes by glyph index, so wide cells and multi-codepoint
+                    // cells get their own chunk.
+                    let mut text = String::new();
+                    let mut runs: Vec<TextRun> = Vec::new();
+                    let mut chunk_col = 0usize;
+                    // `span` is set for a cell shaped alone: its glyphs are centred
+                    // across that many columns as a whole.
+                    let flush = |text: &mut String,
+                                 runs: &mut Vec<TextRun>,
+                                 col: usize,
+                                 span: Option<usize>,
+                                 window: &mut Window,
+                                 cx: &mut App| {
+                        if text.trim().is_empty() {
+                            text.clear();
+                            runs.clear();
+                            return;
+                        }
+                        let mut line = window.text_system().shape_line(
+                            SharedString::from(std::mem::take(text)),
+                            font_size,
+                            runs,
+                            None,
+                        );
+                        runs.clear();
+                        *line = std::sync::Arc::new(snap_to_grid(&line, cell.width, span));
+                        let _ = line.paint(
+                            point(origin.x + cell.width * col as f32, row_y),
+                            cell.height,
+                            window,
+                            cx,
+                        );
+                    };
+                    for (x, c) in row.iter().enumerate() {
+                        if c.spacer {
+                            continue;
+                        }
+                        // Box drawing and blocks are drawn, not shaped, so they
+                        // fill the cell and join up with their neighbours.
+                        if let Some(ch) = sprite_char(c) {
+                            flush(&mut text, &mut runs, chunk_col, None, window, cx);
+                            chunk_col = x + 1;
+                            let (fg, bg) = colors(x, c);
+                            let mut color = rgb_to_hsla(fg);
+                            if c.faint {
+                                color.a *= 0.6;
+                            }
+                            let b =
+                                Bounds::new(point(origin.x + cell.width * x as f32, row_y), *cell);
+                            sprite::paint(
+                                ch,
+                                b,
+                                font_size,
+                                color,
+                                rgb_to_hsla(bg.unwrap_or(default_bg)),
+                                window,
+                            );
+                            continue;
+                        }
+                        let alone = c.wide || c.text.chars().nth(1).is_some();
+                        if alone {
+                            flush(&mut text, &mut runs, chunk_col, None, window, cx);
+                            chunk_col = x;
+                        }
+                        let glyph: &str = if c.text.is_empty() || c.invisible {
+                            " "
+                        } else {
+                            &c.text
+                        };
+                        let (fg, _) = colors(x, c);
                         let mut color = rgb_to_hsla(fg);
                         if c.faint {
                             color.a *= 0.6;
                         }
-                        let b = Bounds::new(point(origin.x + cell.width * x as f32, row_y), *cell);
-                        sprite::paint(
-                            ch,
-                            b,
-                            font_size,
-                            color,
-                            rgb_to_hsla(bg.unwrap_or(default_bg)),
-                            window,
-                        );
-                        continue;
-                    }
-                    let alone = c.wide || c.text.chars().nth(1).is_some();
-                    if alone {
-                        flush(&mut text, &mut runs, chunk_col, None, window, cx);
-                        chunk_col = x;
-                    }
-                    let glyph: &str = if c.text.is_empty() || c.invisible {
-                        " "
-                    } else {
-                        &c.text
-                    };
-                    let (fg, _) = colors(x, c);
-                    let mut color = rgb_to_hsla(fg);
-                    if c.faint {
-                        color.a *= 0.6;
-                    }
-                    let mut f = font.clone();
-                    if c.bold {
-                        f.weight = FontWeight::BOLD;
-                    }
-                    if c.italic {
-                        f.style = FontStyle::Italic;
-                    }
-                    let run = TextRun {
-                        len: glyph.len(),
-                        font: f,
-                        color,
-                        background_color: None,
-                        underline: (c.underline
-                            || link.as_ref().is_some_and(|(ly, lx)| {
-                                *ly as usize == y && lx.contains(&(x as u16))
-                            }))
-                        .then(|| UnderlineStyle {
-                            thickness: px(1.),
-                            color: Some(color),
-                            wavy: false,
-                        }),
-                        strikethrough: c.strikethrough.then(|| StrikethroughStyle {
-                            thickness: px(1.),
-                            color: Some(color),
-                        }),
-                    };
-                    match runs.last_mut() {
-                        Some(last)
-                            if last.font == run.font
-                                && last.color == run.color
-                                && last.underline == run.underline
-                                && last.strikethrough == run.strikethrough =>
-                        {
-                            last.len += run.len
+                        let mut f = font.clone();
+                        if c.bold {
+                            f.weight = FontWeight::BOLD;
                         }
-                        _ => runs.push(run),
+                        if c.italic {
+                            f.style = FontStyle::Italic;
+                        }
+                        let run = TextRun {
+                            len: glyph.len(),
+                            font: f,
+                            color,
+                            background_color: None,
+                            underline: (c.underline
+                                || link.as_ref().is_some_and(|(ly, lx)| {
+                                    *ly as usize == y && lx.contains(&(x as u16))
+                                }))
+                            .then(|| UnderlineStyle {
+                                thickness: px(1.),
+                                color: Some(color),
+                                wavy: false,
+                            }),
+                            strikethrough: c.strikethrough.then(|| StrikethroughStyle {
+                                thickness: px(1.),
+                                color: Some(color),
+                            }),
+                        };
+                        match runs.last_mut() {
+                            Some(last)
+                                if last.font == run.font
+                                    && last.color == run.color
+                                    && last.underline == run.underline
+                                    && last.strikethrough == run.strikethrough =>
+                            {
+                                last.len += run.len
+                            }
+                            _ => runs.push(run),
+                        }
+                        text.push_str(glyph);
+                        if alone {
+                            let span = if c.wide { 2 } else { 1 };
+                            flush(&mut text, &mut runs, chunk_col, Some(span), window, cx);
+                            chunk_col = x + span;
+                        }
                     }
-                    text.push_str(glyph);
-                    if alone {
-                        let span = if c.wide { 2 } else { 1 };
-                        flush(&mut text, &mut runs, chunk_col, Some(span), window, cx);
-                        chunk_col = x + span;
-                    }
+                    flush(&mut text, &mut runs, chunk_col, None, window, cx);
                 }
-                flush(&mut text, &mut runs, chunk_col, None, window, cx);
             }
+            paint_images(&[ImageLayer::AboveText], window);
 
             if let Some(cur) = frame.cursor {
                 let color = rgb_to_hsla(frame.cursor_color.unwrap_or(default_fg));
@@ -1497,14 +1646,22 @@ impl Element for TerminalElement {
 /// but real cells are fractional (7.8 px), so a truncated width drifts a
 /// column every few dozen. Scale the position into a grid of whole-pixel
 /// cells instead, so it lands in the same cell it does on screen.
+fn render_image(p: ImagePixels) -> Arc<RenderImage> {
+    let buf = image::RgbaImage::from_raw(p.width, p.height, p.bgra).expect("w*h*4 bytes");
+    Arc::new(RenderImage::new(vec![image::Frame::new(buf)]))
+}
+
+/// The pointer in the device-pixel grid the program was told about
+/// (`cell_px`), so SGR-pixel reports (mode 1016) match its image coordinates.
 fn mouse_space(
     local: Point<Pixels>,
     cell: Size<Pixels>,
+    (cw, ch): (u32, u32),
+    scale: f32,
     (cols, rows): (u16, u16),
 ) -> (MouseGeometry, (f32, f32)) {
-    let (cw, ch) = (f32::from(cell.width) as u32, f32::from(cell.height) as u32);
     let (cw, ch) = (cw.max(1), ch.max(1));
-    let pad = PADDING as u32;
+    let pad = (PADDING * scale).round() as u32;
     let geometry = MouseGeometry {
         width: cols as u32 * cw + pad * 2,
         height: rows as u32 * ch + pad * 2,
@@ -1513,7 +1670,7 @@ fn mouse_space(
         padding: pad,
     };
     let scale = |v: Pixels, real: Pixels, whole: u32| {
-        (f32::from(v) - PADDING) * whole as f32 / f32::from(real) + PADDING
+        (f32::from(v) - PADDING) * whole as f32 / f32::from(real) + pad as f32
     };
     (
         geometry,
@@ -1958,13 +2115,31 @@ mod tests {
                 px(super::PADDING + 7.9 * (col as f32 + 0.9)),
                 px(super::PADDING + 17.6 * (row as f32 + 0.9)),
             );
-            let (g, pos) = super::mouse_space(at, cell, (200, 40));
+            let (g, pos) = super::mouse_space(at, cell, (8, 18), 1., (200, 40));
             let got = t.encode_mouse(MouseAction::Press, Some(1), 0, pos, false, g);
             assert_eq!(
                 got,
                 format!("\x1b[<0;{};{}M", col + 1, row + 1).into_bytes()
             );
         }
+    }
+
+    #[test]
+    fn pixel_mouse_reports_use_the_device_pixels_the_program_was_told() {
+        use crate::ghostty::{MouseAction, Terminal};
+        use gpui::{point, px, size};
+        // On a 2x screen 7.9x17.6 pt cells are 16x35 px to the program
+        // (terminal-browser draws its page in those pixels).
+        let cell = size(px(7.9), px(17.6));
+        let mut t = Terminal::new(200, 40).unwrap();
+        t.write(b"\x1b[?1003h\x1b[?1016h");
+        let at = point(
+            px(super::PADDING + 7.9 * 100.),
+            px(super::PADDING + 17.6 * 20.),
+        );
+        let (g, pos) = super::mouse_space(at, cell, (16, 35), 2., (200, 40));
+        let got = t.encode_mouse(MouseAction::Motion, None, 0, pos, false, g);
+        assert_eq!(got, b"\x1b[<35;1600;700M");
     }
 
     #[test]
