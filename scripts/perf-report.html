@@ -170,6 +170,7 @@ const GROUPS = [
   ["Frame draw", ["new_tab_draw_ms", "new_split_draw_ms", "switch_workspace_draw_ms", "echo_draw_ms", "scroll_draw_ms"]],
   ["Memory and idle CPU", ["idle_footprint_mb", "per_terminal_mb", "footprint_after_mb", "idle_cpu_pct", "idle_cpu_11_pct"]],
   ["In-app throughput", ["app_ascii_mbps", "app_color_mbps", "app_unicode_mbps", "throughput_cpu_s", "throughput_frame_p99_ms", "throughput_late_pct"]],
+  ["Kitty graphics", ["kitty_parse_ms", "kitty_snapshot_ms", "kitty_convert_ms", "kitty_shm_fps", "kitty_fps", "kitty_frame_p99_ms", "kitty_footprint_mb"]],
 ];
 
 const $ = (id) => document.getElementById(id);

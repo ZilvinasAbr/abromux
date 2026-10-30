@@ -2219,6 +2219,9 @@ fn main() {
     if args.first().is_some_and(|a| a == "bench-vt") {
         std::process::exit(bench::vt(&args[1..]));
     }
+    if args.first().is_some_and(|a| a == "bench-kitty") {
+        std::process::exit(bench::kitty(&args[1..]));
+    }
     if !args.is_empty() {
         std::process::exit(cli::run(args));
     }
