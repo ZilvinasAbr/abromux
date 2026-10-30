@@ -27,6 +27,8 @@ objc = "0.2"
 # page click monitor (browser.rs)
 block = "0.1"
 raw-window-handle = "0.6"
+# Kitty graphics PNG decoding (already a gpui dependency)
+image = "0.25"
 
 [build-dependencies]
 bindgen = "0.71"

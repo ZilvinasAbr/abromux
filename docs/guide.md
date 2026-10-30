@@ -179,11 +179,13 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 
 - binary size
 - headless VT parse throughput (`abromux bench-vt`)
+- headless kitty graphics frame cost: parse, snapshot, BGRA conversion (`abromux bench-kitty`)
 - startup time
 - idle memory and CPU
 - memory per terminal
 - in-app throughput
 - frame draw time and late frames during in-app throughput
+- kitty graphics in-app: 1920×1200 frames per second through shared memory (as terminal-browser sends them) and as base64 through the pty, frame draw p99 while streaming, and the footprint they add
 - UI actions, each until the frame showing its result is on screen: new tab, split and workspace (until the prompt), closing a tab, switching workspaces, focusing tabs and panes, keystroke echo, scrolling, and a browser pane until its page has loaded. Each one also records that frame's draw time, which is abromux's own part. The terminal timings use a bare zsh so your shell config doesn't count, and one more times a new tab with your own login shell.
 
 Each run is recorded with its commit, branch and machine, then compared with the last 10 runs on the same machine. A metric is flagged only when it's worse by more than both its own threshold and 3× the baseline's spread. Run it after each change; leave the Mac alone for the ~1.5 minutes it takes.
@@ -209,7 +211,7 @@ History lives in `<git common dir>/abromux-perf/history.jsonl`, outside the tree
 - `src/browser.rs`: the webview pane; `src/webauthn.{rs,js,m}`: the passkey bridge
 - `src/workspace.rs`: the workspace, split-tree and surface model
 - `src/main.rs`: the app shell (sidebar, pane tab bars, splits, actions)
-- `src/bench.rs`: `abromux bench-vt`, the headless parse benchmark used by `scripts/perf.py`
+- `src/bench.rs`: `abromux bench-vt` and `abromux bench-kitty`, the headless parse benchmarks used by `scripts/perf.py`
 - `src/server.rs`: the control socket's method handlers; `src/cli.rs`: the `abromux` commands; `src/ipc.rs`: the shared wire format
 
 ## Known POC limits

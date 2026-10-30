@@ -48,6 +48,9 @@ METRICS = {
     "vt_ascii_mbps":        ("MB/s", "higher", 0.08, 0,    "headless VT parse, plain ASCII"),
     "vt_color_mbps":        ("MB/s", "higher", 0.08, 0,    "headless VT parse, truecolor SGR"),
     "vt_unicode_mbps":      ("MB/s", "higher", 0.08, 0,    "headless VT parse, CJK + emoji"),
+    "kitty_parse_ms":       ("ms",   "lower",  0.10, 0.2,  "headless kitty 1920x1200 frame: parse"),
+    "kitty_snapshot_ms":    ("ms",   "lower",  0.30, 0.05, "headless kitty frame: frame snapshot"),
+    "kitty_convert_ms":     ("ms",   "lower",  0.10, 0.2,  "headless kitty frame: pixels to BGRA"),
     "startup_socket_ms":    ("ms",   "lower",  0.15, 20,   "launch -> control socket answers"),
     "startup_prompt_ms":    ("ms",   "lower",  0.15, 50,   "launch -> shell prompt on screen"),
     "idle_footprint_mb":    ("MB",   "lower",  0.10, 2,    "footprint, idle, 1 terminal"),
@@ -77,6 +80,10 @@ METRICS = {
     "echo_draw_ms":         ("ms",   "lower",  0.30, 0.5,  "draw of the frame showing the echo"),
     "scroll_ms":            ("ms",   "lower",  0.30, 4,    "scroll wheel through scrollback -> drawn"),
     "scroll_draw_ms":       ("ms",   "lower",  0.30, 0.5,  "draw of the frame after a scroll"),
+    "kitty_shm_fps":        ("fps",  "higher", 0.20, 0,    "in-app kitty 1920x1200 frames/s, shared memory"),
+    "kitty_fps":            ("fps",  "higher", 0.10, 0,    "in-app kitty 1920x1200 frames/s, base64 via pty"),
+    "kitty_frame_p99_ms":   ("ms",   "lower",  0.30, 5,    "p99 frame draw while streaming kitty frames"),
+    "kitty_footprint_mb":   ("MB",   "lower",  0.25, 10,   "footprint growth after shared-memory kitty frames"),
     "browser_open_ms":      ("ms",   "lower",  0.25, 30,   "browser split -> local page loaded"),
 }
 
@@ -254,6 +261,48 @@ class Rpc:
         self.sock.close()
 
 
+# Run in a pane: sends argv[1] full-pane kitty frames, alternating two, the
+# way terminal-browser replaces its image, then a DA1, and writes the seconds
+# until the reply to RESULT. argv[2] is the medium: "direct" (base64 through
+# the pty) or "shm" (POSIX shared memory, as terminal-browser sends them).
+KITTY_STREAM = r'''import base64, os, sys, termios, time, tty
+from multiprocessing import resource_tracker, shared_memory
+w, h = 1920, 1200
+def shm(rgba):
+    m = shared_memory.SharedMemory(create=True, size=w * h * 4)
+    m.buf[: w * h * 4] = rgba * (w * h)
+    # The terminal unlinks it once read.
+    resource_tracker.unregister(m._name, "shared_memory")
+    m.close()
+    return f"\x1b[H\x1b_Ga=T,t=s,f=32,s={w},v={h},i=1,C=1,q=2;".encode() + base64.b64encode(m._name.encode()) + b"\x1b\\"
+def frame(rgba):
+    b64 = base64.b64encode(rgba * (w * h))
+    out = [b"\x1b[H"]
+    for i in range(0, len(b64), 4096):
+        more = int(i + 4096 < len(b64))
+        head = f"a=T,f=32,s={w},v={h},i=1,C=1,q=2,m={more}" if i == 0 else f"m={more}"
+        out += [b"\x1b_G", head.encode(), b";", b64[i:i + 4096], b"\x1b\\"]
+    return b"".join(out)
+colors = [bytes((40, 90, 230, 255)), bytes((220, 50, 50, 255))]
+pics = [frame(c) for c in colors] if sys.argv[2] == "direct" else []
+fd = sys.stdin.fileno()
+old = termios.tcgetattr(fd)
+tty.setraw(fd)
+try:
+    t = time.perf_counter()
+    for i in range(int(sys.argv[1])):
+        os.write(1, shm(colors[i % 2]) if sys.argv[2] == "shm" else pics[i % 2])
+    os.write(1, b"\x1b[c")
+    reply = b""
+    while not reply.endswith(b"c"):
+        reply += os.read(fd, 64)
+    secs = time.perf_counter() - t
+finally:
+    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+open("RESULT", "w").write(f"{secs}\n")
+'''
+
+
 # ---- the suite -------------------------------------------------------------------
 
 class Suite:
@@ -288,6 +337,12 @@ class Suite:
         # Best pass: other load only ever slows a CPU-bound loop down.
         for f, mbps in runs.items():
             self.put(f"vt_{f}_mbps", max(mbps), mbps)
+
+        log("headless kitty graphics")
+        out = sh(str(self.bin), "bench-kitty", env=env)
+        stages = list(zip(*(map(float, line.split()) for line in out.splitlines())))
+        for name, ms in zip(("parse", "snapshot", "convert"), stages):
+            self.put(f"kitty_{name}_ms", min(ms), ms)
 
     # -- app --
 
@@ -569,7 +624,48 @@ clear
         sample(lambda _: rpc.call("debug.input", steps="scroll:600,350,48"), reps * 2, "scroll_ms", "scroll_draw_ms")
         rpc.call("debug.input", steps="key:ctrl-u")
 
+        self._kitty(rpc, base, prompt)
         self._browser(rpc, base, min(reps, 5))
+
+    def _kitty(self, rpc, base, prompt):
+        """Stream full-pane kitty frames into a pane, first through shared
+        memory as terminal-browser does, then as base64 through the pty, each
+        timed to the reply to a DA1 sent after the last frame (it comes only
+        once everything before is parsed). Footprint is taken after the
+        shared-memory stream: the base64 one leaves freed buffers in malloc's
+        cache that make it swing by hundreds of MB from run to run."""
+        tmp = self.session.parent
+        script, res = tmp / "kitty.py", tmp / "kitty.txt"
+        script.write_text(KITTY_STREAM.replace("RESULT", str(res)))
+
+        def stream(frames, medium):
+            res.unlink(missing_ok=True)
+            rpc.call("surface.send_text", surface=base, text=f"{sys.executable} {script} {frames} {medium}\\n")
+            end = time.monotonic() + 60
+            while not (res.exists() and res.read_text().endswith("\n")):
+                if time.monotonic() > end:
+                    raise RuntimeError(f"kitty {medium} frames timed out")
+                time.sleep(0.05)
+            return frames / float(res.read_text())
+
+        try:
+            pid = self.proc.pid
+            m0 = footprint_mb(pid)
+            rpc.call("debug.frames", record=True)
+            self.put("kitty_shm_fps", stream(300, "shm"))
+            rpc.frame()
+            m1 = footprint_mb(pid)
+            if m0 is not None and m1 is not None:
+                self.put("kitty_footprint_mb", m1 - m0)
+            self.put("kitty_fps", stream(60, "direct"))
+            fr = rpc.call("debug.frames", record=False)
+            if fr["draw_ms"]:
+                self.put("kitty_frame_p99_ms", percentile(fr["draw_ms"], 99))
+        except (RuntimeError, OSError) as e:
+            log(f"  kitty timing skipped: {e}")
+        finally:
+            rpc.call("surface.send_text", surface=base, text="printf '\\\\e_Ga=d\\\\e\\\\\\\\'; clear\\n")
+            rpc.wait_text(base, prompt)
 
     def _browser(self, rpc, base, reps):
         """Browser split until a page served from localhost has loaded. Last,
