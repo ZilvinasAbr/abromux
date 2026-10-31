@@ -188,6 +188,12 @@ impl AssetSource for Assets {
             "maximize-2",
             "lock",
             "bot",
+            // The Settings window.
+            "minus",
+            "undo-2",
+            "keyboard",
+            "sliders-horizontal",
+            "palette",
             // gpui-component's menus mark checked items with it.
             "check"
         );
