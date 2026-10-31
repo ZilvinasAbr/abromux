@@ -665,7 +665,7 @@ impl AbroMux {
         .separator()
         .item(
             PopupMenuItem::new("Close Workspace")
-                .on_click(act(|t, i, w, cx| t.close_workspace(i, w, cx))),
+                .on_click(act(|t, i, w, cx| t.request_close_workspace(i, w, cx))),
         )
         .item(
             PopupMenuItem::new("Close Other Workspaces")
@@ -1296,7 +1296,7 @@ impl AbroMux {
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     if let Some(i) = this.ws_index(id) {
-                                        this.close_workspace(i, window, cx)
+                                        this.request_close_workspace(i, window, cx)
                                     }
                                 }))
                                 .child(icon("x").size(px(11. * z)).text_color(sub)),
