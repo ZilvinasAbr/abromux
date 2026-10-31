@@ -481,9 +481,12 @@ impl AbroMux {
     fn make_browser(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> Surface {
         let browser = cx.new(|cx| BrowserView::new(url, window, cx));
         self.surface_ref(browser.entity_id());
-        cx.subscribe_in(&browser, window, |this, b, ev, _, cx| match ev {
+        cx.subscribe_in(&browser, window, |this, b, ev, window, cx| match ev {
             BrowserEvent::TitleChanged => cx.notify(),
             BrowserEvent::Focused => this.focus_surface(b.entity_id(), cx),
+            BrowserEvent::OpenTab { url, focus } => {
+                this.open_tab_beside(b.entity_id(), url, *focus, window, cx)
+            }
         })
         .detach();
         Surface::Browser(browser)
@@ -538,6 +541,29 @@ impl AbroMux {
                 self.split_pane(wi, pane, Axis::Horizontal, false, surface, true, window, cx);
             }
         }
+    }
+
+    /// A new browser tab for `url` right after surface `from`, in its pane.
+    fn open_tab_beside(
+        &mut self,
+        from: EntityId,
+        url: &str,
+        focus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((wi, pane)) = self.workspaces.iter().enumerate().find_map(|(wi, ws)| {
+            ws.root
+                .panes()
+                .into_iter()
+                .find(|p| p.tabs.iter().any(|s| s.entity_id() == from))
+                .map(|p| (wi, p.id))
+        }) else {
+            return;
+        };
+        let surface = self.make_browser(url, window, cx);
+        self.add_tab_to(wi, pane, surface, focus, window, cx);
+        cx.notify();
     }
 
     /// Make the pane containing `id` the focused pane (and select its tab).

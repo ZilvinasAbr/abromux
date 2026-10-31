@@ -5,7 +5,7 @@ Everything AbroMux does, in detail. For a quick start, see the [README](../READM
 ## Features
 
 - **Terminal panes** use [libghostty-vt](https://github.com/ghostty-org/ghostty) for all terminal state: VT parsing, screen and scrollback, colors, selection and key encoding. It is linked statically through a bindgen FFI layer. A shell runs in a PTY (`portable-pty`) and GPUI draws each cell. Text goes through the macOS input system, so IMEs and dead keys compose as usual. Mouse clicks, drags and the wheel go to TUI apps that ask for them (vim, htop, lazygit); hold Shift to select or scroll locally. Full-screen apps without mouse support get arrow keys from the wheel, like Ghostty's alternate scroll.
-- **Browser panes** are native WKWebViews (wry, via `gpui-component`). Each has an address bar with back, forward and reload, and passkeys and security keys work in them once the app is signed with Apple's web-browser entitlement (see "Passkeys").
+- **Browser panes** are native WKWebViews (wry, via `gpui-component`). Each has an address bar with back, forward and reload. ⌘-click or middle-click on a link opens it in a new tab after the current one (⇧ to switch to it). Passkeys and security keys work in them once the app is signed with Apple's web-browser entitlement (see "Passkeys").
 - **Workspaces** sit in a left sidebar, cmux style. Each entry shows the name, the focused tab's title, the git branch and the cwd, plus whatever scripts report through the CLI: status pills (`set-status`), a progress bar (`set-progress`) and the newest `log` line.
 - **Claude Code and Codex** show up in the sidebar once you've run `abromux hooks install`: a "Running" pill while the agent works and "Needs input" when it asks for permission. When it asks, or finishes a turn, its terminal gets a notification ("Codex: Asks to run …", "Claude Code: <the start of its reply>").
 - **Notifications** come from terminal programs (OSC 9, OSC 99 and OSC 777, as Claude Code, Codex and others send them), from the bell, and from `abromux notify`. One you aren't looking at rings its pane, puts a dot on its tab and on its workspace, shows its text under the workspace in the sidebar, counts on the dock icon, and, while AbroMux is in the background, shows a macOS banner that takes you to it when clicked (banners need AbroMux.app; a `cargo run` build has the rest). It's read once you look at that terminal. ⌘I lists them all; ⌘⇧U jumps to the newest unread one.
@@ -161,6 +161,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Notifications list | bell icon in the titlebar | ⌘I (Esc closes) |
 | Jump to newest unread notification | click it in the list | ⌘⇧U |
 | Open a link in a terminal | ⌘-click | |
+| Open a page link in a new tab | ⌘-click (⇧⌘-click to switch to it) | |
 | Toggle sidebar | sidebar icon | ⌘B |
 | Copy / paste in terminal | drag to select, double-click selects a word | ⌘C / ⌘V (asks first if the text could run commands) |
 | Paste file paths | drop files on a terminal (shell-escaped) | |
