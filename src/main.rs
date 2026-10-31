@@ -505,7 +505,20 @@ impl AbroMux {
         &mut self,
         cwd: Option<String>,
         ws: usize,
+        env: Vec<(String, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Surface {
+        self.make_terminal_running(cwd, ws, env, None, window, cx)
+    }
+
+    /// `make_terminal_with` whose shell runs `command` instead of a session.
+    fn make_terminal_running(
+        &mut self,
+        cwd: Option<String>,
+        ws: usize,
         mut env: Vec<(String, String)>,
+        command: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Surface {
@@ -520,7 +533,7 @@ impl AbroMux {
                 path.to_string_lossy().into_owned(),
             ));
         }
-        let term = cx.new(|cx| TerminalView::new(cwd, env, cx));
+        let term = cx.new(|cx| TerminalView::new(cwd, env, command, cx));
         self.surface_ref(term.entity_id());
         cx.subscribe_in(&term, window, |this, term, ev, window, cx| {
             let id = term.entity_id();
@@ -546,7 +559,39 @@ impl AbroMux {
         Surface::Terminal(term)
     }
 
+    /// A browser tab for `url`: the built-in one, or with `browser.engine`
+    /// set to `terminalBrowser`, a terminal running `terminal-browser`
+    /// (the built-in one, with a warning, if it isn't installed).
     fn make_browser(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> Surface {
+        if settings::terminal_browser(cx) {
+            match browser::terminal_browser_command(url) {
+                Some(cmd) => {
+                    let ws = self.workspaces.get(self.active).map_or(0, |w| w.id);
+                    let s = self.make_terminal_running(None, ws, vec![], Some(cmd), window, cx);
+                    if let Surface::Terminal(t) = &s {
+                        t.update(cx, |t, _| t.browser_url = Some(url.into()));
+                    }
+                    return s;
+                }
+                None => window.push_notification(
+                    Notification::warning(
+                        "`browser.engine` is terminalBrowser, but terminal-browser isn't on \
+                         PATH or in ~/.local/bin, so this tab uses the built-in browser.",
+                    )
+                    .title("terminal-browser not found"),
+                    cx,
+                ),
+            }
+        }
+        self.make_builtin_browser(url, window, cx)
+    }
+
+    fn make_builtin_browser(
+        &mut self,
+        url: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Surface {
         let browser = cx.new(|cx| BrowserView::new(url, window, cx));
         self.surface_ref(browser.entity_id());
         cx.subscribe_in(&browser, window, |this, b, ev, window, cx| match ev {
@@ -600,7 +645,7 @@ impl AbroMux {
                 .into_iter()
                 .find(|p| p.id == r)
                 .and_then(|p| p.active_surface())
-                .is_some_and(|s| matches!(s, Surface::Browser(_)))
+                .is_some_and(|s| s.is_browser(cx))
         });
         let surface = self.make_browser(&url, window, cx);
         match right {

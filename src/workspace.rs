@@ -90,6 +90,14 @@ impl Surface {
         }
     }
 
+    /// A browser tab: the built-in one, or a terminal running `terminal-browser`.
+    pub fn is_browser(&self, cx: &App) -> bool {
+        match self {
+            Surface::Terminal(t) => t.read(cx).browser_url.is_some(),
+            Surface::Browser(_) => true,
+        }
+    }
+
     pub fn cwd(&self, cx: &App) -> Option<String> {
         match self {
             Surface::Terminal(t) => Some(t.read(cx).cwd.clone()),

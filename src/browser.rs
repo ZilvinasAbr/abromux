@@ -1080,9 +1080,53 @@ pub fn normalize_url(text: &str) -> String {
     }
 }
 
+/// The shell command that opens `url` in `terminal-browser`, filling the
+/// terminal it runs in, or None if it isn't installed. `--no-merge` keeps it
+/// from joining a neighbouring one as a tab: each abromux tab is one browser.
+pub fn terminal_browser_command(url: &str) -> Option<String> {
+    let bin = find_terminal_browser()?;
+    let mut cmd = format!(
+        "exec {} open --no-merge",
+        shell_quote(&bin.to_string_lossy())
+    );
+    if !url.is_empty() && url != "about:blank" {
+        cmd.push(' ');
+        cmd.push_str(&shell_quote(url));
+    }
+    Some(cmd)
+}
+
+/// `terminal-browser` on PATH or where its installer puts it; an app
+/// opened from the Dock has only the system's PATH.
+fn find_terminal_browser() -> Option<std::path::PathBuf> {
+    let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .chain([
+            home.join(".local/bin"),
+            "/opt/homebrew/bin".into(),
+            "/usr/local/bin".into(),
+        ])
+        .map(|d| d.join("terminal-browser"))
+        .find(|p| p.is_file())
+}
+
+/// One word for sh, zsh, bash or fish.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{safari_version, user_agent};
+    use super::{safari_version, shell_quote, user_agent};
+
+    #[test]
+    fn quotes_for_the_shell() {
+        assert_eq!(shell_quote("https://a.b/?q=1&x"), "'https://a.b/?q=1&x'");
+        assert_eq!(shell_quote("it's"), r"'it'\''s'");
+    }
 
     #[test]
     fn safari_version_keeps_installed_but_not_below_floor() {

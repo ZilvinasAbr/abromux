@@ -102,6 +102,14 @@ abromux's own settings live in `~/.config/abromux/config.json` (or `$XDG_CONFIG_
 
 `resizeStep` is how many pixels ⌃⇧H/J/K/L and `resize-pane` move a divider. `dividerColor` is the line between split panes, and `focusBorderColor` the border around the focused one. Colors are `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`. Unknown keys are errors, so a typo doesn't go unnoticed.
 
+### Browser engine
+
+```json
+{ "browser": { "engine": "terminalBrowser" } }
+```
+
+`engine` is `builtIn` (the default, the WebKit browser pane) or `terminalBrowser` (`"terminal-browser"` works too); Settings has it under General › Browser. With `terminalBrowser`, every new browser tab (⌘⇧L, the globe, ⌘-clicked links, `url` commands, layouts, `abromux new-surface --type browser`) is a terminal running `terminal-browser open --no-merge <url>` in your login shell, and closing the browser closes the tab. abromux looks for `terminal-browser` on PATH, in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`; if it isn't there, the tab falls back to the built-in browser with a warning. The setting applies to tabs opened after it changes; open ones stay as they are. A terminal-browser tab is restored as a browser tab on the page it opened, since abromux doesn't see where it went from there. The `abromux browser` automation commands only drive built-in tabs, so `abromux browser open` always opens one (use `terminal-browser action` to drive a terminal-browser).
+
 ### Sidebar and workspace settings
 
 These use cmux's key names. Shown with their defaults:

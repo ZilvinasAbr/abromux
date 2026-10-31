@@ -733,6 +733,9 @@ impl AbroMux {
                 let (wi, pane, _) = self.surface_target(p)?;
                 let mut p = p.clone();
                 p["type"] = json!("browser");
+                // The automation commands that follow only drive the built-in
+                // browser, whatever `browser.engine` says.
+                p["builtIn"] = json!(true);
                 self.split_with(
                     wi,
                     pane,
@@ -1351,7 +1354,11 @@ impl AbroMux {
                 let url = str_param(p, "url")
                     .map(normalize_url)
                     .unwrap_or_else(|| DEFAULT_URL.into());
-                self.make_browser(&url, window, cx)
+                if bool_param(p, "builtIn", false) {
+                    self.make_builtin_browser(&url, window, cx)
+                } else {
+                    self.make_browser(&url, window, cx)
+                }
             }
             t => bail!("unknown surface type {t:?} (terminal or browser)"),
         })

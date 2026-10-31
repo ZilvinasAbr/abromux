@@ -524,6 +524,10 @@ impl AbroMux {
                 }
                 (s, name)
             }
+            // terminal-browser can't take the built-in browser's history.
+            TabState::Browser { url, name, .. } if crate::settings::terminal_browser(cx) => {
+                (self.make_browser(&url, window, cx), name)
+            }
             TabState::Browser { url, name, history } => match history {
                 Some(h) => {
                     let s = self.make_browser("", window, cx);
@@ -622,6 +626,15 @@ fn tab_state(s: &Surface, scrollback: bool, cx: &App) -> TabState {
     match s {
         Surface::Terminal(t) => {
             let t = t.read(cx);
+            // A terminal-browser tab comes back as a browser on the page it
+            // opened (abromux doesn't see where it went from there).
+            if let Some(url) = &t.browser_url {
+                return TabState::Browser {
+                    url: url.clone(),
+                    name: t.custom_title.clone(),
+                    history: None,
+                };
+            }
             TabState::Terminal {
                 cwd: t.live_cwd(),
                 font_size: Some(t.font_size()),

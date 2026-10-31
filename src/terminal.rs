@@ -134,6 +134,10 @@ pub struct TerminalView {
     pub custom_title: Option<String>,
     /// Text held back by paste protection until the user confirms it.
     pending_paste: Option<String>,
+    /// What the shell runs instead of an interactive session (`$SHELL -l -c`).
+    command: Option<String>,
+    /// The page a `terminal-browser` tab opened, saved as a browser tab.
+    pub browser_url: Option<String>,
     /// Kept to start the shell again the same way (`respawn-pane`).
     env: Vec<(String, String)>,
     /// Bumped on respawn so the old shell's output and exit are ignored.
@@ -155,10 +159,18 @@ impl Focusable for TerminalView {
 }
 
 impl TerminalView {
-    pub fn new(cwd: Option<String>, env: Vec<(String, String)>, cx: &mut Context<Self>) -> Self {
+    /// A login shell in `cwd`; with a `command`, the shell runs it and the
+    /// terminal closes when it ends.
+    pub fn new(
+        cwd: Option<String>,
+        env: Vec<(String, String)>,
+        command: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let (cols, rows) = (80, 24);
         let cwd = cwd.unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
-        let (writer, master, child) = spawn_shell(&cwd, &env, (cols, rows), 0, cx);
+        let (writer, master, child) =
+            spawn_shell(&cwd, &env, command.as_deref(), (cols, rows), 0, cx);
         let focus = cx.focus_handle();
         let config = cx.try_global::<Config>().cloned().unwrap_or_default();
         cx.on_release(Self::free_images).detach();
@@ -201,6 +213,8 @@ impl TerminalView {
             link: None,
             custom_title: None,
             pending_paste: None,
+            command,
+            browser_url: None,
             env,
             generation: 0,
             hold_timer: false,
@@ -237,7 +251,14 @@ impl TerminalView {
         let cwd = self.live_cwd();
         let _ = self.child.kill();
         self.generation += 1;
-        let (writer, master, child) = spawn_shell(&cwd, &self.env, self.grid, self.generation, cx);
+        let (writer, master, child) = spawn_shell(
+            &cwd,
+            &self.env,
+            self.command.as_deref(),
+            self.grid,
+            self.generation,
+            cx,
+        );
         (self.writer, self.master, self.child) = (writer, master, child);
         self.term = new_term(self.grid.0, self.grid.1, &self.config);
         // Size the new PTY and terminal to the pane, cell pixels included.
@@ -1925,13 +1946,15 @@ fn sprite_char(c: &ghostty::Cell) -> Option<char> {
     (chars.next().is_none() && !c.invisible && sprite::covers(ch)).then_some(ch)
 }
 
-/// Start the user's login shell on a new PTY of `size`, and drain its output
+/// Start the user's login shell on a new PTY of `size` (running `command`
+/// if there is one), and drain its output
 /// into the view on the main thread. Output and the exit of a shell from
 /// an older `generation` (one `respawn` replaced) are dropped.
 #[allow(clippy::type_complexity)]
 fn spawn_shell(
     cwd: &str,
     env: &[(String, String)],
+    command: Option<&str>,
     (cols, rows): (u16, u16),
     generation: usize,
     cx: &mut Context<TerminalView>,
@@ -1951,6 +1974,9 @@ fn spawn_shell(
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let mut cmd = CommandBuilder::new(&shell);
     cmd.arg("-l");
+    if let Some(c) = command {
+        cmd.args(["-c", c]);
+    }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "abromux");
