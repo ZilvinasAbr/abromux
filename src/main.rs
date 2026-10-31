@@ -1,4 +1,5 @@
 mod about;
+mod alert;
 mod activity;
 mod agent;
 mod banner;
@@ -691,6 +692,79 @@ impl AbroMux {
         }
         self.focus_active(window, cx);
         cx.notify();
+    }
+
+    /// A close the user asked for: if it would end a Claude Code session,
+    /// confirm first, as cmux does.
+    fn request_close_surface(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
+        let claude = self.workspaces.iter().any(|ws| {
+            ws.root.panes().iter().any(|p| {
+                p.tabs
+                    .iter()
+                    .any(|s| s.entity_id() == id && surface_has_claude(s, cx))
+            })
+        });
+        if !claude {
+            return self.close_surface(id, window, cx);
+        }
+        let rx = alert::confirm(
+            window,
+            alert::Confirm {
+                message: "Close tab?",
+                info: "Claude Code is running in this tab. Closing it will end the session.",
+                button: "Close",
+                suppress: "Don't ask again",
+                skip_key: "AbroMuxSkipCloseClaudeWarning",
+            },
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if rx.await == Ok(true) {
+                let _ = this.update_in(cx, |this, window, cx| this.close_surface(id, window, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// Like `request_close_surface`, for a whole workspace.
+    pub(crate) fn request_close_workspace(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ws) = self.workspaces.get(index) else {
+            return;
+        };
+        let claude = ws
+            .root
+            .panes()
+            .iter()
+            .any(|p| p.tabs.iter().any(|s| surface_has_claude(s, cx)));
+        if !claude {
+            return self.close_workspace(index, window, cx);
+        }
+        let ws_id = ws.id;
+        let rx = alert::confirm(
+            window,
+            alert::Confirm {
+                message: "Close workspace?",
+                info: "Claude Code is running in this workspace. Closing it will close all of its panels and end the session.",
+                button: "Close",
+                suppress: "Don't ask again",
+                skip_key: "AbroMuxSkipCloseClaudeWarning",
+            },
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if rx.await == Ok(true) {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    // Indices may have moved while the sheet was up.
+                    if let Some(i) = this.ws_index(ws_id) {
+                        this.close_workspace(i, window, cx)
+                    }
+                });
+            }
+        })
+        .detach();
     }
 
     // ---- workspaces -----------------------------------------------------
@@ -1686,7 +1760,7 @@ impl AbroMux {
                 )
                 .on_mouse_down(
                     MouseButton::Middle,
-                    cx.listener(move |this, _, window, cx| this.close_surface(sid, window, cx)),
+                    cx.listener(move |this, _, window, cx| this.request_close_surface(sid, window, cx)),
                 )
                 .on_drag(
                     DraggedTab {
@@ -1775,7 +1849,7 @@ impl AbroMux {
                             .hover(|d| d.bg(rgba(0xffffff18)))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.close_surface(sid, window, cx)
+                                this.request_close_surface(sid, window, cx)
                             }))
                             .child(icon("x").size(px(10.)).text_color(rgb(MUTED))),
                     )
@@ -2057,7 +2131,7 @@ impl Render for AbroMux {
                 this.reopen_session(None, window, cx);
             }))
             .on_action(cx.listener(|this, _: &CloseWorkspace, window, cx| {
-                this.close_workspace(this.active, window, cx)
+                this.request_close_workspace(this.active, window, cx)
             }))
             .on_action(cx.listener(|this, _: &RenameWorkspace, window, cx| {
                 this.sidebar = true;
@@ -2089,7 +2163,7 @@ impl Render for AbroMux {
             }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 if let Some(id) = this.ws().focused_surface().map(|s| s.entity_id()) {
-                    this.close_surface(id, window, cx)
+                    this.request_close_surface(id, window, cx)
                 }
             }))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| this.cycle_tab(1, window, cx)))
@@ -2362,6 +2436,10 @@ impl Render for DraggedTab {
 
 /// A name typed into a single-line field: a newline that slipped in would
 /// panic gpui's line shaping wherever the name is drawn.
+fn surface_has_claude(s: &Surface, cx: &App) -> bool {
+    matches!(s, Surface::Terminal(t) if t.read(cx).has_claude())
+}
+
 fn one_line(s: &str) -> String {
     s.split(['\n', '\r'])
         .map(str::trim)

@@ -320,6 +320,13 @@ impl TerminalView {
         }
     }
 
+    /// A Claude Code session is open here, working or not.
+    pub fn has_claude(&self) -> bool {
+        self.agent
+            .as_ref()
+            .is_some_and(|a| a.kind == Kind::Claude.as_str() && a.alive())
+    }
+
     /// Claude Code is working here: its title starts with a spinner glyph
     /// rather than the idle `✳`.
     pub fn claude_running(&self) -> bool {
