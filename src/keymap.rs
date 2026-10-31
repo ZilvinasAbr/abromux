@@ -94,6 +94,10 @@ pub const ACTIONS: &[Act] = {
         "workspaceSwitcher", None, WorkspaceSwitcher, [(None, ["cmd-p"])];
         // ⌘⇧, arrives as cmd-<.
         "reloadConfig", Some("Reload Config"), ReloadConfig, [(None, ["cmd-<"])];
+        "persistenceAbromux", Some("Persistence: abromux (shells keep running, default)"),
+            PersistenceAbromux, [(None, [])];
+        "persistenceCmuxLike", Some("Persistence: cmux-like (shells end on quit)"),
+            PersistenceCmuxLike, [(None, [])];
         "openSettings", Some("Settings…"), OpenSettings, [(None, ["cmd-,"])];
         "copy", Some("Copy"), terminal::Copy, [(T, ["cmd-c"])];
         "paste", Some("Paste"), terminal::Paste, [(T, ["cmd-v"])];

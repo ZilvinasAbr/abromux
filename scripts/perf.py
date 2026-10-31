@@ -4,6 +4,7 @@
     scripts/perf.py run              build, measure, record, compare (~1.5 min)
     scripts/perf.py run --headless   only the parts that need no window (~10 s)
     scripts/perf.py run --full       longer idle windows and more startup runs
+    scripts/perf.py run --persistence cmux-like   the old way (shells end with the app), to compare
     scripts/perf.py compare [ID]     compare a recorded run (default: latest)
     scripts/perf.py history [METRIC] recent runs, or one metric over time
     scripts/perf.py report [--md]    HTML (or Markdown) report with charts
@@ -85,6 +86,11 @@ METRICS = {
     "kitty_frame_p99_ms":   ("ms",   "lower",  0.30, 5,    "p99 frame draw while streaming kitty frames"),
     "kitty_footprint_mb":   ("MB",   "lower",  0.25, 10,   "footprint growth after shared-memory kitty frames"),
     "browser_open_ms":      ("ms",   "lower",  0.25, 30,   "browser split -> local page loaded"),
+    # What `abromux hold` adds on top of the app (not with --persistence cmux-like).
+    "holder_idle_mb":       ("MB",   "lower",  0.10, 2,    "holder footprint, idle, 1 terminal"),
+    "holder_per_terminal_mb": ("MB", "lower",  0.25, 0.3,  "holder footprint per extra terminal"),
+    "holder_idle_cpu_11_pct": ("%",  "lower",  0.50, 0.5,  "holder idle CPU, 11 terminals"),
+    "holder_throughput_cpu_s": ("s", "lower",  0.15, 0.2,  "holder CPU time for the throughput run"),
 }
 
 MODES = {
@@ -306,12 +312,17 @@ open("RESULT", "w").write(f"{secs}\n")
 # ---- the suite -------------------------------------------------------------------
 
 class Suite:
-    def __init__(self, binary: Path, mode: str, data: Path):
+    def __init__(self, binary: Path, mode: str, data: Path, persistence=None):
         self.bin = binary
         self.cfg = MODES[mode]
         self.data = data
         self.metrics = {}
         self.samples = {}
+        # --persistence: set it in the app's config. Without it the app uses
+        # its default, "abromux", so the holder is there either way unless
+        # it's "cmux-like".
+        self.persistence = persistence
+        self.holding = persistence != "cmux-like"
 
     def put(self, name, value, samples=None):
         if value is None:
@@ -355,13 +366,53 @@ class Suite:
         self.session = tmp / "session.json"
         self.env = {**os.environ, "ABROMUX_SOCKET_PATH": str(tmp / "abromux.sock"),
                     "ABROMUX_SESSION_PATH": str(self.session), "XDG_CONFIG_HOME": str(xdg)}
+        if self.persistence:
+            (xdg / "abromux").mkdir()
+            (xdg / "abromux" / "config.json").write_text(json.dumps({"persistence": self.persistence}))
+        # A holder of this run's own, never the user's.
+        self.env["ABROMUX_HOLD_SOCKET"] = str(tmp / "hold.sock")
         self.proc = None
         try:
             self._app(tmp)
             self.actions(tmp)
         finally:
             self.quit()
+            self.holder_reset(start=False)
             shutil.rmtree(tmp, ignore_errors=True)
+
+    # -- abromux hold --
+
+    def holder_pids(self):
+        """This run's `abromux hold` (none with --persistence cmux-like)."""
+        if not self.holding:
+            return []
+        out = sh("pgrep", "-f", f"{self.bin} hold", check=False)
+        return [int(p) for p in out.split()]
+
+    def holder_reset(self, start=True):
+        """No terminals left from an earlier launch (quitting leaves them
+        running); with `start`, a warm holder, as on a relaunch in daily use
+        (it outlives the app while it holds terminals)."""
+        if not self.holding:
+            return
+        for p in self.holder_pids():
+            os.kill(p, signal.SIGTERM)  # its shells hang up with it
+        time.sleep(0.2)
+        if start:
+            sock = Path(self.env["ABROMUX_HOLD_SOCKET"])
+            subprocess.Popen([str(self.bin), "hold"], env=self.env, start_new_session=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            end = time.monotonic() + 5
+            while not sock.exists() and time.monotonic() < end:
+                time.sleep(0.01)
+
+    def holder_footprint(self):
+        pids = self.holder_pids()
+        mbs = [footprint_mb(p) for p in pids]
+        return sum(m for m in mbs if m is not None) if pids else None
+
+    def holder_cpu(self):
+        return sum(cpu_secs(p) for p in self.holder_pids())
 
     def cli(self, *args, check=False):
         r = subprocess.run([str(self.bin), *args], env=self.env, capture_output=True, text=True, timeout=10)
@@ -395,9 +446,11 @@ class Suite:
     def front(self):
         self.cli("focus-window", "--window", "window:1")
 
-    def idle_cpu(self, secs):
-        c0 = cpu_secs(self.proc.pid)
+    def idle_cpu(self, secs, holder_metric=None):
+        c0, h0 = cpu_secs(self.proc.pid), self.holder_cpu()
         time.sleep(secs)
+        if holder_metric and self.holder_pids():
+            self.put(holder_metric, (self.holder_cpu() - h0) / secs * 100)
         return (cpu_secs(self.proc.pid) - c0) / secs * 100
 
     def _app(self, tmp):
@@ -405,6 +458,7 @@ class Suite:
         log("startup")
         sock, prompt = [], []
         for r in range(c["startup_runs"]):
+            self.holder_reset()  # outside the timing: it stops and starts processes
             t0 = time.monotonic()
             self.launch()
             while self.cli("ping").returncode:
@@ -427,17 +481,20 @@ class Suite:
         self.front()
         time.sleep(c["settle"])
         self.put("idle_footprint_mb", footprint_mb(pid))
+        self.put("holder_idle_mb", self.holder_footprint())
         self.put("idle_cpu_pct", self.idle_cpu(c["idle"]))
 
         self.front()
-        m0 = footprint_mb(pid)
+        m0, h0 = footprint_mb(pid), self.holder_footprint()
         for _ in range(10):
             self.cli("new-workspace", check=True)
         time.sleep(c["settle"])
-        m1 = footprint_mb(pid)
+        m1, h1 = footprint_mb(pid), self.holder_footprint()
         if m0 is not None and m1 is not None:
             self.put("per_terminal_mb", (m1 - m0) / 10)
-        self.put("idle_cpu_11_pct", self.idle_cpu(c["idle"]))
+        if h0 is not None and h1 is not None:
+            self.put("holder_per_terminal_mb", (h1 - h0) / 10)
+        self.put("idle_cpu_11_pct", self.idle_cpu(c["idle"], "holder_idle_cpu_11_pct"))
 
         log("in-app throughput")
         # The shell times each cat up to the terminal's reply to a DA1 query
@@ -472,7 +529,7 @@ clear
         rpc = Rpc(self.env["ABROMUX_SOCKET_PATH"])
         vsync = rpc.vsync()
         rpc.call("debug.frames", record=True)
-        c0 = cpu_secs(pid)
+        c0, h0 = cpu_secs(pid), self.holder_cpu()
         self.cli("send", f"zsh {script}\\n")
         end = time.monotonic() + 600
         while time.monotonic() < end:
@@ -482,6 +539,8 @@ clear
         else:
             raise RuntimeError("in-app throughput timed out")
         self.put("throughput_cpu_s", cpu_secs(pid) - c0)
+        if self.holder_pids():
+            self.put("holder_throughput_cpu_s", self.holder_cpu() - h0)
         frames = rpc.call("debug.frames", record=False)
         if frames["draw_ms"]:
             self.put("throughput_frame_p99_ms", percentile(frames["draw_ms"], 99))
@@ -531,6 +590,7 @@ clear
         (zdot / ".zshrc").write_text(f"PROMPT='{BARE_PROMPT}'\nunsetopt PROMPT_SP\n")
         self.env = {**self.env, "SHELL": "/bin/zsh", "ZDOTDIR": str(zdot)}
         prompt = re.escape(BARE_PROMPT.strip()) + r" *$"
+        self.holder_reset()
         self.launch()
         while self.cli("ping").returncode:
             if self.proc.poll() is not None:
@@ -718,7 +778,8 @@ clear
 
 def baseline_for(rec, history, n):
     """Earlier quiet runs from the same machine, most recent last."""
-    earlier = [h for h in history if h["machine"]["id"] == rec["machine"]["id"] and h["timestamp"] < rec["timestamp"] and not h.get("busy")]
+    earlier = [h for h in history if h["machine"]["id"] == rec["machine"]["id"] and h["timestamp"] < rec["timestamp"] and not h.get("busy")
+               and h.get("persistence") == rec.get("persistence")]
     return earlier[-n:]
 
 
@@ -857,7 +918,7 @@ def cmd_run(a):
     if loads[0] > cores / 2:
         log(f"WARNING: load average is {loads[0]} on {cores} cores; numbers will be noisy and the run won't count as a baseline")
     t0 = time.monotonic()
-    suite = Suite(binary, "full" if a.full else "quick", data)
+    suite = Suite(binary, "full" if a.full else "quick", data, a.persistence)
     suite.binary_size()
     suite.headless()
     loads.append(load_avg())
@@ -883,6 +944,8 @@ def cmd_run(a):
         "metrics": suite.metrics,
         "samples": suite.samples,
     }
+    if a.persistence:
+        rec["persistence"] = a.persistence
     if getattr(suite, "grid", None):
         rec["grid"] = suite.grid
     history = load_history()
@@ -1017,6 +1080,9 @@ def main():
     g.add_argument("--headless", action="store_true", help="skip the app; binary size + VT parse only")
     g.add_argument("--full", action="store_true", help="longer settle/idle windows, 5 startup runs")
     r.add_argument("--label", help="free-form note stored with the run")
+    r.add_argument("--persistence", choices=["abromux", "cmux-like"],
+                   help="run the app with this persistence set in its config (compared only with runs "
+                        "of the same one); without it, the app's default (abromux)")
     r.add_argument("--no-build", action="store_true", help="use the existing release binary")
     r.add_argument("--busy", action="store_true", help="mark the run as not representative (kept out of baselines)")
     r.add_argument("--dry-run", action="store_true", help="don't record the run")

@@ -8,16 +8,19 @@ use crate::{
         self, CursorStyle as Caret, Frame, ImageLayer, ImagePixels, MouseAction, MouseGeometry,
         Rgb, ffi,
     },
-    link, osc99, sprite,
+    link, osc99,
+    settings::{Persistence, Settings},
+    sprite,
     theme::*,
 };
+use crate::pty::{Feed, Opened, Pty};
 use futures::{StreamExt, channel::mpsc};
 use gpui::{prelude::*, *};
 use gpui_component::input::{self, Input, InputEvent, InputState};
-use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::PtySize;
 use std::any::Any;
 use std::collections::HashMap;
-use std::io::{Read, Write};
+
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -106,9 +109,14 @@ struct HoverLink {
 
 pub struct TerminalView {
     term: ghostty::Terminal,
-    writer: Box<dyn Write + Send>,
-    master: Box<dyn MasterPty + Send>,
-    child: Box<dyn portable_pty::Child + Send + Sync>,
+    pty: Pty,
+    /// Where the program's output waits for the main thread.
+    feed: Feed,
+    /// It reattached to a shell that ran on in the holder
+    /// while abromux was away, so there's nothing to replay or resume.
+    pub attached: bool,
+    /// Closed or left for the next launch: its reader's end isn't an exit.
+    frozen: bool,
     focus: FocusHandle,
     /// Shared with the paint that draws it, so a paint doesn't copy it.
     frame: Rc<Frame>,
@@ -204,25 +212,36 @@ impl Focusable for TerminalView {
 
 impl TerminalView {
     /// A login shell in `cwd`; with a `command`, the shell runs it and the
-    /// terminal closes when it ends.
+    /// terminal closes when it ends. With `attach`, the holder's terminal
+    /// from the last session, if it's still running (a new shell if not).
     pub fn new(
         cwd: Option<String>,
         env: Vec<(String, String)>,
         command: Option<String>,
+        attach: Option<&str>,
         cx: &mut Context<Self>,
     ) -> Self {
         let (cols, rows) = (80, 24);
         let cwd = cwd.unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
-        let (writer, master, child) =
-            spawn_shell(&cwd, &env, command.as_deref(), (cols, rows), 0, cx);
+        let (opened, feed) =
+            spawn_shell(&cwd, &env, command.as_deref(), (cols, rows), 0, attach, cx);
         let focus = cx.focus_handle();
         let config = cx.try_global::<Config>().cloned().unwrap_or_default();
         cx.on_release(Self::free_images).detach();
+        // A held terminal comes back as it was left, plus what it printed since.
+        let mut term = opened
+            .snapshot
+            .and_then(|s| ghostty::Terminal::from_snapshot(&s).ok())
+            .map(|t| configure(t, &config))
+            .unwrap_or_else(|| new_term(cols, rows, &config));
+        term.write(&opened.backlog);
+        let _ = term.take_effects();
         Self {
-            term: new_term(cols, rows, &config),
-            writer,
-            master,
-            child,
+            term,
+            pty: opened.pty,
+            attached: opened.attached,
+            feed,
+            frozen: false,
             focus,
             frame: Rc::default(),
             dirty: true,
@@ -296,7 +315,7 @@ impl TerminalView {
 
     /// The PTY's device (`/dev/ttys004`), which programs in it see as their tty.
     pub fn tty_name(&self) -> Option<std::path::PathBuf> {
-        self.master.tty_name()
+        self.pty.tty_name()
     }
 
     /// The tab's app as its concrete type, for the module that owns it.
@@ -315,17 +334,19 @@ impl TerminalView {
     /// cwd, on a clean screen, like `tmux respawn-pane -k`.
     pub fn respawn(&mut self, cx: &mut Context<Self>) {
         let cwd = self.live_cwd();
-        let _ = self.child.kill();
+        self.pty.kill();
         self.generation += 1;
-        let (writer, master, child) = spawn_shell(
+        let (opened, feed) = spawn_shell(
             &cwd,
             &self.env,
             self.command.as_deref(),
             self.grid,
             self.generation,
+            None,
             cx,
         );
-        (self.writer, self.master, self.child) = (writer, master, child);
+        (self.pty, self.feed) = (opened.pty, feed);
+        self.attached = false;
         self.term = new_term(self.grid.0, self.grid.1, &self.config);
         // Size the new PTY and terminal to the pane, cell pixels included.
         let (cols, rows) = std::mem::take(&mut self.grid);
@@ -360,7 +381,7 @@ impl TerminalView {
         }
         let fx = self.term.take_effects();
         if !fx.pty_response.is_empty() {
-            let _ = self.writer.write_all(&fx.pty_response);
+            self.pty.write(&fx.pty_response);
         }
         if fx.title_changed {
             self.title = self.term.title();
@@ -377,7 +398,7 @@ impl TerminalView {
             // Shells without OSC 7 integration (stock zsh/bash): ask macOS
             // where the shell is, at most twice a second while it's printing.
             self.cwd_checked = std::time::Instant::now();
-            if let Some(cwd) = self.child.process_id().and_then(process_cwd)
+            if let Some(cwd) = self.pty.pid().and_then(process_cwd)
                 && cwd != self.cwd
             {
                 self.cwd = cwd;
@@ -430,8 +451,42 @@ impl TerminalView {
 
     pub fn send(&mut self, bytes: &[u8]) {
         if !bytes.is_empty() {
-            let _ = self.writer.write_all(bytes);
-            let _ = self.writer.flush();
+            self.pty.write(bytes);
+        }
+    }
+
+    /// Closing its tab: end the shell, which a held one wouldn't on its own
+    /// (dropping the view only lets go, as quitting does).
+    pub fn close(&mut self) {
+        self.frozen = true;
+        self.pty.kill();
+    }
+
+    /// The holder's id for this terminal, to take it back next launch.
+    pub fn held_id(&self) -> Option<&str> {
+        self.pty.held_id()
+    }
+
+    /// Quitting: a held terminal stops reading, takes in what was already
+    /// read, and leaves its state for the next launch (`hold::snapshot_path`).
+    /// The holder takes the PTY over once the app is gone.
+    pub fn freeze(&mut self) {
+        if self.frozen {
+            return;
+        }
+        let Some(id) = self.pty.freeze() else { return };
+        self.frozen = true;
+        let q = self.feed.take();
+        self.term.write(&q.bytes);
+        if let Some(snap) = self.term.snapshot() {
+            let path = crate::hold::snapshot_path(&id);
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let tmp = path.with_extension("tmp");
+            if std::fs::write(&tmp, snap).is_ok() {
+                let _ = std::fs::rename(tmp, path);
+            }
         }
     }
 
@@ -510,7 +565,7 @@ impl TerminalView {
         self.grid = (cols, rows);
         self.cell_px = (cw, ch);
         self.term.resize(cols, rows, cw, ch);
-        let _ = self.master.resize(PtySize {
+        self.pty.resize(PtySize {
             rows,
             cols,
             pixel_width: cols * cw as u16,
@@ -520,7 +575,7 @@ impl TerminalView {
         // now, not when it next prints.
         let reply = self.term.take_pty_response();
         if !reply.is_empty() {
-            let _ = self.writer.write_all(&reply);
+            self.pty.write(&reply);
         }
         self.dirty = true;
     }
@@ -590,8 +645,8 @@ impl TerminalView {
         if self.osc7 {
             return self.cwd.clone();
         }
-        self.child
-            .process_id()
+        self.pty
+            .pid()
             .and_then(process_cwd)
             .unwrap_or_else(|| self.cwd.clone())
     }
@@ -1399,7 +1454,7 @@ impl TerminalView {
     /// The program is reading a password: the PTY doesn't echo but reads
     /// whole lines, the same test Ghostty uses for its lock icon.
     fn password_input(&self) -> bool {
-        let Some(fd) = self.master.as_raw_fd() else {
+        let Some(fd) = self.pty.raw_fd() else {
             return false;
         };
         // SAFETY: tcgetattr only writes the termios it's given.
@@ -2218,103 +2273,94 @@ fn sprite_char(c: &ghostty::Cell) -> Option<char> {
     (chars.next().is_none() && !c.invisible && sprite::covers(ch)).then_some(ch)
 }
 
-/// Start the user's login shell on a new PTY of `size` (running `command`
-/// if there is one), and drain its output
-/// into the view on the main thread. Output and the exit of a shell from
-/// an older `generation` (one `respawn` replaced) are dropped.
-#[allow(clippy::type_complexity)]
+/// Start the user's login shell at `size` (running `command` if there is
+/// one), or take back `attach`, and drain its output into the view on the
+/// main thread. Output and the exit of a shell from an older `generation`
+/// (one `respawn` replaced) are dropped.
 fn spawn_shell(
     cwd: &str,
     env: &[(String, String)],
     command: Option<&str>,
-    (cols, rows): (u16, u16),
+    size: (u16, u16),
     generation: usize,
+    attach: Option<&str>,
     cx: &mut Context<TerminalView>,
-) -> (
-    Box<dyn Write + Send>,
-    Box<dyn MasterPty + Send>,
-    Box<dyn portable_pty::Child + Send + Sync>,
-) {
-    let pty = native_pty_system()
-        .openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("openpty");
+) -> (Opened, Feed) {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let mut cmd = CommandBuilder::new(&shell);
-    cmd.arg("-l");
+    let mut argv = vec![shell.clone(), "-l".into()];
     if let Some(c) = command {
-        cmd.args(["-c", c]);
+        argv.extend(["-c".into(), c.to_string()]);
     }
-    cmd.env("TERM", "xterm-256color");
-    cmd.env("COLORTERM", "truecolor");
-    cmd.env("TERM_PROGRAM", "abromux");
-    for (k, v) in env {
-        cmd.env(k, v);
-    }
+    let mut vars: Vec<(String, String)> = [
+        ("TERM", "xterm-256color"),
+        ("COLORTERM", "truecolor"),
+        ("TERM_PROGRAM", "abromux"),
+    ]
+    .map(|(k, v)| (k.into(), v.into()))
+    .into();
+    vars.extend(env.iter().cloned());
     if cx
         .try_global::<Config>()
         .is_none_or(|c| c.shell_integration)
     {
-        crate::shell::inject(&mut cmd, &shell, env);
+        vars.extend(crate::shell::inject(&shell, env));
     }
-    cmd.cwd(cwd);
-    let child = pty.slave.spawn_command(cmd).expect("spawn shell");
-    drop(pty.slave);
+    // Held shells are for taking back next launch; a run that won't restore
+    // a session (ABROMUX_NO_RESTORE, demos, scripted tests) would only leave
+    // them running unseen. A terminal running a command (a terminal-browser
+    // tab) is made again each launch, so it isn't held either.
+    let persistence = match crate::session::path() {
+        Some(_) if command.is_none() => cx
+            .try_global::<Settings>()
+            .map_or(Persistence::default(), |s| s.persistence),
+        _ => Persistence::CmuxLike,
+    };
+    let (feed, wake) = Feed::new();
+    let opened = crate::pty::open(cwd, &argv, &vars, size, attach, persistence, &feed);
+    drain(feed.clone(), wake, generation, cx);
+    (opened, feed)
+}
 
-    let mut reader = pty.master.try_clone_reader().expect("pty reader");
-    let writer = pty.master.take_writer().expect("pty writer");
-    let (tx, mut rx) = mpsc::unbounded::<Vec<u8>>();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 64 * 1024];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    crate::activity::output();
-                    if tx.unbounded_send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    // Drain PTY output on the main thread; batch whatever is queued so a
-    // flood of output costs one repaint.
+/// Take the program's output on the main thread, all that's queued at once,
+/// so a flood of output costs one repaint.
+fn drain(feed: Feed, mut wake: mpsc::Receiver<()>, generation: usize, cx: &mut Context<TerminalView>) {
     cx.spawn(async move |this, cx| {
-        while let Some(first) = rx.next().await {
-            let mut chunk = first;
-            while let Ok(more) = rx.try_recv() {
-                chunk.extend_from_slice(&more);
-            }
-            let live = this.update(cx, |this, cx| {
-                let live = this.generation == generation;
-                if live {
-                    this.process(&chunk, cx);
+        loop {
+            let woke = wake.next().await.is_some();
+            let q = feed.take();
+            if !q.bytes.is_empty() {
+                let live = this.update(cx, |this, cx| {
+                    let live = this.generation == generation;
+                    if live {
+                        this.process(&q.bytes, cx);
+                    }
+                    live
+                });
+                if !matches!(live, Ok(true)) {
+                    return;
                 }
-                live
-            });
-            if !matches!(live, Ok(true)) {
+            }
+            if q.closed || !woke {
+                let _ = this.update(cx, |this, cx| {
+                    if this.generation == generation && !this.frozen {
+                        cx.emit(TerminalEvent::Exited)
+                    }
+                });
                 return;
             }
         }
-        let _ = this.update(cx, |this, cx| {
-            if this.generation == generation {
-                cx.emit(TerminalEvent::Exited)
-            }
-        });
     })
     .detach();
-    (writer, pty.master, child)
 }
 
 /// A libghostty-vt terminal with the config's colors and cursor.
 fn new_term(cols: u16, rows: u16, config: &Config) -> ghostty::Terminal {
-    let mut term = ghostty::Terminal::new(cols, rows).expect("libghostty-vt terminal");
+    let term = ghostty::Terminal::new(cols, rows).expect("libghostty-vt terminal");
+    configure(term, config)
+}
+
+/// The config's colors and cursor on a new or restored terminal.
+fn configure(mut term: ghostty::Terminal, config: &Config) -> ghostty::Terminal {
     term.set_colors(
         config.foreground,
         config.background,
