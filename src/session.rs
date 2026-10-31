@@ -94,6 +94,13 @@ pub enum TabState {
         /// The tab's name from `rename-tab`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
+        /// Its terminal in herdr-core, still running (`crate::hc`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hc: Option<String>,
+        /// Its surface number, which that terminal's shell has in
+        /// `ABROMUX_SURFACE_ID`; only kept with `hc`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        surface: Option<usize>,
     },
     Browser {
         url: String,
@@ -174,7 +181,7 @@ impl AbroMux {
                     .iter()
                     .position(|p| p.id == ws.focused_pane)
                     .unwrap_or(0),
-                root: node_state(&ws.root, scrollback, cx),
+                root: node_state(&ws.root, scrollback, &self.surface_refs, cx),
             })
             .collect();
         Session {
@@ -195,6 +202,10 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // herdr-core's shells keep their surface numbers: leave those free.
+        for ws in &session.workspaces {
+            self.next_surface = self.next_surface.max(ws.root.max_surface());
+        }
         for state in session.workspaces {
             self.next_ws += 1;
             let id = self.next_ws;
@@ -284,12 +295,21 @@ impl AbroMux {
                 scrollback,
                 agent,
                 name,
+                hc,
+                surface,
             } => {
                 let cwd = std::path::Path::new(&cwd).is_dir().then_some(cwd);
-                let s = self.make_terminal(cwd, ws, window, cx);
+                let attach = hc.as_deref().zip(surface).map(|(a, n)| (n, a));
+                let s = self.make_terminal_full(cwd, ws, vec![], attach, window, cx);
                 if let Surface::Terminal(t) = &s {
                     t.update(cx, |t, cx| {
-                        t.restore(scrollback.as_deref(), font_size, agent, cx)
+                        if t.attached {
+                            // It ran on: its screen and agent are still there.
+                            t.restore(None, font_size, None, cx);
+                            t.agent = agent;
+                        } else {
+                            t.restore(scrollback.as_deref(), font_size, agent, cx)
+                        }
                     });
                 }
                 (s, name)
@@ -303,14 +323,35 @@ impl AbroMux {
     }
 }
 
-fn node_state(node: &Node, scrollback: bool, cx: &App) -> NodeState {
+impl NodeState {
+    /// The highest surface number a terminal in it keeps.
+    fn max_surface(&self) -> usize {
+        match self {
+            NodeState::Pane { tabs, .. } => tabs
+                .iter()
+                .filter_map(|t| match t {
+                    TabState::Terminal { surface, .. } => *surface,
+                    TabState::Browser { .. } => None,
+                })
+                .max()
+                .unwrap_or(0),
+            NodeState::Split { children, .. } => {
+                children[0].max_surface().max(children[1].max_surface())
+            }
+        }
+    }
+}
+
+type Refs = std::collections::HashMap<gpui::EntityId, usize>;
+
+fn node_state(node: &Node, scrollback: bool, refs: &Refs, cx: &App) -> NodeState {
     match node {
         Node::Leaf(p) => NodeState::Pane {
             active: p.active,
             tabs: p
                 .tabs
                 .iter()
-                .map(|s| tab_state(s, scrollback, cx))
+                .map(|s| tab_state(s, scrollback, refs, cx))
                 .collect(),
         },
         Node::Split {
@@ -322,18 +363,22 @@ fn node_state(node: &Node, scrollback: bool, cx: &App) -> NodeState {
             vertical: *axis == Axis::Vertical,
             ratio: *ratio,
             children: Box::new([
-                node_state(&children[0], scrollback, cx),
-                node_state(&children[1], scrollback, cx),
+                node_state(&children[0], scrollback, refs, cx),
+                node_state(&children[1], scrollback, refs, cx),
             ]),
         },
     }
 }
 
-fn tab_state(s: &Surface, scrollback: bool, cx: &App) -> TabState {
+fn tab_state(s: &Surface, scrollback: bool, refs: &Refs, cx: &App) -> TabState {
     match s {
         Surface::Terminal(t) => {
+            let surface = refs.get(&t.entity_id()).copied();
             let t = t.read(cx);
+            let hc = t.hc_address().map(str::to_string);
             TabState::Terminal {
+                surface: surface.filter(|_| hc.is_some()),
+                hc,
                 cwd: t.live_cwd(),
                 font_size: Some(t.font_size()),
                 scrollback: scrollback
@@ -388,6 +433,8 @@ mod tests {
                                     pid: None,
                                 }),
                                 name: Some("server".into()),
+                                hc: Some("t3".into()),
+                                surface: Some(7),
                             }],
                         },
                         NodeState::Pane {

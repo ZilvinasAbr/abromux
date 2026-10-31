@@ -7,7 +7,6 @@
 //! Codex's hooks report to the terminal they run in (`agent.rs`).
 //! Off with `shell-integration = none` in the Ghostty config.
 
-use portable_pty::CommandBuilder;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -16,13 +15,13 @@ const ZSH: &[(&str, &str)] = &[
     ("abromux.zsh", include_str!("shell/zsh/abromux.zsh")),
 ];
 
-/// Set up `cmd` (which runs `shell`) to load the integration, if abromux
-/// has one for that shell.
-pub fn inject(cmd: &mut CommandBuilder, shell: &str, env: &[(String, String)]) {
+/// The variables that make `shell` load the integration (set after `env`),
+/// if abromux has one for that shell.
+pub fn inject(shell: &str, env: &[(String, String)]) -> Vec<(String, String)> {
     if Path::new(shell).file_name().and_then(|n| n.to_str()) != Some("zsh") {
-        return;
+        return vec![];
     }
-    let Some(dir) = zsh_dir() else { return };
+    let Some(dir) = zsh_dir() else { return vec![] };
     // The pane's env wins over abromux's own, as it does for the shell.
     let zdotdir = env
         .iter()
@@ -30,10 +29,11 @@ pub fn inject(cmd: &mut CommandBuilder, shell: &str, env: &[(String, String)]) {
         .find(|(k, _)| k == "ZDOTDIR")
         .map(|(_, v)| v.clone())
         .or_else(|| std::env::var("ZDOTDIR").ok());
-    if let Some(z) = zdotdir {
-        cmd.env("ABROMUX_ZSH_ZDOTDIR", z);
-    }
-    cmd.env("ZDOTDIR", dir);
+    zdotdir
+        .map(|z| ("ABROMUX_ZSH_ZDOTDIR".to_string(), z))
+        .into_iter()
+        .chain([("ZDOTDIR".into(), dir.to_string_lossy().into_owned())])
+        .collect()
 }
 
 /// The zsh integration files, written once per run so they match this build.
@@ -64,7 +64,7 @@ fn write_files(dir: &Path, files: &[(&str, &str)]) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use crate::ghostty::Terminal;
-    use portable_pty::{PtySize, native_pty_system};
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
     use std::io::{Read, Write};
     use std::sync::mpsc;
     use std::time::{Duration, Instant};

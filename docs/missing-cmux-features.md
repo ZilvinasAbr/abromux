@@ -146,7 +146,7 @@ What's missing beyond the browser commands above:
 
 - [ ] **SSH workspaces**: `ssh`, `mosh`, with agent forwarding and identity options.
 - [ ] **Remote tmux**: `ssh-tmux`, `mosh-tmux`, and mirroring remote tmux sessions as native panes.
-- [ ] **Local tmux/zellij ownership**: `local-tmux`, `local-zellij`, so shells survive an app quit, crash or update.
+- [x] **Local tmux/zellij ownership**: `local-tmux`, `local-zellij`, so shells survive an app quit, crash or update. *(partial: through herdr-core with `"persistence": "herdr-core"`, not tmux or zellij)*
 - [ ] **SSH session management**: `ssh-session-list`, `ssh-session-attach`, `ssh-session-cleanup`, and a remote daemon.
 
 ## 9. Coding-agent integrations

@@ -12,6 +12,7 @@ mod config;
 mod cursor;
 mod debug;
 mod ghostty;
+mod hc;
 mod icon;
 mod ipc;
 mod keymap;
@@ -107,6 +108,8 @@ actions!(
         WorkspaceSwitcher,
         RenameTab,
         ReloadConfig,
+        PersistenceAbromux,
+        PersistenceHerdrCore,
         LastPane,
         SwapLeft,
         SwapRight,
@@ -460,11 +463,26 @@ impl AbroMux {
         &mut self,
         cwd: Option<String>,
         ws: usize,
-        mut env: Vec<(String, String)>,
+        env: Vec<(String, String)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Surface {
-        let surface = self.next_surface + 1;
+        self.make_terminal_full(cwd, ws, env, None, window, cx)
+    }
+
+    /// `make_terminal_with` that can attach to a herdr-core terminal from the
+    /// last session: `(its surface number, its address)`. The shell kept the
+    /// `ABROMUX_SURFACE_ID` it started with, so the surface keeps that number.
+    fn make_terminal_full(
+        &mut self,
+        cwd: Option<String>,
+        ws: usize,
+        mut env: Vec<(String, String)>,
+        attach: Option<(usize, &str)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Surface {
+        let surface = attach.map_or(self.next_surface + 1, |(n, _)| n);
         env.extend([
             ("ABROMUX_WORKSPACE_ID".into(), format!("workspace:{ws}")),
             ("ABROMUX_SURFACE_ID".into(), format!("surface:{surface}")),
@@ -475,8 +493,11 @@ impl AbroMux {
                 path.to_string_lossy().into_owned(),
             ));
         }
-        let term = cx.new(|cx| TerminalView::new(cwd, env, cx));
-        self.surface_ref(term.entity_id());
+        let term = cx.new(|cx| TerminalView::new(cwd, env, attach.map(|(_, a)| a), cx));
+        // Its env names `surface` even when the shell is a new one; restore
+        // reserved the numbers the last session used, so it's free.
+        self.surface_refs.insert(term.entity_id(), surface);
+        self.next_surface = self.next_surface.max(surface);
         cx.subscribe_in(&term, window, |this, term, ev, window, cx| {
             let id = term.entity_id();
             match ev {
@@ -628,7 +649,9 @@ impl AbroMux {
             .unwrap();
         let pane = ws.root.pane_mut(pane_id).unwrap();
         let idx = pane.tabs.iter().position(|s| s.entity_id() == id).unwrap();
-        pane.tabs.remove(idx);
+        if let Surface::Terminal(t) = pane.tabs.remove(idx) {
+            t.update(cx, |t, _| t.close());
+        }
         if pane.active >= pane.tabs.len() {
             pane.active = pane.tabs.len().saturating_sub(1);
         } else if idx < pane.active {
@@ -695,8 +718,9 @@ impl AbroMux {
             for s in &p.tabs {
                 self.surface_refs.remove(&s.entity_id());
                 self.notifications.retain(|n| n.surface != s.entity_id());
-                if let Surface::Browser(b) = s {
-                    b.update(cx, |b, cx| b.set_shown(false, cx));
+                match s {
+                    Surface::Browser(b) => b.update(cx, |b, cx| b.set_shown(false, cx)),
+                    Surface::Terminal(t) => t.update(cx, |t, _| t.close()),
                 }
             }
         }
@@ -1265,6 +1289,33 @@ impl AbroMux {
         window.push_notification(note, cx);
         cx.notify();
         result
+    }
+
+    /// The palette's "Persistence:" commands: write it to the config file
+    /// and reload. New terminals use it; running ones keep theirs.
+    fn set_persistence(
+        &mut self,
+        p: settings::Persistence,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(e) = settings::set_persistence(p) {
+            window.push_notification(settings::error_notification(e), cx);
+            return;
+        }
+        if self.reload_settings(window, cx).is_err() {
+            return;
+        }
+        let mut note = format!("New terminals use {}", p.key());
+        if p == settings::Persistence::HerdrCore && hc::binary().is_none() {
+            note.push_str(", but herdr-core (hc) isn't installed: they start here until it is");
+        }
+        window.push_notification(
+            Notification::success(note)
+                .title("Persistence")
+                .id::<settings::Persistence>(),
+            cx,
+        );
     }
 
     fn flash_pane(&mut self, cx: &mut Context<Self>) {
@@ -2308,6 +2359,12 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &ReloadConfig, window, cx| {
                 // A toast says how it went.
                 let _ = this.reload_settings(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PersistenceAbromux, window, cx| {
+                this.set_persistence(settings::Persistence::Abromux, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PersistenceHerdrCore, window, cx| {
+                this.set_persistence(settings::Persistence::HerdrCore, window, cx)
             }))
             .when(self.notifications_open, |d| {
                 d.capture_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {

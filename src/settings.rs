@@ -9,6 +9,7 @@
 //!
 //! ```json
 //! {
+//!   "persistence": "herdr-core",
 //!   "panes": {
 //!     "resizeStep": 20,
 //!     "dividerColor": "#3a3935",
@@ -63,9 +64,121 @@ pub struct Settings {
     pub shortcuts: BTreeMap<String, Shortcut>,
     /// Extra palette commands.
     pub commands: Vec<Command>,
+    /// What keeps terminals going across a quit (`crate::hc`).
+    pub persistence: Persistence,
 }
 
 impl Global for Settings {}
+
+/// How terminals come back after abromux quits. Applies to terminals opened
+/// after it's set; ones already running in herdr-core are attached to again
+/// whatever it says.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Persistence {
+    /// Shells end with the app; the next launch starts new ones in the same
+    /// folders, replays their output and resumes coding agents.
+    #[default]
+    Abromux,
+    /// Shells run in herdr-core and keep running; the next launch attaches
+    /// to them.
+    HerdrCore,
+}
+
+impl Persistence {
+    /// Its value in the config file.
+    pub fn key(self) -> &'static str {
+        match self {
+            Persistence::Abromux => "abromux",
+            Persistence::HerdrCore => "herdr-core",
+        }
+    }
+}
+
+/// Write `"persistence"` into the config file (the palette's "Persistence:"
+/// commands). The rest of the file is left as written: the value is replaced
+/// in place, or the key added first. A file that wouldn't parse with it
+/// isn't touched.
+pub fn set_persistence(p: Persistence) -> Result<(), String> {
+    let path = path();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let new = with_persistence(&text, p)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    std::fs::write(&path, new).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn with_persistence(text: &str, p: Persistence) -> Result<String, String> {
+    let value = format!("\"{}\"", p.key());
+    let new = if text.trim().is_empty() {
+        format!("{{\n  \"persistence\": {value}\n}}\n")
+    } else if let Some(at) = top_level_value(text, "persistence") {
+        format!("{}{value}{}", &text[..at.start], &text[at.end..])
+    } else {
+        let open = text
+            .find('{')
+            .ok_or("the config file isn't a JSON object")?;
+        let (head, rest) = text.split_at(open + 1);
+        let comma = if rest.trim_start().starts_with('}') {
+            ""
+        } else {
+            ","
+        };
+        format!("{head}\n  \"persistence\": {value}{comma}{rest}")
+    };
+    match parse(&new) {
+        Ok(s) if s.persistence == p => Ok(new),
+        Ok(_) => Err("couldn't set persistence in the config file".into()),
+        Err(e) => Err(format!("{}: {e}", path().display())),
+    }
+}
+
+/// Where the string value of top-level `key` is in a JSON object's text.
+fn top_level_value(text: &str, key: &str) -> Option<std::ops::Range<usize>> {
+    let bytes = text.as_bytes();
+    let (mut depth, mut i) = (0, 0);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => depth -= 1,
+            b'"' => {
+                let end = string_end(bytes, i)?;
+                if depth == 1 && &text[i + 1..end] == key {
+                    let rest = text[end + 1..].trim_start();
+                    let rest = rest.strip_prefix(':')?.trim_start();
+                    let start = text.len() - rest.len();
+                    if rest.starts_with('"') {
+                        return Some(start..string_end(bytes, start)? + 1);
+                    }
+                    return None;
+                }
+                i = end;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The closing quote of the JSON string that opens at `start`.
+fn string_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut i = start + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 1,
+            b'"' => return Some(i),
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
 
 /// The keys bound to an action or command.
 #[derive(Clone, Debug, PartialEq)]
@@ -422,6 +535,39 @@ mod tests {
         assert_eq!(parse("").unwrap(), Settings::default());
         assert_eq!(parse("{}").unwrap(), Settings::default());
         assert_eq!(parse(r#"{"panes": {}}"#).unwrap(), Settings::default());
+    }
+
+    #[test]
+    fn persistence() {
+        let s = parse(r#"{"persistence": "herdr-core"}"#).unwrap();
+        assert_eq!(s.persistence, Persistence::HerdrCore);
+        assert!(parse(r#"{"persistence": "tmux"}"#).is_err());
+    }
+
+    #[test]
+    fn setting_persistence_keeps_the_rest_of_the_file() {
+        let h = Persistence::HerdrCore;
+        assert_eq!(
+            with_persistence("", h).unwrap(),
+            "{\n  \"persistence\": \"herdr-core\"\n}\n"
+        );
+        assert_eq!(
+            with_persistence("{}", h).unwrap(),
+            "{\n  \"persistence\": \"herdr-core\"}"
+        );
+        // Added first; key order, spacing and nested strings stay.
+        let file = "{\n    \"panes\": { \"resizeStep\": 30 },\n    \"commands\": [{ \"title\": \"persistence\", \"run\": \"echo \\\"persistence\\\"\" }]\n}\n";
+        let new = with_persistence(file, h).unwrap();
+        assert_eq!(
+            new,
+            format!("{{\n  \"persistence\": \"herdr-core\",{}", &file[1..])
+        );
+        // Replaced in place, and back again.
+        let back = with_persistence(&new, Persistence::Abromux).unwrap();
+        assert_eq!(back, new.replace("herdr-core", "abromux"));
+        assert_eq!(parse(&back).unwrap().panes.resize_step, 30.);
+        // A broken file is left alone.
+        assert!(with_persistence("{ \"panes\": ", h).is_err());
     }
 
     #[test]

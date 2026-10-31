@@ -4,6 +4,7 @@
     scripts/perf.py run              build, measure, record, compare (~1.5 min)
     scripts/perf.py run --headless   only the parts that need no window (~10 s)
     scripts/perf.py run --full       longer idle windows and more startup runs
+    scripts/perf.py run --persistence herdr-core   (or abromux) to compare the two
     scripts/perf.py compare [ID]     compare a recorded run (default: latest)
     scripts/perf.py history [METRIC] recent runs, or one metric over time
     scripts/perf.py report [--md]    HTML (or Markdown) report with charts
@@ -85,6 +86,12 @@ METRICS = {
     "kitty_frame_p99_ms":   ("ms",   "lower",  0.30, 5,    "p99 frame draw while streaming kitty frames"),
     "kitty_footprint_mb":   ("MB",   "lower",  0.25, 10,   "footprint growth after shared-memory kitty frames"),
     "browser_open_ms":      ("ms",   "lower",  0.25, 30,   "browser split -> local page loaded"),
+    # Only with --persistence herdr-core: what herdr-core's own processes
+    # (core, holder, one `hc connect` per terminal) add on top of the app.
+    "hc_idle_mb":           ("MB",   "lower",  0.10, 2,    "herdr-core footprint, idle, 1 terminal"),
+    "hc_per_terminal_mb":   ("MB",   "lower",  0.25, 0.3,  "herdr-core footprint per extra terminal"),
+    "hc_idle_cpu_11_pct":   ("%",    "lower",  0.50, 0.5,  "herdr-core idle CPU, 11 terminals"),
+    "hc_throughput_cpu_s":  ("s",    "lower",  0.15, 0.2,  "herdr-core CPU time for the throughput run"),
 }
 
 MODES = {
@@ -306,12 +313,16 @@ open("RESULT", "w").write(f"{secs}\n")
 # ---- the suite -------------------------------------------------------------------
 
 class Suite:
-    def __init__(self, binary: Path, mode: str, data: Path):
+    def __init__(self, binary: Path, mode: str, data: Path, persistence=None):
         self.bin = binary
         self.cfg = MODES[mode]
         self.data = data
         self.metrics = {}
         self.samples = {}
+        # --persistence: set it in the app's config, give herdr-core a session
+        # of its own, and time throughput with a query the app itself answers.
+        self.persistence = persistence
+        self.hc_session = f"abromux-perf-{os.getpid()}"
 
     def put(self, name, value, samples=None):
         if value is None:
@@ -355,13 +366,59 @@ class Suite:
         self.session = tmp / "session.json"
         self.env = {**os.environ, "ABROMUX_SOCKET_PATH": str(tmp / "abromux.sock"),
                     "ABROMUX_SESSION_PATH": str(self.session), "XDG_CONFIG_HOME": str(xdg)}
+        if self.persistence:
+            (xdg / "abromux").mkdir()
+            (xdg / "abromux" / "config.json").write_text(json.dumps({"persistence": self.persistence}))
+            self.env["HC_SESSION"] = self.hc_session
         self.proc = None
         try:
             self._app(tmp)
             self.actions(tmp)
         finally:
             self.quit()
+            self.hc_reset(start=False)
             shutil.rmtree(tmp, ignore_errors=True)
+
+    # -- herdr-core (--persistence herdr-core) --
+
+    def hc(self, *args):
+        hc = os.environ.get("ABROMUX_HC") or shutil.which("hc") or str(Path.home() / ".local/bin/hc")
+        r = subprocess.run([hc, *args], env={**os.environ, "HC_SESSION": self.hc_session},
+                           capture_output=True, text=True, timeout=30)
+        return r.stdout
+
+    def hc_reset(self, start=True):
+        """No terminals left from an earlier launch (quitting leaves them
+        running); with `start`, a warm core, as when it's in daily use."""
+        if self.persistence != "herdr-core":
+            return
+        self.hc("server", "stop")
+        if start:
+            self.hc("server", "status")
+        else:
+            state = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
+            shutil.rmtree(state / "herdr-core" / self.hc_session, ignore_errors=True)
+
+    def hc_pids(self):
+        """herdr-core's processes serving this app: core, holder, and the
+        app's `hc connect` children."""
+        if self.persistence != "herdr-core":
+            return []
+        try:
+            st = json.loads(self.hc("server", "status"))
+        except ValueError:
+            return []
+        pids = [st.get("pid"), (st.get("holder") or {}).get("pid")]
+        out = sh("pgrep", "-P", str(self.proc.pid), "-f", "hc connect", check=False)
+        return [p for p in pids if p] + [int(p) for p in out.split()]
+
+    def hc_footprint(self):
+        pids = self.hc_pids()
+        mbs = [footprint_mb(p) for p in pids]
+        return sum(m for m in mbs if m is not None) if pids else None
+
+    def hc_cpu(self):
+        return sum(cpu_secs(p) for p in self.hc_pids())
 
     def cli(self, *args, check=False):
         r = subprocess.run([str(self.bin), *args], env=self.env, capture_output=True, text=True, timeout=10)
@@ -370,6 +427,7 @@ class Suite:
         return r
 
     def launch(self):
+        self.hc_reset()
         self.session.write_text(json.dumps({"version": 1, "window": {"x": 364, "y": 200, "width": 1000, "height": 700}, "active": 0,
                                             "workspaces": [{"root": {"kind": "pane", "tabs": [{"kind": "terminal", "cwd": str(Path.home())}]}}]}))
         self.proc = subprocess.Popen([str(self.bin)], env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -395,9 +453,11 @@ class Suite:
     def front(self):
         self.cli("focus-window", "--window", "window:1")
 
-    def idle_cpu(self, secs):
-        c0 = cpu_secs(self.proc.pid)
+    def idle_cpu(self, secs, hc_metric=None):
+        c0, h0 = cpu_secs(self.proc.pid), self.hc_cpu()
         time.sleep(secs)
+        if hc_metric and self.hc_pids():
+            self.put(hc_metric, (self.hc_cpu() - h0) / secs * 100)
         return (cpu_secs(self.proc.pid) - c0) / secs * 100
 
     def _app(self, tmp):
@@ -427,17 +487,20 @@ class Suite:
         self.front()
         time.sleep(c["settle"])
         self.put("idle_footprint_mb", footprint_mb(pid))
+        self.put("hc_idle_mb", self.hc_footprint())
         self.put("idle_cpu_pct", self.idle_cpu(c["idle"]))
 
         self.front()
-        m0 = footprint_mb(pid)
+        m0, h0 = footprint_mb(pid), self.hc_footprint()
         for _ in range(10):
             self.cli("new-workspace", check=True)
         time.sleep(c["settle"])
-        m1 = footprint_mb(pid)
+        m1, h1 = footprint_mb(pid), self.hc_footprint()
         if m0 is not None and m1 is not None:
             self.put("per_terminal_mb", (m1 - m0) / 10)
-        self.put("idle_cpu_11_pct", self.idle_cpu(c["idle"]))
+        if h0 is not None and h1 is not None:
+            self.put("hc_per_terminal_mb", (h1 - h0) / 10)
+        self.put("idle_cpu_11_pct", self.idle_cpu(c["idle"], "hc_idle_cpu_11_pct"))
 
         log("in-app throughput")
         # The shell times each cat up to the terminal's reply to a DA1 query
@@ -453,6 +516,11 @@ class Suite:
         if grid in ("24 80", "?"):
             log(f"  WARNING: grid is {grid!r}; the window was probably not drawn, in-app numbers are suspect")
         script = tmp / "throughput.zsh"
+        # herdr-core answers DA1 itself, as soon as *it* has parsed the
+        # output. A kitty graphics query passes through to the app, so its
+        # reply means the app has parsed everything too.
+        query, end = (r"\e[c", "c") if not self.persistence else \
+            (r"\e_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\e\\", "\\\\")
         script.write_text(f"""zmodload zsh/datetime
 old=$(stty -g)
 stty -echo -icanon min 1
@@ -460,8 +528,8 @@ for i in {{1..{c['passes']}}}; do
   for f in ascii color unicode; do
     s=$EPOCHREALTIME
     cat {self.data}/$f.txt
-    printf '\\e[c'
-    read -r -d c reply
+    printf '{query}'
+    read -r -d '{end}' reply
     print "$f $((EPOCHREALTIME - s))" >> {res}
   done
 done
@@ -472,7 +540,7 @@ clear
         rpc = Rpc(self.env["ABROMUX_SOCKET_PATH"])
         vsync = rpc.vsync()
         rpc.call("debug.frames", record=True)
-        c0 = cpu_secs(pid)
+        c0, hc0 = cpu_secs(pid), self.hc_cpu()
         self.cli("send", f"zsh {script}\\n")
         end = time.monotonic() + 600
         while time.monotonic() < end:
@@ -482,6 +550,8 @@ clear
         else:
             raise RuntimeError("in-app throughput timed out")
         self.put("throughput_cpu_s", cpu_secs(pid) - c0)
+        if self.hc_pids():
+            self.put("hc_throughput_cpu_s", self.hc_cpu() - hc0)
         frames = rpc.call("debug.frames", record=False)
         if frames["draw_ms"]:
             self.put("throughput_frame_p99_ms", percentile(frames["draw_ms"], 99))
@@ -718,7 +788,8 @@ clear
 
 def baseline_for(rec, history, n):
     """Earlier quiet runs from the same machine, most recent last."""
-    earlier = [h for h in history if h["machine"]["id"] == rec["machine"]["id"] and h["timestamp"] < rec["timestamp"] and not h.get("busy")]
+    earlier = [h for h in history if h["machine"]["id"] == rec["machine"]["id"] and h["timestamp"] < rec["timestamp"] and not h.get("busy")
+               and h.get("persistence") == rec.get("persistence")]
     return earlier[-n:]
 
 
@@ -857,7 +928,7 @@ def cmd_run(a):
     if loads[0] > cores / 2:
         log(f"WARNING: load average is {loads[0]} on {cores} cores; numbers will be noisy and the run won't count as a baseline")
     t0 = time.monotonic()
-    suite = Suite(binary, "full" if a.full else "quick", data)
+    suite = Suite(binary, "full" if a.full else "quick", data, a.persistence)
     suite.binary_size()
     suite.headless()
     loads.append(load_avg())
@@ -883,6 +954,8 @@ def cmd_run(a):
         "metrics": suite.metrics,
         "samples": suite.samples,
     }
+    if a.persistence:
+        rec["persistence"] = a.persistence
     if getattr(suite, "grid", None):
         rec["grid"] = suite.grid
     history = load_history()
@@ -1017,6 +1090,9 @@ def main():
     g.add_argument("--headless", action="store_true", help="skip the app; binary size + VT parse only")
     g.add_argument("--full", action="store_true", help="longer settle/idle windows, 5 startup runs")
     r.add_argument("--label", help="free-form note stored with the run")
+    r.add_argument("--persistence", choices=["abromux", "herdr-core"],
+                   help="run the app with this persistence (compared only with runs of the same one); "
+                        "throughput is timed with a kitty query either way, so the two compare")
     r.add_argument("--no-build", action="store_true", help="use the existing release binary")
     r.add_argument("--busy", action="store_true", help="mark the run as not representative (kept out of baselines)")
     r.add_argument("--dry-run", action="store_true", help="don't record the run")

@@ -8,7 +8,9 @@ use crate::{
         self, CursorStyle as Caret, Frame, ImageLayer, ImagePixels, MouseAction, MouseGeometry,
         Rgb, ffi,
     },
-    link, osc99, sprite,
+    link, osc99,
+    settings::{Persistence, Settings},
+    sprite,
     theme::*,
 };
 use futures::{StreamExt, channel::mpsc};
@@ -77,9 +79,10 @@ struct HoverLink {
 
 pub struct TerminalView {
     term: ghostty::Terminal,
-    writer: Box<dyn Write + Send>,
-    master: Box<dyn MasterPty + Send>,
-    child: Box<dyn portable_pty::Child + Send + Sync>,
+    pty: Pty,
+    /// It reattached to a shell that ran on in herdr-core while abromux was
+    /// away, so there's nothing to replay or resume.
+    pub attached: bool,
     focus: FocusHandle,
     /// Shared with the paint that draws it, so a paint doesn't copy it.
     frame: Rc<Frame>,
@@ -155,18 +158,24 @@ impl Focusable for TerminalView {
 }
 
 impl TerminalView {
-    pub fn new(cwd: Option<String>, env: Vec<(String, String)>, cx: &mut Context<Self>) -> Self {
+    /// A new shell in `cwd`, or with `attach`, herdr-core's terminal of that
+    /// address if it's still running (a new shell if not).
+    pub fn new(
+        cwd: Option<String>,
+        env: Vec<(String, String)>,
+        attach: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let (cols, rows) = (80, 24);
         let cwd = cwd.unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
-        let (writer, master, child) = spawn_shell(&cwd, &env, (cols, rows), 0, cx);
+        let (pty, attached) = spawn_shell(&cwd, &env, (cols, rows), 0, attach, cx);
         let focus = cx.focus_handle();
         let config = cx.try_global::<Config>().cloned().unwrap_or_default();
         cx.on_release(Self::free_images).detach();
         Self {
             term: new_term(cols, rows, &config),
-            writer,
-            master,
-            child,
+            pty,
+            attached,
             focus,
             frame: Rc::default(),
             dirty: true,
@@ -235,10 +244,10 @@ impl TerminalView {
     /// cwd, on a clean screen, like `tmux respawn-pane -k`.
     pub fn respawn(&mut self, cx: &mut Context<Self>) {
         let cwd = self.live_cwd();
-        let _ = self.child.kill();
+        self.pty.kill();
         self.generation += 1;
-        let (writer, master, child) = spawn_shell(&cwd, &self.env, self.grid, self.generation, cx);
-        (self.writer, self.master, self.child) = (writer, master, child);
+        (self.pty, _) = spawn_shell(&cwd, &self.env, self.grid, self.generation, None, cx);
+        self.attached = false;
         self.term = new_term(self.grid.0, self.grid.1, &self.config);
         // Size the new PTY and terminal to the pane, cell pixels included.
         let (cols, rows) = std::mem::take(&mut self.grid);
@@ -270,7 +279,7 @@ impl TerminalView {
         }
         let fx = self.term.take_effects();
         if !fx.pty_response.is_empty() {
-            let _ = self.writer.write_all(&fx.pty_response);
+            self.pty.write(&fx.pty_response);
         }
         if fx.title_changed {
             self.title = self.term.title();
@@ -287,7 +296,7 @@ impl TerminalView {
             // Shells without OSC 7 integration (stock zsh/bash): ask macOS
             // where the shell is, at most twice a second while it's printing.
             self.cwd_checked = std::time::Instant::now();
-            if let Some(cwd) = self.child.process_id().and_then(process_cwd)
+            if let Some(cwd) = self.pty.pid().and_then(process_cwd)
                 && cwd != self.cwd
             {
                 self.cwd = cwd;
@@ -313,8 +322,21 @@ impl TerminalView {
 
     pub fn send(&mut self, bytes: &[u8]) {
         if !bytes.is_empty() {
-            let _ = self.writer.write_all(bytes);
-            let _ = self.writer.flush();
+            self.pty.write(bytes);
+        }
+    }
+
+    /// Closing its tab: end the shell, which a herdr-core one wouldn't on its
+    /// own (dropping the view only detaches, as quitting does).
+    pub fn close(&mut self) {
+        self.pty.kill();
+    }
+
+    /// herdr-core's address for this terminal, to attach again next launch.
+    pub fn hc_address(&self) -> Option<&str> {
+        match &self.pty {
+            Pty::Hc(t) => Some(&t.address),
+            Pty::Local { .. } => None,
         }
     }
 
@@ -393,7 +415,7 @@ impl TerminalView {
         self.grid = (cols, rows);
         self.cell_px = (cw, ch);
         self.term.resize(cols, rows, cw, ch);
-        let _ = self.master.resize(PtySize {
+        self.pty.resize(PtySize {
             rows,
             cols,
             pixel_width: cols * cw as u16,
@@ -467,8 +489,8 @@ impl TerminalView {
         if self.osc7 {
             return self.cwd.clone();
         }
-        self.child
-            .process_id()
+        self.pty
+            .pid()
             .and_then(process_cwd)
             .unwrap_or_else(|| self.cwd.clone())
     }
@@ -1092,7 +1114,7 @@ impl TerminalView {
     /// The program is reading a password: the PTY doesn't echo but reads
     /// whole lines, the same test Ghostty uses for its lock icon.
     fn password_input(&self) -> bool {
-        let Some(fd) = self.master.as_raw_fd() else {
+        let Some(fd) = self.pty.raw_fd() else {
             return false;
         };
         // SAFETY: tcgetattr only writes the termios it's given.
@@ -1905,21 +1927,125 @@ fn sprite_char(c: &ghostty::Cell) -> Option<char> {
     (chars.next().is_none() && !c.invisible && sprite::covers(ch)).then_some(ch)
 }
 
-/// Start the user's login shell on a new PTY of `size`, and drain its output
-/// into the view on the main thread. Output and the exit of a shell from
-/// an older `generation` (one `respawn` replaced) are dropped.
-#[allow(clippy::type_complexity)]
+/// Where a terminal's program runs.
+enum Pty {
+    /// A PTY of abromux's own: the shell ends with the app.
+    Local {
+        writer: Box<dyn Write + Send>,
+        master: Box<dyn MasterPty + Send>,
+        child: Box<dyn portable_pty::Child + Send + Sync>,
+    },
+    /// A terminal in herdr-core, which outlives the app (`crate::hc`).
+    Hc(crate::hc::Terminal),
+}
+
+impl Pty {
+    fn write(&mut self, bytes: &[u8]) {
+        match self {
+            Pty::Local { writer, .. } => {
+                let _ = writer.write_all(bytes);
+                let _ = writer.flush();
+            }
+            Pty::Hc(t) => t.write(bytes),
+        }
+    }
+
+    fn resize(&self, size: PtySize) {
+        match self {
+            Pty::Local { master, .. } => {
+                let _ = master.resize(size);
+            }
+            Pty::Hc(t) => t.resize(size.cols, size.rows),
+        }
+    }
+
+    /// The shell's pid (herdr-core's terminals run on this machine too).
+    fn pid(&self) -> Option<u32> {
+        match self {
+            Pty::Local { child, .. } => child.process_id(),
+            Pty::Hc(t) => t.pid,
+        }
+    }
+
+    /// End the program for good. Dropping a `Pty` ends a local shell too, but
+    /// only detaches from herdr-core's.
+    fn kill(&mut self) {
+        match self {
+            Pty::Local { child, .. } => {
+                let _ = child.kill();
+            }
+            Pty::Hc(t) => t.kill(),
+        }
+    }
+
+    fn raw_fd(&self) -> Option<i32> {
+        match self {
+            Pty::Local { master, .. } => master.as_raw_fd(),
+            Pty::Hc(_) => None,
+        }
+    }
+}
+
+/// Start the user's login shell at `size` (or attach to herdr-core's
+/// terminal `attach`), and drain its output into the view on the main
+/// thread. Output and the exit of a shell from an older `generation` (one
+/// `respawn` replaced) are dropped. The flag says whether it attached.
 fn spawn_shell(
     cwd: &str,
     env: &[(String, String)],
-    (cols, rows): (u16, u16),
+    size: (u16, u16),
     generation: usize,
+    attach: Option<&str>,
     cx: &mut Context<TerminalView>,
-) -> (
-    Box<dyn Write + Send>,
-    Box<dyn MasterPty + Send>,
-    Box<dyn portable_pty::Child + Send + Sync>,
-) {
+) -> (Pty, bool) {
+    let (tx, rx) = mpsc::unbounded::<Vec<u8>>();
+    let (pty, attached) = open_pty(cwd, env, size, attach, tx, cx);
+    drain(rx, generation, cx);
+    (pty, attached)
+}
+
+fn open_pty(
+    cwd: &str,
+    env: &[(String, String)],
+    (cols, rows): (u16, u16),
+    attach: Option<&str>,
+    tx: mpsc::UnboundedSender<Vec<u8>>,
+    cx: &mut Context<TerminalView>,
+) -> (Pty, bool) {
+    if let Some(address) = attach {
+        match crate::hc::Terminal::attach(address, (cols, rows), hc_sink(tx.clone())) {
+            Ok(t) => return (Pty::Hc(t), true),
+            Err(e) => eprintln!("abromux: herdr-core terminal {address}: {e}"),
+        }
+    }
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let mut vars: Vec<(String, String)> = [
+        ("TERM", "xterm-256color"),
+        ("COLORTERM", "truecolor"),
+        ("TERM_PROGRAM", "abromux"),
+    ]
+    .map(|(k, v)| (k.into(), v.into()))
+    .into();
+    vars.extend(env.iter().cloned());
+    if cx
+        .try_global::<Config>()
+        .is_none_or(|c| c.shell_integration)
+    {
+        vars.extend(crate::shell::inject(&shell, env));
+    }
+    if cx
+        .try_global::<Settings>()
+        .is_some_and(|s| s.persistence == Persistence::HerdrCore)
+    {
+        // herdr-core starts programs with its own environment, not ours.
+        let all = std::env::vars().chain(vars.iter().cloned()).collect();
+        let argv = [shell.clone(), "-l".into()];
+        match crate::hc::Terminal::spawn(cwd, &argv, &all, (cols, rows), hc_sink(tx.clone())) {
+            Ok(t) => return (Pty::Hc(t), false),
+            Err(e) => eprintln!("abromux: herdr-core: {e}; starting the shell here instead"),
+        }
+    }
+
     let pty = native_pty_system()
         .openpty(PtySize {
             rows,
@@ -1928,20 +2054,10 @@ fn spawn_shell(
             pixel_height: 0,
         })
         .expect("openpty");
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let mut cmd = CommandBuilder::new(&shell);
     cmd.arg("-l");
-    cmd.env("TERM", "xterm-256color");
-    cmd.env("COLORTERM", "truecolor");
-    cmd.env("TERM_PROGRAM", "abromux");
-    for (k, v) in env {
+    for (k, v) in vars {
         cmd.env(k, v);
-    }
-    if cx
-        .try_global::<Config>()
-        .is_none_or(|c| c.shell_integration)
-    {
-        crate::shell::inject(&mut cmd, &shell, env);
     }
     cmd.cwd(cwd);
     let child = pty.slave.spawn_command(cmd).expect("spawn shell");
@@ -1949,7 +2065,6 @@ fn spawn_shell(
 
     let mut reader = pty.master.try_clone_reader().expect("pty reader");
     let writer = pty.master.take_writer().expect("pty writer");
-    let (tx, mut rx) = mpsc::unbounded::<Vec<u8>>();
     std::thread::spawn(move || {
         let mut buf = [0u8; 64 * 1024];
         loop {
@@ -1964,9 +2079,39 @@ fn spawn_shell(
             }
         }
     });
+    (
+        Pty::Local {
+            writer,
+            master: pty.master,
+            child,
+        },
+        false,
+    )
+}
 
-    // Drain PTY output on the main thread; batch whatever is queued so a
-    // flood of output costs one repaint.
+/// herdr-core's output into the same channel a local PTY's goes to.
+fn hc_sink(
+    tx: mpsc::UnboundedSender<Vec<u8>>,
+) -> impl FnMut(crate::hc::Output) -> bool + Send + 'static {
+    move |out| match out {
+        crate::hc::Output::Bytes(b) => {
+            crate::activity::output();
+            tx.unbounded_send(b).is_ok()
+        }
+        crate::hc::Output::Closed => {
+            tx.close_channel();
+            false
+        }
+    }
+}
+
+/// Drain the program's output on the main thread; batch whatever is queued
+/// so a flood of output costs one repaint.
+fn drain(
+    mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    generation: usize,
+    cx: &mut Context<TerminalView>,
+) {
     cx.spawn(async move |this, cx| {
         while let Some(first) = rx.next().await {
             let mut chunk = first;
@@ -1991,7 +2136,6 @@ fn spawn_shell(
         });
     })
     .detach();
-    (writer, pty.master, child)
 }
 
 /// A libghostty-vt terminal with the config's colors and cursor.
