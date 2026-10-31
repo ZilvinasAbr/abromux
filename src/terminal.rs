@@ -112,6 +112,10 @@ pub struct TerminalView {
     ime_cursor: Bounds<Pixels>,
     /// Bitmask of mouse buttons held while reporting to the program.
     mouse_buttons: u8,
+    /// ⌘ is down as far as the program knows: we sent it a press (only
+    /// programs that asked the kitty keyboard protocol for lone modifiers
+    /// get one) and owe it a release.
+    cmd_down: bool,
     /// Sub-line wheel/trackpad deltas carried between events.
     scroll_accum: f32,
     /// Whether the shell reports its cwd itself (OSC 7); if not, it's polled.
@@ -203,6 +207,7 @@ impl TerminalView {
             marked: None,
             ime_cursor: Bounds::default(),
             mouse_buttons: 0,
+            cmd_down: false,
             scroll_accum: 0.,
             osc7: false,
             cwd_checked: std::time::Instant::now(),
@@ -294,6 +299,7 @@ impl TerminalView {
         self.clear_pending = false;
         self.marked = None;
         self.mouse_buttons = 0;
+        self.cmd_down = false;
         self.selecting = None;
         self.link = None;
         self.pending_paste = None;
@@ -998,6 +1004,78 @@ impl TerminalView {
         }
     }
 
+    /// Tell the program ⌘ went down or up, as a lone-modifier key event.
+    /// Mouse reports can't carry ⌘, so a program that wants ⌘-click (like
+    /// terminal-browser's open-in-new-tab) tracks the key itself. Programs
+    /// that didn't ask for such events get no bytes.
+    fn sync_cmd(&mut self, down: bool) {
+        if down == self.cmd_down {
+            return;
+        }
+        let (action, mods) = if down {
+            (ffi::GHOSTTY_KEY_ACTION_PRESS, ffi::GHOSTTY_MODS_SUPER as u16)
+        } else {
+            (ffi::GHOSTTY_KEY_ACTION_RELEASE, 0)
+        };
+        let bytes = self
+            .term
+            .encode_key_action(action, ffi::GHOSTTY_KEY_META_LEFT, mods, None, 0);
+        // Only count a press the program was sent, so a release follows it.
+        self.cmd_down = down && !bytes.is_empty();
+        // Not `input`: ⌘ on its own mustn't clear a selection (⌘C is next)
+        // or scroll.
+        if !bytes.is_empty() {
+            self.send(&bytes);
+        }
+    }
+
+    /// The pointer over the grid: a hand on a ⌘-hovered link, else the
+    /// shape the program asked for (OSC 22), the I-beam by default.
+    fn pointer_style(&self) -> gpui::CursorStyle {
+        use gpui::CursorStyle as C;
+        if self.link.is_some() {
+            return C::PointingHand;
+        }
+        match self.term.mouse_shape() {
+            ffi::GHOSTTY_MOUSE_SHAPE_DEFAULT
+            | ffi::GHOSTTY_MOUSE_SHAPE_HELP
+            | ffi::GHOSTTY_MOUSE_SHAPE_PROGRESS
+            | ffi::GHOSTTY_MOUSE_SHAPE_WAIT
+            | ffi::GHOSTTY_MOUSE_SHAPE_ZOOM_IN
+            | ffi::GHOSTTY_MOUSE_SHAPE_ZOOM_OUT => C::Arrow,
+            ffi::GHOSTTY_MOUSE_SHAPE_POINTER => C::PointingHand,
+            ffi::GHOSTTY_MOUSE_SHAPE_CONTEXT_MENU => C::ContextualMenu,
+            ffi::GHOSTTY_MOUSE_SHAPE_CELL | ffi::GHOSTTY_MOUSE_SHAPE_CROSSHAIR => C::Crosshair,
+            ffi::GHOSTTY_MOUSE_SHAPE_VERTICAL_TEXT => C::IBeamCursorForVerticalLayout,
+            ffi::GHOSTTY_MOUSE_SHAPE_ALIAS => C::DragLink,
+            ffi::GHOSTTY_MOUSE_SHAPE_COPY => C::DragCopy,
+            ffi::GHOSTTY_MOUSE_SHAPE_NO_DROP | ffi::GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED => {
+                C::OperationNotAllowed
+            }
+            ffi::GHOSTTY_MOUSE_SHAPE_MOVE
+            | ffi::GHOSTTY_MOUSE_SHAPE_GRAB
+            | ffi::GHOSTTY_MOUSE_SHAPE_ALL_SCROLL => C::OpenHand,
+            ffi::GHOSTTY_MOUSE_SHAPE_GRABBING => C::ClosedHand,
+            ffi::GHOSTTY_MOUSE_SHAPE_COL_RESIZE | ffi::GHOSTTY_MOUSE_SHAPE_EW_RESIZE => {
+                C::ResizeLeftRight
+            }
+            ffi::GHOSTTY_MOUSE_SHAPE_ROW_RESIZE | ffi::GHOSTTY_MOUSE_SHAPE_NS_RESIZE => {
+                C::ResizeUpDown
+            }
+            ffi::GHOSTTY_MOUSE_SHAPE_E_RESIZE => C::ResizeRight,
+            ffi::GHOSTTY_MOUSE_SHAPE_W_RESIZE => C::ResizeLeft,
+            ffi::GHOSTTY_MOUSE_SHAPE_N_RESIZE => C::ResizeUp,
+            ffi::GHOSTTY_MOUSE_SHAPE_S_RESIZE => C::ResizeDown,
+            ffi::GHOSTTY_MOUSE_SHAPE_NE_RESIZE
+            | ffi::GHOSTTY_MOUSE_SHAPE_SW_RESIZE
+            | ffi::GHOSTTY_MOUSE_SHAPE_NESW_RESIZE => C::ResizeUpRightDownLeft,
+            ffi::GHOSTTY_MOUSE_SHAPE_NW_RESIZE
+            | ffi::GHOSTTY_MOUSE_SHAPE_SE_RESIZE
+            | ffi::GHOSTTY_MOUSE_SHAPE_NWSE_RESIZE => C::ResizeUpLeftDownRight,
+            _ => C::IBeam,
+        }
+    }
+
     /// Whether mouse events go to the program; Shift forces local selection
     /// and scrollback, like Ghostty.
     fn reporting(&self, m: Modifiers) -> bool {
@@ -1219,6 +1297,8 @@ impl TerminalView {
         if self.reporting(ev.modifiers)
             && let Some(b) = button_code(ev.button)
         {
+            // ⌘ may have gone down while another pane had focus.
+            self.sync_cmd(ev.modifiers.platform);
             self.mouse_buttons |= 1 << b;
             self.report_mouse(MouseAction::Press, Some(b), ev.modifiers, ev.position);
             return;
@@ -1380,19 +1460,21 @@ impl Render for TerminalView {
                     }
                 }
             }))
-            .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, _, cx| {
-                if this.update_link(ev.modifiers.platform) {
+            .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, window, cx| {
+                // A press only to the focused terminal; a release to any
+                // that was told of a press.
+                let cmd = ev.modifiers.platform;
+                if !cmd || this.focus.is_focused(window) {
+                    this.sync_cmd(cmd);
+                }
+                if this.update_link(cmd) {
                     cx.notify();
                 }
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up(MouseButton::Right, cx.listener(Self::on_mouse_up))
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_mouse_up))
-            .cursor(if self.link.is_some() {
-                gpui::CursorStyle::PointingHand
-            } else {
-                gpui::CursorStyle::IBeam
-            })
+            .cursor(self.pointer_style())
             .child(TerminalElement { view: cx.entity() })
             .children(scrollbar)
             .children(lock)

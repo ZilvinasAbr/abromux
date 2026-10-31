@@ -528,6 +528,20 @@ impl Terminal {
         on
     }
 
+    /// The pointer shape the program asked for with OSC 22 (`text`, the
+    /// I-beam, until it does).
+    pub fn mouse_shape(&self) -> GhosttyMouseShape {
+        let mut shape = GHOSTTY_MOUSE_SHAPE_TEXT;
+        unsafe {
+            ghostty_terminal_get(
+                self.raw,
+                GHOSTTY_TERMINAL_DATA_MOUSE_SHAPE,
+                &mut shape as *mut _ as *mut c_void,
+            )
+        };
+        shape
+    }
+
     /// Whether the program turned on bracketed paste (mode 2004).
     pub fn bracketed_paste(&self) -> bool {
         // GHOSTTY_MODE_BRACKETED_PASTE: ghostty_mode_new(2004, false) is an
@@ -797,10 +811,24 @@ impl Terminal {
         text: Option<&str>,
         unshifted: u32,
     ) -> Vec<u8> {
+        self.encode_key_action(GHOSTTY_KEY_ACTION_PRESS, key, mods, text, unshifted)
+    }
+
+    /// `encode_key` for a press, repeat or release. Most programs get
+    /// nothing for a release or a lone modifier; only those that asked the
+    /// kitty keyboard protocol for them do.
+    pub fn encode_key_action(
+        &mut self,
+        action: GhosttyKeyAction,
+        key: GhosttyKey,
+        mods: GhosttyMods,
+        text: Option<&str>,
+        unshifted: u32,
+    ) -> Vec<u8> {
         unsafe {
             ghostty_key_encoder_setopt_from_terminal(self.key_encoder, self.raw);
             let ev = self.key_event;
-            ghostty_key_event_set_action(ev, GHOSTTY_KEY_ACTION_PRESS);
+            ghostty_key_event_set_action(ev, action);
             ghostty_key_event_set_key(ev, key);
             ghostty_key_event_set_mods(ev, mods);
             ghostty_key_event_set_consumed_mods(ev, 0);
@@ -1651,6 +1679,27 @@ mod tests {
 
         t.write(b"\x1b_Ga=d,d=A,q=2\x1b\\");
         assert!(t.frame().images.is_empty(), "deleted images leave the list");
+    }
+
+    #[test]
+    fn pointer_shape_and_lone_command_key() {
+        let mut t = Terminal::new(20, 3).unwrap();
+        assert_eq!(t.mouse_shape(), GHOSTTY_MOUSE_SHAPE_TEXT);
+        t.write(b"\x1b]22;pointer\x1b\\");
+        assert_eq!(t.mouse_shape(), GHOSTTY_MOUSE_SHAPE_POINTER);
+        t.write(b"\x1b]22;default\x1b\\");
+        assert_eq!(t.mouse_shape(), GHOSTTY_MOUSE_SHAPE_DEFAULT);
+
+        let sup = GHOSTTY_MODS_SUPER as u16;
+        let mut cmd = |t: &mut Terminal, action, mods| {
+            String::from_utf8(t.encode_key_action(action, GHOSTTY_KEY_META_LEFT, mods, None, 0))
+                .unwrap()
+        };
+        assert_eq!(cmd(&mut t, GHOSTTY_KEY_ACTION_PRESS, sup), "", "plain programs get nothing");
+        // terminal-browser's flags: all keys as escape codes, with releases.
+        t.write(b"\x1b[>27u");
+        assert_eq!(cmd(&mut t, GHOSTTY_KEY_ACTION_PRESS, sup), "\x1b[57444;9u");
+        assert_eq!(cmd(&mut t, GHOSTTY_KEY_ACTION_RELEASE, 0), "\x1b[57444;1:3u");
     }
 
     #[test]
