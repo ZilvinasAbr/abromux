@@ -171,7 +171,8 @@ impl AssetSource for Assets {
             "circle-x",
             "pencil",
             "maximize-2",
-            "lock"
+            "lock",
+            "bot"
         );
         Ok(bytes.map(Cow::Borrowed))
     }

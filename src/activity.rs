@@ -53,7 +53,8 @@ pub fn output() {
 fn begin() -> usize {
     let reason = CString::new("Terminal output").unwrap();
     unsafe {
-        let reason: *mut Object = msg_send![class!(NSString), stringWithUTF8String: reason.as_ptr()];
+        let reason: *mut Object =
+            msg_send![class!(NSString), stringWithUTF8String: reason.as_ptr()];
         let info: *mut Object = msg_send![class!(NSProcessInfo), processInfo];
         let token: *mut Object = msg_send![info, beginActivityWithOptions: OPTIONS reason: reason];
         let token: *mut Object = msg_send![token, retain];

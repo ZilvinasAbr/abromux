@@ -78,7 +78,7 @@ abromux log --level success --source deploy 'Deployed to staging'   # info|progr
 abromux notify --title 'Done' --body 'All 213 tests pass'
 ```
 
-`notify` marks your terminal: it rings the pane, dots the tab and workspace, and shows a macOS banner if abromux is in the background. Use it once when a long task finishes or you need the user, not for every step. Claude Code and Codex already notify through their hooks (`abromux hooks install`) when they finish a turn or ask for permission, so don't duplicate that.
+`notify` marks your terminal: it rings the pane, dots the tab and workspace, and shows a macOS banner if abromux is in the background. Use it once when a long task finishes or you need the user, not for every step. Coding agents with hooks (`abromux hooks install`: Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode, Pi) already notify when they finish a turn or ask for permission, so don't duplicate that.
 
 Clear status pills and progress you set once they no longer apply.
 

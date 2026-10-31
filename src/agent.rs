@@ -1,40 +1,46 @@
 //! Coding agents running in a terminal, so session restore can resume them.
 //!
-//! `abromux hooks install` adds hooks (see `Kind::events`) for Claude Code
-//! to `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`) and
-//! for Codex to `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`). Each
-//! runs `abromux hooks claude-event` or `codex-event`, which forwards the
-//! event to the app as `agent.report` for the terminal it runs in
-//! (`$ABROMUX_SURFACE_ID`). Outside abromux the hook is a no-op.
+//! `abromux hooks install` hooks into each agent it finds set up (see
+//! `Kind::ALL`): JSON hook settings for Claude Code, Codex, Gemini CLI, Droid
+//! and Cursor, and a small plugin file for OpenCode and Pi. Each hook runs
+//! `abromux hooks <kind>-event` with the agent's payload on stdin, which
+//! turns it into Claude Code's shape (`normalize`) and forwards it to the app
+//! as `agent.report` for the terminal it runs in (`$ABROMUX_SURFACE_ID`).
+//! Outside abromux the hook is a no-op.
 //!
 //! The app keeps the session id, so on restore a terminal that had an agent
-//! running types `claude --resume <id>` or `codex resume <id>` into its new
-//! shell. It also shows the agent's state in the sidebar ("Running", "Needs
-//! input") and notifies when the agent asks for something or finishes a turn
-//! (with the start of its last reply).
+//! running types its resume command (`claude --resume <id>`, `codex resume
+//! <id>`, …) into its new shell. It also shows the agent's state in the
+//! sidebar ("Running", "Needs input") and notifies when the agent asks for
+//! something or finishes a turn (with the start of its last reply).
 //!
 //! Codex has no SessionEnd hook, so its hooks also pass the Codex process id
-//! (`$PPID` of the hook's shell): an agent whose process is gone isn't saved.
-//! Newer Codex runs hooks in a shared background server instead, with the
-//! environment of whichever terminal started it; the zsh integration runs
-//! `codex` with `--no-daemon` so they run here (`src/shell/zsh/abromux.zsh`).
+//! (`$PPID` of the hook's shell), and the OpenCode and Pi plugins pass their
+//! own: an agent whose process is gone isn't saved. Newer Codex runs hooks in
+//! a shared background server instead, with the environment of whichever
+//! terminal started it; the zsh integration runs `codex` with `--no-daemon`
+//! so they run here (`src/shell/zsh/abromux.zsh`).
 
 use crate::ipc;
 use anyhow::{Context as _, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use std::{io::Read, path::PathBuf, time::Duration};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Agent {
-    /// "claude" or "codex".
+    /// `Kind::as_str`: "claude", "codex", ….
     pub kind: String,
     pub session_id: String,
     /// Where the agent was started; `--resume` only finds sessions from there.
     pub cwd: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
-    /// The agent's process, when its hooks say (Codex's do).
+    /// The agent's process, when its hooks say (Codex's, OpenCode's, Pi's).
     #[serde(skip)]
     pub pid: Option<u32>,
 }
@@ -44,10 +50,36 @@ pub struct Agent {
 pub enum Kind {
     Claude,
     Codex,
+    Gemini,
+    Droid,
+    Cursor,
+    OpenCode,
+    Pi,
+}
+
+/// How an agent takes hooks.
+#[derive(PartialEq)]
+enum Setup {
+    /// Claude Code's `{"hooks": {Event: [{"hooks": [{command}]}]}}`, which
+    /// Codex, Gemini and Droid share. Droid's own `hooks.json` drops the
+    /// outer `"hooks"`.
+    Groups,
+    /// Cursor's `{"version": 1, "hooks": {event: [{command}]}}`.
+    Flat,
+    /// A JavaScript file the agent loads at startup.
+    Plugin,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 2] = [Kind::Claude, Kind::Codex];
+    pub const ALL: [Kind; 7] = [
+        Kind::Claude,
+        Kind::Codex,
+        Kind::Gemini,
+        Kind::Droid,
+        Kind::Cursor,
+        Kind::OpenCode,
+        Kind::Pi,
+    ];
 
     pub fn parse(s: &str) -> Option<Self> {
         Kind::ALL.into_iter().find(|k| k.as_str() == s)
@@ -57,6 +89,11 @@ impl Kind {
         match self {
             Kind::Claude => "claude",
             Kind::Codex => "codex",
+            Kind::Gemini => "gemini",
+            Kind::Droid => "droid",
+            Kind::Cursor => "cursor",
+            Kind::OpenCode => "opencode",
+            Kind::Pi => "pi",
         }
     }
 
@@ -65,6 +102,11 @@ impl Kind {
         match self {
             Kind::Claude => "Claude",
             Kind::Codex => "Codex",
+            Kind::Gemini => "Gemini",
+            Kind::Droid => "Droid",
+            Kind::Cursor => "Cursor",
+            Kind::OpenCode => "OpenCode",
+            Kind::Pi => "Pi",
         }
     }
 
@@ -72,16 +114,26 @@ impl Kind {
     pub fn title(self) -> &'static str {
         match self {
             Kind::Claude => "Claude Code",
-            Kind::Codex => "Codex",
+            Kind::Gemini => "Gemini CLI",
+            k => k.label(),
         }
     }
 
-    /// Hook events: all (re)assert the session but SessionEnd, which ends
-    /// it. PostToolUse marks the agent running again after a permission
-    /// prompt (Claude's Notification, Codex's PermissionRequest).
+    fn setup(self) -> Setup {
+        match self {
+            Kind::Cursor => Setup::Flat,
+            Kind::OpenCode | Kind::Pi => Setup::Plugin,
+            _ => Setup::Groups,
+        }
+    }
+
+    /// Hook events, in the agent's own names: all (re)assert the session but
+    /// the session end, which ends it. A tool finishing marks the agent
+    /// running again after a permission prompt (Claude's Notification,
+    /// Codex's PermissionRequest).
     fn events(self) -> &'static [&'static str] {
         match self {
-            Kind::Claude => &[
+            Kind::Claude | Kind::Droid => &[
                 "SessionStart",
                 "UserPromptSubmit",
                 "PostToolUse",
@@ -96,53 +148,231 @@ impl Kind {
                 "PermissionRequest",
                 "Stop",
             ],
+            Kind::Gemini => &[
+                "SessionStart",
+                "BeforeAgent",
+                "AfterTool",
+                "Notification",
+                "AfterAgent",
+                "SessionEnd",
+            ],
+            // Its permission hooks must answer allow or deny, so none here.
+            Kind::Cursor => &[
+                "sessionStart",
+                "beforeSubmitPrompt",
+                "postToolUse",
+                "stop",
+                "sessionEnd",
+            ],
+            Kind::OpenCode | Kind::Pi => &[],
         }
     }
 
-    fn subcommand(self) -> &'static str {
-        match self {
-            Kind::Claude => "claude-event",
-            Kind::Codex => "codex-event",
-        }
+    fn subcommand(self) -> String {
+        format!("{}-event", self.as_str())
     }
 
-    /// The file our hooks go in, or None if the agent isn't set up here.
-    fn settings_path(self) -> anyhow::Result<Option<PathBuf>> {
-        let home = || {
-            std::env::var("HOME")
-                .map(PathBuf::from)
-                .context("HOME isn't set")
-        };
-        Ok(match self {
-            Kind::Claude => Some(match std::env::var("CLAUDE_CONFIG_DIR") {
-                Ok(dir) => PathBuf::from(dir).join("settings.json"),
-                Err(_) => home()?.join(".claude/settings.json"),
-            }),
-            Kind::Codex => {
-                let dir = match std::env::var("CODEX_HOME") {
-                    Ok(dir) => PathBuf::from(dir),
-                    Err(_) => home()?.join(".codex"),
-                };
-                dir.is_dir().then(|| dir.join("hooks.json"))
+    /// The agent's config folder, if it's set up here.
+    fn dir(self) -> anyhow::Result<Option<PathBuf>> {
+        let home = std::env::var("HOME")
+            .map(PathBuf::from)
+            .context("HOME isn't set")?;
+        let env = |var: &str| std::env::var_os(var).map(PathBuf::from);
+        let dir = match self {
+            // Created if missing: Claude Code is the main one.
+            Kind::Claude => {
+                return Ok(Some(
+                    env("CLAUDE_CONFIG_DIR").unwrap_or(home.join(".claude")),
+                ));
             }
-        })
+            Kind::Codex => env("CODEX_HOME").unwrap_or(home.join(".codex")),
+            Kind::Gemini => env("GEMINI_CLI_HOME").unwrap_or(home).join(".gemini"),
+            Kind::Droid => home.join(".factory"),
+            Kind::Cursor => home.join(".cursor"),
+            Kind::OpenCode => env("OPENCODE_CONFIG_DIR").unwrap_or_else(|| {
+                env("XDG_CONFIG_HOME")
+                    .unwrap_or(home.join(".config"))
+                    .join("opencode")
+            }),
+            Kind::Pi => env("PI_CODING_AGENT_DIR").unwrap_or(home.join(".pi/agent")),
+        };
+        Ok(dir.is_dir().then_some(dir))
     }
 
-    /// The hook's shell command. Codex reads a hook's stdout as JSON, so its
-    /// hook always prints `{}` (and decides nothing).
+    /// The file our hooks go in, and whether its hooks sit at the top level
+    /// rather than under `"hooks"`.
+    fn settings_path(self, dir: &Path) -> (PathBuf, bool) {
+        match self {
+            Kind::Claude | Kind::Gemini => (dir.join("settings.json"), false),
+            Kind::Codex | Kind::Cursor => (dir.join("hooks.json"), false),
+            // Droid reads settings.json's hooks only without a hooks.json, so
+            // creating one would hide hooks already there.
+            Kind::Droid => match dir.join("hooks.json") {
+                p if p.exists() => (p, true),
+                _ => (dir.join("settings.json"), false),
+            },
+            Kind::OpenCode => (dir.join("plugins/abromux.js"), false),
+            Kind::Pi => (dir.join("extensions/abromux.js"), false),
+        }
+    }
+
+    /// The hook's shell command. Codex and Gemini read a hook's stdout as
+    /// JSON, so theirs always prints `{}` (and decides nothing); Claude and
+    /// Droid show what it prints.
     fn command(self, exe: &str) -> String {
         let exe = quote(exe);
         let sub = self.subcommand();
+        let guard = format!("[ -n \"$ABROMUX_SURFACE_ID\" ] && [ -x {exe} ]");
         match self {
-            Kind::Claude => format!(
-                "[ -n \"$ABROMUX_SURFACE_ID\" ] && [ -x {exe} ] && {exe} hooks {sub} || true"
-            ),
             Kind::Codex => format!(
-                "[ -n \"$ABROMUX_SURFACE_ID\" ] && [ -x {exe} ] && ABROMUX_AGENT_PID=$PPID {exe} hooks {sub} >/dev/null 2>&1; echo '{{}}'"
+                "{guard} && ABROMUX_AGENT_PID=$PPID {exe} hooks {sub} >/dev/null 2>&1; echo '{{}}'"
             ),
+            Kind::Gemini => format!("{guard} && {exe} hooks {sub} >/dev/null 2>&1; echo '{{}}'"),
+            _ => format!("{guard} && {exe} hooks {sub} || true"),
+        }
+    }
+
+    /// One hook's entry. Gemini counts its timeout in milliseconds.
+    fn hook(self, exe: &str) -> Value {
+        let command = self.command(exe);
+        match self {
+            Kind::Cursor => json!({ "command": command, "timeout": 5 }),
+            Kind::Gemini => json!({ "type": "command", "command": command, "timeout": 5000 }),
+            _ => json!({ "type": "command", "command": command, "timeout": 5 }),
+        }
+    }
+
+    fn plugin(self, exe: &str) -> String {
+        let src = match self {
+            Kind::OpenCode => OPENCODE_PLUGIN,
+            _ => PI_EXTENSION,
+        };
+        let exe = serde_json::to_string(exe).expect("a string");
+        format!("{PLUGIN_MARK}\n{SEND_JS}{src}").replace("EXE", &exe)
+    }
+
+    /// What to type to resume session `id`.
+    fn resume(self, id: &str) -> String {
+        match self {
+            Kind::Claude => format!("claude --resume {id}"),
+            Kind::Codex => format!("codex resume {id}"),
+            Kind::Gemini => format!("gemini --resume {id}"),
+            Kind::Droid => format!("droid --resume {id}"),
+            Kind::Cursor => format!("cursor-agent --resume {id}"),
+            Kind::OpenCode => format!("opencode --session {id}"),
+            Kind::Pi => format!("pi --session {id}"),
         }
     }
 }
+
+/// The first line of our plugin files, so uninstall knows them.
+const PLUGIN_MARK: &str =
+    "// Installed by `abromux hooks install`; `abromux hooks uninstall` removes it.";
+
+/// Both plugins send Claude Code-shaped events (see `normalize`) to `EXE`.
+const SEND_JS: &str = r#"import { spawn } from "node:child_process";
+
+const exe = EXE;
+const send = (kind, event) => {
+  try {
+    const p = spawn(exe, ["hooks", `${kind}-event`], { stdio: ["pipe", "ignore", "ignore"] });
+    p.on("error", () => {});
+    p.stdin.on("error", () => {});
+    p.stdin.end(JSON.stringify({ ...event, pid: process.pid }));
+  } catch {}
+};
+const replyText = (content) =>
+  typeof content === "string"
+    ? content
+    : (content ?? []).filter((c) => c?.type === "text").map((c) => c.text).join(" ");
+"#;
+
+const OPENCODE_PLUGIN: &str = r#"
+// Subagent sessions have a parent; their events would take over the terminal.
+export const AbromuxPlugin = async ({ directory }) => {
+  if (!process.env.ABROMUX_SURFACE_ID) return {};
+  const children = new Set();
+  const busy = new Set();
+  const assistant = new Set();
+  const replies = new Map();
+  const report = (event, sessionID, extra = {}) => {
+    if (sessionID && !children.has(sessionID))
+      send("opencode", { hook_event_name: event, session_id: sessionID, cwd: directory, ...extra });
+  };
+  const idle = (id) => {
+    if (busy.delete(id)) report("Stop", id, { last_assistant_message: replies.get(id) });
+  };
+  return {
+    event: async ({ event }) => {
+      const p = event.properties ?? {};
+      switch (event.type) {
+        case "session.created":
+        case "session.updated":
+          if (p.info?.parentID) children.add(p.info.id);
+          else if (event.type === "session.created") report("SessionStart", p.info?.id);
+          break;
+        case "session.status":
+          if (p.status?.type === "busy" && !busy.has(p.sessionID)) {
+            busy.add(p.sessionID);
+            report("UserPromptSubmit", p.sessionID);
+          } else if (p.status?.type === "idle") idle(p.sessionID);
+          break;
+        case "session.idle":
+          idle(p.sessionID);
+          break;
+        case "permission.asked":
+        case "permission.updated":
+          report("PermissionRequest", p.sessionID, { message: p.title ?? p.permission });
+          break;
+        case "session.error":
+          if (p.sessionID) replies.set(p.sessionID, p.error?.data?.message ?? "Stopped with an error");
+          break;
+        case "permission.replied":
+          report("PostToolUse", p.sessionID);
+          break;
+        case "message.updated":
+          if (p.info?.role === "assistant") assistant.add(p.info.id);
+          break;
+        case "message.part.updated":
+          if (p.part?.type === "text" && assistant.has(p.part.messageID))
+            replies.set(p.part.sessionID, replyText([p.part]));
+          break;
+      }
+    },
+  };
+};
+"#;
+
+const PI_EXTENSION: &str = r#"
+// Only interactive sessions: a `pi -p` run inside one mustn't take it over.
+export default function (pi) {
+  if (!process.env.ABROMUX_SURFACE_ID) return;
+  let reply;
+  const report = (ctx, event, extra = {}) => {
+    if (!ctx.hasUI || !ctx.sessionManager.getSessionFile()) return;
+    send("pi", {
+      hook_event_name: event,
+      session_id: ctx.sessionManager.getSessionId(),
+      cwd: ctx.cwd,
+      ...extra,
+    });
+  };
+  pi.on("session_start", (_e, ctx) => report(ctx, "SessionStart"));
+  pi.on("agent_start", (_e, ctx) => report(ctx, "UserPromptSubmit"));
+  pi.on("agent_end", (e) => {
+    const last = [...(e.messages ?? [])].reverse().find((m) => m?.role === "assistant");
+    reply = last && (last.stopReason === "error" ? last.errorMessage : replyText(last.content));
+  });
+  pi.on("agent_settled", (e, ctx) =>
+    report(ctx, "Stop", { last_assistant_message: e.aborted ? "Stopped" : reply }),
+  );
+  pi.on("ui_prompt_start", (e, ctx) =>
+    report(ctx, "PermissionRequest", { message: e.title ?? "Needs your input" }),
+  );
+  pi.on("ui_prompt_end", (_e, ctx) => report(ctx, "PostToolUse"));
+  pi.on("session_shutdown", (_e, ctx) => report(ctx, "SessionEnd"));
+}
+"#;
 
 /// Longest Stop summary sent to the app.
 const SUMMARY_CHARS: usize = 160;
@@ -174,7 +404,7 @@ impl Agent {
             kind: kind.as_str().into(),
             session_id: session_id.into(),
             cwd: s("cwd").unwrap_or_default().into(),
-            // Codex's modes don't map to a resume flag.
+            // Other agents' modes don't map to a resume flag.
             permission_mode: s("permission_mode")
                 .filter(|m| kind == Kind::Claude && safe(m) && *m != "default")
                 .map(String::from),
@@ -204,23 +434,19 @@ impl Agent {
         if !self.cwd.is_empty() && self.cwd != shell_cwd {
             cmd += &format!("cd -- {} && ", quote(&self.cwd));
         }
-        match kind {
-            Kind::Claude => {
-                cmd += &format!("claude --resume {}", self.session_id);
-                if let Some(mode) = self.permission_mode.as_deref().filter(|m| safe(m)) {
-                    cmd += &format!(" --permission-mode {mode}");
-                }
-            }
-            Kind::Codex => cmd += &format!("codex resume {}", self.session_id),
+        cmd += &kind.resume(&self.session_id);
+        if kind == Kind::Claude
+            && let Some(mode) = self.permission_mode.as_deref().filter(|m| safe(m))
+        {
+            cmd += &format!(" --permission-mode {mode}");
         }
         Some(cmd)
     }
 }
 
-/// `abromux hooks claude-event|codex-event`: the agent's hook payload
-/// arrives on stdin. Never fails and prints nothing (Claude's SessionStart
-/// output would land in the conversation), so a closed app can't get in the
-/// agent's way.
+/// `abromux hooks <kind>-event`: the agent's hook payload arrives on stdin.
+/// Never fails and prints nothing (Claude's SessionStart output would land
+/// in the conversation), so a closed app can't get in the agent's way.
 pub fn hook_event(kind: Kind) -> i32 {
     let Ok(surface) = std::env::var("ABROMUX_SURFACE_ID") else {
         return 0;
@@ -232,20 +458,57 @@ pub fn hook_event(kind: Kind) -> i32 {
     let Ok(payload) = serde_json::from_str::<Value>(&input) else {
         return 0;
     };
-    let params = report(
-        kind,
-        &payload,
-        &surface,
-        std::env::var("ABROMUX_AGENT_PID")
-            .ok()
-            .and_then(|p| p.parse().ok()),
-    );
+    let pid = std::env::var("ABROMUX_AGENT_PID")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .or(payload["pid"].as_u64().and_then(|p| u32::try_from(p).ok()));
+    let Some(params) = report(kind, &payload, &surface, pid) else {
+        return 0;
+    };
     let _ = ipc::call_timeout("agent.report", params, Duration::from_secs(2));
     0
 }
 
+/// An agent's hook payload in Claude Code's shape: its event names, and
+/// `session_id`, `cwd`, `message` and `last_assistant_message`. None for an
+/// event that means nothing here.
+fn normalize(kind: Kind, payload: &Value) -> Option<Value> {
+    let mut p = payload.clone();
+    let event = payload["hook_event_name"].as_str().unwrap_or_default();
+    let renamed = match (kind, event) {
+        (Kind::Gemini, "BeforeAgent") | (Kind::Cursor, "beforeSubmitPrompt") => "UserPromptSubmit",
+        (Kind::Gemini, "AfterTool") | (Kind::Cursor, "postToolUse") => "PostToolUse",
+        (Kind::Gemini, "AfterAgent") => {
+            p["last_assistant_message"] = payload["prompt_response"].clone();
+            "Stop"
+        }
+        (Kind::Cursor, "sessionStart") => "SessionStart",
+        (Kind::Cursor, "sessionEnd") => "SessionEnd",
+        (Kind::Cursor, "stop") => {
+            match payload["status"].as_str() {
+                Some("aborted") => p["last_assistant_message"] = json!("Stopped"),
+                Some("error") => p["last_assistant_message"] = json!("Stopped with an error"),
+                _ => {}
+            }
+            "Stop"
+        }
+        (Kind::Cursor, _) => return None,
+        (_, e) => e,
+    };
+    p["hook_event_name"] = json!(renamed);
+    if kind == Kind::Cursor {
+        // The chat id, which `--resume` takes; sessionStart has it too.
+        p["session_id"] = payload["conversation_id"].clone();
+        if p["cwd"].is_null() {
+            p["cwd"] = payload["workspace_roots"][0].clone();
+        }
+    }
+    Some(p)
+}
+
 /// `agent.report`'s params for a hook payload.
-fn report(kind: Kind, payload: &Value, surface: &str, pid: Option<u32>) -> Value {
+fn report(kind: Kind, payload: &Value, surface: &str, pid: Option<u32>) -> Option<Value> {
+    let payload = normalize(kind, payload)?;
     let event = payload["hook_event_name"].as_str().unwrap_or_default();
     let mut params = json!({
         "surface": surface,
@@ -266,7 +529,7 @@ fn report(kind: Kind, payload: &Value, surface: &str, pid: Option<u32>) -> Value
         params["summary"] = json!(summary);
     }
     // Codex asks before running something: say what.
-    if event == "PermissionRequest" {
+    if event == "PermissionRequest" && kind == Kind::Codex {
         let input = &payload["tool_input"];
         // The notification's title already names the agent.
         let what = input["command"]
@@ -281,11 +544,14 @@ fn report(kind: Kind, payload: &Value, surface: &str, pid: Option<u32>) -> Value
         params["message"] = json!(shorten(
             &what.unwrap_or_else(|| "Needs your approval".into())
         ));
+    } else if let Some(m) = payload["message"].as_str() {
+        params["message"] = json!(shorten(m));
     }
-    params
+    Some(params)
 }
 
-/// The start of Claude's last reply in a transcript (JSON lines), on one line.
+/// The start of the agent's last reply in a transcript (JSON lines), on one
+/// line.
 fn last_reply(path: &str) -> Option<String> {
     use std::io::{Seek, SeekFrom};
     // Only the tail: transcripts grow to megabytes.
@@ -298,22 +564,29 @@ fn last_reply(path: &str) -> Option<String> {
     summary(&String::from_utf8_lossy(&bytes))
 }
 
+/// The last assistant line with text. Claude marks it `"type": "assistant"`;
+/// Droid and Cursor put the role in the message.
 fn summary(jsonl: &str) -> Option<String> {
     jsonl
         .lines()
         .rev()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .find_map(|v| {
-            if v["type"] != "assistant" {
+            let msg = &v["message"];
+            if v["type"] != "assistant" && msg["role"] != "assistant" && v["role"] != "assistant" {
                 return None;
             }
-            let text = v["message"]["content"]
-                .as_array()?
-                .iter()
-                .filter(|c| c["type"] == "text")
-                .filter_map(|c| c["text"].as_str())
-                .collect::<Vec<_>>()
-                .join(" ");
+            let content = msg.get("content").unwrap_or(&v["content"]);
+            let text = match content {
+                Value::String(s) => s.clone(),
+                c => c
+                    .as_array()?
+                    .iter()
+                    .filter(|c| c["type"] == "text")
+                    .filter_map(|c| c["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            };
             shorten(&text)
         })
 }
@@ -339,62 +612,104 @@ fn is_ours(hook: &Value) -> bool {
     })
 }
 
+/// The event map: `settings["hooks"]`, or `settings` itself.
+fn events_mut(settings: &mut Map<String, Value>, top: bool) -> Option<&mut Map<String, Value>> {
+    if top {
+        return Some(settings);
+    }
+    match settings.get_mut("hooks") {
+        Some(Value::Object(hooks)) => Some(hooks),
+        _ => None,
+    }
+}
+
 /// Drop our hooks from `settings`, and any event list left empty.
-fn strip(settings: &mut Map<String, Value>) {
-    let Some(Value::Object(hooks)) = settings.get_mut("hooks") else {
+fn strip(settings: &mut Map<String, Value>, top: bool) {
+    let Some(hooks) = events_mut(settings, top) else {
         return;
     };
-    for groups in hooks.values_mut() {
-        let Value::Array(groups) = groups else {
+    for list in hooks.values_mut() {
+        let Value::Array(list) = list else {
             continue;
         };
-        groups.retain_mut(|g| match g.get_mut("hooks") {
-            Some(Value::Array(list)) => {
-                list.retain(|h| !is_ours(h));
-                !list.is_empty()
+        list.retain_mut(|g| match g.get_mut("hooks") {
+            Some(Value::Array(inner)) => {
+                inner.retain(|h| !is_ours(h));
+                !inner.is_empty()
             }
-            _ => true,
+            // Cursor's lists hold the hooks themselves.
+            _ => !is_ours(g),
         });
     }
     hooks.retain(|_, g| g.as_array().is_none_or(|a| !a.is_empty()));
-    if hooks.is_empty() {
+    if !top && hooks.is_empty() {
         settings.remove("hooks");
     }
 }
 
 /// Append our hooks: Codex trusts each hook by its place in the list, so
 /// hooks already there keep theirs.
-fn add(settings: &mut Map<String, Value>, kind: Kind, exe: &str) -> anyhow::Result<()> {
-    let command = kind.command(exe);
-    let hooks = settings.entry("hooks").or_insert_with(|| json!({}));
-    let Value::Object(hooks) = hooks else {
-        bail!("\"hooks\" in the {} settings isn't an object", kind.label())
+fn add(settings: &mut Map<String, Value>, kind: Kind, exe: &str, top: bool) -> anyhow::Result<()> {
+    let hook = kind.hook(exe);
+    if kind.setup() == Setup::Flat {
+        settings.entry("version").or_insert(json!(1));
+    }
+    let hooks = if top {
+        settings
+    } else {
+        match settings.entry("hooks").or_insert_with(|| json!({})) {
+            Value::Object(hooks) => hooks,
+            _ => bail!("\"hooks\" in the {} settings isn't an object", kind.title()),
+        }
     };
     for event in kind.events() {
-        let groups = hooks.entry(*event).or_insert_with(|| json!([]));
-        let Value::Array(groups) = groups else {
+        let Value::Array(list) = hooks.entry(*event).or_insert_with(|| json!([])) else {
             bail!(
                 "hooks.{event} in the {} settings isn't a list",
-                kind.label()
+                kind.title()
             )
         };
-        groups.push(json!({ "hooks": [{ "type": "command", "command": command, "timeout": 5 }] }));
+        list.push(match kind.setup() {
+            Setup::Flat => hook.clone(),
+            _ => json!({ "hooks": [hook] }),
+        });
     }
     Ok(())
 }
 
-/// `abromux hooks install|uninstall`: edit each agent's settings in place,
-/// keeping everything else. Codex is skipped when it isn't set up.
-pub fn hooks(install: bool) -> anyhow::Result<String> {
+/// `abromux hooks install|uninstall [agent…]`: edit each agent's settings in
+/// place, keeping everything else. Agents that aren't set up are skipped;
+/// `only` limits it to the agents named.
+pub fn hooks(install: bool, only: &[String]) -> anyhow::Result<String> {
+    let kinds: Vec<Kind> = if only.is_empty() {
+        Kind::ALL.to_vec()
+    } else {
+        only.iter()
+            .map(|n| {
+                Kind::parse(n).with_context(|| {
+                    let names: Vec<_> = Kind::ALL.iter().map(|k| k.as_str()).collect();
+                    format!("no agent {n} (expected {})", names.join(", "))
+                })
+            })
+            .collect::<anyhow::Result<_>>()?
+    };
+    let exe = std::env::current_exe()
+        .and_then(|e| e.canonicalize())
+        .context("can't find the abromux binary")?;
+    let exe = exe.to_string_lossy();
     let mut out = vec![];
-    for kind in Kind::ALL {
-        match kind.settings_path()? {
-            Some(path) => out.push(edit(kind, &path, install)?),
-            None => out.push(format!(
-                "Skipped {}: no ~/.codex (or $CODEX_HOME) folder",
-                kind.title()
-            )),
-        }
+    for kind in kinds {
+        let Some(dir) = kind.dir()? else {
+            if !only.is_empty() || install {
+                out.push(format!("Skipped {}: not set up here", kind.title()));
+            }
+            continue;
+        };
+        let (path, top) = kind.settings_path(&dir);
+        out.push(match kind.setup() {
+            Setup::Plugin => plugin(kind, &path, install, &exe)?,
+            _ => edit(kind, &path, top, install, &exe)?,
+        });
     }
     if install && out.iter().any(|l| l.contains("Codex hooks")) {
         out.push(
@@ -405,7 +720,7 @@ pub fn hooks(install: bool) -> anyhow::Result<String> {
     Ok(out.join("\n"))
 }
 
-fn edit(kind: Kind, path: &std::path::Path, install: bool) -> anyhow::Result<String> {
+fn edit(kind: Kind, path: &Path, top: bool, install: bool, exe: &str) -> anyhow::Result<String> {
     let mut settings = match std::fs::read_to_string(path) {
         Ok(text) => match serde_json::from_str::<Value>(&text)
             .with_context(|| format!("can't parse {}", path.display()))?
@@ -416,28 +731,64 @@ fn edit(kind: Kind, path: &std::path::Path, install: bool) -> anyhow::Result<Str
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Map::new(),
         Err(e) => return Err(e).with_context(|| format!("can't read {}", path.display())),
     };
-    strip(&mut settings);
+    strip(&mut settings, top);
     if install {
-        let exe = std::env::current_exe()
-            .and_then(|e| e.canonicalize())
-            .context("can't find the abromux binary")?;
-        add(&mut settings, kind, &exe.to_string_lossy())?;
+        add(&mut settings, kind, exe, top)?;
     }
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("json.abromux-tmp");
-    std::fs::write(
-        &tmp,
-        serde_json::to_string_pretty(&Value::Object(settings))? + "\n",
+    write(
+        path,
+        &(serde_json::to_string_pretty(&Value::Object(settings))? + "\n"),
     )?;
-    std::fs::rename(&tmp, path)?;
     Ok(format!(
         "{} {} hooks in {}",
         if install { "Installed" } else { "Removed" },
         kind.title(),
         path.display()
     ))
+}
+
+/// Write or remove our plugin file; one without our mark is someone else's.
+fn plugin(kind: Kind, path: &Path, install: bool, exe: &str) -> anyhow::Result<String> {
+    let ours = match std::fs::read_to_string(path) {
+        Ok(text) => text.starts_with(PLUGIN_MARK),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => return Err(e).with_context(|| format!("can't read {}", path.display())),
+    };
+    if !ours {
+        bail!(
+            "{} isn't ours; move it to install {}'s",
+            path.display(),
+            kind.title()
+        );
+    }
+    if install {
+        write(path, &kind.plugin(exe))?;
+    } else if path.exists() {
+        std::fs::remove_file(path)?;
+    } else {
+        return Ok(format!(
+            "No {} plugin to remove in {}",
+            kind.title(),
+            path.display()
+        ));
+    }
+    Ok(format!(
+        "{} {} plugin {}",
+        if install { "Installed" } else { "Removed" },
+        kind.title(),
+        path.display()
+    ))
+}
+
+/// Replace `path` in one step, making its folder if needed.
+fn write(path: &Path, text: &str) -> anyhow::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("abromux-tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -451,7 +802,7 @@ mod tests {
         assert!(
             Agent::from_report(&json!({ "kind": "claude", "session_id": "x; rm -rf ~" })).is_none()
         );
-        assert!(Agent::from_report(&json!({ "kind": "gemini", "session_id": "abc" })).is_none());
+        assert!(Agent::from_report(&json!({ "kind": "aider", "session_id": "abc" })).is_none());
         let c = Agent::from_report(&json!({ "kind": "codex", "session_id": "abc", "permission_mode": "bypassPermissions", "pid": 42 })).unwrap();
         assert_eq!((c.permission_mode, c.pid), (None, Some(42)));
     }
@@ -460,21 +811,77 @@ mod tests {
     fn codex_reports() {
         // Payloads as codex-cli 0.164 sends them.
         let stop = json!({ "hook_event_name": "Stop", "session_id": "01a1", "cwd": "/p", "last_assistant_message": "Done:\n  all  green." });
-        let r = report(Kind::Codex, &stop, "surface:3", Some(7));
+        let r = report(Kind::Codex, &stop, "surface:3", Some(7)).unwrap();
         assert_eq!(
             (r["kind"].as_str(), r["summary"].as_str(), r["pid"].as_u64()),
             (Some("codex"), Some("Done: all green."), Some(7))
         );
         let ask = json!({ "hook_event_name": "PermissionRequest", "session_id": "01a1", "tool_name": "Bash", "tool_input": { "command": "touch  /etc/x" } });
         assert_eq!(
-            report(Kind::Codex, &ask, "surface:3", None)["message"],
+            report(Kind::Codex, &ask, "surface:3", None).unwrap()["message"],
             "Asks to run touch /etc/x"
         );
         let ask = json!({ "hook_event_name": "PermissionRequest", "tool_name": "apply_patch" });
         assert_eq!(
-            report(Kind::Codex, &ask, "surface:3", None)["message"],
+            report(Kind::Codex, &ask, "surface:3", None).unwrap()["message"],
             "Asks to use apply_patch"
         );
+    }
+
+    #[test]
+    fn other_agents_report_like_claude() {
+        let r = |k, p| report(k, &p, "surface:1", None).unwrap();
+        // Gemini CLI's own event names.
+        let g = r(
+            Kind::Gemini,
+            json!({ "hook_event_name": "AfterAgent", "session_id": "a1-b2", "cwd": "/p", "prompt_response": "Fixed it." }),
+        );
+        assert_eq!(
+            (g["event"].as_str(), g["summary"].as_str()),
+            (Some("Stop"), Some("Fixed it."))
+        );
+        let g = r(
+            Kind::Gemini,
+            json!({ "hook_event_name": "BeforeAgent", "session_id": "a1-b2" }),
+        );
+        assert_eq!(g["event"], "UserPromptSubmit");
+        let g = r(
+            Kind::Gemini,
+            json!({ "hook_event_name": "Notification", "notification_type": "ToolPermission", "message": "Allow  shell?" }),
+        );
+        assert_eq!(
+            (g["event"].as_str(), g["message"].as_str()),
+            (Some("Notification"), Some("Allow shell?"))
+        );
+        // Cursor: the chat id and the first workspace root.
+        let c = r(
+            Kind::Cursor,
+            json!({ "hook_event_name": "stop", "conversation_id": "c-9", "workspace_roots": ["/w"], "status": "aborted" }),
+        );
+        assert_eq!(
+            (
+                c["event"].as_str(),
+                c["session_id"].as_str(),
+                c["cwd"].as_str(),
+                c["summary"].as_str()
+            ),
+            (Some("Stop"), Some("c-9"), Some("/w"), Some("Stopped"))
+        );
+        assert!(
+            report(
+                Kind::Cursor,
+                &json!({ "hook_event_name": "afterFileEdit" }),
+                "s",
+                None
+            )
+            .is_none()
+        );
+        // The plugins send Claude's names and their own pid.
+        let o = r(
+            Kind::OpenCode,
+            json!({ "hook_event_name": "PermissionRequest", "session_id": "ses_1", "message": "Run ls" }),
+        );
+        assert_eq!(o["message"], "Run ls");
     }
 
     #[test]
@@ -521,6 +928,12 @@ mod tests {
             c.resume_command("/tmp").unwrap(),
             "cd -- '/p' && codex resume 01a1-2"
         );
+        let o = Agent {
+            kind: "opencode".into(),
+            session_id: "ses_9".into(),
+            ..c
+        };
+        assert_eq!(o.resume_command("/p").unwrap(), "opencode --session ses_9");
     }
 
     #[test]
@@ -542,6 +955,9 @@ mod tests {
         let long = json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "é".repeat(300) }] } }).to_string();
         assert_eq!(summary(&long).unwrap().chars().count(), SUMMARY_CHARS + 1);
         assert_eq!(summary(""), None);
+        // Droid's transcripts.
+        let droid = json!({ "type": "message", "message": { "role": "assistant", "content": [{ "type": "text", "text": "ok" }] } }).to_string();
+        assert_eq!(summary(&droid).as_deref(), Some("ok"));
     }
 
     #[test]
@@ -551,17 +967,18 @@ mod tests {
             serde_json::from_value(json!({ "model": "opus", "hooks": { "Stop": [theirs] } }))
                 .unwrap();
         for _ in 0..2 {
-            strip(&mut s);
+            strip(&mut s, false);
             add(
                 &mut s,
                 Kind::Claude,
                 "/Applications/AbroMux.app/Contents/MacOS/abromux",
+                false,
             )
             .unwrap();
         }
         assert_eq!(s["hooks"]["Stop"].as_array().unwrap().len(), 2);
         assert_eq!(s["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
-        strip(&mut s);
+        strip(&mut s, false);
         assert_eq!(
             Value::Object(s),
             json!({ "model": "opus", "hooks": { "Stop": [theirs] } })
@@ -573,7 +990,7 @@ mod tests {
         let theirs = json!({ "matcher": "Edit", "hooks": [{ "type": "command", "command": "fmt.sh", "timeout": 60 }] });
         let mut s: Map<String, Value> =
             serde_json::from_value(json!({ "hooks": { "PostToolUse": [theirs] } })).unwrap();
-        add(&mut s, Kind::Codex, "/x/abromux").unwrap();
+        add(&mut s, Kind::Codex, "/x/abromux", false).unwrap();
         let post = s["hooks"]["PostToolUse"].as_array().unwrap();
         assert_eq!(
             post[0], theirs,
@@ -587,10 +1004,57 @@ mod tests {
         assert!(
             s["hooks"].get("PermissionRequest").is_some() && s["hooks"].get("SessionEnd").is_none()
         );
-        strip(&mut s);
+        strip(&mut s, false);
         assert_eq!(
             Value::Object(s),
             json!({ "hooks": { "PostToolUse": [theirs] } })
+        );
+    }
+
+    #[test]
+    fn cursor_and_droid_layouts() {
+        let theirs = json!({ "command": "./cursor-hook.sh", "timeout": 10 });
+        let mut s: Map<String, Value> =
+            serde_json::from_value(json!({ "version": 1, "hooks": { "stop": [theirs] } })).unwrap();
+        add(&mut s, Kind::Cursor, "/x/abromux", false).unwrap();
+        assert_eq!(s["hooks"]["stop"][1]["timeout"], 5);
+        assert!(
+            s["hooks"]["stop"][1]["command"]
+                .as_str()
+                .unwrap()
+                .contains("hooks cursor-event")
+        );
+        strip(&mut s, false);
+        assert_eq!(
+            Value::Object(s),
+            json!({ "version": 1, "hooks": { "stop": [theirs] } })
+        );
+        // Droid's hooks.json: events at the top.
+        let mut d = Map::new();
+        add(&mut d, Kind::Droid, "/x/abromux", true).unwrap();
+        assert!(
+            d["Stop"][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("hooks droid-event")
+        );
+        strip(&mut d, true);
+        assert!(d.is_empty());
+        // Gemini counts milliseconds.
+        let mut g = Map::new();
+        add(&mut g, Kind::Gemini, "/x/abromux", false).unwrap();
+        assert_eq!(g["hooks"]["AfterAgent"][0]["hooks"][0]["timeout"], 5000);
+    }
+
+    #[test]
+    fn plugins_embed_the_binary() {
+        let js = Kind::OpenCode.plugin("/A \"b\"/abromux");
+        assert!(js.starts_with(PLUGIN_MARK));
+        assert!(js.contains(r#"const exe = "/A \"b\"/abromux";"#));
+        assert!(
+            Kind::Pi
+                .plugin("/x")
+                .contains("export default function (pi)")
         );
     }
 }

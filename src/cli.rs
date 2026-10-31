@@ -65,7 +65,8 @@ Commands:
   config path                                                (where abromux's config.json lives)
   config check [<file>]                                      (validate the config file; needs no running app)
   config shortcuts                                           (each shortcut's name for config.json, and its keys now)
-  hooks install|uninstall                                    (Claude Code and Codex hooks: agent status, notifications, resume on restore)
+  hooks install|uninstall [agent...]                         (agent hooks: status, notifications, resume on restore;
+                                                             claude, codex, gemini, droid, cursor, opencode, pi)
   skills install|uninstall                                   (Claude Code and Codex skills that teach them this CLI)
   skills show [abromux|abromux-browser]                      (print a skill: an agent-facing guide)
   quit
@@ -368,8 +369,8 @@ fn dispatch(
         "focus-window" => ("window.focus", |v| format!("OK {}", s(&v["window"]))),
         "hooks" => {
             let msg = match pos.first().map(String::as_str) {
-                Some("install") => agent::hooks(true),
-                Some("uninstall") => agent::hooks(false),
+                Some("install") => agent::hooks(true, &pos[1..]),
+                Some("uninstall") => agent::hooks(false, &pos[1..]),
                 _ => return Err("hooks: expected install or uninstall".into()),
             };
             println!("{}", msg.map_err(|e| format!("{e:#}"))?);

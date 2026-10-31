@@ -151,8 +151,8 @@ What's missing beyond the browser commands above:
 
 ## 9. Coding-agent integrations
 
-- [x] **Agent hooks**: `hooks setup` for Claude Code, Codex, OpenCode, Gemini, Kiro, Amp, Cursor, Pi and others. They feed notifications, status and session IDs. *(partial: `hooks install` for Claude Code and Codex; it feeds session IDs, the sidebar status and notifications)*
-- [x] **Agent session resume**: `restore` and `fork` from checkpoints, plus `surface resume` commands. *(partial: session restore resumes Claude Code and Codex sessions; no `fork` or CLI commands)*
+- [x] **Agent hooks**: `hooks setup` for Claude Code, Codex, OpenCode, Gemini, Kiro, Amp, Cursor, Pi and others. They feed notifications, status and session IDs. *(partial: `hooks install` for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; it feeds session IDs, the sidebar status and notifications. No Kiro, Amp or Copilot yet)*
+- [x] **Agent session resume**: `restore` and `fork` from checkpoints, plus `surface resume` commands. *(partial: session restore resumes the sessions of every agent with hooks; no `fork` or CLI commands)*
 - [ ] **Agent hibernation**: put idle agents to sleep under memory pressure and wake them later.
 - [ ] **Feed**: an approval inbox for agent permission prompts and turn-complete events.
 - [ ] **Multi-agent teams as panes**: `claude-teams`, `codex-teams`, and oh-my-opencode (`omo`/`omx`/`omc`). Subagents become native splits.
@@ -182,10 +182,10 @@ What's missing beyond the browser commands above:
 
 If the goal is daily-driver parity, a reasonable sequence is:
 
-Done so far: customizable shortcuts and custom palette commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; Claude Code and Codex status and notifications; sidebar status, progress and log.
+Done so far: customizable shortcuts and custom palette commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; agent status, notifications and resume for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; sidebar status, progress and log.
 
 Next:
 
-1. **Hooks for other agents** (OpenCode, Gemini, …).
-2. **Custom commands that build layouts** (cmux's workspace commands), and a project-level config file.
+1. **Custom commands that build layouts** (cmux's workspace commands), and a project-level config file.
+2. **Hooks for the remaining agents** (Kiro, Amp, Copilot), once their hook formats settle.
 3. **Dragging tabs, multiple windows, SSH/tmux**, as the workspace model matures.

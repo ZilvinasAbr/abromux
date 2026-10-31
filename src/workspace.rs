@@ -25,6 +25,7 @@ impl Surface {
                 Some(a) if a.alive() => match Kind::parse(&a.kind) {
                     Some(Kind::Claude) => "claude",
                     Some(Kind::Codex) => "codex",
+                    Some(_) => "bot",
                     None => "terminal",
                 },
                 _ => "terminal",
