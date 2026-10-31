@@ -33,6 +33,7 @@ mod skills;
 mod sprite;
 mod status;
 mod terminal;
+mod terminal_browser;
 mod theme;
 mod titlebar;
 mod webauthn;
@@ -564,12 +565,13 @@ impl AbroMux {
     /// (the built-in one, with a warning, if it isn't installed).
     fn make_browser(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> Surface {
         if settings::terminal_browser(cx) {
-            match browser::terminal_browser_command(url) {
+            match terminal_browser::command(url) {
                 Some(cmd) => {
                     let ws = self.workspaces.get(self.active).map_or(0, |w| w.id);
                     let s = self.make_terminal_running(None, ws, vec![], Some(cmd), window, cx);
                     if let Surface::Terminal(t) = &s {
                         t.update(cx, |t, _| t.browser_url = Some(url.into()));
+                        terminal_browser::watch(t, cx);
                     }
                     return s;
                 }

@@ -21,6 +21,7 @@ impl Surface {
     /// A terminal running a coding agent shows the agent's logo.
     pub fn icon(&self, cx: &App) -> &'static str {
         match self {
+            Surface::Terminal(t) if t.read(cx).browser_url.is_some() => "globe",
             Surface::Terminal(t) => match t.read(cx).agent.as_ref() {
                 Some(a) if a.alive() => match Kind::parse(&a.kind) {
                     Some(Kind::Claude) => "claude",
@@ -46,6 +47,16 @@ impl Surface {
         match self {
             Surface::Terminal(t) => {
                 let t = t.read(cx);
+                // A terminal-browser tab reads like a browser tab.
+                if let Some(url) = &t.browser_url {
+                    return if !t.browser_title.is_empty() {
+                        t.browser_title.clone()
+                    } else if !url.is_empty() {
+                        url.clone()
+                    } else {
+                        "New Tab".into()
+                    };
+                }
                 if !t.shown_title().is_empty() {
                     t.shown_title().to_string()
                 } else {

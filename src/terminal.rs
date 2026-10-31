@@ -136,8 +136,11 @@ pub struct TerminalView {
     pending_paste: Option<String>,
     /// What the shell runs instead of an interactive session (`$SHELL -l -c`).
     command: Option<String>,
-    /// The page a `terminal-browser` tab opened, saved as a browser tab.
+    /// Set on a tab running terminal-browser: the page it shows (at first
+    /// the one it opened), saved as a browser tab.
     pub browser_url: Option<String>,
+    /// That page's title, once terminal-browser reports it.
+    pub browser_title: String,
     /// Kept to start the shell again the same way (`respawn-pane`).
     env: Vec<(String, String)>,
     /// Bumped on respawn so the old shell's output and exit are ignored.
@@ -215,6 +218,7 @@ impl TerminalView {
             pending_paste: None,
             command,
             browser_url: None,
+            browser_title: String::new(),
             env,
             generation: 0,
             hold_timer: false,
@@ -243,6 +247,25 @@ impl TerminalView {
                 });
             });
         }
+    }
+
+    /// The PTY's device (`/dev/ttys004`), which programs in it see as their tty.
+    pub fn tty_name(&self) -> Option<std::path::PathBuf> {
+        self.master.tty_name()
+    }
+
+    /// The page terminal-browser reports for this tab.
+    pub fn set_browser_page(&mut self, page: crate::terminal_browser::Page, cx: &mut Context<Self>) {
+        let url = (!page.url.is_empty()).then_some(page.url);
+        if self.browser_title == page.title && (url.is_none() || self.browser_url == url) {
+            return;
+        }
+        self.browser_title = page.title;
+        if url.is_some() {
+            self.browser_url = url;
+        }
+        cx.emit(TerminalEvent::TitleChanged);
+        cx.notify();
     }
 
     /// Kill the shell (and whatever it runs) and start a fresh one in its
