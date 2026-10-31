@@ -2,6 +2,7 @@
 /vendor/ghostty
 /vendor/zig
 /vendor/ghostty-vt-out
-.claude/
+.claude/*
+!.claude/skills/
 .DS_Store
 /dist
