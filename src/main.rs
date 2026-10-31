@@ -1851,9 +1851,15 @@ impl AbroMux {
             Some(Surface::Browser(b)) => b.clone().into_any_element(),
             None => div().into_any_element(),
         };
+        let browser = matches!(pane.active_surface(), Some(Surface::Browser(_)));
 
         // A ring around panes with unread notifications, like cmux.
         let ring = pane.tabs.iter().any(|s| self.surface_unread(s.entity_id()));
+        // A webview is a native view drawn above everything gpui paints, so
+        // it would cover the ring or focus border; keep it inside them. The
+        // inset doesn't follow focus, so switching splits doesn't resize
+        // (and reflow) the page.
+        let border = if multi || ring { px(2.) } else { px(0.) };
         div()
             .id(("pane", pane_id))
             .size_full()
@@ -1871,6 +1877,7 @@ impl AbroMux {
                     .flex_1()
                     .min_h_0()
                     .relative()
+                    .when(browser, |d| d.px(border).pb(border))
                     .child(content)
                     // Unfocused splits are dimmed, like cmux/ghostty.
                     .when(multi && !focused, |d| {
