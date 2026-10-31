@@ -377,6 +377,26 @@ export default function (pi) {
 /// Longest Stop summary sent to the app.
 const SUMMARY_CHARS: usize = 160;
 
+/// Claude Code starts its terminal title with its state: `✳` when idle, a
+/// spinner glyph (braille dots, `◐`, …) while working. The tab shows the
+/// state with Claude's logo instead, so the title drops the glyph.
+pub fn strip_status_glyph(title: &str) -> &str {
+    let mut chars = title.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), Some(' ')) if is_status_glyph(c) => chars.as_str().trim_start(),
+        _ => title,
+    }
+}
+
+/// Middle dot, braille, geometric shapes and dingbats: what Claude Code draws
+/// its state with, and never how a title it generates starts.
+fn is_status_glyph(c: char) -> bool {
+    matches!(
+        c,
+        '·' | '\u{2800}'..='\u{28ff}' | '\u{25a0}'..='\u{25ff}' | '\u{2700}'..='\u{27bf}'
+    )
+}
+
 /// Session ids and modes go into a shell command line, so keep them to safe
 /// characters.
 fn safe(s: &str) -> bool {
@@ -895,6 +915,19 @@ mod tests {
             Some("Refactor sidebar")
         );
         assert_eq!(clean_title("   \n"), None);
+    }
+
+    #[test]
+    fn claude_title_loses_its_status_glyph() {
+        assert_eq!(strip_status_glyph("✳ Abromux settings"), "Abromux settings");
+        assert_eq!(
+            strip_status_glyph("◑ Multi-subscription"),
+            "Multi-subscription"
+        );
+        assert_eq!(strip_status_glyph("⠂ Working"), "Working");
+        assert_eq!(strip_status_glyph("Plain title"), "Plain title");
+        assert_eq!(strip_status_glyph("✳"), "✳");
+        assert_eq!(strip_status_glyph("Ä title"), "Ä title");
     }
 
     #[test]

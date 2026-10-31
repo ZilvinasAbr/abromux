@@ -2,7 +2,7 @@
 //! drawn cell-by-cell with gpui.
 
 use crate::{
-    agent::Agent,
+    agent::{self, Agent, Kind},
     config::{Config, CursorStyle as ConfigCursor},
     ghostty::{
         self, CursorStyle as Caret, Frame, ImageLayer, ImagePixels, MouseAction, MouseGeometry,
@@ -309,6 +309,26 @@ impl TerminalView {
             self.update_link(true);
         }
         cx.notify();
+    }
+
+    /// The program's title for tabs and the sidebar: Claude Code's without
+    /// its state glyph, which the tab shows with Claude's logo instead.
+    pub fn shown_title(&self) -> &str {
+        match &self.agent {
+            Some(a) if a.kind == Kind::Claude.as_str() => agent::strip_status_glyph(&self.title),
+            _ => &self.title,
+        }
+    }
+
+    /// Claude Code is working here: its title starts with a spinner glyph
+    /// rather than the idle `✳`.
+    pub fn claude_running(&self) -> bool {
+        self.agent.as_ref().is_some_and(|a| {
+            a.kind == Kind::Claude.as_str()
+                && a.alive()
+                && self.title != agent::strip_status_glyph(&self.title)
+                && !self.title.starts_with('✳')
+        })
     }
 
     pub fn send(&mut self, bytes: &[u8]) {

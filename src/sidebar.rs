@@ -1040,6 +1040,7 @@ impl AbroMux {
         let details = !sb.hide_all_details;
         let active = i == self.active;
         let name = ws.name(cx);
+        let claude_running = ws.claude_running(cx);
         let subtitle = ws
             .focused_surface()
             .map(|s| s.title(cx))
@@ -1226,6 +1227,10 @@ impl AbroMux {
                                 .rounded_full()
                                 .bg(rgb(ACCENT_BRIGHT)),
                         )
+                    })
+                    // White on a filled row, whose fill may be the same orange.
+                    .when(claude_running && !is_renaming, |s| {
+                        s.child(claude_spinner(px(13. * z)).when(filled, |d| d.text_color(fg)))
                     })
                     .child(match renaming {
                         // Edit in place: same font and line as the title, in a

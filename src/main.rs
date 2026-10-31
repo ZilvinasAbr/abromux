@@ -264,6 +264,8 @@ struct AbroMux {
     /// Workspaces auto-naming has asked an agent CLI to name, once each
     /// (`server::auto_name`); clearing a workspace's name lets it ask again.
     naming: Vec<usize>,
+    /// A task is redrawing the window while Claude's logo turns somewhere.
+    spinning: bool,
 }
 
 impl AbroMux {
@@ -310,6 +312,7 @@ impl AbroMux {
             palette: None,
             launch_session: None,
             naming: vec![],
+            spinning: false,
         };
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
@@ -1354,6 +1357,30 @@ impl AbroMux {
         .detach();
     }
 
+    /// While Claude works in any terminal, redraw once per frame of the star
+    /// animation in its tab and sidebar row. A timer rather than `with_animation`, which would
+    /// redraw the whole window at the display's rate.
+    fn tick_spinner(&mut self, cx: &mut Context<Self>) {
+        if self.spinning || !self.workspaces.iter().any(|w| w.claude_running(cx)) {
+            return;
+        }
+        self.spinning = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                Timer::after(Duration::from_millis(CLAUDE_FRAME_MS)).await;
+                let more = this.update(cx, |this, cx| {
+                    cx.notify();
+                    this.spinning = this.workspaces.iter().any(|w| w.claude_running(cx));
+                    this.spinning
+                });
+                if !matches!(more, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
     /// Show hints after a lone ⌘ or ⌃ has been held for `HINT_DELAY`; any
     /// other modifier change hides them.
     fn modifiers_changed(&mut self, m: &Modifiers, window: &mut Window, cx: &mut Context<Self>) {
@@ -1690,11 +1717,14 @@ impl AbroMux {
                             .bg(rgb(ACCENT_BRIGHT)),
                     )
                 })
-                .child(
+                .child(if s.claude_running(cx) {
+                    claude_spinner(px(12.)).into_any_element()
+                } else {
                     icon(s.icon(cx))
                         .size(px(12.))
-                        .text_color(icon_color(s.icon(cx), active || unread)),
-                )
+                        .text_color(icon_color(s.icon(cx), active || unread))
+                        .into_any_element()
+                })
                 .child(match renaming.clone() {
                     Some(input) => div()
                         .flex_1()
@@ -1945,6 +1975,7 @@ impl Render for AbroMux {
             self.ws_drop = None;
         }
         self.sync_webviews(cx);
+        self.tick_spinner(cx);
         let notifications = self
             .notifications_open
             .then(|| self.render_notifications(cx));
