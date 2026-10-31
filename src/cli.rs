@@ -22,11 +22,25 @@ Commands:
   ping | version | identify
   list-workspaces
   current-workspace
-  new-workspace [--name <title>] [--cwd <path>] [--command <text>] [--focus <true|false>]
-                [--layout <json>|@<file>]                  (build a cmux-style layout: splits, panes, tabs)
+  new-workspace [--name <title>] [--description <text>] [--cwd <path>] [--command <text>] [--focus <true|false>]
+                [--group <ref>] [--layout <json>|@<file>]  (build a cmux-style layout: splits, panes, tabs)
   select-workspace --workspace <id|ref|index>
   close-workspace --workspace <id|ref|index>
   rename-workspace [--workspace <id|ref|index>] <title>
+  workspace-action [--workspace <ref>] <action> [<value>]    (rename, clear-name, set-description, clear-description,
+                                                             set-color, clear-color, move-up, move-down, move-top,
+                                                             close-others, close-above, close-below, mark-read)
+  reorder-workspace [--workspace <ref>] (--index <n> | --before <ref> | --after <ref>) [--dry-run]
+  reorder-workspaces --order <ref>,<ref>,... [--dry-run]     (unnamed ones follow in their order)
+  group list
+  group create [--workspace <ref>] [--name <title>]          (a sidebar group holding the workspace)
+  group add --group <ref> [--workspace <ref>]
+  group remove [--workspace <ref>]
+  group rename|color|collapse|expand|ungroup [--group <ref>] [<title>|<color>]   (default: the workspace's group)
+  group by-folder                                            (group ungrouped workspaces that share a repo/folder)
+  restore-session [--from <stable|nightly|path>]             (reopen the session this launch restored, or another one;
+                                                             only workspaces not already open)
+  restore-session --export <path> [--force]                  (write the current session to a file)
   tree [--all] [--workspace <id|ref|index>]
   list-panes [--workspace <id|ref|index>]
   focus-pane --pane <id|ref|index> [--workspace <id|ref|index>]
@@ -107,6 +121,8 @@ const SWITCHES: &[&str] = &[
     "interactive",
     "compact",
     "exact",
+    "dry-run",
+    "force",
 ];
 
 struct Args {
@@ -127,7 +143,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
                 opts.insert("focus".into(), json!(false));
             }
             Some(k) if SWITCHES.contains(&k) => {
-                opts.insert(k.into(), json!(true));
+                opts.insert(k.replace('-', "_"), json!(true));
             }
             Some(k) => {
                 let v = it.next().ok_or_else(|| format!("--{k} needs a value"))?;
@@ -229,6 +245,99 @@ fn dispatch(
             ("workspace.rename", |v| {
                 format!("OK {} {}", s(&v["ref"]), s(&v["name"]))
             })
+        }
+        "workspace-action" => {
+            if !opts.contains_key("action") {
+                first("action", &mut opts)?;
+            }
+            let key = match opts["action"].as_str().unwrap_or_default() {
+                "rename" => Some("title"),
+                "set-description" => Some("description"),
+                "set-color" => Some("color"),
+                _ => None,
+            };
+            if let Some(k) = key
+                && !opts.contains_key(k)
+                && !pos.is_empty()
+            {
+                opts.insert(k.into(), json!(pos.join(" ")));
+            }
+            ("workspace.action", |v| match v["ref"].as_str() {
+                Some(r) => format!("OK {r}"),
+                None => "OK".into(),
+            })
+        }
+        "reorder-workspace" => ("workspace.reorder", |v| {
+            format!("OK {} index={}", s(&v["workspace"]), v["index"])
+        }),
+        "reorder-workspaces" => ("workspace.reorder_all", |v| {
+            format!("OK {}", lines(v, s).replace('\n', ","))
+        }),
+        "group" => {
+            let sub = if pos.is_empty() {
+                "list".to_string()
+            } else {
+                pos.remove(0)
+            };
+            let method = match sub.as_str() {
+                "list" => "group.list",
+                "create" => "group.create",
+                "add" => "group.add",
+                "remove" => "group.remove",
+                "by-folder" => "group.by_folder",
+                "rename" | "color" | "collapse" | "expand" | "ungroup" => {
+                    let key = match sub.as_str() {
+                        "rename" => Some("title"),
+                        "color" => Some("color"),
+                        _ => None,
+                    };
+                    if let Some(k) = key {
+                        if pos.is_empty() {
+                            return Err(format!("group {sub}: missing <{k}>"));
+                        }
+                        opts.insert(k.into(), json!(pos.join(" ")));
+                    }
+                    match sub.as_str() {
+                        "rename" => "group.rename",
+                        "color" => "group.color",
+                        "collapse" => "group.collapse",
+                        "expand" => "group.expand",
+                        _ => "group.ungroup",
+                    }
+                }
+                other => return Err(format!("group: unknown subcommand {other:?}")),
+            };
+            (method, |v| {
+                if v.is_array() {
+                    lines(v, group_line)
+                } else if v["ref"].is_string() {
+                    group_line(v)
+                } else if let Some(n) = v["created"].as_u64() {
+                    format!("OK {n} groups")
+                } else {
+                    "OK".into()
+                }
+            })
+        }
+        "restore-session" => {
+            if opts.contains_key("export") {
+                let path = opts.remove("export").unwrap();
+                let abs = path
+                    .as_str()
+                    .and_then(|p| std::path::absolute(p).ok())
+                    .map(|p| p.to_string_lossy().into_owned());
+                opts.insert("path".into(), json!(abs.unwrap_or_default()));
+                ("session.export", |v| format!("OK {}", s(&v["path"])))
+            } else {
+                // A file is read by the app: make its path absolute here.
+                if let Some(Value::String(f)) = opts.get_mut("from")
+                    && !matches!(f.as_str(), "stable" | "nightly")
+                    && let Ok(abs) = std::path::absolute(&*f)
+                {
+                    *f = abs.to_string_lossy().into_owned();
+                }
+                ("session.restore", |v| format!("OK reopened {}", v["added"]))
+            }
         }
         "tree" => ("workspace.tree", tree),
         "list-panes" => ("pane.list", |v| lines(v, pane_line)),
@@ -809,10 +918,34 @@ fn workspace_line(w: &Value) -> String {
     if let Some(b) = w["branch"].as_str() {
         line += &format!(" ({b})");
     }
+    if let Some(g) = w["group"].as_str() {
+        line += &format!("  [{g}]");
+    }
     if w["unread"] == true {
         line += "  [unread]";
     }
+    if let Some(d) = w["description"].as_str() {
+        line += &format!("\n      {}", d.replace('\n', "\n      "));
+    }
     line
+}
+
+fn group_line(g: &Value) -> String {
+    let ws: Vec<String> = g["workspaces"]
+        .as_array()
+        .map(|a| a.iter().map(s).collect())
+        .unwrap_or_default();
+    let folded = if g["collapsed"] == true {
+        "  [collapsed]"
+    } else {
+        ""
+    };
+    format!(
+        "{}  {}  {}{folded}",
+        s(&g["ref"]),
+        s(&g["name"]),
+        ws.join(",")
+    )
 }
 
 fn notification_line(n: &Value) -> String {

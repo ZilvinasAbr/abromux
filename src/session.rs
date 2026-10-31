@@ -14,9 +14,10 @@
 use crate::{
     AbroMux,
     agent::Agent,
-    workspace::{Node, Pane, Surface, Workspace},
+    workspace::{Group, Node, Pane, Surface, Workspace},
 };
 use gpui::{App, Axis, Bounds, Context, Pixels, Window, point, px, size};
+use gpui_component::WindowExt;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -35,6 +36,17 @@ pub struct Session {
     #[serde(default = "sidebar_width")]
     pub sidebar_width: f32,
     pub workspaces: Vec<WorkspaceState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<GroupState>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct GroupState {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<u32>,
+    #[serde(default)]
+    pub collapsed: bool,
 }
 
 fn yes() -> bool {
@@ -61,6 +73,15 @@ pub struct WorkspaceState {
     #[serde(default)]
     pub focused: usize,
     pub root: NodeState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<u32>,
+    /// Index into the session's `groups`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -99,6 +120,9 @@ pub enum TabState {
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
+        /// The back/forward list (`BrowserView::history_state`), saved on quit.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        history: Option<String>,
     },
 }
 
@@ -117,9 +141,12 @@ pub fn path() -> Option<PathBuf> {
 }
 
 pub fn load() -> Option<Session> {
-    let text = std::fs::read_to_string(path()?).ok()?;
-    match serde_json::from_str::<Session>(&text) {
-        Ok(s) if s.version == VERSION && !s.workspaces.is_empty() => Some(s),
+    let path = path()?;
+    if !path.exists() {
+        return None;
+    }
+    match read(&path) {
+        Ok(s) if !s.workspaces.is_empty() => Some(s),
         Ok(_) => None,
         Err(e) => {
             eprintln!("abromux: ignoring unreadable session: {e}");
@@ -128,20 +155,49 @@ pub fn load() -> Option<Session> {
     }
 }
 
+/// A session file, or why it couldn't be read.
+pub fn read(path: &std::path::Path) -> Result<Session, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    match serde_json::from_str::<Session>(&text) {
+        Ok(s) if s.version == VERSION => Ok(s),
+        Ok(s) => Err(format!(
+            "{}: session version {} isn't {VERSION}",
+            path.display(),
+            s.version
+        )),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
+/// Where `restore-session --from` reads: `stable`, `nightly`, or a file.
+pub fn source(from: &str) -> PathBuf {
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let support = home.join("Library/Application Support");
+    match from {
+        "stable" => support.join("abromux/session.json"),
+        "nightly" => support.join("abromux-nightly/session.json"),
+        p => p
+            .strip_prefix("~/")
+            .map_or_else(|| p.into(), |rest| home.join(rest)),
+    }
+}
+
 /// Write atomically (temp file + rename) so a crash mid-write can't leave a
 /// truncated session behind.
 pub fn save(session: &Session) {
     let Some(path) = path() else { return };
-    let Ok(json) = serde_json::to_string(session) else {
-        return;
-    };
+    let _ = write(session, &path);
+}
+
+/// Write `session` to `path` atomically.
+pub fn write(session: &Session, path: &std::path::Path) -> std::io::Result<()> {
+    let json = serde_json::to_string(session)?;
     if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
+        std::fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, json).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
-    }
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, path)
 }
 
 impl WindowState {
@@ -168,6 +224,12 @@ impl AbroMux {
             .iter()
             .map(|ws| WorkspaceState {
                 name: ws.custom_name.clone(),
+                auto_name: ws.auto_title.clone(),
+                description: ws.description.clone(),
+                color: ws.color,
+                group: ws
+                    .group
+                    .and_then(|g| self.groups.iter().position(|x| x.id == g)),
                 focused: ws
                     .root
                     .panes()
@@ -184,6 +246,15 @@ impl AbroMux {
             sidebar: self.sidebar,
             sidebar_width: self.sidebar_width,
             workspaces,
+            groups: self
+                .groups
+                .iter()
+                .map(|g| GroupState {
+                    name: g.name.clone(),
+                    color: g.color,
+                    collapsed: g.collapsed,
+                })
+                .collect(),
         }
     }
 
@@ -195,7 +266,92 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        for state in session.workspaces {
+        let first = self.workspaces.len();
+        let added = self.add_workspaces(session.workspaces, session.groups, window, cx);
+        if added == 0 {
+            return false;
+        }
+        self.sidebar = session.sidebar;
+        self.sidebar_width = session
+            .sidebar_width
+            .clamp(crate::SIDEBAR_MIN, crate::SIDEBAR_MAX);
+        self.select_workspace(first + session.active.min(added - 1), window, cx);
+        true
+    }
+
+    /// ⌘⇧O and `restore-session`: add the workspaces of `session` (by
+    /// default the one this launch restored) that aren't open as they were,
+    /// e.g. ones closed since. Returns how many it added.
+    pub(crate) fn reopen_session(
+        &mut self,
+        session: Option<Session>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> usize {
+        let Some(session) = session.or_else(|| self.launch_session.clone()) else {
+            window.push_notification("There's no previous session to reopen.", cx);
+            return 0;
+        };
+        // Each open workspace accounts for one saved one at most, so two
+        // saved in the same folder aren't both taken for it.
+        let mut open: Vec<String> = self
+            .workspaces
+            .iter()
+            .map(|w| workspace_key(w.custom_name.as_deref(), &node_state(&w.root, false, cx)))
+            .collect();
+        let states: Vec<WorkspaceState> = session
+            .workspaces
+            .into_iter()
+            .filter(|w| {
+                let key = workspace_key(w.name.as_deref(), &w.root);
+                match open.iter().position(|k| *k == key) {
+                    Some(i) => {
+                        open.swap_remove(i);
+                        false
+                    }
+                    None => true,
+                }
+            })
+            .collect();
+        let first = self.workspaces.len();
+        let added = self.add_workspaces(states, session.groups, window, cx);
+        let note = match added {
+            0 => "Every workspace of that session is already open.".to_string(),
+            1 => "Reopened 1 workspace.".to_string(),
+            n => format!("Reopened {n} workspaces."),
+        };
+        window.push_notification(note, cx);
+        if added > 0 {
+            self.select_workspace(first, window, cx);
+        }
+        cx.notify();
+        added
+    }
+
+    /// Build the saved workspaces after the open ones, with their groups.
+    /// Returns how many it built.
+    pub(crate) fn add_workspaces(
+        &mut self,
+        states: Vec<WorkspaceState>,
+        groups: Vec<GroupState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> usize {
+        let group_ids: Vec<usize> = groups
+            .into_iter()
+            .map(|g| {
+                self.next_group += 1;
+                self.groups.push(Group {
+                    id: self.next_group,
+                    name: g.name,
+                    color: g.color,
+                    collapsed: g.collapsed,
+                });
+                self.next_group
+            })
+            .collect();
+        let first = self.workspaces.len();
+        for state in states {
             self.next_ws += 1;
             let id = self.next_ws;
             let Some(root) = self.build_node(state.root, id, window, cx) else {
@@ -207,18 +363,15 @@ impl AbroMux {
                 .or(panes.first())
                 .copied()
                 .unwrap_or(0);
-            self.workspaces
-                .push(Workspace::new(id, state.name, root, focused_pane));
+            let mut ws = Workspace::new(id, state.name, root, focused_pane);
+            ws.auto_title = state.auto_name;
+            ws.description = state.description;
+            ws.color = state.color;
+            ws.group = state.group.and_then(|g| group_ids.get(g).copied());
+            self.workspaces.push(ws);
         }
-        if self.workspaces.is_empty() {
-            return false;
-        }
-        self.sidebar = session.sidebar;
-        self.sidebar_width = session
-            .sidebar_width
-            .clamp(crate::SIDEBAR_MIN, crate::SIDEBAR_MAX);
-        self.select_workspace(session.active.min(self.workspaces.len() - 1), window, cx);
-        true
+        crate::workspace::tidy_groups(&mut self.workspaces, &mut self.groups);
+        self.workspaces.len() - first
     }
 
     fn build_node(
@@ -294,12 +447,58 @@ impl AbroMux {
                 }
                 (s, name)
             }
-            TabState::Browser { url, name } => (self.make_browser(&url, window, cx), name),
+            TabState::Browser { url, name, history } => match history {
+                Some(h) => {
+                    let s = self.make_browser("", window, cx);
+                    if let Surface::Browser(b) = &s {
+                        b.update(cx, |b, cx| {
+                            if b.restore_history(&h, cx) {
+                                b.url = url;
+                            } else if !url.is_empty() {
+                                b.navigate(&url, cx);
+                            }
+                        });
+                    }
+                    (s, name)
+                }
+                None => (self.make_browser(&url, window, cx), name),
+            },
         };
         if name.is_some() {
             s.set_custom_title(name, cx);
         }
         s
+    }
+}
+
+/// A workspace's name and layout, to tell whether a saved one is open
+/// already.
+fn workspace_key(name: Option<&str>, root: &NodeState) -> String {
+    format!("{}\n{}", name.unwrap_or_default(), layout_key(root))
+}
+
+/// What a workspace's layout is: its splits and each tab's directory or
+/// page.
+fn layout_key(n: &NodeState) -> String {
+    match n {
+        NodeState::Pane { tabs, .. } => {
+            let tabs: Vec<String> = tabs
+                .iter()
+                .map(|t| match t {
+                    TabState::Terminal { cwd, .. } => format!("t:{cwd}"),
+                    TabState::Browser { url, .. } => format!("b:{url}"),
+                })
+                .collect();
+            format!("[{}]", tabs.join(","))
+        }
+        NodeState::Split {
+            vertical, children, ..
+        } => format!(
+            "({}{}|{})",
+            if *vertical { "v" } else { "h" },
+            layout_key(&children[0]),
+            layout_key(&children[1])
+        ),
     }
 }
 
@@ -346,6 +545,7 @@ fn tab_state(s: &Surface, scrollback: bool, cx: &App) -> TabState {
         Surface::Browser(b) => TabState::Browser {
             url: b.read(cx).url.clone(),
             name: b.read(cx).custom_title.clone(),
+            history: scrollback.then(|| b.read(cx).history_state(cx)).flatten(),
         },
     }
 }
@@ -369,6 +569,10 @@ mod tests {
             sidebar_width: 300.,
             workspaces: vec![WorkspaceState {
                 name: Some("api".into()),
+                auto_name: None,
+                description: Some("Ship it\n- build".into()),
+                color: Some(0x1565c0),
+                group: Some(0),
                 focused: 1,
                 root: NodeState::Split {
                     vertical: false,
@@ -395,10 +599,16 @@ mod tests {
                             tabs: vec![TabState::Browser {
                                 url: "https://example.com".into(),
                                 name: None,
+                                history: Some("YnBsaXN0".into()),
                             }],
                         },
                     ]),
                 },
+            }],
+            groups: vec![GroupState {
+                name: "web".into(),
+                color: None,
+                collapsed: true,
             }],
         };
         let json = serde_json::to_string(&s).unwrap();

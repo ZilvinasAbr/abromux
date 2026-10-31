@@ -63,9 +63,209 @@ pub struct Settings {
     pub shortcuts: BTreeMap<String, Shortcut>,
     /// Extra palette commands.
     pub commands: Vec<Command>,
+    pub app: AppSettings,
+    pub sidebar: SidebarSettings,
+    pub sidebar_appearance: SidebarAppearance,
+    pub workspace_colors: WorkspaceColors,
+    pub workspace_groups: WorkspaceGroups,
+    pub automation: Automation,
 }
 
 impl Global for Settings {}
+
+/// cmux's `app` keys that abromux has.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct AppSettings {
+    /// ⌘N starts in the focused terminal's directory; off, in home.
+    pub workspace_inherit_working_directory: bool,
+    /// Where a new workspace goes in the sidebar, outside a group.
+    pub new_workspace_placement: Placement,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            workspace_inherit_working_directory: true,
+            new_workspace_placement: Placement::End,
+        }
+    }
+}
+
+/// Where a new workspace is put: first, right after the selected one (or
+/// its group), or last.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum Placement {
+    Top,
+    #[default]
+    AfterCurrent,
+    End,
+}
+
+/// The sidebar's rows, with cmux's `sidebar` keys.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct SidebarSettings {
+    /// The workspace name's size in points; the smaller lines scale with it.
+    #[serde(deserialize_with = "font_size")]
+    pub font_size: f32,
+    /// Only names: no description, notification, status, branch or path.
+    pub hide_all_details: bool,
+    /// Let long names wrap instead of cutting them off.
+    pub wrap_workspace_titles: bool,
+    pub show_workspace_description: bool,
+    #[serde(deserialize_with = "opt_color")]
+    pub workspace_description_color: Option<Rgba>,
+    pub show_notification_message: bool,
+    /// The git branch and directory line.
+    pub show_branch_directory: bool,
+    /// The branch and the directory on lines of their own.
+    pub stack_branch_directory: bool,
+    /// Only the directory's last part (`…/api`), not the whole `~/` path.
+    pub path_last_segment_only: bool,
+    pub show_progress: bool,
+    pub show_log: bool,
+    /// Status pills from `set-status` and agents.
+    pub show_custom_metadata: bool,
+    /// The selected workspace's row; `workspaceColors.selectionColor` too.
+    #[serde(deserialize_with = "opt_color")]
+    pub selection_color: Option<Rgba>,
+}
+
+impl Default for SidebarSettings {
+    fn default() -> Self {
+        Self {
+            font_size: 12.5,
+            hide_all_details: false,
+            wrap_workspace_titles: false,
+            show_workspace_description: true,
+            workspace_description_color: None,
+            show_notification_message: true,
+            show_branch_directory: true,
+            stack_branch_directory: false,
+            path_last_segment_only: false,
+            show_progress: true,
+            show_log: true,
+            show_custom_metadata: true,
+            selection_color: None,
+        }
+    }
+}
+
+/// A tint over the sidebar's background.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct SidebarAppearance {
+    #[serde(deserialize_with = "opt_color")]
+    pub tint_color: Option<Rgba>,
+    /// 0–1.
+    #[serde(deserialize_with = "unit")]
+    pub tint_opacity: f32,
+}
+
+impl Default for SidebarAppearance {
+    fn default() -> Self {
+        Self {
+            tint_color: None,
+            tint_opacity: 0.18,
+        }
+    }
+}
+
+/// How workspace colors show, and the named ones to pick from.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkspaceColors {
+    pub indicator_style: IndicatorStyle,
+    #[serde(deserialize_with = "opt_color")]
+    pub selection_color: Option<Rgba>,
+    /// With `solidFill`, how strongly rows other than the selected one show
+    /// their color.
+    #[serde(deserialize_with = "unit")]
+    pub unselected_fill_opacity: f32,
+    /// The palette, by name; cmux's sixteen by default. Set, it replaces
+    /// them all, as cmux's does.
+    #[serde(deserialize_with = "named_colors")]
+    pub colors: Vec<(String, u32)>,
+}
+
+/// The cmux palette, in its order.
+pub const WORKSPACE_COLORS: [(&str, u32); 16] = [
+    ("Red", 0xC0392B),
+    ("Crimson", 0x922B21),
+    ("Orange", 0xA04000),
+    ("Amber", 0x7D6608),
+    ("Olive", 0x4A5C18),
+    ("Green", 0x196F3D),
+    ("Teal", 0x006B6B),
+    ("Aqua", 0x0E6B8C),
+    ("Blue", 0x1565C0),
+    ("Navy", 0x1A5276),
+    ("Indigo", 0x283593),
+    ("Purple", 0x6A1B9A),
+    ("Magenta", 0xAD1457),
+    ("Rose", 0x880E4F),
+    ("Brown", 0x7B3F00),
+    ("Charcoal", 0x3E4B5E),
+];
+
+impl Default for WorkspaceColors {
+    fn default() -> Self {
+        Self {
+            indicator_style: IndicatorStyle::LeftRail,
+            selection_color: None,
+            unselected_fill_opacity: 0.7,
+            colors: WORKSPACE_COLORS
+                .iter()
+                .map(|(n, c)| (n.to_string(), *c))
+                .collect(),
+        }
+    }
+}
+
+impl WorkspaceColors {
+    /// A palette name (any case) or `#rrggbb`.
+    pub fn parse(&self, s: &str) -> Option<u32> {
+        self.colors
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(s))
+            .map(|(_, c)| *c)
+            .or_else(|| {
+                s.starts_with('#')
+                    .then(|| crate::workspace::parse_color(s))
+                    .flatten()
+            })
+    }
+}
+
+/// How a workspace's color marks its row.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum IndicatorStyle {
+    /// A bar down the row's left edge.
+    #[default]
+    LeftRail,
+    /// The whole row, faded unless it's selected.
+    SolidFill,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkspaceGroups {
+    /// Where a new workspace goes inside a group (⌘N from one of its
+    /// workspaces, or its header's +): after the selected one, second
+    /// (after the group's first), or last.
+    pub new_workspace_placement: Placement,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct Automation {
+    /// Name a workspace from its agent's first prompt, summarised by that
+    /// agent's own CLI (`claude -p`, `codex exec`). A name you give it wins.
+    pub workspace_auto_naming: bool,
+}
 
 /// The keys bound to an action or command.
 #[derive(Clone, Debug, PartialEq)]
@@ -284,6 +484,47 @@ fn color<'de, D: Deserializer<'de>>(d: D) -> Result<Rgba, D::Error> {
             "{s:?} isn't a color; use #rgb, #rgba, #rrggbb or #rrggbbaa"
         ))
     })
+}
+
+fn opt_color<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Rgba>, D::Error> {
+    #[derive(Deserialize)]
+    struct C(#[serde(deserialize_with = "color")] Rgba);
+    Ok(Option::<C>::deserialize(d)?.map(|c| c.0))
+}
+
+fn font_size<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let v = f32::deserialize(d)?;
+    if (8. ..=24.).contains(&v) {
+        Ok(v)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "fontSize must be 8–24 points, got {v}"
+        )))
+    }
+}
+
+fn unit<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let v = f32::deserialize(d)?;
+    if (0. ..=1.).contains(&v) {
+        Ok(v)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "an opacity is 0–1, got {v}"
+        )))
+    }
+}
+
+/// `{ "Red": "#C0392B", … }`, sorted by name.
+fn named_colors<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<(String, u32)>, D::Error> {
+    let map = serde_json::Map::<String, serde_json::Value>::deserialize(d)?;
+    map.into_iter()
+        .map(|(name, v)| {
+            v.as_str()
+                .and_then(crate::workspace::parse_color)
+                .map(|c| (name.clone(), c))
+                .ok_or_else(|| serde::de::Error::custom(format!("color {name:?} isn't #rrggbb")))
+        })
+        .collect()
 }
 
 /// The toast for a config file that couldn't be read. It stays until
@@ -547,6 +788,49 @@ mod tests {
                 .contains("needs one of")
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sidebar_and_workspace_keys() {
+        let s = parse(
+            r##"{
+              "app": { "workspaceInheritWorkingDirectory": false, "newWorkspacePlacement": "afterCurrent" },
+              "sidebar": { "fontSize": 14, "hideAllDetails": true, "selectionColor": "#336699" },
+              "sidebarAppearance": { "tintColor": "#000", "tintOpacity": 0.3 },
+              "workspaceColors": { "indicatorStyle": "solidFill", "colors": { "Ocean": "#0066aa" } },
+              "workspaceGroups": { "newWorkspacePlacement": "top" },
+              "automation": { "workspaceAutoNaming": true }
+            }"##,
+        )
+        .unwrap();
+        assert!(!s.app.workspace_inherit_working_directory);
+        assert_eq!(s.app.new_workspace_placement, Placement::AfterCurrent);
+        assert_eq!(s.sidebar.font_size, 14.);
+        assert!(s.sidebar.hide_all_details && s.sidebar.show_log);
+        assert_eq!(s.sidebar.selection_color, Some(rgb(0x336699)));
+        assert_eq!(s.sidebar_appearance.tint_opacity, 0.3);
+        assert_eq!(
+            s.workspace_colors.indicator_style,
+            IndicatorStyle::SolidFill
+        );
+        assert_eq!(s.workspace_colors.parse("ocean"), Some(0x0066aa));
+        assert_eq!(
+            s.workspace_colors.parse("Red"),
+            None,
+            "a palette replaces cmux's"
+        );
+        assert_eq!(s.workspace_colors.parse("#ff0000"), Some(0xff0000));
+        assert_eq!(s.workspace_groups.new_workspace_placement, Placement::Top);
+        assert!(s.automation.workspace_auto_naming);
+        let d = Settings::default();
+        assert_eq!(d.workspace_colors.parse("amber"), Some(0x7D6608));
+        assert_eq!(d.app.new_workspace_placement, Placement::End);
+        let err = |text: &str| parse(text).unwrap_err().to_string();
+        assert!(err(r#"{"sidebar": {"fontSize": 50}}"#).contains("8–24"));
+        assert!(
+            err(r#"{"workspaceColors": {"indicatorStyle": "wash"}}"#).contains("unknown variant")
+        );
+        assert!(err(r#"{"workspaceColors": {"colors": {"X": "blue"}}}"#).contains("isn't #rrggbb"));
     }
 
     #[test]

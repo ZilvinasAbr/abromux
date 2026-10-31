@@ -47,7 +47,7 @@ The first ref printed is the new terminal. Keep it; every later command needs it
 
 - `new-split <left|right|up|down>`: splits your pane (or `--surface`'s).
 - `new-surface`: a new tab in your pane (or `--pane`).
-- `new-workspace --name <title> --cwd <dir>`: a new sidebar entry.
+- `new-workspace --name <title> --cwd <dir> [--description <text>] [--group group:N]`: a new sidebar entry.
 - `new-workspace --name <title> --cwd <dir> --layout '<json>'`: a new workspace already split, in cmux's layout format: `{"direction": "horizontal", "split": 0.5, "children": [{"pane": {"surfaces": [{"command": "npm run dev"}]}}, {"pane": {"surfaces": [{"type": "browser", "url": "localhost:3000"}]}}]}`. `--layout @file.json` reads it from a file.
 - All take `--command <text>` (typed into the new shell, then Enter), `--cwd <dir>` and `--type browser --url <url>`.
 
@@ -88,6 +88,9 @@ Clear status pills and progress you set once they no longer apply.
 ```bash
 abromux open ~/code/other-repo           # a directory opens a workspace; a URL opens a browser split
 abromux rename-workspace 'auth refactor' # your workspace
+abromux workspace-action set-description 'Migrating auth to OAuth'   # a line under its name
+abromux workspace-action set-color Teal  # cmux's color names or #rrggbb; clear-color
+abromux group list                       # sidebar groups; group add --group group:1 puts yours in one
 abromux focus-surface --surface surface:7    # take the user there (only when asked)
 abromux list-notifications
 abromux clear-history --surface surface:7    # like ⌘K

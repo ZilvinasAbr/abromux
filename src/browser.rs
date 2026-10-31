@@ -287,6 +287,54 @@ impl BrowserView {
         let _ = self.webview.read(cx).raw().reload();
     }
 
+    /// WKWebView's `interactionState` (its back/forward list), base64, for
+    /// the session file.
+    pub fn history_state(&self, cx: &App) -> Option<String> {
+        unsafe {
+            let wk = self.wk_webview(cx);
+            let state: *mut Object = msg_send![wk, interactionState];
+            if state.is_null() {
+                return None;
+            }
+            let is_data: bool = msg_send![state, isKindOfClass: objc::class!(NSData)];
+            if !is_data {
+                return None;
+            }
+            let b64: *mut Object = msg_send![state, base64EncodedStringWithOptions: 0usize];
+            let utf8: *const std::ffi::c_char = msg_send![b64, UTF8String];
+            (!utf8.is_null()).then(|| {
+                std::ffi::CStr::from_ptr(utf8)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+        }
+    }
+
+    /// Bring back a back/forward list from [`history_state`](Self::history_state),
+    /// which also loads its current page. False if `state` isn't one.
+    pub fn restore_history(&mut self, state: &str, cx: &mut Context<Self>) -> bool {
+        let Ok(c) = std::ffi::CString::new(state) else {
+            return false;
+        };
+        let ok = unsafe {
+            let s: *mut Object =
+                msg_send![objc::class!(NSString), stringWithUTF8String: c.as_ptr()];
+            let data: *mut Object = msg_send![objc::class!(NSData), alloc];
+            let data: *mut Object = msg_send![data, initWithBase64EncodedString: s options: 0usize];
+            if data.is_null() {
+                false
+            } else {
+                let _: () = msg_send![self.wk_webview(cx), setInteractionState: data];
+                let _: () = msg_send![data, release];
+                true
+            }
+        };
+        if ok {
+            self.watch_loading(cx);
+        }
+        ok
+    }
+
     fn stop(&self, cx: &App) {
         let _: () = unsafe { msg_send![self.wk_webview(cx), stopLoading] };
     }

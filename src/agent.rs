@@ -521,6 +521,12 @@ fn report(kind: Kind, payload: &Value, surface: &str, pid: Option<u32>) -> Optio
         "notification_type": payload["notification_type"],
         "pid": pid,
     });
+    // For `automation.workspaceAutoNaming`.
+    if event == "UserPromptSubmit"
+        && let Some(prompt) = payload["prompt"].as_str()
+    {
+        params["prompt"] = json!(prompt.chars().take(PROMPT_CHARS).collect::<String>());
+    }
     if event == "Stop" {
         let summary = match payload["last_assistant_message"].as_str() {
             Some(text) => shorten(text),
@@ -592,6 +598,81 @@ fn summary(jsonl: &str) -> Option<String> {
 }
 
 /// Text on one line, cut to `SUMMARY_CHARS`. None if it's blank.
+/// How much of a prompt goes to the app, to name its workspace from.
+const PROMPT_CHARS: usize = 2000;
+
+/// A short title for a session that starts with `prompt`, from the agent's
+/// own CLI (`claude -p` on a small model, or `codex exec`), run through a
+/// login shell so it's found on the user's PATH. Blocks for up to a minute;
+/// None for other agents or if it fails.
+pub fn title_for(kind: Kind, prompt: &str) -> Option<String> {
+    use std::process::{Command, Stdio};
+    let ask = format!(
+        "Reply with only a title of 2 to 5 words for a coding session that starts \
+         with the request below. No quotes, no trailing punctuation.\n\n<request>\n{prompt}\n</request>"
+    );
+    let dir = std::env::temp_dir();
+    static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let out = dir.join(format!("abromux-title-{}-{run}.txt", std::process::id()));
+    let script = match kind {
+        // On stdin: `--tools` takes a list, which would swallow an argument.
+        Kind::Claude => {
+            r#"printf '%s' "$1" | claude -p --model haiku --no-session-persistence --tools """#
+                .to_string()
+        }
+        Kind::Codex => format!(
+            r#"codex exec --skip-git-repo-check --ephemeral -s read-only -o '{}' "$1" >/dev/null 2>&1 && cat '{}'"#,
+            out.display(),
+            out.display()
+        ),
+        _ => return None,
+    };
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let mut cmd = Command::new(shell);
+    cmd.args(["-lc", &script, "abromux", &ask])
+        .current_dir(&dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // Not as a hook of some abromux terminal.
+    for (k, _) in std::env::vars() {
+        if k.starts_with("ABROMUX_") {
+            cmd.env_remove(k);
+        }
+    }
+    let mut child = cmd.spawn().ok()?;
+    let start = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait().ok()? {
+            Some(s) => break s,
+            None if start.elapsed() > std::time::Duration::from_secs(60) => {
+                let _ = child.kill();
+                let _ = std::fs::remove_file(&out);
+                return None;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(200)),
+        }
+    };
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut child.stdout.take()?, &mut text).ok()?;
+    let _ = std::fs::remove_file(&out);
+    status.success().then(|| clean_title(&text)).flatten()
+}
+
+/// The first line of a model's answer, as a name: no quotes or markdown,
+/// at most 60 characters.
+fn clean_title(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let line = line
+        .trim_start_matches(['#', '*', ' '])
+        .trim_matches(['"', '\'', '`', '*', '“', '”'])
+        .trim_end_matches(['.', '!', ' '])
+        .trim();
+    let title: String = line.chars().take(60).collect();
+    (!title.is_empty()).then_some(title)
+}
+
 fn shorten(text: &str) -> Option<String> {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if text.is_empty() {
@@ -794,6 +875,19 @@ fn write(path: &Path, text: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titles() {
+        assert_eq!(
+            clean_title("\n  \"Fix login bug.\"\nmore").as_deref(),
+            Some("Fix login bug")
+        );
+        assert_eq!(
+            clean_title("**Refactor sidebar**").as_deref(),
+            Some("Refactor sidebar")
+        );
+        assert_eq!(clean_title("   \n"), None);
+    }
 
     #[test]
     fn report_validates_ids_and_drops_default_mode() {

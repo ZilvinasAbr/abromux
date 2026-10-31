@@ -26,6 +26,7 @@ mod server;
 mod session;
 mod settings;
 mod shell;
+mod sidebar;
 mod skills;
 mod sprite;
 mod status;
@@ -111,7 +112,15 @@ actions!(
         SwapLeft,
         SwapRight,
         SwapUp,
-        SwapDown
+        SwapDown,
+        EditDescription,
+        MoveWorkspaceUp,
+        MoveWorkspaceDown,
+        NewGroup,
+        GroupByFolder,
+        Ungroup,
+        ToggleGroup,
+        ReopenSession
     ]
 );
 
@@ -174,7 +183,9 @@ impl AssetSource for Assets {
             "pencil",
             "maximize-2",
             "lock",
-            "bot"
+            "bot",
+            // gpui-component's menus mark checked items with it.
+            "check"
         );
         Ok(bytes.map(Cow::Borrowed))
     }
@@ -197,6 +208,15 @@ struct AbroMux {
     /// Last seen window frame, for the session file.
     window_bounds: Option<Bounds<Pixels>>,
     renaming: Option<(usize, Entity<InputState>)>,
+    /// The workspace whose description is being edited (⌥⌘E).
+    describing: Option<(usize, Entity<InputState>)>,
+    /// Sidebar groups, by id; a workspace's `group` names one.
+    groups: Vec<workspace::Group>,
+    next_group: usize,
+    renaming_group: Option<(usize, Entity<InputState>)>,
+    /// Where a dragged workspace would land: beside workspace id, after it
+    /// or before.
+    ws_drop: Option<(usize, bool)>,
     /// The tab being renamed in its tab bar.
     renaming_tab: Option<(EntityId, Entity<InputState>)>,
     sidebar: bool,
@@ -227,6 +247,10 @@ struct AbroMux {
     badge: usize,
     /// The ⌘⇧P / ⌘P palette, while open.
     palette: Option<palette::Palette>,
+    /// The session this launch restored, for ⌘⇧O.
+    launch_session: Option<session::Session>,
+    /// Workspaces whose name an agent CLI is making (`server::auto_name`).
+    naming: Vec<usize>,
 }
 
 impl AbroMux {
@@ -247,6 +271,11 @@ impl AbroMux {
             socket: None,
             window_bounds: None,
             renaming: None,
+            describing: None,
+            groups: vec![],
+            next_group: 0,
+            renaming_group: None,
+            ws_drop: None,
             renaming_tab: None,
             sidebar: true,
             sidebar_width: SIDEBAR_WIDTH,
@@ -266,6 +295,8 @@ impl AbroMux {
             notifications_open: false,
             badge: 0,
             palette: None,
+            launch_session: session.clone(),
+            naming: vec![],
         };
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
@@ -656,6 +687,17 @@ impl AbroMux {
         self.create_workspace(cwd, true, window, cx);
     }
 
+    /// ⌘N: a new workspace in the focused terminal's directory, unless
+    /// `app.workspaceInheritWorkingDirectory` is off.
+    fn new_workspace_here(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let inherit = cx
+            .global::<settings::Settings>()
+            .app
+            .workspace_inherit_working_directory;
+        let cwd = inherit.then(|| self.focused_cwd(cx)).flatten();
+        self.new_workspace(cwd, window, cx)
+    }
+
     /// Returns the new workspace's index.
     fn create_workspace(
         &mut self,
@@ -673,13 +715,28 @@ impl AbroMux {
             active: 0,
         };
         let focused = pane.id;
-        let ws = Workspace::new(id, None, Node::Leaf(pane), focused);
-        self.workspaces.push(ws);
-        let index = self.workspaces.len() - 1;
+        let mut ws = Workspace::new(id, None, Node::Leaf(pane), focused);
+        let (index, group) = self.new_workspace_slot(cx);
+        ws.group = group;
+        let index = self.insert_workspace(index, ws);
+        if let Some(g) = self.groups.iter_mut().find(|g| Some(g.id) == group) {
+            g.collapsed = false;
+        }
         if select {
             self.select_workspace(index, window, cx);
         }
         cx.notify();
+        index
+    }
+
+    /// Put `ws` at `index`, keeping the selected workspace selected.
+    /// Returns where it went.
+    fn insert_workspace(&mut self, index: usize, ws: Workspace) -> usize {
+        let index = index.min(self.workspaces.len());
+        self.workspaces.insert(index, ws);
+        if self.workspaces.len() > 1 && self.active >= index {
+            self.active += 1;
+        }
         index
     }
 
@@ -705,6 +762,7 @@ impl AbroMux {
         if self.active > index || self.active >= self.workspaces.len() {
             self.active = self.active.saturating_sub(1);
         }
+        workspace::tidy_groups(&mut self.workspaces, &mut self.groups);
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -1347,276 +1405,6 @@ impl AbroMux {
 
     // ---- rendering ------------------------------------------------------
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let rows: Vec<AnyElement> = self
-            .workspaces
-            .iter()
-            .enumerate()
-            .map(|(i, ws)| {
-                let active = i == self.active;
-                let name = ws.name(cx);
-                let subtitle = ws
-                    .focused_surface()
-                    .map(|s| s.title(cx))
-                    .unwrap_or_default();
-                let cwd = ws.cwd(cx);
-                let branch = cwd.as_deref().and_then(|c| self.branch(c));
-                let meta = match (&branch, &cwd) {
-                    (Some(b), Some(c)) => format!("{b} • {}", tilde(c)),
-                    (None, Some(c)) => tilde(c),
-                    _ => String::new(),
-                };
-                let fg = if active { rgb(0xffffff) } else { rgb(TEXT) };
-                let sub = if active { rgba(0xffffffc0) } else { rgb(MUTED) };
-                let renaming = self
-                    .renaming
-                    .as_ref()
-                    .filter(|(id, _)| *id == ws.id)
-                    .map(|(_, input)| input.clone());
-                let is_renaming = renaming.is_some();
-                let group: SharedString = format!("ws-{}", ws.id).into();
-                let hint = shortcut_digit(i, self.workspaces.len())
-                    .filter(|_| self.hints == Some(Hints::Command));
-                let latest = self.latest_unread(ws).map(|n| n.text());
-                let status = self.render_ws_status(ws, active);
-
-                div()
-                    .id(("ws", ws.id))
-                    .group(group.clone())
-                    .relative()
-                    .mx(px(8.))
-                    .px(px(10.))
-                    .py(px(7.))
-                    .rounded(px(7.))
-                    .cursor_pointer()
-                    .when(active, |s| s.bg(rgb(ACCENT)))
-                    .when(!active, |s| s.hover(|s| s.bg(rgba(HOVER))))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
-                            if ev.click_count >= 2 {
-                                this.start_rename(i, window, cx);
-                            } else {
-                                this.select_workspace(i, window, cx);
-                            }
-                        }),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .when(latest.is_some(), |s| {
-                                s.child(
-                                    div()
-                                        .size(px(7.))
-                                        .flex_none()
-                                        .rounded_full()
-                                        .bg(rgb(ACCENT_BRIGHT)),
-                                )
-                            })
-                            .child(match renaming {
-                                // Edit in place: same font and line as the title, in a
-                                // dark inset so it reads as a field on the accent row.
-                                Some(input) => div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .h(px(20.))
-                                    .my(px(-2.))
-                                    .mx(px(-5.))
-                                    .px(px(4.))
-                                    .flex()
-                                    .items_center()
-                                    .rounded(px(5.))
-                                    .bg(rgba(0x0000004d))
-                                    .border_1()
-                                    .border_color(rgba(0xffffff59))
-                                    .text_color(rgb(TEXT))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                        cx.stop_propagation()
-                                    })
-                                    .capture_key_down(cx.listener(
-                                        |this, ev: &KeyDownEvent, window, cx| {
-                                            if ev.keystroke.key == "escape" {
-                                                this.renaming = None;
-                                                this.focus_active(window, cx);
-                                                cx.notify();
-                                            }
-                                        },
-                                    ))
-                                    .child(
-                                        Input::new(&input)
-                                            .appearance(false)
-                                            .text_size(px(12.5))
-                                            .h_full()
-                                            .px_0()
-                                            .py_0(),
-                                    )
-                                    .into_any_element(),
-                                None => div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(px(12.5))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(fg)
-                                    .child(name.clone())
-                                    .into_any_element(),
-                            })
-                            .when(!is_renaming, |s| {
-                                s.child(
-                                    div()
-                                        .id(("ws-close", ws.id))
-                                        .invisible()
-                                        .group_hover(group.clone(), |s| s.visible())
-                                        .flex_none()
-                                        .rounded(px(4.))
-                                        .p(px(2.))
-                                        .hover(|s| s.bg(rgba(0xffffff22)))
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                            cx.stop_propagation()
-                                        })
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.close_workspace(i, window, cx)
-                                        }))
-                                        .child(icon("x").size(px(11.)).text_color(sub)),
-                                )
-                            }),
-                    )
-                    .when(
-                        !subtitle.is_empty()
-                            && subtitle != name
-                            && Some(&subtitle) != cwd.as_ref().map(|c| tilde(c)).as_ref(),
-                        |s| {
-                            s.child(
-                                div()
-                                    .mt(px(2.))
-                                    .text_size(px(11.))
-                                    .text_color(sub)
-                                    .line_clamp(2)
-                                    .child(subtitle),
-                            )
-                        },
-                    )
-                    .when_some(latest, |s, text| {
-                        s.child(
-                            div()
-                                .mt(px(2.))
-                                .flex()
-                                .gap(px(4.))
-                                .text_size(px(11.))
-                                .text_color(if active {
-                                    rgb(0xffffff)
-                                } else {
-                                    rgb(ACCENT_BRIGHT)
-                                })
-                                .child(icon("bell").mt(px(1.)).size(px(10.)).text_color(
-                                    if active {
-                                        rgb(0xffffff)
-                                    } else {
-                                        rgb(ACCENT_BRIGHT)
-                                    },
-                                ))
-                                .child(div().flex_1().min_w_0().line_clamp(2).child(text)),
-                        )
-                    })
-                    .children(status)
-                    .when_some(hint, |s, d| {
-                        s.child(
-                            hint_pill(format!("⌘{d}"))
-                                .absolute()
-                                .top(px(6.))
-                                .right(px(8.)),
-                        )
-                    })
-                    .when(!meta.is_empty(), |s| {
-                        s.child(
-                            div()
-                                .mt(px(2.))
-                                .flex()
-                                .items_center()
-                                .gap(px(4.))
-                                .text_size(px(10.5))
-                                .text_color(sub)
-                                .when(branch.is_some(), |s| {
-                                    s.child(icon("git-branch").size(px(10.)).text_color(sub))
-                                })
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .font_family(terminal::FONT_FAMILY)
-                                        .child(meta),
-                                ),
-                        )
-                    })
-                    .into_any_element()
-            })
-            .collect();
-
-        div()
-            .w(px(self.sidebar_width))
-            .h_full()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .relative()
-            .bg(rgba(SIDEBAR_BG))
-            .border_r_1()
-            .border_color(rgb(BORDER))
-            .child(
-                // Titlebar row: traffic lights live on the left.
-                div()
-                    .h(px(TITLEBAR_H))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap_1()
-                    .pr(px(10.))
-                    .on_mouse_down(MouseButton::Left, |ev, window, _| {
-                        titlebar::drag_or_zoom(ev, window)
-                    })
-                    .children(self.titlebar_buttons(cx)),
-            )
-            .child(
-                div()
-                    .id("workspaces")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .pb_2()
-                    .children(rows),
-            )
-            .child(
-                // Drag the right edge to resize; double-click resets.
-                div()
-                    .id("sidebar-edge")
-                    .absolute()
-                    .top_0()
-                    .right_0()
-                    .w(px(6.))
-                    .h_full()
-                    .cursor_col_resize()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, ev: &MouseDownEvent, _, cx| {
-                            if ev.click_count >= 2 {
-                                this.sidebar_width = SIDEBAR_WIDTH;
-                                cx.notify();
-                            } else {
-                                this.resizing_sidebar = true;
-                            }
-                            cx.stop_propagation();
-                        }),
-                    ),
-            )
-            .into_any_element()
-    }
-
     /// Sidebar toggle and new-workspace buttons, shown in the sidebar's
     /// titlebar row or next to the traffic lights when it's hidden. Holding
     /// ⌘ swaps them for their shortcuts.
@@ -1679,7 +1467,7 @@ impl AbroMux {
                 .into_any_element(),
             button("new-ws", "plus", "⌘N")
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(|this, _, window, cx| this.new_workspace(None, window, cx)))
+                .on_click(cx.listener(|this, _, window, cx| this.new_workspace_here(window, cx)))
                 .into_any_element(),
         ]
     }
@@ -2095,6 +1883,7 @@ impl Render for AbroMux {
         }
         if !cx.has_active_drag() {
             self.tab_drop = None;
+            self.ws_drop = None;
         }
         self.sync_webviews(cx);
         let notifications = self
@@ -2127,9 +1916,38 @@ impl Render for AbroMux {
             .text_color(rgb(TEXT))
             .font_family(".AppleSystemUIFont")
             .on_action(cx.listener(|_, _: &Quit, window, cx| quit::request(window, cx)))
-            .on_action(cx.listener(|this, _: &NewWorkspace, window, cx| {
-                let cwd = this.focused_cwd(cx);
-                this.new_workspace(cwd, window, cx)
+            .on_action(
+                cx.listener(|this, _: &NewWorkspace, window, cx| {
+                    this.new_workspace_here(window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &EditDescription, window, cx| {
+                this.start_describe(this.active, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MoveWorkspaceUp, _, cx| {
+                this.nudge_workspace(this.active, false, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MoveWorkspaceDown, _, cx| {
+                this.nudge_workspace(this.active, true, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NewGroup, _, cx| {
+                this.new_group(this.active, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GroupByFolder, _, cx| {
+                this.group_by_folder(cx);
+            }))
+            .on_action(cx.listener(|this, _: &Ungroup, _, cx| {
+                if let Some(g) = this.ws().group {
+                    this.ungroup(g, cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ToggleGroup, _, cx| {
+                if let Some(g) = this.ws().group {
+                    this.toggle_group(g, cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ReopenSession, window, cx| {
+                this.reopen_session(None, window, cx);
             }))
             .on_action(cx.listener(|this, _: &CloseWorkspace, window, cx| {
                 this.close_workspace(this.active, window, cx)
