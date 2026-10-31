@@ -27,6 +27,9 @@ const LINE_HEIGHT: f32 = 1.25;
 const PADDING: f32 = 6.;
 /// The scrollbar's strip at the right edge, which takes its clicks.
 const SCROLLBAR_WIDTH: f32 = 12.;
+/// The kitty keyboard protocol's "report event types" flag: the program
+/// wants repeats and releases.
+const KITTY_REPORT_EVENTS: u8 = 2;
 
 actions!(
     terminal,
@@ -116,6 +119,16 @@ pub struct TerminalView {
     /// programs that asked the kitty keyboard protocol for lone modifiers
     /// get one) and owe it a release.
     cmd_down: bool,
+    /// Keys sent to the program as presses that it will want a release
+    /// for (kitty keyboard protocol with event types), by gpui key name.
+    pressed: Vec<String>,
+    /// The focus the program was last told of (mode 1004).
+    focus_reported: bool,
+    /// The focus in/out listeners are registered (on the first render,
+    /// which has the window).
+    focus_hooked: bool,
+    /// Sub-column horizontal wheel/trackpad deltas carried between events.
+    scroll_accum_x: f32,
     /// Sub-line wheel/trackpad deltas carried between events.
     scroll_accum: f32,
     /// Whether the shell reports its cwd itself (OSC 7); if not, it's polled.
@@ -208,6 +221,10 @@ impl TerminalView {
             ime_cursor: Bounds::default(),
             mouse_buttons: 0,
             cmd_down: false,
+            pressed: Vec::new(),
+            focus_reported: false,
+            focus_hooked: false,
+            scroll_accum_x: 0.,
             scroll_accum: 0.,
             osc7: false,
             cwd_checked: std::time::Instant::now(),
@@ -300,6 +317,8 @@ impl TerminalView {
         self.marked = None;
         self.mouse_buttons = 0;
         self.cmd_down = false;
+        self.pressed.clear();
+        self.focus_reported = false;
         self.selecting = None;
         self.link = None;
         self.pending_paste = None;
@@ -954,34 +973,92 @@ impl TerminalView {
         if text_like && self.config.keybind(ks).is_none() && self.term.kitty_flags() == 0 {
             return;
         }
-        if self.send_keystroke(ks, cx) {
+        let action = if ev.is_held {
+            ffi::GHOSTTY_KEY_ACTION_REPEAT
+        } else {
+            ffi::GHOSTTY_KEY_ACTION_PRESS
+        };
+        if self.send_key(ks, action, cx) {
             cx.stop_propagation();
         }
+    }
+
+    /// A key let go: its release, to a program that was sent its press and
+    /// asked for releases (kitty keyboard protocol, "report event types").
+    /// Web pages in terminal-browser get their `keyup` from these.
+    fn on_key_up(&mut self, ev: &KeyUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        let Some(i) = self.pressed.iter().position(|k| *k == ks.key) else {
+            return;
+        };
+        self.pressed.swap_remove(i);
+        self.send_release(&ks.key, mods(ks.modifiers));
+    }
+
+    fn send_release(&mut self, key: &str, mods: ffi::GhosttyMods) {
+        let Some((code, unshifted)) = map_key(key) else {
+            return;
+        };
+        let bytes =
+            self.term
+                .encode_key_action(ffi::GHOSTTY_KEY_ACTION_RELEASE, code, mods, None, unshifted);
+        if !bytes.is_empty() {
+            self.send(&bytes);
+        }
+    }
+
+    /// Release every key and ⌘ the program thinks is still down, as focus
+    /// leaves: the key-ups will go to another view.
+    fn release_all(&mut self) {
+        for key in std::mem::take(&mut self.pressed) {
+            self.send_release(&key, 0);
+        }
+        self.sync_cmd(false);
     }
 
     /// Encode a keystroke for the shell (Ghostty keybinds first) and write
     /// it. False if it maps to nothing, including unbound ⌘-shortcuts, which
     /// belong to the app.
     pub fn send_keystroke(&mut self, ks: &Keystroke, cx: &mut Context<Self>) -> bool {
+        self.send_key(ks, ffi::GHOSTTY_KEY_ACTION_PRESS, cx)
+    }
+
+    /// `send_keystroke` as a press or a repeat. A terminal-browser tab also
+    /// takes ⌘-keys: the ones abromux leaves it (see
+    /// `keymap::TERMINAL_BROWSER_KEYS`) reach here unbound.
+    fn send_key(
+        &mut self,
+        ks: &Keystroke,
+        action: ffi::GhosttyKeyAction,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if let Some(bytes) = self.config.keybind(ks).map(<[u8]>::to_vec) {
             self.input(&bytes, cx);
             return true;
         }
-        if ks.modifiers.platform {
+        let m = ks.modifiers;
+        if m.platform && self.browser_url.is_none() {
             return false;
         }
         let Some((key, unshifted)) = map_key(&ks.key) else {
             return false;
         };
-        let m = ks.modifiers;
         let mods = mods(m);
         // Like Ghostty's default (macos-option-as-alt = false), Option composes
-        // characters; named keys (enter, arrows, …) carry no text.
+        // characters; named keys (enter, arrows, …) carry no text, and
+        // neither does a ⌘-shortcut.
         let printable = ks.key.chars().count() == 1 || ks.key == "space";
-        let text = ks.key_char.as_deref().filter(|_| printable && !m.control);
-        let bytes = self.term.encode_key(key, mods, text, unshifted);
+        let text = ks
+            .key_char
+            .as_deref()
+            .filter(|_| printable && !m.control && !m.platform);
+        let bytes = self.term.encode_key_action(action, key, mods, text, unshifted);
         if bytes.is_empty() {
             return false;
+        }
+        // Owe the program a release if it asked for them.
+        if self.term.kitty_flags() & KITTY_REPORT_EVENTS != 0 && !self.pressed.contains(&ks.key) {
+            self.pressed.push(ks.key.clone());
         }
         self.input(&bytes, cx);
         true
@@ -1008,6 +1085,39 @@ impl TerminalView {
             PlatformInput::ScrollWheel(e) => self.on_scroll(&e, window, cx),
             _ => {}
         }
+    }
+
+    /// Bring the program up to date on focus: this pane focused in the
+    /// active window. A program with mode 1004 gets `CSI I` / `CSI O`; any
+    /// program losing focus gets the releases of keys still down.
+    fn update_focus(&mut self, window: &Window) {
+        let focused = self.focus.is_focused(window) && window.is_window_active();
+        if focused == self.focus_reported {
+            return;
+        }
+        self.focus_reported = focused;
+        if !focused {
+            self.release_all();
+        }
+        if self.term.focus_reporting() {
+            self.send(if focused { b"\x1b[I" } else { b"\x1b[O" });
+        }
+    }
+
+    /// Watch focus and window activation for `update_focus`, once the view
+    /// has a window.
+    fn hook_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.focus_hooked, true) {
+            return;
+        }
+        let focus = self.focus.clone();
+        cx.on_focus_in(&focus, window, |this, window, _| this.update_focus(window))
+            .detach();
+        cx.on_focus_out(&focus, window, |this, _, window, _| this.update_focus(window))
+            .detach();
+        cx.observe_window_activation(window, |this, window, _| this.update_focus(window))
+            .detach();
+        self.update_focus(window);
     }
 
     /// Tell the program ⌘ went down or up, as a lone-modifier key event.
@@ -1148,6 +1258,27 @@ impl TerminalView {
             ScrollDelta::Pixels(_) => self.config.scroll_precision,
             ScrollDelta::Lines(_) => self.config.scroll_discrete,
         };
+        // Sideways: wheel left/right (buttons 6/7), one per column, to a
+        // program that takes the mouse. Scrollback has no sideways.
+        if self.reporting(ev.modifiers) {
+            let dx = f32::from(ev.delta.pixel_delta(self.cell.height).x)
+                / f32::from(self.cell.width).max(1.)
+                * multiplier;
+            if dx * self.scroll_accum_x < 0. {
+                self.scroll_accum_x = 0.;
+            }
+            self.scroll_accum_x += dx;
+            let cols = self.scroll_accum_x.trunc() as isize;
+            self.scroll_accum_x -= cols as f32;
+            for _ in 0..cols.unsigned_abs() {
+                self.report_mouse(
+                    MouseAction::Press,
+                    Some(if cols > 0 { 6 } else { 7 }),
+                    ev.modifiers,
+                    ev.position,
+                );
+            }
+        }
         let delta = f32::from(ev.delta.pixel_delta(self.cell.height).y)
             / f32::from(self.cell.height)
             * multiplier;
@@ -1375,7 +1506,8 @@ impl TerminalView {
 }
 
 impl Render for TerminalView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.hook_focus(window, cx);
         let bg = self.frame.background;
         let find_bar = self
             .find_input
@@ -1406,7 +1538,13 @@ impl Render for TerminalView {
         div()
             .id("terminal")
             .relative()
-            .key_context("Terminal")
+            // A terminal-browser tab keeps the browser's ⌘-keys (see
+            // `keymap::TERMINAL_BROWSER_KEYS`).
+            .key_context(if self.browser_url.is_some() {
+                "Terminal TerminalBrowser"
+            } else {
+                "Terminal"
+            })
             .track_focus(&self.focus)
             .size_full()
             .bg(rgb_to_hsla(if bg == Rgb::default() {
@@ -1415,6 +1553,7 @@ impl Render for TerminalView {
                 bg
             }))
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_key_up(cx.listener(Self::on_key_up))
             .on_action(cx.listener(|this, _: &Copy, _, cx| {
                 this.copy(cx);
             }))

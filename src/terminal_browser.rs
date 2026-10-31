@@ -20,11 +20,14 @@ use std::{
 /// The shell command that opens `url` in terminal-browser, filling the
 /// terminal it runs in, or None if it isn't installed. `--no-merge` keeps it
 /// from joining a neighbouring one as a tab: each abromux tab is one browser.
-/// abromux shows kitty graphics, so terminal-browser needn't ask.
+/// abromux shows kitty graphics, so terminal-browser needn't ask. Find,
+/// devtools and console take the built-in browser's keys (⌘F, ⌥⌘I, ⌥⌘C),
+/// which abromux leaves to the tab (`keymap::TERMINAL_BROWSER_KEYS`).
 pub fn command(url: &str) -> Option<String> {
     let bin = find()?;
     let mut cmd = format!(
-        "TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK=1 exec {} open --no-merge",
+        "TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK=1 exec {} open --no-merge \
+         --find-key=super+f --devtools-key=super+alt+i --console-key=super+alt+c",
         shell_quote(&bin.to_string_lossy())
     );
     if !url.is_empty() && url != "about:blank" {

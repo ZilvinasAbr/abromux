@@ -160,6 +160,29 @@ impl Global for Base {}
 /// Bind every action's keys, with the config file's shortcuts and commands
 /// in place of the defaults. The first call remembers the keymap as it was,
 /// so later calls (on reload) start again from it.
+/// The ⌘-keys a terminal-browser tab keeps for the browser, as the built-in
+/// browser has them: address bar, reload, back/forward, find (terminal-browser
+/// is started with ⌘F, ⌥⌘I and ⌥⌘C for find, devtools and console), zoom,
+/// and editing in the page. Window-level keys (⌘T, ⌘W, ⌘P, …) stay abromux's.
+pub const TERMINAL_BROWSER_KEYS: &[&str] = &[
+    "cmd-l",
+    "cmd-r",
+    "cmd-[",
+    "cmd-]",
+    "cmd-f",
+    "alt-cmd-i",
+    "alt-cmd-c",
+    "cmd-=",
+    "cmd-+",
+    "cmd--",
+    "cmd-0",
+    "cmd-a",
+    "cmd-c",
+    "cmd-x",
+    "cmd-z",
+    "cmd-shift-z",
+];
+
 pub fn apply(settings: &Settings, cx: &mut App) {
     if !cx.has_global::<Base>() {
         let keymap = cx.key_bindings();
@@ -168,6 +191,13 @@ pub fn apply(settings: &Settings, cx: &mut App) {
     }
     let mut bindings = cx.global::<Base>().0.clone();
     bindings.extend(bindings_for(settings));
+    // Last, so they win over the Terminal bindings in the same view; the
+    // keys fall through to the terminal, which sends them on.
+    bindings.extend(
+        TERMINAL_BROWSER_KEYS
+            .iter()
+            .map(|k| KeyBinding::new(k, gpui::NoAction, Some("TerminalBrowser"))),
+    );
     cx.clear_key_bindings();
     cx.bind_keys(bindings);
 }
@@ -461,6 +491,14 @@ pub fn check_context(s: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_browser_keys_parse() {
+        for k in TERMINAL_BROWSER_KEYS {
+            let ks = Keystroke::parse(k).unwrap_or_else(|e| panic!("{k}: {e}"));
+            assert!(ks.modifiers.platform, "{k} is a ⌘-key");
+        }
+    }
 
     fn keys(s: &str) -> Vec<String> {
         parse_seq(s)

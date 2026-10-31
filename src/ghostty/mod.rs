@@ -544,12 +544,19 @@ impl Terminal {
 
     /// Whether the program turned on bracketed paste (mode 2004).
     pub fn bracketed_paste(&self) -> bool {
-        // GHOSTTY_MODE_BRACKETED_PASTE: ghostty_mode_new(2004, false) is an
-        // inline function, so bindgen doesn't see it.
-        let mut q = GhosttyTerminalModeConfig {
-            mode: 2004,
-            value: false,
-        };
+        self.dec_mode(2004)
+    }
+
+    /// Whether the program asked for focus in/out reports (mode 1004).
+    pub fn focus_reporting(&self) -> bool {
+        self.dec_mode(1004)
+    }
+
+    /// A DEC private mode (`CSI ? n h`).
+    fn dec_mode(&self, mode: u16) -> bool {
+        // ghostty_mode_new(n, false) is an inline function, so bindgen
+        // doesn't see it; the struct is the same.
+        let mut q = GhosttyTerminalModeConfig { mode, value: false };
         unsafe {
             ghostty_terminal_get(
                 self.raw,
@@ -808,21 +815,10 @@ impl Terminal {
         }
     }
 
-    /// Encode a key press via libghostty's encoder (honours kitty keyboard,
-    /// application cursor keys, etc). Returns bytes for the PTY.
-    pub fn encode_key(
-        &mut self,
-        key: GhosttyKey,
-        mods: GhosttyMods,
-        text: Option<&str>,
-        unshifted: u32,
-    ) -> Vec<u8> {
-        self.encode_key_action(GHOSTTY_KEY_ACTION_PRESS, key, mods, text, unshifted)
-    }
-
-    /// `encode_key` for a press, repeat or release. Most programs get
-    /// nothing for a release or a lone modifier; only those that asked the
-    /// kitty keyboard protocol for them do.
+    /// Encode a key press, repeat or release via libghostty's encoder
+    /// (honours kitty keyboard, application cursor keys, etc). Returns bytes
+    /// for the PTY. Most programs get nothing for a release or a lone
+    /// modifier; only those that asked the kitty keyboard protocol do.
     pub fn encode_key_action(
         &mut self,
         action: GhosttyKeyAction,
@@ -1706,6 +1702,14 @@ mod tests {
         t.write(b"\x1b[>27u");
         assert_eq!(cmd(&mut t, GHOSTTY_KEY_ACTION_PRESS, sup), "\x1b[57444;9u");
         assert_eq!(cmd(&mut t, GHOSTTY_KEY_ACTION_RELEASE, 0), "\x1b[57444;1:3u");
+
+        // ⌘L, a held key's repeat and its release, as terminal-browser gets them.
+        let mut key = |t: &mut Terminal, action, k, mods, cp: char| {
+            String::from_utf8(t.encode_key_action(action, k, mods, None, cp as u32)).unwrap()
+        };
+        assert_eq!(key(&mut t, GHOSTTY_KEY_ACTION_PRESS, GHOSTTY_KEY_L, sup, 'l'), "\x1b[108;9u");
+        assert_eq!(key(&mut t, GHOSTTY_KEY_ACTION_REPEAT, GHOSTTY_KEY_A, 0, 'a'), "\x1b[97;1:2u");
+        assert_eq!(key(&mut t, GHOSTTY_KEY_ACTION_RELEASE, GHOSTTY_KEY_A, 0, 'a'), "\x1b[97;1:3u");
     }
 
     #[test]
@@ -2006,11 +2010,12 @@ mod tests {
         t.select((6, 0), (10, 0));
         assert_eq!(t.selection_text().as_deref(), Some("world"));
         assert_eq!(
-            t.encode_key(ffi::GHOSTTY_KEY_ARROW_UP, 0, None, 0),
+            t.encode_key_action(GHOSTTY_KEY_ACTION_PRESS, ffi::GHOSTTY_KEY_ARROW_UP, 0, None, 0),
             b"\x1b[A"
         );
         assert_eq!(
-            t.encode_key(
+            t.encode_key_action(
+                GHOSTTY_KEY_ACTION_PRESS,
                 ffi::GHOSTTY_KEY_C,
                 ffi::GHOSTTY_MODS_CTRL as u16,
                 None,
