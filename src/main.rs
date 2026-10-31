@@ -1785,8 +1785,17 @@ impl AbroMux {
                 .when(!active, |d| {
                     d.text_color(rgb(MUTED)).hover(|d| d.bg(rgba(HOVER)))
                 })
+                // Overlaid, not a border, so the focused tab's content doesn't shift down.
                 .when(active && focused && multi, |d| {
-                    d.border_t_2().border_color(rgb(ACCENT))
+                    d.relative().child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .w_full()
+                            .h(px(2.))
+                            .bg(rgb(ACCENT)),
+                    )
                 })
                 .on_mouse_down(
                     MouseButton::Left,
