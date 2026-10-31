@@ -130,11 +130,14 @@ pub fn find(name: &str) -> Option<&'static Act> {
     ACTIONS.iter().find(|a| a.name == name)
 }
 
-/// Runs the config file's `"commands"[index]`.
+/// Runs `"commands"[index]` of the config file, or of the project file
+/// `project` (`settings::find_project`).
 #[derive(Clone, PartialEq, serde::Deserialize, gpui::Action)]
 #[action(namespace = abromux, no_json)]
 pub struct RunCommand {
     pub index: usize,
+    #[serde(default)]
+    pub project: Option<std::path::PathBuf>,
 }
 
 /// The keymap before `apply` added the shortcuts: gpui-component's, the
@@ -211,7 +214,10 @@ fn bindings_for(settings: &Settings) -> Vec<KeyBinding> {
             for keys in &s.keys {
                 user.push(Bind {
                     keys: keys.clone(),
-                    action: Box::new(RunCommand { index }),
+                    action: Box::new(RunCommand {
+                        index,
+                        project: None,
+                    }),
                     context: s.when.clone(),
                 });
             }

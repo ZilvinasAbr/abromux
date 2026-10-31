@@ -14,6 +14,7 @@ mod ghostty;
 mod icon;
 mod ipc;
 mod keymap;
+mod layout;
 mod link;
 mod menu;
 mod notification;
@@ -448,11 +449,23 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Surface {
+        self.make_terminal_with(cwd, ws, vec![], window, cx)
+    }
+
+    /// `make_terminal` with extra environment variables for the shell.
+    fn make_terminal_with(
+        &mut self,
+        cwd: Option<String>,
+        ws: usize,
+        mut env: Vec<(String, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Surface {
         let surface = self.next_surface + 1;
-        let mut env = vec![
+        env.extend([
             ("ABROMUX_WORKSPACE_ID".into(), format!("workspace:{ws}")),
             ("ABROMUX_SURFACE_ID".into(), format!("surface:{surface}")),
-        ];
+        ]);
         if let Some(path) = &self.socket {
             env.push((
                 "ABROMUX_SOCKET_PATH".into(),
@@ -981,19 +994,131 @@ impl AbroMux {
         }
     }
 
-    /// The config file's `"commands"[index]`, from the palette or its shortcut.
-    fn run_command(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(c) = cx
-            .global::<settings::Settings>()
-            .commands
-            .get(index)
-            .cloned()
-        else {
-            return;
+    /// `"commands"[index]` of the config file, or of the project file
+    /// `project`, from the palette or its shortcut. A project command asks
+    /// first until it's trusted as written; `confirm` asks every time.
+    fn run_command(
+        &mut self,
+        index: usize,
+        project: Option<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (c, untrusted, base) = match &project {
+            None => match cx.global::<settings::Settings>().commands.get(index) {
+                Some(c) => (c.clone(), None, None),
+                None => return,
+            },
+            Some(file) => match settings::read_project(file) {
+                Ok(mut cmds) if index < cmds.len() => {
+                    let (c, raw) = cmds.swap_remove(index);
+                    let untrusted =
+                        (!settings::is_trusted(file, &raw)).then(|| (file.clone(), raw));
+                    let base = settings::project_root(file).to_path_buf();
+                    (c, untrusted, Some(base))
+                }
+                Ok(_) => return,
+                Err(e) => return window.push_notification(settings::error_notification(e), cx),
+            },
         };
+        if !c.confirm && untrusted.is_none() {
+            return self.execute_command(c, base, window, cx);
+        }
+        let mut detail = c.describe();
+        let message = match &untrusted {
+            Some((file, _)) => {
+                detail = format!(
+                    "{detail}\n\nFrom {}. You're asked once for each project command, and again if it changes.",
+                    tilde(&file.to_string_lossy())
+                );
+                format!("Run “{}” from this project?", c.title)
+            }
+            None => format!("Run “{}”?", c.title),
+        };
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &message,
+            Some(&detail),
+            &["Run", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await != Ok(0) {
+                return;
+            }
+            if let Some((file, raw)) = &untrusted {
+                settings::trust(file, raw);
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.execute_command(c, base, window, cx)
+            });
+        })
+        .detach();
+    }
+
+    /// Run `c`; `base` is its project's directory, which a workspace's
+    /// `cwd` is relative to (else the focused terminal's).
+    fn execute_command(
+        &mut self,
+        c: settings::Command,
+        base: Option<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(url) = &c.url {
             let s = self.make_browser(&browser::normalize_url(url), window, cx);
             return self.add_tab(s, window, cx);
+        }
+        if let Some(spec) = &c.workspace {
+            let name = c.workspace_name().unwrap_or_default().to_string();
+            let open = self
+                .workspaces
+                .iter()
+                .position(|w| w.custom_name.as_deref() == Some(name.as_str()));
+            let base = base
+                .or_else(|| self.focused_cwd(cx).map(Into::into))
+                .unwrap_or_else(|| std::env::var("HOME").unwrap_or_default().into());
+            let Some(i) = open else {
+                self.open_layout(spec, Some(name), &base, window, cx);
+                return;
+            };
+            match c.restart {
+                settings::Restart::New => {
+                    self.open_layout(spec, Some(name), &base, window, cx);
+                }
+                settings::Restart::Ignore => self.select_workspace(i, window, cx),
+                settings::Restart::Recreate => {
+                    self.replace_workspace(i, spec, name, &base, window, cx)
+                }
+                settings::Restart::Confirm => {
+                    let answer = window.prompt(
+                        PromptLevel::Info,
+                        &format!("Replace the open “{name}” workspace?"),
+                        Some("Its terminals are closed and the layout is built again."),
+                        &["Replace", "Cancel"],
+                        cx,
+                    );
+                    let (id, spec) = (self.workspaces[i].id, spec.clone());
+                    cx.spawn_in(window, async move |this, cx| {
+                        if answer.await != Ok(0) {
+                            return;
+                        }
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            // It may have moved or closed meanwhile.
+                            match this.workspaces.iter().position(|w| w.id == id) {
+                                Some(i) => {
+                                    this.replace_workspace(i, &spec, name, &base, window, cx)
+                                }
+                                None => {
+                                    this.open_layout(&spec, Some(name), &base, window, cx);
+                                }
+                            }
+                        });
+                    })
+                    .detach();
+                }
+            }
+            return;
         }
         let Some(run) = c.run else { return };
         let term = match self.ws().focused_surface() {
@@ -1013,6 +1138,27 @@ impl AbroMux {
             t.send(format!("{run}\r").as_bytes());
             cx.notify();
         });
+    }
+
+    /// Close workspace `i` and build `spec` in its place.
+    fn replace_workspace(
+        &mut self,
+        i: usize,
+        spec: &layout::WorkspaceSpec,
+        name: String,
+        base: &std::path::Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new = self.open_layout(spec, Some(name), base, window, cx);
+        let id = self.workspaces[new].id;
+        self.close_workspace(i, window, cx);
+        let new = self.workspaces.len() - 1;
+        let moved = self.workspaces.remove(new);
+        debug_assert_eq!(moved.id, id);
+        // Where the old one was, so the sidebar order stays.
+        self.workspaces.insert(i, moved);
+        self.select_workspace(i, window, cx);
     }
 
     fn focus_dir(&mut self, dir: Dir, window: &mut Window, cx: &mut Context<Self>) {
@@ -2074,7 +2220,7 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &SwapUp, w, cx| this.swap_dir(Dir::Up, w, cx)))
             .on_action(cx.listener(|this, _: &SwapDown, w, cx| this.swap_dir(Dir::Down, w, cx)))
             .on_action(cx.listener(|this, a: &keymap::RunCommand, window, cx| {
-                this.run_command(a.index, window, cx)
+                this.run_command(a.index, a.project.clone(), window, cx)
             }))
             .on_action(cx.listener(|this, _: &ReloadConfig, window, cx| {
                 // A toast says how it went.

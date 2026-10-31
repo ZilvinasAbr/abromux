@@ -124,7 +124,7 @@ What's missing beyond the browser commands above:
 - [ ] **`capabilities`, `events`**: an event stream with cursors, filters and reconnect.
 - [ ] **`wait-for`**: named signals between scripts.
 - [ ] **`read-selection`**, and `read-screen --selection`.
-- [ ] **Starting a workspace from a JSON layout**: `new-workspace --layout <json>` and `--description`.
+- [x] **Starting a workspace from a JSON layout**: `new-workspace --layout <json>` and `--description`. *(partial: `--layout`, from JSON or `@file`; no `--description`)*
 - [ ] **`workspace-action`, `tab-action`**: one-shot actions with title, color, description and URL.
 - [ ] **`top` / `memory`**: CPU, memory and process trees per workspace or surface.
 - [ ] **`surface-health`, `refresh-surfaces`, `debug-terminals`.**
@@ -134,10 +134,10 @@ What's missing beyond the browser commands above:
 
 ## 7. Configuration
 
-- [x] **A `cmux.json`-style config file** with a JSON schema, `config doctor`/`check`/`validate`, and `reload-config` (⌘⇧,), which reloads in place with no restart. *(partial: `~/.config/abromux/config.json` with `config check`, `config path` and `reload-config`; only pane settings so far, no JSON schema, no project-level file)*
+- [x] **A `cmux.json`-style config file** with a JSON schema, `config doctor`/`check`/`validate`, and `reload-config` (⌘⇧,), which reloads in place with no restart. *(partial: `~/.config/abromux/config.json` with `config check`, `config path` and `reload-config`, plus a project file (`.abromux/config.json`, or cmux's `.cmux/cmux.json` / `cmux.json`) for commands; no JSON schema)*
 - [ ] **Settings window**: ⌘,.
 - [x] **Customizable keyboard shortcuts**, including two-step chords and `when` conditions. *(`"shortcuts"` in config.json, listed by `abromux config shortcuts`; `when` takes a key context)*
-- [x] **Custom commands and actions**: project-specific commands and workspace layouts that you launch from the palette, tab-bar buttons or the plus-button menu. Also packs and setting presets. *(partial: `"commands"` in config.json run text in a terminal or open a URL, from the palette or their own shortcut; no layouts, buttons, project-level file, packs or presets)*
+- [x] **Custom commands and actions**: project-specific commands and workspace layouts that you launch from the palette, tab-bar buttons or the plus-button menu. Also packs and setting presets. *(partial: `"commands"` run text in a terminal, open a URL or build a workspace layout in cmux's format, from the palette or their own shortcut, globally or per project with a trust prompt; no tab-bar buttons, packs or presets)*
 - [x] **Command palette**: ⌘⇧P for commands, ⌘P to switch workspaces. *(partial: the switcher lists workspaces, not surfaces; no custom commands or rename/description modes)*
 - [ ] **App preferences**: light/dark/system appearance, accent color, app icon, window-title template, menu-bar-only mode, minimal mode.
 - [ ] **Themes**: `themes list/set/clear`.
@@ -182,10 +182,10 @@ What's missing beyond the browser commands above:
 
 If the goal is daily-driver parity, a reasonable sequence is:
 
-Done so far: customizable shortcuts and custom palette commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; agent status, notifications and resume for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; sidebar status, progress and log.
+Done so far: customizable shortcuts and custom palette commands, including workspace layouts and project commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; agent status, notifications and resume for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; sidebar status, progress and log.
 
 Next:
 
-1. **Custom commands that build layouts** (cmux's workspace commands), and a project-level config file.
+1. **Tab-bar buttons for commands** (cmux's actions), and a JSON schema for the config file.
 2. **Hooks for the remaining agents** (Kiro, Amp, Copilot), once their hook formats settle.
 3. **Dragging tabs, multiple windows, SSH/tmux**, as the workspace model matures.

@@ -272,6 +272,29 @@ impl AbroMux {
                     .collect::<Vec<_>>()
             ),
             "workspace.current" => self.describe_ws(self.active, false, cx),
+            "workspace.create" if p.get("layout").is_some_and(|l| !l.is_null()) => {
+                // The CLI passes the JSON as text.
+                let layout = match &p["layout"] {
+                    Value::String(s) => serde_json::from_str(s),
+                    v => serde_json::from_value(v.clone()),
+                }
+                .context("bad --layout")?;
+                let spec = crate::layout::WorkspaceSpec {
+                    layout: Some(layout),
+                    ..Default::default()
+                };
+                spec.check().map_err(anyhow::Error::msg)?;
+                let base = str_param(p, "cwd")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::env::var("HOME").unwrap_or_default().into());
+                let prev = self.active;
+                let name = str_param(p, "name").map(String::from);
+                let wi = self.open_layout(&spec, name, &base, window, cx);
+                if !bool_param(p, "focus", true) {
+                    self.select_workspace(prev, window, cx);
+                }
+                self.describe_ws(wi, false, cx)
+            }
             "workspace.create" => {
                 let cwd = str_param(p, "cwd").map(String::from);
                 let wi = self.create_workspace(cwd, bool_param(p, "focus", true), window, cx);

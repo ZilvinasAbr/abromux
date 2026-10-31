@@ -23,6 +23,7 @@ Commands:
   list-workspaces
   current-workspace
   new-workspace [--name <title>] [--cwd <path>] [--command <text>] [--focus <true|false>]
+                [--layout <json>|@<file>]                  (build a cmux-style layout: splits, panes, tabs)
   select-workspace --workspace <id|ref|index>
   close-workspace --workspace <id|ref|index>
   rename-workspace [--workspace <id|ref|index>] <title>
@@ -65,6 +66,7 @@ Commands:
   config path                                                (where abromux's config.json lives)
   config check [<file>]                                      (validate the config file; needs no running app)
   config shortcuts                                           (each shortcut's name for config.json, and its keys now)
+  config project                                             (the project commands file found from here, and its commands)
   hooks install|uninstall [agent...]                         (agent hooks: status, notifications, resume on restore;
                                                              claude, codex, gemini, droid, cursor, opencode, pi)
   skills install|uninstall                                   (Claude Code and Codex skills that teach them this CLI)
@@ -205,7 +207,21 @@ fn dispatch(
         "identify" => ("system.identify", pretty),
         "list-workspaces" => ("workspace.list", |v| lines(v, workspace_line)),
         "current-workspace" => ("workspace.current", workspace_line),
-        "new-workspace" => ("workspace.create", |v| format!("OK {}", s(&v["ref"]))),
+        "new-workspace" => {
+            // `--layout @file.json` reads it from a file.
+            if let Some(Value::String(l)) = opts.get_mut("layout")
+                && let Some(file) = l.strip_prefix('@')
+            {
+                *l = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
+            }
+            // The app runs elsewhere: make the directory absolute here.
+            if let Some(Value::String(c)) = opts.get_mut("cwd")
+                && let Ok(abs) = std::path::absolute(&*c)
+            {
+                *c = abs.to_string_lossy().into_owned();
+            }
+            ("workspace.create", |v| format!("OK {}", s(&v["ref"])))
+        }
         "select-workspace" => ("workspace.select", |v| format!("OK {}", s(&v["ref"]))),
         "close-workspace" => ("workspace.close", |v| format!("OK {}", s(&v["closed"]))),
         "rename-workspace" => {
@@ -405,7 +421,7 @@ fn dispatch(
     Ok(())
 }
 
-/// `config path`, `config check [<file>]` and `config shortcuts`, which
+/// `config path`, `config check [<file>]`, `config project` and `config shortcuts`, which
 /// need no running app.
 fn config(pos: &[String]) -> Result<(), String> {
     match pos.first().map(String::as_str) {
@@ -420,11 +436,31 @@ fn config(pos: &[String]) -> Result<(), String> {
             };
             println!("OK {}{note}", path.display());
         }
+        Some("project") => {
+            let here = std::env::current_dir().map_err(|e| e.to_string())?;
+            let Some(file) = settings::find_project(&here) else {
+                println!(
+                    "No project file here or above (looked for {})",
+                    settings::PROJECT_FILES.join(", ")
+                );
+                return Ok(());
+            };
+            let cmds = settings::read_project(&file)?;
+            println!("OK {} ({} commands)", file.display(), cmds.len());
+            for (c, raw) in cmds {
+                let trusted = if settings::is_trusted(&file, &raw) {
+                    ""
+                } else {
+                    "  (asks before running)"
+                };
+                println!("  {}{trusted}", c.title);
+            }
+        }
         Some("shortcuts") => {
             let settings = settings::load()?;
             print!("{}", crate::keymap::describe(&settings));
         }
-        _ => return Err("config: expected path, check or shortcuts".into()),
+        _ => return Err("config: expected path, check, project or shortcuts".into()),
     }
     Ok(())
 }

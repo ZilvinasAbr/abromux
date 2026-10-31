@@ -1555,7 +1555,11 @@ mod tests {
             t.write(format!("{i}\r\n").as_bytes());
         }
         let sb = t.scrollbar();
-        assert_eq!((sb.len, sb.offset + sb.len), (5, sb.total), "at the bottom: {sb:?}");
+        assert_eq!(
+            (sb.len, sb.offset + sb.len),
+            (5, sb.total),
+            "at the bottom: {sb:?}"
+        );
         t.scroll_to_row(10);
         assert_eq!(t.scrollbar().offset, 10);
         t.scroll_to_row(0);

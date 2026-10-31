@@ -48,6 +48,7 @@ The first ref printed is the new terminal. Keep it; every later command needs it
 - `new-split <left|right|up|down>`: splits your pane (or `--surface`'s).
 - `new-surface`: a new tab in your pane (or `--pane`).
 - `new-workspace --name <title> --cwd <dir>`: a new sidebar entry.
+- `new-workspace --name <title> --cwd <dir> --layout '<json>'`: a new workspace already split, in cmux's layout format: `{"direction": "horizontal", "split": 0.5, "children": [{"pane": {"surfaces": [{"command": "npm run dev"}]}}, {"pane": {"surfaces": [{"type": "browser", "url": "localhost:3000"}]}}]}`. `--layout @file.json` reads it from a file.
 - All take `--command <text>` (typed into the new shell, then Enter), `--cwd <dir>` and `--type browser --url <url>`.
 
 ## Talk to another terminal
