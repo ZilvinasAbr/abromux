@@ -13,7 +13,7 @@ use crate::{
     sprite,
     theme::*,
 };
-use crate::pty::{Attach, Feed, Opened, Pty};
+use crate::pty::{Feed, Opened, Pty};
 use futures::{StreamExt, channel::mpsc};
 use gpui::{prelude::*, *};
 use gpui_component::input::{self, Input, InputEvent, InputState};
@@ -83,7 +83,7 @@ pub struct TerminalView {
     pty: Pty,
     /// Where the program's output waits for the main thread.
     feed: Feed,
-    /// It reattached to a shell that ran on in herdr-core or the holder
+    /// It reattached to a shell that ran on in the holder
     /// while abromux was away, so there's nothing to replay or resume.
     pub attached: bool,
     /// Closed or left for the next launch: its reader's end isn't an exit.
@@ -168,7 +168,7 @@ impl TerminalView {
     pub fn new(
         cwd: Option<String>,
         env: Vec<(String, String)>,
-        attach: Option<&Attach>,
+        attach: Option<&str>,
         cx: &mut Context<Self>,
     ) -> Self {
         let (cols, rows) = (80, 24);
@@ -342,17 +342,16 @@ impl TerminalView {
         }
     }
 
-    /// Closing its tab: end the shell, which a herdr-core or held one
-    /// wouldn't on its own (dropping the view only lets go, as quitting does).
+    /// Closing its tab: end the shell, which a held one wouldn't on its own
+    /// (dropping the view only lets go, as quitting does).
     pub fn close(&mut self) {
         self.frozen = true;
         self.pty.kill();
     }
 
-    /// herdr-core's address or the holder's id for this terminal, to take
-    /// it back next launch.
-    pub fn attach(&self) -> Option<Attach> {
-        self.pty.attach()
+    /// The holder's id for this terminal, to take it back next launch.
+    pub fn held_id(&self) -> Option<&str> {
+        self.pty.held_id()
     }
 
     /// Quitting: a held terminal stops reading, takes in what was already
@@ -1973,7 +1972,7 @@ fn spawn_shell(
     env: &[(String, String)],
     size: (u16, u16),
     generation: usize,
-    attach: Option<&Attach>,
+    attach: Option<&str>,
     cx: &mut Context<TerminalView>,
 ) -> (Opened, Feed) {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
@@ -1991,9 +1990,15 @@ fn spawn_shell(
     {
         vars.extend(crate::shell::inject(&shell, env));
     }
-    let persistence = cx
-        .try_global::<Settings>()
-        .map_or(Persistence::Abromux, |s| s.persistence);
+    // Held shells are for taking back next launch; a run that won't restore
+    // a session (ABROMUX_NO_RESTORE, demos, scripted tests) would only leave
+    // them running unseen.
+    let persistence = match crate::session::path() {
+        None => Persistence::Abromux,
+        Some(_) => cx
+            .try_global::<Settings>()
+            .map_or(Persistence::default(), |s| s.persistence),
+    };
     let (feed, wake) = Feed::new();
     let opened = crate::pty::open(cwd, &shell, &vars, size, attach, persistence, &feed);
     drain(feed.clone(), wake, generation, cx);

@@ -11,7 +11,6 @@
 //! `ABROMUX_NO_RESTORE=1` turns it off, as do `ABROMUX_DEMO`/`ABROMUX_SCRIPT` unless
 //! a session path is given, so test runs never touch the real session.
 
-use crate::pty::Attach;
 use crate::{
     AbroMux,
     agent::Agent,
@@ -95,14 +94,11 @@ pub enum TabState {
         /// The tab's name from `rename-tab`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
-        /// Its terminal in herdr-core, still running (`crate::hc`).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        hc: Option<String>,
         /// Its terminal in abromux's holder, still running (`crate::hold`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         held: Option<String>,
         /// Its surface number, which that terminal's shell has in
-        /// `ABROMUX_SURFACE_ID`; only kept with `hc` or `held`.
+        /// `ABROMUX_SURFACE_ID`; only kept with `held`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         surface: Option<usize>,
     },
@@ -206,7 +202,7 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        // herdr-core's shells keep their surface numbers: leave those free.
+        // Held shells keep their surface numbers: leave those free.
         for ws in &session.workspaces {
             self.next_surface = self.next_surface.max(ws.root.max_surface());
         }
@@ -299,16 +295,11 @@ impl AbroMux {
                 scrollback,
                 agent,
                 name,
-                hc,
                 held,
                 surface,
             } => {
                 let cwd = std::path::Path::new(&cwd).is_dir().then_some(cwd);
-                let attach = hc
-                    .map(Attach::Hc)
-                    .or(held.map(Attach::Held))
-                    .zip(surface);
-                let attach = attach.as_ref().map(|(a, n)| (*n, a));
+                let attach = surface.zip(held.as_deref());
                 let s = self.make_terminal_full(cwd, ws, vec![], attach, window, cx);
                 if let Surface::Terminal(t) = &s {
                     t.update(cx, |t, cx| {
@@ -384,14 +375,9 @@ fn tab_state(s: &Surface, scrollback: bool, refs: &Refs, cx: &App) -> TabState {
         Surface::Terminal(t) => {
             let surface = refs.get(&t.entity_id()).copied();
             let t = t.read(cx);
-            let (hc, held) = match t.attach() {
-                Some(Attach::Hc(a)) => (Some(a), None),
-                Some(Attach::Held(id)) => (None, Some(id)),
-                None => (None, None),
-            };
+            let held = t.held_id().map(str::to_string);
             TabState::Terminal {
-                surface: surface.filter(|_| hc.is_some() || held.is_some()),
-                hc,
+                surface: surface.filter(|_| held.is_some()),
                 held,
                 cwd: t.live_cwd(),
                 font_size: Some(t.font_size()),
@@ -447,8 +433,7 @@ mod tests {
                                     pid: None,
                                 }),
                                 name: Some("server".into()),
-                                hc: Some("t3".into()),
-                                held: None,
+                                held: Some("4242-3".into()),
                                 surface: Some(7),
                             }],
                         },

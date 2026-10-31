@@ -4,7 +4,7 @@
     scripts/perf.py run              build, measure, record, compare (~1.5 min)
     scripts/perf.py run --headless   only the parts that need no window (~10 s)
     scripts/perf.py run --full       longer idle windows and more startup runs
-    scripts/perf.py run --persistence herdr-core   (or abromux, abromux-hold) to compare them
+    scripts/perf.py run --persistence abromux   the old way (shells end with the app), to compare
     scripts/perf.py compare [ID]     compare a recorded run (default: latest)
     scripts/perf.py history [METRIC] recent runs, or one metric over time
     scripts/perf.py report [--md]    HTML (or Markdown) report with charts
@@ -86,13 +86,11 @@ METRICS = {
     "kitty_frame_p99_ms":   ("ms",   "lower",  0.30, 5,    "p99 frame draw while streaming kitty frames"),
     "kitty_footprint_mb":   ("MB",   "lower",  0.25, 10,   "footprint growth after shared-memory kitty frames"),
     "browser_open_ms":      ("ms",   "lower",  0.25, 30,   "browser split -> local page loaded"),
-    # Only with --persistence herdr-core or abromux-hold: what the process(es)
-    # keeping shells alive add on top of the app (herdr-core's core, holder and
-    # `hc connect`s, or `abromux hold`).
-    "hc_idle_mb":           ("MB",   "lower",  0.10, 2,    "persistence daemon footprint, idle, 1 terminal"),
-    "hc_per_terminal_mb":   ("MB",   "lower",  0.25, 0.3,  "persistence daemon footprint per extra terminal"),
-    "hc_idle_cpu_11_pct":   ("%",    "lower",  0.50, 0.5,  "persistence daemon idle CPU, 11 terminals"),
-    "hc_throughput_cpu_s":  ("s",    "lower",  0.15, 0.2,  "persistence daemon CPU time for the throughput run"),
+    # What `abromux hold` adds on top of the app (not with --persistence abromux).
+    "holder_idle_mb":       ("MB",   "lower",  0.10, 2,    "holder footprint, idle, 1 terminal"),
+    "holder_per_terminal_mb": ("MB", "lower",  0.25, 0.3,  "holder footprint per extra terminal"),
+    "holder_idle_cpu_11_pct": ("%",  "lower",  0.50, 0.5,  "holder idle CPU, 11 terminals"),
+    "holder_throughput_cpu_s": ("s", "lower",  0.15, 0.2,  "holder CPU time for the throughput run"),
 }
 
 MODES = {
@@ -320,10 +318,11 @@ class Suite:
         self.data = data
         self.metrics = {}
         self.samples = {}
-        # --persistence: set it in the app's config, give herdr-core a session
-        # of its own, and time throughput with a query the app itself answers.
+        # --persistence: set it in the app's config. Without it the app uses
+        # its default, abromux-hold, so the holder is there either way unless
+        # it's "abromux".
         self.persistence = persistence
-        self.hc_session = f"abromux-perf-{os.getpid()}"
+        self.holding = persistence != "abromux"
 
     def put(self, name, value, samples=None):
         if value is None:
@@ -370,77 +369,50 @@ class Suite:
         if self.persistence:
             (xdg / "abromux").mkdir()
             (xdg / "abromux" / "config.json").write_text(json.dumps({"persistence": self.persistence}))
-            self.env["HC_SESSION"] = self.hc_session
-            self.env["ABROMUX_HOLD_SOCKET"] = str(tmp / "hold.sock")
+        # A holder of this run's own, never the user's.
+        self.env["ABROMUX_HOLD_SOCKET"] = str(tmp / "hold.sock")
         self.proc = None
         try:
             self._app(tmp)
             self.actions(tmp)
         finally:
             self.quit()
-            self.hc_reset(start=False)
+            self.holder_reset(start=False)
             shutil.rmtree(tmp, ignore_errors=True)
 
-    # -- herdr-core (--persistence herdr-core) --
-
-    def hc(self, *args):
-        hc = os.environ.get("ABROMUX_HC") or shutil.which("hc") or str(Path.home() / ".local/bin/hc")
-        r = subprocess.run([hc, *args], env={**os.environ, "HC_SESSION": self.hc_session},
-                           capture_output=True, text=True, timeout=30)
-        return r.stdout
+    # -- abromux hold --
 
     def holder_pids(self):
-        """`abromux hold` processes of this run (--persistence abromux-hold)."""
+        """This run's `abromux hold` (none with --persistence abromux)."""
+        if not self.holding:
+            return []
         out = sh("pgrep", "-f", f"{self.bin} hold", check=False)
         return [int(p) for p in out.split()]
 
-    def hc_reset(self, start=True):
+    def holder_reset(self, start=True):
         """No terminals left from an earlier launch (quitting leaves them
-        running); with `start`, a warm core or holder, as on a relaunch in
-        daily use (it outlives the app while it holds terminals)."""
-        if self.persistence == "abromux-hold":
-            for p in self.holder_pids():
-                os.kill(p, signal.SIGTERM)  # its shells hang up with it
-            time.sleep(0.2)
-            if start:
-                sock = Path(self.env["ABROMUX_HOLD_SOCKET"])
-                subprocess.Popen([str(self.bin), "hold"], env=self.env, start_new_session=True,
-                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                end = time.monotonic() + 5
-                while not sock.exists() and time.monotonic() < end:
-                    time.sleep(0.01)
+        running); with `start`, a warm holder, as on a relaunch in daily use
+        (it outlives the app while it holds terminals)."""
+        if not self.holding:
             return
-        if self.persistence != "herdr-core":
-            return
-        self.hc("server", "stop")
+        for p in self.holder_pids():
+            os.kill(p, signal.SIGTERM)  # its shells hang up with it
+        time.sleep(0.2)
         if start:
-            self.hc("server", "status")
-        else:
-            state = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
-            shutil.rmtree(state / "herdr-core" / self.hc_session, ignore_errors=True)
+            sock = Path(self.env["ABROMUX_HOLD_SOCKET"])
+            subprocess.Popen([str(self.bin), "hold"], env=self.env, start_new_session=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            end = time.monotonic() + 5
+            while not sock.exists() and time.monotonic() < end:
+                time.sleep(0.01)
 
-    def hc_pids(self):
-        """The persistence daemon's processes serving this app: herdr-core's
-        core, holder and the app's `hc connect` children, or `abromux hold`."""
-        if self.persistence == "abromux-hold":
-            return self.holder_pids()
-        if self.persistence != "herdr-core":
-            return []
-        try:
-            st = json.loads(self.hc("server", "status"))
-        except ValueError:
-            return []
-        pids = [st.get("pid"), (st.get("holder") or {}).get("pid")]
-        out = sh("pgrep", "-P", str(self.proc.pid), "-f", "hc connect", check=False)
-        return [p for p in pids if p] + [int(p) for p in out.split()]
-
-    def hc_footprint(self):
-        pids = self.hc_pids()
+    def holder_footprint(self):
+        pids = self.holder_pids()
         mbs = [footprint_mb(p) for p in pids]
         return sum(m for m in mbs if m is not None) if pids else None
 
-    def hc_cpu(self):
-        return sum(cpu_secs(p) for p in self.hc_pids())
+    def holder_cpu(self):
+        return sum(cpu_secs(p) for p in self.holder_pids())
 
     def cli(self, *args, check=False):
         r = subprocess.run([str(self.bin), *args], env=self.env, capture_output=True, text=True, timeout=10)
@@ -474,11 +446,11 @@ class Suite:
     def front(self):
         self.cli("focus-window", "--window", "window:1")
 
-    def idle_cpu(self, secs, hc_metric=None):
-        c0, h0 = cpu_secs(self.proc.pid), self.hc_cpu()
+    def idle_cpu(self, secs, holder_metric=None):
+        c0, h0 = cpu_secs(self.proc.pid), self.holder_cpu()
         time.sleep(secs)
-        if hc_metric and self.hc_pids():
-            self.put(hc_metric, (self.hc_cpu() - h0) / secs * 100)
+        if holder_metric and self.holder_pids():
+            self.put(holder_metric, (self.holder_cpu() - h0) / secs * 100)
         return (cpu_secs(self.proc.pid) - c0) / secs * 100
 
     def _app(self, tmp):
@@ -486,7 +458,7 @@ class Suite:
         log("startup")
         sock, prompt = [], []
         for r in range(c["startup_runs"]):
-            self.hc_reset()  # outside the timing: it stops and starts processes
+            self.holder_reset()  # outside the timing: it stops and starts processes
             t0 = time.monotonic()
             self.launch()
             while self.cli("ping").returncode:
@@ -509,20 +481,20 @@ class Suite:
         self.front()
         time.sleep(c["settle"])
         self.put("idle_footprint_mb", footprint_mb(pid))
-        self.put("hc_idle_mb", self.hc_footprint())
+        self.put("holder_idle_mb", self.holder_footprint())
         self.put("idle_cpu_pct", self.idle_cpu(c["idle"]))
 
         self.front()
-        m0, h0 = footprint_mb(pid), self.hc_footprint()
+        m0, h0 = footprint_mb(pid), self.holder_footprint()
         for _ in range(10):
             self.cli("new-workspace", check=True)
         time.sleep(c["settle"])
-        m1, h1 = footprint_mb(pid), self.hc_footprint()
+        m1, h1 = footprint_mb(pid), self.holder_footprint()
         if m0 is not None and m1 is not None:
             self.put("per_terminal_mb", (m1 - m0) / 10)
         if h0 is not None and h1 is not None:
-            self.put("hc_per_terminal_mb", (h1 - h0) / 10)
-        self.put("idle_cpu_11_pct", self.idle_cpu(c["idle"], "hc_idle_cpu_11_pct"))
+            self.put("holder_per_terminal_mb", (h1 - h0) / 10)
+        self.put("idle_cpu_11_pct", self.idle_cpu(c["idle"], "holder_idle_cpu_11_pct"))
 
         log("in-app throughput")
         # The shell times each cat up to the terminal's reply to a DA1 query
@@ -538,11 +510,6 @@ class Suite:
         if grid in ("24 80", "?"):
             log(f"  WARNING: grid is {grid!r}; the window was probably not drawn, in-app numbers are suspect")
         script = tmp / "throughput.zsh"
-        # herdr-core answers DA1 itself, as soon as *it* has parsed the
-        # output. A kitty graphics query passes through to the app, so its
-        # reply means the app has parsed everything too.
-        query, end = (r"\e[c", "c") if not self.persistence else \
-            (r"\e_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\e\\", "\\\\")
         script.write_text(f"""zmodload zsh/datetime
 old=$(stty -g)
 stty -echo -icanon min 1
@@ -550,8 +517,8 @@ for i in {{1..{c['passes']}}}; do
   for f in ascii color unicode; do
     s=$EPOCHREALTIME
     cat {self.data}/$f.txt
-    printf '{query}'
-    read -r -d '{end}' reply
+    printf '\\e[c'
+    read -r -d c reply
     print "$f $((EPOCHREALTIME - s))" >> {res}
   done
 done
@@ -562,7 +529,7 @@ clear
         rpc = Rpc(self.env["ABROMUX_SOCKET_PATH"])
         vsync = rpc.vsync()
         rpc.call("debug.frames", record=True)
-        c0, hc0 = cpu_secs(pid), self.hc_cpu()
+        c0, h0 = cpu_secs(pid), self.holder_cpu()
         self.cli("send", f"zsh {script}\\n")
         end = time.monotonic() + 600
         while time.monotonic() < end:
@@ -572,8 +539,8 @@ clear
         else:
             raise RuntimeError("in-app throughput timed out")
         self.put("throughput_cpu_s", cpu_secs(pid) - c0)
-        if self.hc_pids():
-            self.put("hc_throughput_cpu_s", self.hc_cpu() - hc0)
+        if self.holder_pids():
+            self.put("holder_throughput_cpu_s", self.holder_cpu() - h0)
         frames = rpc.call("debug.frames", record=False)
         if frames["draw_ms"]:
             self.put("throughput_frame_p99_ms", percentile(frames["draw_ms"], 99))
@@ -623,7 +590,7 @@ clear
         (zdot / ".zshrc").write_text(f"PROMPT='{BARE_PROMPT}'\nunsetopt PROMPT_SP\n")
         self.env = {**self.env, "SHELL": "/bin/zsh", "ZDOTDIR": str(zdot)}
         prompt = re.escape(BARE_PROMPT.strip()) + r" *$"
-        self.hc_reset()
+        self.holder_reset()
         self.launch()
         while self.cli("ping").returncode:
             if self.proc.poll() is not None:
@@ -1113,9 +1080,9 @@ def main():
     g.add_argument("--headless", action="store_true", help="skip the app; binary size + VT parse only")
     g.add_argument("--full", action="store_true", help="longer settle/idle windows, 5 startup runs")
     r.add_argument("--label", help="free-form note stored with the run")
-    r.add_argument("--persistence", choices=["abromux", "herdr-core", "abromux-hold"],
-                   help="run the app with this persistence (compared only with runs of the same one); "
-                        "throughput is timed with a kitty query either way, so the two compare")
+    r.add_argument("--persistence", choices=["abromux-hold", "abromux"],
+                   help="run the app with this persistence set in its config (compared only with runs "
+                        "of the same one); without it, the app's default (abromux-hold)")
     r.add_argument("--no-build", action="store_true", help="use the existing release binary")
     r.add_argument("--busy", action="store_true", help="mark the run as not representative (kept out of baselines)")
     r.add_argument("--dry-run", action="store_true", help="don't record the run")

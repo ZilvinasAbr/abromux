@@ -9,7 +9,7 @@
 //!
 //! ```json
 //! {
-//!   "persistence": "herdr-core",
+//!   "persistence": "abromux",
 //!   "panes": {
 //!     "resizeStep": 20,
 //!     "dividerColor": "#3a3935",
@@ -71,30 +71,26 @@ pub struct Settings {
 impl Global for Settings {}
 
 /// How terminals come back after abromux quits. Applies to terminals opened
-/// after it's set; ones already running in herdr-core or the holder are
-/// taken back whatever it says.
+/// after it's set; ones already running in the holder are taken back
+/// whatever it says.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Persistence {
+    /// Shells run in abromux's holder (`crate::hold`) and keep running; the
+    /// next launch takes them back as they were.
+    #[default]
+    AbromuxHold,
     /// Shells end with the app; the next launch starts new ones in the same
     /// folders, replays their output and resumes coding agents.
-    #[default]
     Abromux,
-    /// Shells run in herdr-core and keep running; the next launch attaches
-    /// to them.
-    HerdrCore,
-    /// Shells run in abromux's own holder (`crate::hold`) and keep running;
-    /// the next launch takes them back as they were.
-    AbromuxHold,
 }
 
 impl Persistence {
     /// Its value in the config file.
     pub fn key(self) -> &'static str {
         match self {
-            Persistence::Abromux => "abromux",
-            Persistence::HerdrCore => "herdr-core",
             Persistence::AbromuxHold => "abromux-hold",
+            Persistence::Abromux => "abromux",
         }
     }
 }
@@ -543,37 +539,38 @@ mod tests {
 
     #[test]
     fn persistence() {
-        let s = parse(r#"{"persistence": "herdr-core"}"#).unwrap();
-        assert_eq!(s.persistence, Persistence::HerdrCore);
+        assert_eq!(Settings::default().persistence, Persistence::AbromuxHold);
+        let s = parse(r#"{"persistence": "abromux"}"#).unwrap();
+        assert_eq!(s.persistence, Persistence::Abromux);
         let s = parse(r#"{"persistence": "abromux-hold"}"#).unwrap();
         assert_eq!(s.persistence, Persistence::AbromuxHold);
-        assert!(parse(r#"{"persistence": "tmux"}"#).is_err());
+        assert!(parse(r#"{"persistence": "herdr-core"}"#).is_err());
     }
 
     #[test]
     fn setting_persistence_keeps_the_rest_of_the_file() {
-        let h = Persistence::HerdrCore;
+        let old = Persistence::Abromux;
         assert_eq!(
-            with_persistence("", h).unwrap(),
-            "{\n  \"persistence\": \"herdr-core\"\n}\n"
+            with_persistence("", old).unwrap(),
+            "{\n  \"persistence\": \"abromux\"\n}\n"
         );
         assert_eq!(
-            with_persistence("{}", h).unwrap(),
-            "{\n  \"persistence\": \"herdr-core\"}"
+            with_persistence("{}", old).unwrap(),
+            "{\n  \"persistence\": \"abromux\"}"
         );
         // Added first; key order, spacing and nested strings stay.
         let file = "{\n    \"panes\": { \"resizeStep\": 30 },\n    \"commands\": [{ \"title\": \"persistence\", \"run\": \"echo \\\"persistence\\\"\" }]\n}\n";
-        let new = with_persistence(file, h).unwrap();
+        let new = with_persistence(file, old).unwrap();
         assert_eq!(
             new,
-            format!("{{\n  \"persistence\": \"herdr-core\",{}", &file[1..])
+            format!("{{\n  \"persistence\": \"abromux\",{}", &file[1..])
         );
         // Replaced in place, and back again.
-        let back = with_persistence(&new, Persistence::Abromux).unwrap();
-        assert_eq!(back, new.replace("herdr-core", "abromux"));
+        let back = with_persistence(&new, Persistence::AbromuxHold).unwrap();
+        assert_eq!(back, new.replace("\"abromux\"", "\"abromux-hold\""));
         assert_eq!(parse(&back).unwrap().panes.resize_step, 30.);
         // A broken file is left alone.
-        assert!(with_persistence("{ \"panes\": ", h).is_err());
+        assert!(with_persistence("{ \"panes\": ", old).is_err());
     }
 
     #[test]

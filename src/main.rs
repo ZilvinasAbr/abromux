@@ -12,7 +12,6 @@ mod config;
 mod cursor;
 mod debug;
 mod ghostty;
-mod hc;
 mod hold;
 mod icon;
 mod ipc;
@@ -111,7 +110,6 @@ actions!(
         RenameTab,
         ReloadConfig,
         PersistenceAbromux,
-        PersistenceHerdrCore,
         PersistenceAbromuxHold,
         LastPane,
         SwapLeft,
@@ -489,15 +487,16 @@ impl AbroMux {
         self.make_terminal_full(cwd, ws, env, None, window, cx)
     }
 
-    /// `make_terminal_with` that can attach to a herdr-core terminal from the
-    /// last session: `(its surface number, its address)`. The shell kept the
-    /// `ABROMUX_SURFACE_ID` it started with, so the surface keeps that number.
+    /// `make_terminal_with` that can take back a terminal the holder kept
+    /// from the last session: `(its surface number, its holder id)`. The shell
+    /// kept the `ABROMUX_SURFACE_ID` it started with, so the surface keeps that
+    /// number.
     fn make_terminal_full(
         &mut self,
         cwd: Option<String>,
         ws: usize,
         mut env: Vec<(String, String)>,
-        attach: Option<(usize, &crate::pty::Attach)>,
+        attach: Option<(usize, &str)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Surface {
@@ -1325,10 +1324,7 @@ impl AbroMux {
         if self.reload_settings(window, cx).is_err() {
             return;
         }
-        let mut note = format!("New terminals use {}", p.key());
-        if p == settings::Persistence::HerdrCore && hc::binary().is_none() {
-            note.push_str(", but herdr-core (hc) isn't installed: they start here until it is");
-        }
+        let note = format!("New terminals use {}", p.key());
         window.push_notification(
             Notification::success(note)
                 .title("Persistence")
@@ -2381,9 +2377,6 @@ impl Render for AbroMux {
             }))
             .on_action(cx.listener(|this, _: &PersistenceAbromux, window, cx| {
                 this.set_persistence(settings::Persistence::Abromux, window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &PersistenceHerdrCore, window, cx| {
-                this.set_persistence(settings::Persistence::HerdrCore, window, cx)
             }))
             .on_action(cx.listener(|this, _: &PersistenceAbromuxHold, window, cx| {
                 this.set_persistence(settings::Persistence::AbromuxHold, window, cx)
