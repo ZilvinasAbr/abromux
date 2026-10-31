@@ -272,7 +272,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | New browser tab | globe icon | ⌘⇧L (⌘L focuses address bar) |
 | Split right / down | split icons | ⌘D / ⌘⇧D |
 | Move tab / split by dragging | drag a tab onto a tab bar, a pane's edge or the window's edge | |
-| Rename tab | double-click it (Enter saves, Esc cancels; an empty name goes back to the program's title) | ⌘⇧P → Rename Tab… |
+| Rename tab | double-click it (Enter saves, Esc cancels; an empty name goes back to the program's title) | ⌘R (in a browser tab ⌘R reloads; use ⌘⇧P → Rename Tab…) |
 | Close tab | tab `×` / middle-click | ⌘W (last tab closes the pane; last pane closes the workspace) |
 | Cycle tabs | | ⌘⇧[ / ⌘⇧], ⌃Tab / ⌃⇧Tab |
 | Select tab in focused pane | click | ⌃1…⌃8, ⌃9 for the last (hold ⌃ to see the numbers) |

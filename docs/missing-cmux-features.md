@@ -47,7 +47,7 @@ So the list below reads in context:
 - [x] **Pane zoom**: ⌘⇧↩ makes the focused pane fill the workspace, and again restores the split. *(partial: no `zoom-pane` in the CLI)*
 - [x] **Jump to tab N**: ⌃1–8, and ⌃9 for the last tab.
 - [x] **Tab cycling with ⌃Tab / ⌃⇧Tab.**
-- [x] **Renaming tabs**: `rename-tab`, overriding the shell's title. *(double-click a tab, the palette, or `rename-tab`; saved with the session)*
+- [x] **Renaming tabs**: `rename-tab`, overriding the shell's title. *(⌘R, double-click a tab, the palette, or `rename-tab`; saved with the session)*
 - [ ] **Dragging tabs**: reorder them within a pane, move them to another pane, or drop them on an edge to make a new split. The CLI equivalents are `move-surface`, `reorder-surface`, `split-off` and `drag-surface-to-split`.
 - [ ] **Moving tabs to a new workspace** (`move-tab-to-new-workspace`, `break-pane`).
 - [x] **Joining or swapping panes** (`join-pane`, `swap-pane`), and switching to the last pane (`last-pane`). *(partial: `swap-pane` and `last-pane`, in the CLI and the palette; no `join-pane`)*
