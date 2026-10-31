@@ -126,6 +126,8 @@ const SIDEBAR_MAX: f32 = 480.;
 /// Height of the titlebar row the traffic lights sit in.
 const TITLEBAR_H: f32 = 38.;
 const TABBAR_H: f32 = 30.;
+/// The macOS window's corner radius (`-[NSWindow _cornerRadius]` on macOS 26).
+const WINDOW_RADIUS: f32 = 16.;
 /// How close to the pane area's outer edge a dragged tab splits the whole
 /// workspace instead of one pane.
 const DROP_EDGE: f32 = 32.;
@@ -1684,9 +1686,17 @@ impl AbroMux {
         ]
     }
 
-    fn render_node(&self, node: &Node, multi: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// `corners`: which of the node's corners are also the window's rounded
+    /// corners, so pane borders can follow them instead of being clipped.
+    fn render_node(
+        &self,
+        node: &Node,
+        multi: bool,
+        corners: Corners<bool>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         match node {
-            Node::Leaf(p) => self.render_pane(p, multi, cx),
+            Node::Leaf(p) => self.render_pane(p, multi, corners, cx),
             Node::Split {
                 id,
                 axis,
@@ -1717,18 +1727,45 @@ impl AbroMux {
                             cx.stop_propagation();
                         }),
                     );
+                let (ca, cb) = if horizontal {
+                    (
+                        Corners {
+                            top_right: false,
+                            bottom_right: false,
+                            ..corners
+                        },
+                        Corners {
+                            top_left: false,
+                            bottom_left: false,
+                            ..corners
+                        },
+                    )
+                } else {
+                    (
+                        Corners {
+                            bottom_left: false,
+                            bottom_right: false,
+                            ..corners
+                        },
+                        Corners {
+                            top_left: false,
+                            top_right: false,
+                            ..corners
+                        },
+                    )
+                };
                 let a = div()
                     .flex_none()
                     .overflow_hidden()
                     .when(horizontal, |s| s.w(relative(*ratio)).h_full())
                     .when(!horizontal, |s| s.h(relative(*ratio)).w_full())
-                    .child(self.render_node(&children[0], multi, cx));
+                    .child(self.render_node(&children[0], multi, ca, cx));
                 let b = div()
                     .flex_1()
                     .min_w_0()
                     .min_h_0()
                     .overflow_hidden()
-                    .child(self.render_node(&children[1], multi, cx));
+                    .child(self.render_node(&children[1], multi, cb, cx));
                 div()
                     .size_full()
                     .flex()
@@ -1751,7 +1788,13 @@ impl AbroMux {
         }
     }
 
-    fn render_pane(&self, pane: &Pane, multi: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_pane(
+        &self,
+        pane: &Pane,
+        multi: bool,
+        corners: Corners<bool>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let pane_id = pane.id;
         let focused = self.ws().focused_pane == pane_id;
         let tab_hints = focused && self.hints == Some(Hints::Control);
@@ -2055,9 +2098,7 @@ impl AbroMux {
                     })
                     .when_some(self.flash.filter(|(p, _)| *p == pane_id), |d, (_, n)| {
                         d.child(
-                            div()
-                                .absolute()
-                                .inset_0()
+                            window_corners(div().absolute().inset_0(), corners)
                                 .border_2()
                                 .border_color(rgb(ACCENT))
                                 .bg(rgba(0x1f6fe522))
@@ -2071,9 +2112,7 @@ impl AbroMux {
             )
             .when(ring, |d| {
                 d.child(
-                    div()
-                        .absolute()
-                        .inset_0()
+                    window_corners(div().absolute().inset_0(), corners)
                         .border_2()
                         .border_color(rgb(ACCENT_BRIGHT)),
                 )
@@ -2081,9 +2120,7 @@ impl AbroMux {
             // Which split has the keyboard, at a glance.
             .when(multi && focused && !ring, |d| {
                 d.child(
-                    div()
-                        .absolute()
-                        .inset_0()
+                    window_corners(div().absolute().inset_0(), corners)
                         .border_1()
                         .border_color(cx.global::<settings::Settings>().panes.focus_border_color),
                 )
@@ -2113,12 +2150,22 @@ impl Render for AbroMux {
         let toasts = Root::render_notification_layer(window, cx);
         let ws = self.ws();
         let multi = ws.root.panes().len() > 1;
+        // The pane area's corners that are the window's: the top ones sit
+        // under the titlebar row when the sidebar is hidden, the left ones
+        // next to the sidebar when it's shown. Full screen has none.
+        let rounded = !window.is_fullscreen();
+        let corners = Corners {
+            top_left: false,
+            top_right: rounded && self.sidebar,
+            bottom_right: rounded,
+            bottom_left: rounded && !self.sidebar,
+        };
         let main = match ws
             .zoom
             .and_then(|z| ws.root.panes().into_iter().find(|p| p.id == z))
         {
-            Some(p) => self.render_pane(p, multi, cx),
-            None => self.render_node(&ws.root, multi, cx),
+            Some(p) => self.render_pane(p, multi, corners, cx),
+            None => self.render_node(&ws.root, multi, corners, cx),
         };
         let sidebar = if self.sidebar {
             Some(self.render_sidebar(cx))
@@ -2389,6 +2436,15 @@ impl Render for AbroMux {
             .children(palette)
             .children(toasts)
     }
+}
+
+/// Rounds `d`'s `corners` like the window's, for borders drawn along its edge.
+fn window_corners(d: Div, corners: Corners<bool>) -> Div {
+    let r = px(WINDOW_RADIUS);
+    d.when(corners.top_left, |d| d.rounded_tl(r))
+        .when(corners.top_right, |d| d.rounded_tr(r))
+        .when(corners.bottom_right, |d| d.rounded_br(r))
+        .when(corners.bottom_left, |d| d.rounded_bl(r))
 }
 
 /// A tab icon's colour: Claude's logo keeps its orange, others are muted
