@@ -1,6 +1,6 @@
 [package]
 name = "abromux"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 description = "A cmux-style terminal and browser workspace app for macOS, built with Rust, GPUI and libghostty-vt"
 license = "MIT"
