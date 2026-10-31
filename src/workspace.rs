@@ -34,6 +34,11 @@ impl Surface {
         }
     }
 
+    /// Claude Code is working in it; its logo turns.
+    pub fn claude_running(&self, cx: &App) -> bool {
+        matches!(self, Surface::Terminal(t) if t.read(cx).claude_running())
+    }
+
     pub fn title(&self, cx: &App) -> String {
         if let Some(t) = self.custom_title(cx) {
             return t;
@@ -41,8 +46,8 @@ impl Surface {
         match self {
             Surface::Terminal(t) => {
                 let t = t.read(cx);
-                if !t.title.is_empty() {
-                    t.title.clone()
+                if !t.shown_title().is_empty() {
+                    t.shown_title().to_string()
                 } else {
                     tilde(&t.cwd)
                 }
@@ -657,6 +662,15 @@ impl Workspace {
         })
     }
 
+    /// Claude Code is working in one of its terminals.
+    pub fn claude_running(&self, cx: &App) -> bool {
+        self.root
+            .panes()
+            .iter()
+            .flat_map(|p| p.tabs.iter())
+            .any(|s| s.claude_running(cx))
+    }
+
     pub fn name(&self, cx: &App) -> String {
         match self.custom_name.as_ref().or(self.auto_title.as_ref()) {
             Some(n) => n.clone(),
@@ -669,7 +683,7 @@ impl Workspace {
     pub fn auto_name(&self, cx: &App) -> String {
         let title = |s: &Surface| match s {
             Surface::Terminal(t) => {
-                Some(t.read(cx).title.trim().to_string()).filter(|t| !t.is_empty())
+                Some(t.read(cx).shown_title().trim().to_string()).filter(|t| !t.is_empty())
             }
             Surface::Browser(_) => None,
         };
