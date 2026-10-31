@@ -517,14 +517,17 @@ fn unit<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
 /// `{ "Red": "#C0392B", … }`, sorted by name.
 fn named_colors<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<(String, u32)>, D::Error> {
     let map = serde_json::Map::<String, serde_json::Value>::deserialize(d)?;
-    map.into_iter()
+    let mut colors = map
+        .into_iter()
         .map(|(name, v)| {
             v.as_str()
                 .and_then(crate::workspace::parse_color)
                 .map(|c| (name.clone(), c))
                 .ok_or_else(|| serde::de::Error::custom(format!("color {name:?} isn't #rrggbb")))
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    colors.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(colors)
 }
 
 /// The toast for a config file that couldn't be read. It stays until
@@ -556,6 +559,84 @@ pub fn read(path: &Path) -> Result<Settings, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
         Err(e) => Err(format!("{}: {e}", path.display())),
     }
+}
+
+/// Set one key of the config file, as the Settings window does: `key` is
+/// its path (`["sidebar", "fontSize"]`), and `None` removes it so the
+/// default applies. The rest of the file stays as it was, in its order;
+/// objects left empty are removed. The result must parse, or nothing is
+/// written. Returns the new settings.
+pub fn edit(key: &[&str], value: Option<serde_json::Value>) -> Result<Settings, String> {
+    edit_file(&path(), key, value)
+}
+
+pub fn edit_file(
+    path: &Path,
+    key: &[&str],
+    value: Option<serde_json::Value>,
+) -> Result<Settings, String> {
+    use serde_json::{Map, Value};
+    let at = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(at(&e)),
+    };
+    let mut root = if text.trim().is_empty() {
+        Value::Object(Map::new())
+    } else {
+        serde_json::from_str(&text).map_err(|e| at(&e))?
+    };
+    let Some((last, parents)) = key.split_last() else {
+        return Err("no key to set".into());
+    };
+    fn set(obj: &mut Map<String, Value>, parents: &[&str], last: &str, value: Option<Value>) {
+        let Some((first, rest)) = parents.split_first() else {
+            match value {
+                Some(v) => {
+                    obj.insert(last.to_string(), v);
+                }
+                None => {
+                    obj.shift_remove(last);
+                }
+            }
+            return;
+        };
+        if value.is_none() && !obj.get(*first).is_some_and(Value::is_object) {
+            return;
+        }
+        let child = obj
+            .entry(first.to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !child.is_object() {
+            *child = Value::Object(Map::new());
+        }
+        let Value::Object(child) = child else {
+            unreachable!()
+        };
+        set(child, rest, last, value);
+        if child.is_empty() {
+            obj.shift_remove(*first);
+        }
+    }
+    let Value::Object(obj) = &mut root else {
+        return Err(at(&"the file isn't a JSON object"));
+    };
+    set(obj, parents, last, value);
+    let mut out = serde_json::to_string_pretty(&root).map_err(|e| at(&e))?;
+    out.push('\n');
+    let settings = parse(&out).map_err(|e| at(&e))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| at(&e))?;
+    }
+    // Write next to it and rename, so a crash never leaves half a file. A
+    // symlinked file (dotfiles) is written where it points, keeping the link.
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let tmp = target.with_extension("json.tmp");
+    std::fs::write(&tmp, out)
+        .and_then(|()| std::fs::rename(&tmp, &target))
+        .map_err(|e| at(&e))?;
+    Ok(settings)
 }
 
 fn parse(text: &str) -> Result<Settings, serde_json::Error> {
@@ -837,5 +918,66 @@ mod tests {
     fn missing_file_is_defaults() {
         let p = Path::new("/nonexistent/abromux/config.json");
         assert_eq!(read(p).unwrap(), Settings::default());
+    }
+
+    #[test]
+    fn edit_keeps_the_rest_of_the_file() {
+        use serde_json::json;
+        let dir = std::env::temp_dir().join(format!("abromux-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let p = dir.join("sub/config.json");
+
+        // A missing file and folder are created.
+        let s = edit_file(&p, &["sidebar", "fontSize"], Some(json!(14))).unwrap();
+        assert_eq!(s.sidebar.font_size, 14.);
+
+        std::fs::write(
+            &p,
+            r#"{ "panes": { "resizeStep": 30 }, "commands": [{ "title": "t", "run": "ls" }],
+                "sidebar": { "showLog": false, "fontSize": 14 } }"#,
+        )
+        .unwrap();
+        let s = edit_file(&p, &["app", "newWorkspacePlacement"], Some(json!("top"))).unwrap();
+        assert_eq!(s.app.new_workspace_placement, Placement::Top);
+        assert_eq!(s.panes.resize_step, 30.);
+        assert_eq!(s.commands.len(), 1);
+        let keys = |p: &Path| -> Vec<String> {
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+            v.as_object().unwrap().keys().cloned().collect()
+        };
+        assert_eq!(
+            keys(&p),
+            ["panes", "commands", "sidebar", "app"],
+            "order kept"
+        );
+
+        // Removing the last key of an object removes the object.
+        edit_file(&p, &["sidebar", "showLog"], None).unwrap();
+        edit_file(&p, &["sidebar", "fontSize"], None).unwrap();
+        assert_eq!(keys(&p), ["panes", "commands", "app"]);
+        // Removing what isn't there is fine.
+        edit_file(&p, &["automation", "workspaceAutoNaming"], None).unwrap();
+
+        // A value the settings reject isn't written.
+        let before = std::fs::read_to_string(&p).unwrap();
+        let e = edit_file(&p, &["sidebar", "fontSize"], Some(json!(99))).unwrap_err();
+        assert!(e.contains("fontSize must be 8–24"), "{e}");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), before);
+
+        // Nor is anything over a file that isn't JSON.
+        std::fs::write(&p, "{ oops").unwrap();
+        assert!(edit_file(&p, &["sidebar", "showLog"], Some(json!(true))).is_err());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "{ oops");
+
+        // A symlinked file stays a symlink.
+        let real = dir.join("real.json");
+        std::fs::write(&real, "{}").unwrap();
+        let link = dir.join("link.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        edit_file(&link, &["sidebar", "showLog"], Some(json!(false))).unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(std::fs::read_to_string(&real).unwrap().contains("showLog"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

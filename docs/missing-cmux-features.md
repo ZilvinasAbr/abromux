@@ -135,7 +135,7 @@ What's missing beyond the browser commands above:
 ## 7. Configuration
 
 - [x] **A `cmux.json`-style config file** with a JSON schema, `config doctor`/`check`/`validate`, and `reload-config` (⌘⇧,), which reloads in place with no restart. *(partial: `~/.config/abromux/config.json` with `config check`, `config path` and `reload-config`, plus a project file (`.abromux/config.json`, or cmux's `.cmux/cmux.json` / `cmux.json`) for commands; no JSON schema)*
-- [ ] **Settings window**: ⌘,.
+- [x] **Settings window**: ⌘,. *(partial: pages for general, sidebar, workspace colors, panes, shortcuts (with a recorder) and commands, writing `config.json`; chords, `"when"` contexts, palette colors and commands are edited in the file)*
 - [x] **Customizable keyboard shortcuts**, including two-step chords and `when` conditions. *(`"shortcuts"` in config.json, listed by `abromux config shortcuts`; `when` takes a key context)*
 - [x] **Custom commands and actions**: project-specific commands and workspace layouts that you launch from the palette, tab-bar buttons or the plus-button menu. Also packs and setting presets. *(partial: `"commands"` run text in a terminal, open a URL or build a workspace layout in cmux's format, from the palette or their own shortcut, globally or per project with a trust prompt; no tab-bar buttons, packs or presets)*
 - [x] **Command palette**: ⌘⇧P for commands, ⌘P to switch workspaces. *(partial: the switcher lists workspaces, not surfaces; no custom commands or rename/description modes)*
@@ -182,7 +182,7 @@ What's missing beyond the browser commands above:
 
 If the goal is daily-driver parity, a reasonable sequence is:
 
-Done so far: workspace descriptions, colors, groups, drag to reorder, sidebar settings, auto-naming and reopening the previous session; customizable shortcuts and custom palette commands, including workspace layouts and project commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; agent status, notifications and resume for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; sidebar status, progress and log.
+Done so far: workspace descriptions, colors, groups, drag to reorder, sidebar settings, auto-naming and reopening the previous session; customizable shortcuts and custom palette commands, including workspace layouts and project commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload and a Settings window; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; agent status, notifications and resume for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; sidebar status, progress and log.
 
 Next:
 

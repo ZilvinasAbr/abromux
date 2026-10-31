@@ -80,6 +80,12 @@ Each workspace's row shows its name, a description if it has one, the focused ta
 - **Groups**: a header above workspaces that belong together. Right-click a row → Group → New Group starts one (named after the repository), or ⌘⇧P → Group Workspaces by Folder groups every workspace that shares a repository or folder with another. Click a header to fold it (a folded group still shows the selected workspace, and a dot if one has an unread notification), double-click to rename it, drag it to move the whole group, and use its `+` for a new workspace in the group's folder. Right-click a header to rename, color, ungroup or close it. ⌘N from a workspace in a group puts the new one in the group.
 - **Auto-naming** (off by default): with `"automation": { "workspaceAutoNaming": true }`, the first prompt you give a coding agent in a workspace is turned into a short name by that agent's own CLI (`claude -p` on Haiku, or `codex exec`), once per workspace. That runs a request on your account. A name you give the workspace always wins, and without one the name otherwise follows the agent's terminal title.
 
+## Settings window
+
+⌘, (or the app menu › Settings…) opens Settings: a page each for General, Sidebar, Workspace Colors, Panes, Keyboard Shortcuts and Commands, with a search field over all of them. It's a front end for the config file below, not a separate store. Each change writes just that key to `config.json` and applies at once. A setting put back to its default is removed from the file, and the rest of the file (other keys, their order, commands) stays as you wrote it. The undo arrow next to a setting resets it, and the one by a page's title resets the whole page.
+
+On Keyboard Shortcuts, click a shortcut and press the new keys; Esc cancels. A shortcut needs ⌘, ⌃ or ⌥, unless it's a function key. If another action had that key, a toast says the new one takes it over. × removes a shortcut. Chords (`ctrl-a h`), per-context keys (`"when"`), workspace palette colors and commands are edited in the file; Settings shows them, and General › Config Files opens the file. If the file doesn't parse, Settings says why and saves nothing until it's fixed.
+
 ## Config file
 
 abromux's own settings live in `~/.config/abromux/config.json` (or `$XDG_CONFIG_HOME/abromux/config.json`), shared by the release and nightly apps. Every key is optional:
@@ -300,6 +306,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Find in page (browser) | | ⌘F, same keys as find in terminal |
 | Browser back / forward / reload | arrows and ↻ next to the address bar | ⌘[ / ⌘], ⌘R |
 | Web inspector / JS console | | ⌥⌘I / ⌥⌘C |
+| Settings | app menu › Settings… | ⌘, |
 | Reload the config file | | ⌘⇧, |
 | Change any of these keys | | `"shortcuts"` in the [config file](#shortcuts-and-commands) |
 

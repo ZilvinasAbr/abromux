@@ -26,6 +26,7 @@ mod quit;
 mod server;
 mod session;
 mod settings;
+mod settings_window;
 mod shell;
 mod sidebar;
 mod skills;
@@ -60,6 +61,7 @@ actions!(
     abromux,
     [
         About,
+        OpenSettings,
         Quit,
         NewWorkspace,
         CloseWorkspace,
@@ -187,6 +189,12 @@ impl AssetSource for Assets {
             "maximize-2",
             "lock",
             "bot",
+            // The Settings window.
+            "minus",
+            "undo-2",
+            "keyboard",
+            "sliders-horizontal",
+            "palette",
             // gpui-component's menus mark checked items with it.
             "check"
         );
@@ -1316,11 +1324,7 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let result = settings::load().map(|s| {
-            keymap::apply(&s, cx);
-            cx.set_global(s);
-            menu::set_menus(cx);
-        });
+        let result = settings::load().map(|s| settings_window::apply(s, cx));
         let note = match &result {
             Ok(()) => Notification::success(format!(
                 "Reloaded {}",
@@ -2400,10 +2404,16 @@ fn run_app(cwd: Option<String>) {
             }
         });
         cx.on_action(|_: &About, cx| about::show(cx));
+        cx.on_action(|_: &OpenSettings, cx| settings_window::show(cx));
         // The fixed bindings; the shortcuts users can change are in keymap.rs.
         cx.bind_keys([
             KeyBinding::new("cmd-w", about::CloseAbout, Some("About")),
             KeyBinding::new("escape", about::CloseAbout, Some("About")),
+            KeyBinding::new(
+                "cmd-w",
+                settings_window::CloseSettings,
+                Some("SettingsWindow"),
+            ),
             KeyBinding::new("down", palette::SelectNext, Some("CommandPalette > Input")),
             KeyBinding::new(
                 "ctrl-n",

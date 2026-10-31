@@ -94,6 +94,7 @@ pub const ACTIONS: &[Act] = {
         "workspaceSwitcher", None, WorkspaceSwitcher, [(None, ["cmd-p"])];
         // ⌘⇧, arrives as cmd-<.
         "reloadConfig", Some("Reload Config"), ReloadConfig, [(None, ["cmd-<"])];
+        "openSettings", Some("Settings…"), OpenSettings, [(None, ["cmd-,"])];
         "copy", Some("Copy"), terminal::Copy, [(T, ["cmd-c"])];
         "paste", Some("Paste"), terminal::Paste, [(T, ["cmd-v"])];
         "find", Some("Find…"), terminal::Find, [(T, ["cmd-f"]), (B, ["cmd-f"]), (BI, ["cmd-f"])];
@@ -259,34 +260,68 @@ fn bindings_for(settings: &Settings) -> Vec<KeyBinding> {
         .collect()
 }
 
+/// An action's keys with `settings`: the config file's if it sets them,
+/// else the defaults (each once, though bound in several contexts). True
+/// when the config file sets them.
+pub fn keys_for(settings: &Settings, act: &Act) -> (Vec<Vec<Keystroke>>, bool) {
+    match settings.shortcuts.get(act.name) {
+        Some(s) => (s.keys.clone(), true),
+        None => {
+            let mut keys: Vec<Vec<Keystroke>> = vec![];
+            for k in act.bindings.iter().flat_map(|(_, ks)| ks.iter()) {
+                let k = parse_seq(k).expect("default shortcut parses");
+                if !keys.contains(&k) {
+                    keys.push(k);
+                }
+            }
+            (keys, false)
+        }
+    }
+}
+
+/// A keystroke sequence as the palette and menus show it: `⌘⇧P`.
+pub fn label(seq: &[Keystroke]) -> String {
+    seq.iter()
+        .map(|k| crate::palette::key_label(&k.modifiers, &k.key))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A key pressed in the Settings window's shortcut recorder, as the config
+/// file writes it (`cmd-shift-k`), or `None` if it can't be a shortcut: it
+/// needs ⌘, ⌃ or ⌥, unless it's a function key, so typing isn't taken over.
+pub fn record(ks: &Keystroke) -> Option<String> {
+    let m = &ks.modifiers;
+    let function_key = ks
+        .key
+        .strip_prefix('f')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=20).contains(&n));
+    if !(m.platform || m.control || m.alt || function_key) {
+        return None;
+    }
+    let mut k = ks.clone();
+    k.key_char = None;
+    k.modifiers.function = false;
+    // ⌘⇧] arrives as cmd-} with shift still set; the config writes cmd-}.
+    if SHIFTED.iter().any(|(_, shifted)| *shifted == k.key) {
+        k.modifiers.shift = false;
+    }
+    let text = k.unparse();
+    // Only what the config file reads back as this same key.
+    (parse_seq(&text).ok()? == [k]).then_some(text)
+}
+
 /// `abromux config shortcuts`: each action's name and its keys with
 /// `settings`, marking the ones the config file sets.
 pub fn describe(settings: &Settings) -> String {
-    let label = |seq: &[Keystroke]| {
-        seq.iter()
-            .map(|k| crate::palette::key_label(&k.modifiers, &k.key))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
     let mut out = String::new();
     for act in ACTIONS {
-        let (keys, set) = match settings.shortcuts.get(act.name) {
-            Some(s) => (s.keys.iter().map(|k| label(k)).collect::<Vec<_>>(), true),
-            None => {
-                let mut keys: Vec<String> = act
-                    .bindings
-                    .iter()
-                    .flat_map(|(_, ks)| ks.iter())
-                    .map(|k| label(&parse_seq(k).expect("default shortcut parses")))
-                    .collect();
-                keys.dedup();
-                (keys, false)
-            }
-        };
+        let (keys, set) = keys_for(settings, act);
         let keys = if keys.is_empty() {
             "-".into()
         } else {
-            keys.join(", ")
+            keys.iter().map(|k| label(k)).collect::<Vec<_>>().join(", ")
         };
         let mark = if set { "  (config)" } else { "" };
         out.push_str(&format!("{:<22}{keys}{mark}\n", act.name));
@@ -498,6 +533,36 @@ mod tests {
         assert!(named("abromux::NewTerminal").is_empty());
         assert_eq!(named("abromux::RunCommand"), ["cmd-t"]);
         assert_eq!(named("terminal::Find").len(), 3, "one per context");
+    }
+
+    #[test]
+    fn recorded_keys() {
+        let rec = |s: &str| {
+            let mut k = Keystroke::parse(s).unwrap();
+            k.key_char = Some("x".into());
+            record(&k)
+        };
+        assert_eq!(rec("cmd-shift-k").as_deref(), Some("cmd-shift-k"));
+        assert_eq!(rec("alt-cmd-left").as_deref(), Some("alt-cmd-left"));
+        assert_eq!(rec("cmd-shift-}").as_deref(), Some("cmd-}"));
+        assert_eq!(rec("cmd-shift-<").as_deref(), Some("cmd-<"));
+        assert_eq!(rec("f5").as_deref(), Some("f5"));
+        assert_eq!(rec("k"), None, "plain keys are for typing");
+        assert_eq!(rec("shift-k"), None);
+    }
+
+    #[test]
+    fn keys_for_defaults_and_config() {
+        let settings: Settings =
+            serde_json::from_str(r#"{ "shortcuts": { "splitRight": "cmd-k" } }"#).unwrap();
+        let labels = |name: &str| {
+            let (keys, set) = keys_for(&settings, find(name).unwrap());
+            (keys.iter().map(|k| label(k)).collect::<Vec<_>>(), set)
+        };
+        assert_eq!(labels("splitRight"), (vec!["⌘K".to_string()], true));
+        // Bound in three contexts, listed once.
+        assert_eq!(labels("find"), (vec!["⌘F".to_string()], false));
+        assert_eq!(labels("openSettings"), (vec!["⌘,".to_string()], false));
     }
 
     #[test]

@@ -7,9 +7,9 @@ use crate::{
     About, CloseTab, CloseWorkspace, CommandPalette, EditDescription, FlashPane, FocusAddressBar,
     FocusDown, FocusLeft, FocusRight, FocusUp, GroupByFolder, JumpToUnread, LastPane,
     MoveWorkspaceDown, MoveWorkspaceUp, NewBrowser, NewGroup, NewTerminal, NewWorkspace, NextTab,
-    NextWorkspace, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab, RenameWorkspace,
-    ReopenSession, SplitDown, SplitRight, ToggleGroup, ToggleNotifications, ToggleSidebar,
-    ToggleZoom, Ungroup, WorkspaceSwitcher, browser, channel, terminal,
+    NextWorkspace, OpenSettings, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab,
+    RenameWorkspace, ReopenSession, SplitDown, SplitRight, ToggleGroup, ToggleNotifications,
+    ToggleSidebar, ToggleZoom, Ungroup, WorkspaceSwitcher, browser, channel, terminal,
 };
 use gpui::*;
 
@@ -71,6 +71,8 @@ pub fn set_menus(cx: &mut App) {
             name: app.into(),
             items: vec![
                 MenuItem::action(format!("About {app}"), About),
+                MenuItem::separator(),
+                MenuItem::action("Settings…", OpenSettings),
                 MenuItem::action("Reload Configuration", ReloadConfig),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
