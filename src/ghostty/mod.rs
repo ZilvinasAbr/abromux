@@ -709,6 +709,12 @@ impl Terminal {
         mem::take(&mut self.ud.fx)
     }
 
+    /// Just the replies owed to the program, leaving the other effects for
+    /// `take_effects`.
+    pub fn take_pty_response(&mut self) -> Vec<u8> {
+        mem::take(&mut self.ud.fx.pty_response)
+    }
+
     /// Whether the program is holding the screen mid-redraw (synchronized
     /// output), so drawing shows the frame from before it.
     pub fn held(&self) -> bool {
@@ -1714,6 +1720,11 @@ mod tests {
         assert_eq!(ask(&mut t, b"\x1b[16t"), "\x1b[6;20;10t", "cell size");
         assert_eq!(ask(&mut t, b"\x1b[14t"), "\x1b[4;60;200t", "text area");
         assert_eq!(ask(&mut t, b"\x1b[18t"), "\x1b[8;3;20t", "grid");
+        // In-band size reports (mode 2048): one on enabling, one per resize.
+        assert_eq!(ask(&mut t, b"\x1b[?2048h"), "\x1b[48;3;20;60;200t");
+        t.resize(30, 4, 10, 20);
+        let after = String::from_utf8_lossy(&t.take_effects().pty_response).into_owned();
+        assert_eq!(after, "\x1b[48;4;30;80;300t");
     }
 
     #[test]

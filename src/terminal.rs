@@ -469,6 +469,12 @@ impl TerminalView {
             pixel_width: cols * cw as u16,
             pixel_height: rows * ch as u16,
         });
+        // A program with in-band size reports (mode 2048) gets its report
+        // now, not when it next prints.
+        let reply = self.term.take_pty_response();
+        if !reply.is_empty() {
+            let _ = self.writer.write_all(&reply);
+        }
         self.dirty = true;
     }
 
