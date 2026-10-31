@@ -154,6 +154,13 @@ impl BrowserView {
             .build_as_child(window)
             .expect("create webview");
         webauthn::install(&raw);
+        // NSViews don't clip by default since macOS 14; keep the page from
+        // drawing past its frame over the focused pane's border just outside.
+        {
+            let wk = raw.webview();
+            let wk = &*wk as *const _ as *mut Object;
+            let _: () = unsafe { msg_send![wk, setClipsToBounds: true] };
+        }
         crate::cursor::install();
         if !url.is_empty() {
             let _ = raw.load_url(url);
