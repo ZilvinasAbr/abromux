@@ -5,6 +5,7 @@
 
 use crate::{
     AbroMux,
+    settings::SidebarSettings,
     theme::*,
     workspace::{LogEntry, LogLevel, Progress, Status, Workspace},
 };
@@ -146,14 +147,27 @@ impl AbroMux {
     }
 
     /// Pills, progress and the newest log line for the sidebar row.
-    pub(crate) fn render_ws_status(&self, ws: &Workspace, active: bool) -> Option<AnyElement> {
-        if ws.status.is_empty() && ws.progress.is_none() && ws.log.is_empty() {
+    pub(crate) fn render_ws_status(
+        &self,
+        ws: &Workspace,
+        active: bool,
+        sb: &SidebarSettings,
+    ) -> Option<AnyElement> {
+        let z = sb.font_size / 12.5;
+        let status = if sb.show_custom_metadata {
+            &ws.status[..]
+        } else {
+            &[]
+        };
+        let progress = ws.progress.as_ref().filter(|_| sb.show_progress);
+        let log = ws.log.last().filter(|_| sb.show_log);
+        if status.is_empty() && progress.is_none() && log.is_none() {
             return None;
         }
         let sub = if active { rgba(0xffffffc0) } else { rgb(MUTED) };
         let fg = if active { rgb(0xffffff) } else { rgb(TEXT) };
-        let agents = ws.status.iter().filter(|s| s.owner.is_some()).count();
-        let pills = ws.status.iter().map(|s| {
+        let agents = status.iter().filter(|s| s.owner.is_some()).count();
+        let pills = status.iter().map(|s| {
             // An agent's key carries its surface number to keep it apart from
             // others; show it only when there's more than one.
             let key = match s.owner {
@@ -173,9 +187,13 @@ impl AbroMux {
                 } else {
                     rgba(0xffffff0d)
                 })
-                .text_size(px(10.5))
+                .text_size(px(10.5 * z))
                 .map(|d| match s.icon.as_deref().filter(|i| ICONS.contains(i)) {
-                    Some(i) => d.child(icon(i).size(px(10.)).text_color(s.color.map_or(sub, rgb))),
+                    Some(i) => d.child(
+                        icon(i)
+                            .size(px(10. * z))
+                            .text_color(s.color.map_or(sub, rgb)),
+                    ),
                     None => d.child(
                         div()
                             .size(px(6.))
@@ -200,7 +218,7 @@ impl AbroMux {
                         .child(s.value.clone()),
                 )
         });
-        let progress = ws.progress.as_ref().map(|p| {
+        let progress = progress.map(|p| {
             let pct = (p.value.clamp(0., 1.) * 100.).round();
             div()
                 .flex()
@@ -211,7 +229,7 @@ impl AbroMux {
                         .flex()
                         .justify_between()
                         .gap(px(6.))
-                        .text_size(px(10.5))
+                        .text_size(px(10.5 * z))
                         .text_color(sub)
                         .child(
                             div()
@@ -240,7 +258,7 @@ impl AbroMux {
                         ),
                 )
         });
-        let log = ws.log.last().map(|l| {
+        let log = log.map(|l| {
             let color = if active {
                 sub
             } else {
@@ -254,7 +272,7 @@ impl AbroMux {
                 .flex()
                 .items_center()
                 .gap(px(4.))
-                .text_size(px(10.5))
+                .text_size(px(10.5 * z))
                 .child(div().size(px(6.)).flex_none().rounded_full().bg(color))
                 .child(
                     div()
@@ -274,7 +292,7 @@ impl AbroMux {
                 .flex()
                 .flex_col()
                 .gap(px(3.))
-                .when(!ws.status.is_empty(), |d| {
+                .when(!status.is_empty(), |d| {
                     d.child(
                         div()
                             .flex()

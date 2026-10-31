@@ -4,11 +4,12 @@
 //! outside a browser).
 
 use crate::{
-    About, CloseTab, CloseWorkspace, CommandPalette, FlashPane, FocusAddressBar, FocusDown,
-    FocusLeft, FocusRight, FocusUp, JumpToUnread, LastPane, NewBrowser, NewTerminal, NewWorkspace,
-    NextTab, NextWorkspace, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab, RenameWorkspace,
-    SplitDown, SplitRight, ToggleNotifications, ToggleSidebar, ToggleZoom, WorkspaceSwitcher,
-    browser, channel, terminal,
+    About, CloseTab, CloseWorkspace, CommandPalette, EditDescription, FlashPane, FocusAddressBar,
+    FocusDown, FocusLeft, FocusRight, FocusUp, GroupByFolder, JumpToUnread, LastPane,
+    MoveWorkspaceDown, MoveWorkspaceUp, NewBrowser, NewGroup, NewTerminal, NewWorkspace, NextTab,
+    NextWorkspace, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab, RenameWorkspace,
+    ReopenSession, SplitDown, SplitRight, ToggleGroup, ToggleNotifications, ToggleSidebar,
+    ToggleZoom, Ungroup, WorkspaceSwitcher, browser, channel, terminal,
 };
 use gpui::*;
 
@@ -93,6 +94,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Rename Tab…", RenameTab),
                 MenuItem::action("Rename Workspace…", RenameWorkspace),
+                MenuItem::action("Edit Workspace Description…", EditDescription),
                 MenuItem::action("Restart Shell", terminal::RestartShell),
                 MenuItem::separator(),
                 MenuItem::action("Close Tab", CloseTab),
@@ -100,6 +102,8 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Command Palette…", CommandPalette),
                 MenuItem::action("Go to Workspace…", WorkspaceSwitcher),
+                MenuItem::separator(),
+                MenuItem::action("Reopen Previous Session", ReopenSession),
             ],
         },
         Menu {
@@ -164,6 +168,17 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Next Workspace", NextWorkspace),
                 MenuItem::action("Previous Workspace", PrevWorkspace),
+                MenuItem::action("Move Workspace Up", MoveWorkspaceUp),
+                MenuItem::action("Move Workspace Down", MoveWorkspaceDown),
+                MenuItem::submenu(Menu {
+                    name: "Workspace Groups".into(),
+                    items: vec![
+                        MenuItem::action("New Group from Workspace", NewGroup),
+                        MenuItem::action("Group Workspaces by Folder", GroupByFolder),
+                        MenuItem::action("Collapse or Expand Group", ToggleGroup),
+                        MenuItem::action("Ungroup Workspaces", Ungroup),
+                    ],
+                }),
                 MenuItem::action("Next Tab", NextTab),
                 MenuItem::action("Previous Tab", PrevTab),
                 MenuItem::separator(),

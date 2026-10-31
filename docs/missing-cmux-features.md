@@ -58,11 +58,11 @@ So the list below reads in context:
 
 ## 3. Workspaces and sidebar
 
-- [x] **Session restore**: save on quit and restore on relaunch. That covers windows, workspaces, the split layout, working directories, scrollback (best effort) and browser URLs with their history. It also covers reopening the previous session (⌘⇧O, `restore-session`). *(partial: no browser back/forward history, and no ⌘⇧O / `restore-session`)*
-- [ ] **Workspace descriptions**: edit with ⌥⌘E and show them in the sidebar.
-- [ ] **Workspace colors**: per-workspace color, indicator style and selection color.
-- [ ] **Reordering workspaces**: drag in the sidebar, plus `reorder-workspace(s)` in the CLI.
-- [ ] **Workspace groups**: grouping by cwd and choosing where new workspaces are placed.
+- [x] **Session restore**: save on quit and restore on relaunch. That covers windows, workspaces, the split layout, working directories, scrollback (best effort) and browser URLs with their history. It also covers reopening the previous session (⌘⇧O, `restore-session`). *(⌘⇧O reopens the launch session's workspaces that aren't open; `restore-session --from stable|nightly|<file>` and `--export`)*
+- [x] **Workspace descriptions**: edit with ⌥⌘E and show them in the sidebar. *(also `new-workspace --description`, `workspace-action set-description`)*
+- [x] **Workspace colors**: per-workspace color, indicator style and selection color. *(partial: `leftRail` and `solidFill` styles only; `workspace-action set-color`, the right-click menu)*
+- [x] **Reordering workspaces**: drag in the sidebar, plus `reorder-workspace(s)` in the CLI. *(also `workspace-action move-up/move-down/move-top`)*
+- [x] **Workspace groups**: grouping by cwd and choosing where new workspaces are placed. *(partial: groups you make, or Group Workspaces by Folder, with `workspaceGroups.newWorkspacePlacement`; no `byCwd` icons or header context-menu entries from the config; `abromux group …` instead of cmux's group flags beyond `new-workspace --group`)*
 - [ ] **More sidebar metadata**:
   - [ ] linked PR status and number
   - [ ] listening ports
@@ -70,9 +70,9 @@ So the list below reads in context:
   - [x] status pills set by scripts (`set-status`, `clear-status`, `list-status`) *(partial: `--icon` only knows abromux's bundled icons; not saved with the session)*
   - [x] a progress bar (`set-progress`, `clear-progress`)
   - [x] a per-workspace log (`log`, `list-log`, `clear-log`) *(partial: the sidebar shows only the newest entry)*
-- [ ] **Sidebar settings**: font size, hiding details, wrapping titles, branch layout, last path segment only, tint and opacity.
-- [ ] **New workspaces inherit the cwd** (a setting). *(partial: ⌘N already uses the focused terminal's cwd)*
-- [ ] **Auto-naming workspaces** from what the agent is doing.
+- [x] **Sidebar settings**: font size, hiding details, wrapping titles, branch layout, last path segment only, tint and opacity. *(cmux's `sidebar`, `sidebarAppearance` and `workspaceColors` keys; not `matchTerminalBackground`, light/dark tints, badge or spinner positions, compact status)*
+- [x] **New workspaces inherit the cwd** (a setting). *(`app.workspaceInheritWorkingDirectory`, and `app.newWorkspacePlacement`)*
+- [x] **Auto-naming workspaces** from what the agent is doing. *(`automation.workspaceAutoNaming`, off by default: Claude Code and Codex name it from the first prompt; not tabs)*
 - [ ] **Right sidebar**: toggle it (⌥⌘B), focus it (⌘⇧E), and switch between modes such as file explorer, find, sessions, feed and dock.
 - [ ] **Dock**: custom terminal controls in the right sidebar, defined in `.cmux/dock.json` or `~/.config/cmux/dock.json`.
 - [ ] **Custom sidebars**: user-written, SwiftUI-style sidebar files. Beta in cmux.
@@ -182,7 +182,7 @@ What's missing beyond the browser commands above:
 
 If the goal is daily-driver parity, a reasonable sequence is:
 
-Done so far: customizable shortcuts and custom palette commands, including workspace layouts and project commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; agent status, notifications and resume for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; sidebar status, progress and log.
+Done so far: workspace descriptions, colors, groups, drag to reorder, sidebar settings, auto-naming and reopening the previous session; customizable shortcuts and custom palette commands, including workspace layouts and project commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; agent status, notifications and resume for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; sidebar status, progress and log.
 
 Next:
 

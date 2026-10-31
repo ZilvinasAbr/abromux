@@ -53,9 +53,12 @@ pub struct WorkspaceSpec {
     /// Typed into the first terminal before its own command.
     #[serde(default)]
     pub setup: Option<String>,
-    /// cmux's workspace colour; abromux has none, so it's ignored.
+    /// A `workspaceColors` name or `#rrggbb`.
     #[serde(default)]
     pub color: Option<String>,
+    /// Shown under the name in the sidebar.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -250,9 +253,16 @@ impl AbroMux {
         let panes: Vec<usize> = root.panes().iter().map(|p| p.id).collect();
         let focused = focus.unwrap_or(panes[0]);
         let name = spec.name.clone().or(name);
-        self.workspaces
-            .push(Workspace::new(id, name, root, focused));
-        let index = self.workspaces.len() - 1;
+        let mut ws = Workspace::new(id, name, root, focused);
+        let colors = &cx.global::<crate::settings::Settings>().workspace_colors;
+        ws.color = spec.color.as_deref().and_then(|c| colors.parse(c));
+        ws.description = spec
+            .description
+            .as_deref()
+            .and_then(crate::sidebar::clean_description);
+        let (index, group) = self.new_workspace_slot(cx);
+        ws.group = group;
+        let index = self.insert_workspace(index, ws);
         self.select_workspace(index, window, cx);
         index
     }

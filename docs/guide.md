@@ -66,7 +66,19 @@ The first passkey request asks to let AbroMux use passkeys (System Settings › 
 
 ## Session restore
 
-Quitting saves the session to `~/Library/Application Support/abromux/session.json` (the layout is also saved every few seconds, so a crash loses little). The next launch restores the window frame, workspaces and their names, the split layout and ratios, tabs and their names, each terminal's working directory and font size, browser URLs, and up to 2000 lines of each terminal's output (with colors). Shells start fresh: running programs aren't kept alive. Coding agents' sessions are the exception. Run `abromux hooks install` once and abromux learns, through the agents' hooks, which session runs in which terminal (the same hooks feed the sidebar status and notifications; rerun `install` after updating abromux to pick up new hook events). On restore, it types the agent's resume command into that terminal's new shell: `claude --resume <id>` (with the same permission mode), `codex resume <id>`, `gemini --resume <id>`, `droid --resume <id>`, `cursor-agent --resume <id>`, `opencode --session <id>` or `pi --session <id>`. A Codex, OpenCode or Pi you had quit isn't resumed. The hooks go after any hooks already there and do nothing outside abromux: `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`), `~/.codex/hooks.json` (or `$CODEX_HOME`), `~/.gemini/settings.json`, `~/.factory/hooks.json` (or the `hooks` in `~/.factory/settings.json` when there's no hooks.json) and `~/.cursor/hooks.json`. OpenCode and Pi get a plugin file instead: `~/.config/opencode/plugins/abromux.js` and `~/.pi/agent/extensions/abromux.js`. Agents whose folder doesn't exist are skipped; `abromux hooks install gemini pi` does just those. Codex asks you once to review new hooks: trust them when it does. They point at the binary you ran `install` from, so run it from the installed app; `abromux hooks uninstall` removes them. `ABROMUX_NO_RESTORE=1` skips it; `ABROMUX_SESSION_PATH` uses another file. `ABROMUX_DEMO` and `ABROMUX_SCRIPT` runs don't touch the session unless `ABROMUX_SESSION_PATH` is set.
+Quitting saves the session to `~/Library/Application Support/abromux/session.json` (the layout is also saved every few seconds, so a crash loses little). The next launch restores the window frame, workspaces with their names, descriptions, colors and groups, the split layout and ratios, tabs and their names, each terminal's working directory and font size, browser pages with their back/forward history (saved on quit), and up to 2000 lines of each terminal's output (with colors). Shells start fresh: running programs aren't kept alive. Coding agents' sessions are the exception. Run `abromux hooks install` once and abromux learns, through the agents' hooks, which session runs in which terminal (the same hooks feed the sidebar status and notifications; rerun `install` after updating abromux to pick up new hook events). On restore, it types the agent's resume command into that terminal's new shell: `claude --resume <id>` (with the same permission mode), `codex resume <id>`, `gemini --resume <id>`, `droid --resume <id>`, `cursor-agent --resume <id>`, `opencode --session <id>` or `pi --session <id>`. A Codex, OpenCode or Pi you had quit isn't resumed. The hooks go after any hooks already there and do nothing outside abromux: `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`), `~/.codex/hooks.json` (or `$CODEX_HOME`), `~/.gemini/settings.json`, `~/.factory/hooks.json` (or the `hooks` in `~/.factory/settings.json` when there's no hooks.json) and `~/.cursor/hooks.json`. OpenCode and Pi get a plugin file instead: `~/.config/opencode/plugins/abromux.js` and `~/.pi/agent/extensions/abromux.js`. Agents whose folder doesn't exist are skipped; `abromux hooks install gemini pi` does just those. Codex asks you once to review new hooks: trust them when it does. They point at the binary you ran `install` from, so run it from the installed app; `abromux hooks uninstall` removes them. `ABROMUX_NO_RESTORE=1` skips it; `ABROMUX_SESSION_PATH` uses another file. `ABROMUX_DEMO` and `ABROMUX_SCRIPT` runs don't touch the session unless `ABROMUX_SESSION_PATH` is set.
+
+Reopen Previous Session (⌘⇧O, File menu, or `abromux restore-session`) brings back the workspaces of the session this launch restored that aren't open any more, such as ones you closed by mistake. Workspaces still open as they were are skipped, so it never doubles one. `abromux restore-session --from nightly` (or `stable`, or a file) adds another session's workspaces, for example after trying the nightly app; `abromux restore-session --export <file> [--force]` writes the current one to a file.
+
+## Sidebar
+
+Each workspace's row shows its name, a description if it has one, the focused tab's title, the latest unread notification, status pills, progress and the newest log line from scripts, and the git branch and directory. Right-click a row for its menu: rename, add or edit a description, pick a color, move it, put it in a group, or close it (or every other one).
+
+- **Description**: ⌥⌘E (or right-click → Add Description…) edits it under the name. Return saves, ⇧↩ adds a line, Esc cancels, and an empty one clears it.
+- **Color**: right-click → Color, from cmux's sixteen (Red, Crimson, Orange, Amber, Olive, Green, Teal, Aqua, Blue, Navy, Indigo, Purple, Magenta, Rose, Brown, Charcoal) or your own palette (`workspaceColors.colors`). It shows as a bar down the row's left edge, or fills the row with `"indicatorStyle": "solidFill"`. A layout's `"color"` sets it too.
+- **Order**: drag a row to move it. A line shows where it will land, between two rows; between two of a group's workspaces puts it in that group, and above a group's header keeps it out. Dropping it on a header makes it the group's first. Right-click → Move Up / Move Down / Move to Top, or ⌘⇧P → Move Workspace Up / Down. ⌘1…⌘9 follow the order.
+- **Groups**: a header above workspaces that belong together. Right-click a row → Group → New Group starts one (named after the repository), or ⌘⇧P → Group Workspaces by Folder groups every workspace that shares a repository or folder with another. Click a header to fold it (a folded group still shows the selected workspace, and a dot if one has an unread notification), double-click to rename it, drag it to move the whole group, and use its `+` for a new workspace in the group's folder. Right-click a header to rename, color, ungroup or close it. ⌘N from a workspace in a group puts the new one in the group.
+- **Auto-naming** (off by default): with `"automation": { "workspaceAutoNaming": true }`, the first prompt you give a coding agent in a workspace is turned into a short name by that agent's own CLI (`claude -p` on Haiku, or `codex exec`), once per workspace. That runs a request on your account. A name you give the workspace always wins, and without one the name otherwise follows the agent's terminal title.
 
 ## Config file
 
@@ -83,6 +95,50 @@ abromux's own settings live in `~/.config/abromux/config.json` (or `$XDG_CONFIG_
 ```
 
 `resizeStep` is how many pixels ⌃⇧H/J/K/L and `resize-pane` move a divider. `dividerColor` is the line between split panes, and `focusBorderColor` the border around the focused one. Colors are `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`. Unknown keys are errors, so a typo doesn't go unnoticed.
+
+### Sidebar and workspace settings
+
+These use cmux's key names. Shown with their defaults:
+
+```json
+{
+  "app": {
+    "workspaceInheritWorkingDirectory": true,
+    "newWorkspacePlacement": "end"
+  },
+  "sidebar": {
+    "fontSize": 12.5,
+    "hideAllDetails": false,
+    "wrapWorkspaceTitles": false,
+    "showWorkspaceDescription": true,
+    "workspaceDescriptionColor": null,
+    "showNotificationMessage": true,
+    "showBranchDirectory": true,
+    "stackBranchDirectory": false,
+    "pathLastSegmentOnly": false,
+    "showProgress": true,
+    "showLog": true,
+    "showCustomMetadata": true,
+    "selectionColor": null
+  },
+  "sidebarAppearance": { "tintColor": null, "tintOpacity": 0.18 },
+  "workspaceColors": {
+    "indicatorStyle": "leftRail",
+    "selectionColor": null,
+    "unselectedFillOpacity": 0.7,
+    "colors": { "Red": "#C0392B", "Blue": "#1565C0" }
+  },
+  "workspaceGroups": { "newWorkspacePlacement": "afterCurrent" },
+  "automation": { "workspaceAutoNaming": false }
+}
+```
+
+- `workspaceInheritWorkingDirectory`: ⌘N and the `+` start in the focused terminal's directory; `false` starts in your home folder.
+- `newWorkspacePlacement`: where a new workspace goes, `top`, `afterCurrent` (after the selected one, or after its group) or `end`. `workspaceGroups.newWorkspacePlacement` is the same inside a group, where `top` means right after the group's first workspace.
+- `fontSize` sizes the workspace names (8–24); the smaller lines scale with it. `hideAllDetails` shows names only. `wrapWorkspaceTitles` lets long names wrap.
+- `showWorkspaceDescription`, `showNotificationMessage`, `showBranchDirectory`, `showProgress`, `showLog` and `showCustomMetadata` (status pills) hide those lines when `false`. `stackBranchDirectory` puts the branch and the directory on lines of their own, and `pathLastSegmentOnly` shows `…/api` instead of `~/code/api`.
+- `selectionColor` (in `sidebar` or `workspaceColors`) is the selected row's fill; it's the accent color by default. `sidebarAppearance.tintColor` lays a tint of that opacity over the sidebar.
+- `workspaceColors.colors` replaces the palette the Color menu offers and `set-color` names (cmux's sixteen by default). `indicatorStyle` is `leftRail` or `solidFill`; with `solidFill`, rows other than the selected one show their color at `unselectedFillOpacity`.
 
 ### Shortcuts and commands
 
@@ -172,6 +228,13 @@ abromux jump-to-unread
 abromux set-status build compiling --color '#e0a84f'   # a pill under the workspace
 abromux set-progress 0.4 --label 'Building'
 abromux log --level error --source build 'Build failed'
+abromux workspace-action set-description 'Ship the release'   # cmux's workspace actions
+abromux workspace-action --workspace workspace:2 set-color Teal
+abromux reorder-workspace --workspace workspace:4 --index 0
+abromux group create --name api             # a sidebar group holding this workspace
+abromux group add --group group:1 --workspace workspace:5
+abromux new-workspace --cwd ~/code/api --group group:1 --description 'Fix the 500s'
+abromux restore-session --from nightly
 abromux --json list-panes
 ```
 
@@ -198,6 +261,11 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 |---|---|---|
 | New workspace | `+` in sidebar header / footer | ⌘N |
 | Rename workspace | double-click its name (Enter saves, Esc cancels) | ⌘⇧R |
+| Workspace description | right-click → Add Description… (Return saves, ⇧↩ new line) | ⌥⌘E |
+| Workspace color, group, move, close others | right-click the row | |
+| Reorder workspaces | drag a row (onto a group to join it) or a group header | ⌘⇧P → Move Workspace Up / Down |
+| Fold a group | click its header (double-click renames, right-click for more) | ⌘⇧P → Collapse or Expand Group |
+| Reopen workspaces closed since launch | | ⌘⇧O |
 | Delete workspace | hover → `×` | ⌘⇧W |
 | Select workspace | click | ⌘1…⌘8, ⌘9 for the last, ⌃⌘[ / ⌃⌘] (hold ⌘ to see the numbers) |
 | New terminal tab | terminal icon in pane tab bar | ⌘T |
@@ -272,7 +340,7 @@ History lives in `<git common dir>/abromux-perf/history.jsonl`, outside the tree
 - `src/terminal.rs`: PTY plumbing plus a custom GPUI `Element` that paints the grid
 - `src/browser.rs`: the webview pane; `src/webauthn.{rs,js,m}`: the passkey bridge
 - `src/workspace.rs`: the workspace, split-tree and surface model
-- `src/main.rs`: the app shell (sidebar, pane tab bars, splits, actions)
+- `src/main.rs`: the app shell (pane tab bars, splits, actions); `src/sidebar.rs`: the sidebar's rows, groups, menus and drag to reorder
 - `src/bench.rs`: `abromux bench-vt` and `abromux bench-kitty`, the headless parse benchmarks used by `scripts/perf.py`
 - `src/server.rs`: the control socket's method handlers; `src/cli.rs`: the `abromux` commands; `src/ipc.rs`: the shared wire format
 

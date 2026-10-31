@@ -49,7 +49,17 @@ pub const ACTIONS: &[Act] = {
     acts![
         "newWorkspace", Some("New Workspace"), NewWorkspace, [(None, ["cmd-n"])];
         "renameWorkspace", Some("Rename Workspace…"), RenameWorkspace, [(None, ["cmd-shift-r"])];
+        "editWorkspaceDescription", Some("Edit Workspace Description…"), EditDescription,
+            [(None, ["alt-cmd-e"])];
         "closeWorkspace", Some("Close Workspace"), CloseWorkspace, [(None, ["cmd-shift-w"])];
+        "moveWorkspaceUp", Some("Move Workspace Up"), MoveWorkspaceUp, [(None, [])];
+        "moveWorkspaceDown", Some("Move Workspace Down"), MoveWorkspaceDown, [(None, [])];
+        "newWorkspaceGroup", Some("New Group from Workspace"), NewGroup, [(None, [])];
+        "groupWorkspacesByFolder", Some("Group Workspaces by Folder"), GroupByFolder, [(None, [])];
+        "ungroupWorkspaces", Some("Ungroup Workspaces"), Ungroup, [(None, [])];
+        "toggleWorkspaceGroup", Some("Collapse or Expand Group"), ToggleGroup, [(None, [])];
+        "reopenPreviousSession", Some("Reopen Previous Session"), ReopenSession,
+            [(None, ["cmd-shift-o"])];
         "nextWorkspace", Some("Next Workspace"), NextWorkspace, [(None, ["ctrl-cmd-]"])];
         "previousWorkspace", Some("Previous Workspace"), PrevWorkspace, [(None, ["ctrl-cmd-["])];
         "newTerminal", Some("New Terminal Tab"), NewTerminal, [(None, ["cmd-t"])];
