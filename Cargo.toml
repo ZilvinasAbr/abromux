@@ -17,7 +17,8 @@ portable-pty = "0.9"
 anyhow = "1"
 futures = { version = "0.3", features = ["executor"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order: the Settings window rewrites config.json keeping the user's key order
+serde_json = { version = "1", features = ["preserve_order"] }
 # inline terminal cell text (already a gpui dependency)
 smol_str = "0.2"
 # OSC 99 scan for ESC (already a dependency of several crates)
