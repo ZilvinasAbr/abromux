@@ -14,6 +14,8 @@ mod debug;
 mod ghostty;
 mod icon;
 mod ipc;
+mod keymap;
+mod layout;
 mod link;
 mod menu;
 mod notification;
@@ -104,7 +106,12 @@ actions!(
         CommandPalette,
         WorkspaceSwitcher,
         RenameTab,
-        ReloadConfig
+        ReloadConfig,
+        LastPane,
+        SwapLeft,
+        SwapRight,
+        SwapUp,
+        SwapDown
     ]
 );
 
@@ -165,7 +172,9 @@ impl AssetSource for Assets {
             "search",
             "circle-x",
             "pencil",
-            "maximize-2"
+            "maximize-2",
+            "lock",
+            "bot"
         );
         Ok(bytes.map(Cow::Borrowed))
     }
@@ -441,11 +450,23 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Surface {
+        self.make_terminal_with(cwd, ws, vec![], window, cx)
+    }
+
+    /// `make_terminal` with extra environment variables for the shell.
+    fn make_terminal_with(
+        &mut self,
+        cwd: Option<String>,
+        ws: usize,
+        mut env: Vec<(String, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Surface {
         let surface = self.next_surface + 1;
-        let mut env = vec![
+        env.extend([
             ("ABROMUX_WORKSPACE_ID".into(), format!("workspace:{ws}")),
             ("ABROMUX_SURFACE_ID".into(), format!("surface:{surface}")),
-        ];
+        ]);
         if let Some(path) = &self.socket {
             env.push((
                 "ABROMUX_SOCKET_PATH".into(),
@@ -981,6 +1002,192 @@ impl AbroMux {
         }
     }
 
+    fn last_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let ws = &mut self.workspaces[self.active];
+        let Some(id) = ws.last_pane() else {
+            return false;
+        };
+        ws.focused_pane = id;
+        self.focus_active(window, cx);
+        cx.notify();
+        true
+    }
+
+    fn swap_dir(&mut self, dir: Dir, window: &mut Window, cx: &mut Context<Self>) {
+        let ws = &mut self.workspaces[self.active];
+        if ws.swap_pane(ws.focused_pane, dir) {
+            self.focus_active(window, cx);
+            cx.notify();
+        }
+    }
+
+    /// `"commands"[index]` of the config file, or of the project file
+    /// `project`, from the palette or its shortcut. A project command asks
+    /// first until it's trusted as written; `confirm` asks every time.
+    fn run_command(
+        &mut self,
+        index: usize,
+        project: Option<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (c, untrusted, base) = match &project {
+            None => match cx.global::<settings::Settings>().commands.get(index) {
+                Some(c) => (c.clone(), None, None),
+                None => return,
+            },
+            Some(file) => match settings::read_project(file) {
+                Ok(mut cmds) if index < cmds.len() => {
+                    let (c, raw) = cmds.swap_remove(index);
+                    let untrusted =
+                        (!settings::is_trusted(file, &raw)).then(|| (file.clone(), raw));
+                    let base = settings::project_root(file).to_path_buf();
+                    (c, untrusted, Some(base))
+                }
+                Ok(_) => return,
+                Err(e) => return window.push_notification(settings::error_notification(e), cx),
+            },
+        };
+        if !c.confirm && untrusted.is_none() {
+            return self.execute_command(c, base, window, cx);
+        }
+        let mut detail = c.describe();
+        let message = match &untrusted {
+            Some((file, _)) => {
+                detail = format!(
+                    "{detail}\n\nFrom {}. You're asked once for each project command, and again if it changes.",
+                    tilde(&file.to_string_lossy())
+                );
+                format!("Run “{}” from this project?", c.title)
+            }
+            None => format!("Run “{}”?", c.title),
+        };
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &message,
+            Some(&detail),
+            &["Run", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await != Ok(0) {
+                return;
+            }
+            if let Some((file, raw)) = &untrusted {
+                settings::trust(file, raw);
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.execute_command(c, base, window, cx)
+            });
+        })
+        .detach();
+    }
+
+    /// Run `c`; `base` is its project's directory, which a workspace's
+    /// `cwd` is relative to (else the focused terminal's).
+    fn execute_command(
+        &mut self,
+        c: settings::Command,
+        base: Option<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(url) = &c.url {
+            let s = self.make_browser(&browser::normalize_url(url), window, cx);
+            return self.add_tab(s, window, cx);
+        }
+        if let Some(spec) = &c.workspace {
+            let name = c.workspace_name().unwrap_or_default().to_string();
+            let open = self
+                .workspaces
+                .iter()
+                .position(|w| w.custom_name.as_deref() == Some(name.as_str()));
+            let base = base
+                .or_else(|| self.focused_cwd(cx).map(Into::into))
+                .unwrap_or_else(|| std::env::var("HOME").unwrap_or_default().into());
+            let Some(i) = open else {
+                self.open_layout(spec, Some(name), &base, window, cx);
+                return;
+            };
+            match c.restart {
+                settings::Restart::New => {
+                    self.open_layout(spec, Some(name), &base, window, cx);
+                }
+                settings::Restart::Ignore => self.select_workspace(i, window, cx),
+                settings::Restart::Recreate => {
+                    self.replace_workspace(i, spec, name, &base, window, cx)
+                }
+                settings::Restart::Confirm => {
+                    let answer = window.prompt(
+                        PromptLevel::Info,
+                        &format!("Replace the open “{name}” workspace?"),
+                        Some("Its terminals are closed and the layout is built again."),
+                        &["Replace", "Cancel"],
+                        cx,
+                    );
+                    let (id, spec) = (self.workspaces[i].id, spec.clone());
+                    cx.spawn_in(window, async move |this, cx| {
+                        if answer.await != Ok(0) {
+                            return;
+                        }
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            // It may have moved or closed meanwhile.
+                            match this.workspaces.iter().position(|w| w.id == id) {
+                                Some(i) => {
+                                    this.replace_workspace(i, &spec, name, &base, window, cx)
+                                }
+                                None => {
+                                    this.open_layout(&spec, Some(name), &base, window, cx);
+                                }
+                            }
+                        });
+                    })
+                    .detach();
+                }
+            }
+            return;
+        }
+        let Some(run) = c.run else { return };
+        let term = match self.ws().focused_surface() {
+            Some(Surface::Terminal(t)) if !c.new_tab => t.clone(),
+            // No terminal to type into: open one, as `newTab` does.
+            _ => {
+                let cwd = self.focused_cwd(cx);
+                let ws = self.ws().id;
+                let s = self.make_terminal(cwd, ws, window, cx);
+                let Surface::Terminal(t) = &s else { return };
+                let t = t.clone();
+                self.add_tab(s, window, cx);
+                t
+            }
+        };
+        term.update(cx, |t, cx| {
+            t.send(format!("{run}\r").as_bytes());
+            cx.notify();
+        });
+    }
+
+    /// Close workspace `i` and build `spec` in its place.
+    fn replace_workspace(
+        &mut self,
+        i: usize,
+        spec: &layout::WorkspaceSpec,
+        name: String,
+        base: &std::path::Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new = self.open_layout(spec, Some(name), base, window, cx);
+        let id = self.workspaces[new].id;
+        self.close_workspace(i, window, cx);
+        let new = self.workspaces.len() - 1;
+        let moved = self.workspaces.remove(new);
+        debug_assert_eq!(moved.id, id);
+        // Where the old one was, so the sidebar order stays.
+        self.workspaces.insert(i, moved);
+        self.select_workspace(i, window, cx);
+    }
+
     fn focus_dir(&mut self, dir: Dir, window: &mut Window, cx: &mut Context<Self>) {
         let ws = &mut self.workspaces[self.active];
         if let Some(id) = ws.root.neighbor(ws.focused_pane, dir) {
@@ -1040,7 +1247,11 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let result = settings::load().map(|s| cx.set_global(s));
+        let result = settings::load().map(|s| {
+            keymap::apply(&s, cx);
+            cx.set_global(s);
+            menu::set_menus(cx);
+        });
         let note = match &result {
             Ok(()) => Notification::success(format!(
                 "Reloaded {}",
@@ -1874,6 +2085,9 @@ impl AbroMux {
 
 impl Render for AbroMux {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        for ws in &mut self.workspaces {
+            ws.track_focus();
+        }
         self.window_bounds = Some(window.window_bounds().get_bounds());
         self.mark_viewed(window);
         for ws in &mut self.workspaces {
@@ -2024,6 +2238,16 @@ impl Render for AbroMux {
             .map(|d| self.palette_actions(d, cx))
             .on_action(cx.listener(|this, _: &JumpToUnread, window, cx| {
                 this.jump_to_unread(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &LastPane, window, cx| {
+                this.last_pane(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwapLeft, w, cx| this.swap_dir(Dir::Left, w, cx)))
+            .on_action(cx.listener(|this, _: &SwapRight, w, cx| this.swap_dir(Dir::Right, w, cx)))
+            .on_action(cx.listener(|this, _: &SwapUp, w, cx| this.swap_dir(Dir::Up, w, cx)))
+            .on_action(cx.listener(|this, _: &SwapDown, w, cx| this.swap_dir(Dir::Down, w, cx)))
+            .on_action(cx.listener(|this, a: &keymap::RunCommand, window, cx| {
+                this.run_command(a.index, a.project.clone(), window, cx)
             }))
             .on_action(cx.listener(|this, _: &ReloadConfig, window, cx| {
                 // A toast says how it went.
@@ -2284,62 +2508,10 @@ fn run_app(cwd: Option<String>) {
             }
         });
         cx.on_action(|_: &About, cx| about::show(cx));
+        // The fixed bindings; the shortcuts users can change are in keymap.rs.
         cx.bind_keys([
-            KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("cmd-w", about::CloseAbout, Some("About")),
             KeyBinding::new("escape", about::CloseAbout, Some("About")),
-            KeyBinding::new("cmd-n", NewWorkspace, None),
-            KeyBinding::new("cmd-shift-w", CloseWorkspace, None),
-            KeyBinding::new("cmd-shift-r", RenameWorkspace, None),
-            KeyBinding::new("ctrl-cmd-]", NextWorkspace, None),
-            KeyBinding::new("ctrl-cmd-[", PrevWorkspace, None),
-            KeyBinding::new("cmd-t", NewTerminal, None),
-            KeyBinding::new("cmd-shift-l", NewBrowser, None),
-            KeyBinding::new("cmd-d", SplitRight, None),
-            KeyBinding::new("cmd-shift-d", SplitDown, None),
-            KeyBinding::new("cmd-w", CloseTab, None),
-            // ⌘⇧] arrives from macOS as cmd-} (shift folded into the key), so
-            // "cmd-shift-]" would never match.
-            KeyBinding::new("cmd-}", NextTab, None),
-            KeyBinding::new("cmd-{", PrevTab, None),
-            KeyBinding::new("cmd-b", ToggleSidebar, None),
-            KeyBinding::new("cmd-l", FocusAddressBar, None),
-            KeyBinding::new("cmd-1", Ws1, None),
-            KeyBinding::new("cmd-2", Ws2, None),
-            KeyBinding::new("cmd-3", Ws3, None),
-            KeyBinding::new("cmd-4", Ws4, None),
-            KeyBinding::new("cmd-5", Ws5, None),
-            KeyBinding::new("cmd-6", Ws6, None),
-            KeyBinding::new("cmd-7", Ws7, None),
-            KeyBinding::new("cmd-8", Ws8, None),
-            KeyBinding::new("cmd-9", Ws9, None),
-            KeyBinding::new("ctrl-1", Tab1, None),
-            KeyBinding::new("ctrl-2", Tab2, None),
-            KeyBinding::new("ctrl-3", Tab3, None),
-            KeyBinding::new("ctrl-4", Tab4, None),
-            KeyBinding::new("ctrl-5", Tab5, None),
-            KeyBinding::new("ctrl-6", Tab6, None),
-            KeyBinding::new("ctrl-7", Tab7, None),
-            KeyBinding::new("ctrl-8", Tab8, None),
-            KeyBinding::new("ctrl-9", Tab9, None),
-            KeyBinding::new("ctrl-tab", NextTab, None),
-            KeyBinding::new("ctrl-shift-tab", PrevTab, None),
-            KeyBinding::new("alt-cmd-left", FocusLeft, None),
-            KeyBinding::new("alt-cmd-right", FocusRight, None),
-            KeyBinding::new("alt-cmd-up", FocusUp, None),
-            KeyBinding::new("alt-cmd-down", FocusDown, None),
-            KeyBinding::new("ctrl-shift-h", ResizeLeft, None),
-            KeyBinding::new("ctrl-shift-j", ResizeDown, None),
-            KeyBinding::new("ctrl-shift-k", ResizeUp, None),
-            KeyBinding::new("ctrl-shift-l", ResizeRight, None),
-            KeyBinding::new("cmd-shift-h", FlashPane, None),
-            KeyBinding::new("cmd-shift-enter", ToggleZoom, None),
-            KeyBinding::new("cmd-i", ToggleNotifications, None),
-            KeyBinding::new("cmd-shift-u", JumpToUnread, None),
-            KeyBinding::new("cmd-shift-p", CommandPalette, None),
-            KeyBinding::new("cmd-p", WorkspaceSwitcher, None),
-            // ⌘⇧, arrives as cmd-< (see cmd-} below).
-            KeyBinding::new("cmd-<", ReloadConfig, None),
             KeyBinding::new("down", palette::SelectNext, Some("CommandPalette > Input")),
             KeyBinding::new(
                 "ctrl-n",
@@ -2358,35 +2530,11 @@ fn run_app(cwd: Option<String>) {
             KeyBinding::new("tab", NoAction, Some("Terminal")),
             KeyBinding::new("shift-tab", NoAction, Some("Terminal")),
             KeyBinding::new("ctrl-shift-i", NoAction, Some("Terminal")),
-            KeyBinding::new("cmd-c", terminal::Copy, Some("Terminal")),
-            KeyBinding::new("cmd-v", terminal::Paste, Some("Terminal")),
-            KeyBinding::new("cmd-=", terminal::IncreaseFontSize, Some("Terminal")),
-            KeyBinding::new("cmd-+", terminal::IncreaseFontSize, Some("Terminal")),
-            KeyBinding::new("cmd--", terminal::DecreaseFontSize, Some("Terminal")),
-            KeyBinding::new("cmd-0", terminal::ResetFontSize, Some("Terminal")),
-            KeyBinding::new("cmd-k", terminal::ClearScrollback, Some("Terminal")),
-            KeyBinding::new("cmd-f", terminal::Find, Some("Terminal")),
-            KeyBinding::new("cmd-g", terminal::FindNext, Some("Terminal")),
-            KeyBinding::new("cmd-shift-g", terminal::FindPrevious, Some("Terminal")),
-            KeyBinding::new("alt-cmd-g", terminal::FindPrevious, Some("Terminal")),
-            KeyBinding::new("cmd-e", terminal::UseSelectionForFind, Some("Terminal")),
             KeyBinding::new("shift-enter", terminal::FindPrevious, Some("FindBar")),
-            KeyBinding::new("cmd-[", browser::Back, Some("Browser")),
-            KeyBinding::new("cmd-]", browser::Forward, Some("Browser")),
-            KeyBinding::new("cmd-r", browser::Reload, Some("Browser")),
-            KeyBinding::new("alt-cmd-i", browser::ToggleDevTools, Some("Browser")),
-            KeyBinding::new("alt-cmd-c", browser::ShowConsole, Some("Browser")),
-            KeyBinding::new("cmd-f", terminal::Find, Some("Browser")),
-            KeyBinding::new("cmd-g", terminal::FindNext, Some("Browser")),
-            KeyBinding::new("cmd-shift-g", terminal::FindPrevious, Some("Browser")),
-            KeyBinding::new("alt-cmd-g", terminal::FindPrevious, Some("Browser")),
-            KeyBinding::new("cmd-e", terminal::UseSelectionForFind, Some("Browser")),
-            // The address and find fields take these for search and indent.
-            KeyBinding::new("cmd-f", terminal::Find, Some("Browser > Input")),
-            KeyBinding::new("cmd-[", browser::Back, Some("Browser > Input")),
-            KeyBinding::new("cmd-]", browser::Forward, Some("Browser > Input")),
         ]);
         menu::init(cx);
+        keymap::apply(&cx.global::<settings::Settings>().clone(), cx);
+        menu::set_menus(cx);
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
                 cx.quit();

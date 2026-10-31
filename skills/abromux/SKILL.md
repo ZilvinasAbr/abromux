@@ -48,6 +48,7 @@ The first ref printed is the new terminal. Keep it; every later command needs it
 - `new-split <left|right|up|down>`: splits your pane (or `--surface`'s).
 - `new-surface`: a new tab in your pane (or `--pane`).
 - `new-workspace --name <title> --cwd <dir>`: a new sidebar entry.
+- `new-workspace --name <title> --cwd <dir> --layout '<json>'`: a new workspace already split, in cmux's layout format: `{"direction": "horizontal", "split": 0.5, "children": [{"pane": {"surfaces": [{"command": "npm run dev"}]}}, {"pane": {"surfaces": [{"type": "browser", "url": "localhost:3000"}]}}]}`. `--layout @file.json` reads it from a file.
 - All take `--command <text>` (typed into the new shell, then Enter), `--cwd <dir>` and `--type browser --url <url>`.
 
 ## Talk to another terminal
@@ -78,7 +79,7 @@ abromux log --level success --source deploy 'Deployed to staging'   # info|progr
 abromux notify --title 'Done' --body 'All 213 tests pass'
 ```
 
-`notify` marks your terminal: it rings the pane, dots the tab and workspace, and shows a macOS banner if abromux is in the background. Use it once when a long task finishes or you need the user, not for every step. Claude Code and Codex already notify through their hooks (`abromux hooks install`) when they finish a turn or ask for permission, so don't duplicate that.
+`notify` marks your terminal: it rings the pane, dots the tab and workspace, and shows a macOS banner if abromux is in the background. Use it once when a long task finishes or you need the user, not for every step. Coding agents with hooks (`abromux hooks install`: Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode, Pi) already notify when they finish a turn or ask for permission, so don't duplicate that.
 
 Clear status pills and progress you set once they no longer apply.
 

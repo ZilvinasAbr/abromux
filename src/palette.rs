@@ -7,11 +7,16 @@
 //! shortcut would.
 
 use crate::{
-    AbroMux, TITLEBAR_H, browser, channel, shortcut_digit, terminal, theme::*, workspace::Surface,
+    AbroMux, TITLEBAR_H, channel, keymap,
+    settings::{self, Command, Settings},
+    shortcut_digit,
+    theme::*,
+    workspace::Surface,
     workspace::tilde,
 };
 use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputEvent, InputState};
+use std::path::Path;
 
 actions!(palette, [SelectNext, SelectPrev, Confirm, Dismiss]);
 
@@ -34,6 +39,8 @@ enum Target {
 struct Entry {
     title: SharedString,
     subtitle: Option<SharedString>,
+    /// More words it matches, after the title.
+    keywords: Vec<String>,
     keys: Option<SharedString>,
     target: Target,
 }
@@ -51,66 +58,58 @@ pub struct Palette {
     scroll: ScrollHandle,
 }
 
-/// Commands in palette order. Ws1–9 and Tab1–9 are left out: the switcher
-/// and the tab bar cover them.
-fn commands() -> Vec<(&'static str, Box<dyn Action>)> {
-    use crate::{
-        CloseTab, CloseWorkspace, FlashPane, FocusAddressBar, FocusDown, FocusLeft, FocusRight,
-        FocusUp, JumpToUnread, NewBrowser, NewTerminal, NewWorkspace, NextTab, NextWorkspace,
-        PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab, RenameWorkspace, ResizeDown,
-        ResizeLeft, ResizeRight, ResizeUp, SplitDown, SplitRight, ToggleNotifications,
-        ToggleSidebar, ToggleZoom,
+/// A palette command: its title, subtitle, extra search words and action.
+type Cmd = (String, Option<String>, Vec<String>, Box<dyn Action>);
+
+/// Commands in palette order: the actions with a title, then the config
+/// file's commands, then those of the project file at `project` (which
+/// replace config ones of the same title). Ws1–9 and Tab1–9 have none: the
+/// switcher and the tab bar cover them.
+fn commands(project: Option<&Path>, cx: &App) -> Vec<Cmd> {
+    let builtin = keymap::ACTIONS
+        .iter()
+        .filter_map(|a| a.title.map(|t| (t.to_string(), None, vec![], (a.action)())));
+    // A project file that doesn't parse shows its error as a command.
+    let local = project.map(|p| (p, settings::read_project(p)));
+    let local_titles: Vec<String> = match &local {
+        Some((_, Ok(cmds))) => cmds.iter().map(|(c, _)| c.title.clone()).collect(),
+        _ => vec![],
     };
-    vec![
-        ("New Workspace", Box::new(NewWorkspace)),
-        ("Rename Workspace…", Box::new(RenameWorkspace)),
-        ("Close Workspace", Box::new(CloseWorkspace)),
-        ("Next Workspace", Box::new(NextWorkspace)),
-        ("Previous Workspace", Box::new(PrevWorkspace)),
-        ("New Terminal Tab", Box::new(NewTerminal)),
-        ("New Browser Tab", Box::new(NewBrowser)),
-        ("Split Right", Box::new(SplitRight)),
-        ("Split Down", Box::new(SplitDown)),
-        ("Rename Tab…", Box::new(RenameTab)),
-        ("Close Tab", Box::new(CloseTab)),
-        ("Next Tab", Box::new(NextTab)),
-        ("Previous Tab", Box::new(PrevTab)),
-        ("Focus Pane Left", Box::new(FocusLeft)),
-        ("Focus Pane Right", Box::new(FocusRight)),
-        ("Focus Pane Up", Box::new(FocusUp)),
-        ("Focus Pane Down", Box::new(FocusDown)),
-        ("Resize Pane Left", Box::new(ResizeLeft)),
-        ("Resize Pane Right", Box::new(ResizeRight)),
-        ("Resize Pane Up", Box::new(ResizeUp)),
-        ("Resize Pane Down", Box::new(ResizeDown)),
-        ("Flash Focused Pane", Box::new(FlashPane)),
-        ("Toggle Pane Zoom", Box::new(ToggleZoom)),
-        ("Toggle Sidebar", Box::new(ToggleSidebar)),
-        ("Show Notifications", Box::new(ToggleNotifications)),
-        ("Jump to Latest Unread", Box::new(JumpToUnread)),
-        ("Reload Config", Box::new(ReloadConfig)),
-        ("Copy", Box::new(terminal::Copy)),
-        ("Paste", Box::new(terminal::Paste)),
-        ("Find…", Box::new(terminal::Find)),
-        ("Find Next", Box::new(terminal::FindNext)),
-        ("Find Previous", Box::new(terminal::FindPrevious)),
-        (
-            "Use Selection for Find",
-            Box::new(terminal::UseSelectionForFind),
-        ),
-        ("Clear Scrollback", Box::new(terminal::ClearScrollback)),
-        ("Restart Shell", Box::new(terminal::RestartShell)),
-        ("Increase Font Size", Box::new(terminal::IncreaseFontSize)),
-        ("Decrease Font Size", Box::new(terminal::DecreaseFontSize)),
-        ("Reset Font Size", Box::new(terminal::ResetFontSize)),
-        ("Focus Address Bar", Box::new(FocusAddressBar)),
-        ("Back", Box::new(browser::Back)),
-        ("Forward", Box::new(browser::Forward)),
-        ("Reload Page", Box::new(browser::Reload)),
-        ("Toggle Developer Tools", Box::new(browser::ToggleDevTools)),
-        ("Show JavaScript Console", Box::new(browser::ShowConsole)),
-        ("Quit", Box::new(Quit)),
-    ]
+    let entry = |c: &Command, project: Option<&Path>, index| -> Cmd {
+        let action: Box<dyn Action> = Box::new(keymap::RunCommand {
+            index,
+            project: project.map(Path::to_path_buf),
+        });
+        let subtitle = c.description.clone().or_else(|| {
+            let root = settings::project_root(project?);
+            let name = root.file_name().unwrap_or(root.as_os_str());
+            Some(format!("{} project", name.to_string_lossy()))
+        });
+        (c.title.clone(), subtitle, c.keywords.clone(), action)
+    };
+    let global: Vec<Cmd> = cx
+        .global::<Settings>()
+        .commands
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !local_titles.contains(&c.title))
+        .map(|(i, c)| entry(c, None, i))
+        .collect();
+    let local: Vec<Cmd> = match &local {
+        Some((p, Ok(cmds))) => cmds
+            .iter()
+            .enumerate()
+            .map(|(i, (c, _))| entry(c, Some(p), i))
+            .collect(),
+        Some((_, Err(e))) => vec![(
+            "Project commands not loaded".into(),
+            Some(e.clone()),
+            vec![],
+            Box::new(crate::ReloadConfig),
+        )],
+        None => vec![],
+    };
+    builtin.chain(global).chain(local).collect()
 }
 
 impl AbroMux {
@@ -228,23 +227,26 @@ impl AbroMux {
     /// The commands that apply to what has focus now, with their shortcuts.
     fn command_entries(&self, window: &Window, cx: &mut App) -> Vec<Entry> {
         let browser = matches!(self.ws().focused_surface(), Some(Surface::Browser(_)));
-        let available: Vec<_> = commands()
+        let project = self
+            .focused_cwd(cx)
+            .and_then(|d| settings::find_project(Path::new(&d)));
+        let available: Vec<_> = commands(project.as_deref(), cx)
             .into_iter()
             // Root actions are always available; this drops terminal ones
             // when a browser has focus and the other way round.
-            .filter(|(_, a)| window.is_action_available(a.as_ref(), cx))
+            .filter(|(.., a)| window.is_action_available(a.as_ref(), cx))
             // Its handler sits on the root, but it only acts on a browser.
-            .filter(|(_, a)| browser || !a.as_any().is::<crate::FocusAddressBar>())
+            .filter(|(.., a)| browser || !a.as_any().is::<crate::FocusAddressBar>())
             .collect();
         let stack = window.context_stack();
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
         available
             .into_iter()
-            .map(|(title, action)| {
-                let title = match title {
+            .map(|(title, subtitle, keywords, action)| {
+                let title = match title.as_str() {
                     "Quit" => format!("Quit {}", channel::app_name()),
-                    t => t.to_string(),
+                    _ => title,
                 };
                 // The first binding whose context applies is the main one
                 // (⌘⇧] before ⌃⇥). gpui's own lookup would hide ⌥⌘I behind
@@ -263,7 +265,8 @@ impl AbroMux {
                     });
                 Entry {
                     title: title.into(),
-                    subtitle: None,
+                    subtitle: subtitle.map(Into::into),
+                    keywords,
                     keys,
                     target: Target::Action(action),
                 }
@@ -277,6 +280,7 @@ impl AbroMux {
             .iter()
             .enumerate()
             .map(|(i, ws)| Entry {
+                keywords: vec![],
                 title: ws.name(cx).into(),
                 subtitle: ws.cwd(cx).map(|c| tilde(&c).into()),
                 keys: shortcut_digit(i, n).map(|d| format!("⌘{d}").into()),
@@ -463,7 +467,16 @@ impl Palette {
             .entries
             .iter()
             .enumerate()
-            .filter_map(|(i, e)| fuzzy_match(query, &e.title).map(|(score, pos)| (score, i, pos)))
+            .filter_map(|(i, e)| match fuzzy_match(query, &e.title) {
+                Some((score, pos)) => Some((score, i, pos)),
+                // A keyword match ranks below any title match.
+                None => e
+                    .keywords
+                    .iter()
+                    .filter_map(|k| fuzzy_match(query, k))
+                    .map(|(score, _)| (score - 2000, i, vec![]))
+                    .max_by_key(|(score, ..)| *score),
+            })
             .collect();
         // Best score first; ties keep palette order.
         scored.sort_by_key(|(score, i, _)| (-score, *i));
@@ -490,7 +503,7 @@ fn highlighted(title: &SharedString, positions: &[usize]) -> StyledText {
 }
 
 /// A shortcut the way macOS menus show it: ⌃⌥⇧⌘ then the key.
-fn key_label(m: &Modifiers, key: &str) -> String {
+pub(crate) fn key_label(m: &Modifiers, key: &str) -> String {
     // gpui folds shift into these keys (cmd-} is ⌘⇧]).
     let (shift, key) = match key {
         "{" => (true, "["),

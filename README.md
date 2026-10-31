@@ -10,7 +10,7 @@ I love [cmux](https://cmux.com) and use it every day. But with many agents and b
 
 - **Workspaces** in a sidebar, each with its git branch, cwd and status.
 - **Split panes** with tabs of terminals (libghostty) and browsers (native WebKit).
-- **Agent aware**: Claude Code and Codex show when they're running or need input, and notify you.
+- **Agent aware**: Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi show when they're running or need input, notify you, and resume after a restart.
 - **Session restore**: layout, scrollback and agent sessions come back after a restart.
 - **Scriptable** through the `abromux` CLI, with commands named after cmux's.
 - **Reads your Ghostty config** for theme, font and colors.
@@ -19,7 +19,7 @@ I love [cmux](https://cmux.com) and use it every day. But with many agents and b
 
 Download `AbroMux-<version>.dmg` from the [latest release](https://github.com/ZilvinasAbr/abromux/releases/latest), open it and drag AbroMux to Applications. It needs macOS 13 or later on Apple Silicon.
 
-Optionally, put the `abromux` CLI on your PATH, turn on Claude Code and Codex integration, and teach those agents the CLI with skills:
+Optionally, put the `abromux` CLI on your PATH, turn on coding-agent integration, and teach those agents the CLI with skills:
 
 ```bash
 sudo ln -sf /Applications/AbroMux.app/Contents/MacOS/abromux /usr/local/bin/abromux

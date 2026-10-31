@@ -15,6 +15,7 @@ dependencies = [
  "gpui-component",
  "image",
  "lb-wry",
+ "libc",
  "memchr",
  "objc",
  "portable-pty",

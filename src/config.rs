@@ -1,7 +1,8 @@
 //! Reads the user's Ghostty config so terminals look and type like their
 //! Ghostty: font, colors, palette, theme, cursor style and `text:`/`csi:`/
 //! `esc:` keybinds, paste protection (`clipboard-paste-protection`,
-//! `clipboard-paste-bracketed-safe`) and `shell-integration = none`.
+//! `clipboard-paste-bracketed-safe`), `copy-on-select = clipboard`,
+//! `mouse-scroll-multiplier`, `scrollbar` and `shell-integration = none`.
 //! Everything else in the file is ignored.
 //!
 //! Files, in load order (later wins): `$XDG_CONFIG_HOME/ghostty/config`
@@ -49,6 +50,16 @@ pub struct Config {
     /// Load abromux's shell integration (`crate::shell`); off with
     /// `shell-integration = none`.
     pub shell_integration: bool,
+    /// Copy a selection to the clipboard when the mouse lets go of it
+    /// (`copy-on-select = clipboard`). Ghostty's default `true` copies to a
+    /// selection pasteboard that macOS doesn't have, so only `clipboard` counts.
+    pub copy_on_select: bool,
+    /// Rows per trackpad row and per wheel notch (`mouse-scroll-multiplier`,
+    /// either one number or `precision:<n>,discrete:<n>`).
+    pub scroll_precision: f32,
+    pub scroll_discrete: f32,
+    /// The overlay scrollbar (`scrollbar = system`); off with `never`.
+    pub scrollbar: bool,
 }
 
 impl Global for Config {}
@@ -80,6 +91,10 @@ impl Default for Config {
             paste_protection: true,
             paste_bracketed_safe: true,
             shell_integration: true,
+            copy_on_select: false,
+            scroll_precision: 1.,
+            scroll_discrete: 1.,
+            scrollbar: true,
         }
     }
 }
@@ -156,6 +171,23 @@ impl Config {
                     c.paste_bracketed_safe = parse_bool(v).unwrap_or(c.paste_bracketed_safe)
                 }
                 "shell-integration" => c.shell_integration = v != "none",
+                "copy-on-select" => c.copy_on_select = unquote(v) == "clipboard",
+                "mouse-scroll-multiplier" => {
+                    for part in unquote(v).split(',') {
+                        let (kind, n) = part.split_once(':').unwrap_or(("", part));
+                        let Some(n) = n.trim().parse::<f32>().ok().filter(|n| *n > 0.) else {
+                            continue;
+                        };
+                        let n = n.min(10_000.);
+                        match kind.trim() {
+                            "precision" => c.scroll_precision = n,
+                            "discrete" => c.scroll_discrete = n,
+                            "" => (c.scroll_precision, c.scroll_discrete) = (n, n),
+                            _ => {}
+                        }
+                    }
+                }
+                "scrollbar" => c.scrollbar = unquote(v) != "never",
                 "keybind" if v == "clear" => c.keybinds.clear(),
                 "keybind" => {
                     if let Some((trigger, action)) = v.split_once('=')
@@ -413,6 +445,28 @@ mod tests {
         assert!(Config::default().shell_integration);
         let c = Config::from_entries(&entries("shell-integration = none"));
         assert!(!c.shell_integration);
+    }
+
+    #[test]
+    fn selection_and_scrolling() {
+        let d = Config::default();
+        assert!(!d.copy_on_select && d.scrollbar);
+        assert_eq!((d.scroll_precision, d.scroll_discrete), (1., 1.));
+        let c = Config::from_entries(&entries(
+            "copy-on-select = clipboard\nmouse-scroll-multiplier = 3\nscrollbar = never",
+        ));
+        assert!(c.copy_on_select && !c.scrollbar);
+        assert_eq!((c.scroll_precision, c.scroll_discrete), (3., 3.));
+        let c = Config::from_entries(&entries(
+            "copy-on-select = true\nmouse-scroll-multiplier = precision:0.5,discrete:4",
+        ));
+        assert!(
+            !c.copy_on_select,
+            "true is the selection pasteboard, not the clipboard"
+        );
+        assert_eq!((c.scroll_precision, c.scroll_discrete), (0.5, 4.));
+        let c = Config::from_entries(&entries("mouse-scroll-multiplier = -2"));
+        assert_eq!(c.scroll_discrete, 1., "bad values are ignored");
     }
 
     #[test]

@@ -25,6 +25,8 @@ use std::sync::Arc;
 pub const FONT_FAMILY: &str = "JetBrains Mono";
 const LINE_HEIGHT: f32 = 1.25;
 const PADDING: f32 = 6.;
+/// The scrollbar's strip at the right edge, which takes its clicks.
+const SCROLLBAR_WIDTH: f32 = 12.;
 
 actions!(
     terminal,
@@ -138,6 +140,10 @@ pub struct TerminalView {
     generation: usize,
     /// A task will repaint once the program's hold on the screen times out.
     hold_timer: bool,
+    /// When the viewport last scrolled; the scrollbar shows for a moment after.
+    scrolled_at: Option<std::time::Instant>,
+    /// Dragging the scrollbar thumb: where in it (0–1 of the track) it was grabbed.
+    scrollbar_grab: Option<f32>,
 }
 
 impl EventEmitter<TerminalEvent> for TerminalView {}
@@ -198,6 +204,8 @@ impl TerminalView {
             env,
             generation: 0,
             hold_timer: false,
+            scrolled_at: None,
+            scrollbar_grab: None,
         }
     }
 
@@ -911,6 +919,13 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         match ev {
+            // gpui's hit test would give the scrollbar its strip.
+            PlatformInput::MouseDown(e)
+                if self.scrollbar_visible()
+                    && e.position.x >= self.bounds.right() - px(SCROLLBAR_WIDTH) =>
+            {
+                self.on_scrollbar_down(&e, window, cx)
+            }
             PlatformInput::MouseDown(e) => self.on_mouse_down(&e, window, cx),
             PlatformInput::MouseUp(e) => self.on_mouse_up(&e, window, cx),
             PlatformInput::MouseMove(e) => self.on_mouse_move(&e, window, cx),
@@ -981,8 +996,13 @@ impl TerminalView {
     }
 
     fn on_scroll(&mut self, ev: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let delta =
-            f32::from(ev.delta.pixel_delta(self.cell.height).y) / f32::from(self.cell.height);
+        let multiplier = match ev.delta {
+            ScrollDelta::Pixels(_) => self.config.scroll_precision,
+            ScrollDelta::Lines(_) => self.config.scroll_discrete,
+        };
+        let delta = f32::from(ev.delta.pixel_delta(self.cell.height).y)
+            / f32::from(self.cell.height)
+            * multiplier;
         if delta * self.scroll_accum < 0. {
             self.scroll_accum = 0.;
         }
@@ -1012,8 +1032,112 @@ impl TerminalView {
         } else {
             self.term.scroll(-lines);
             self.dirty = true;
-            cx.notify();
+            self.show_scrollbar(cx);
         }
+    }
+
+    /// Show the scrollbar now and hide it a moment after scrolling stops,
+    /// like macOS's overlay scrollbars.
+    fn show_scrollbar(&mut self, cx: &mut Context<Self>) {
+        const LINGER: std::time::Duration = std::time::Duration::from_millis(1000);
+        self.scrolled_at = Some(std::time::Instant::now());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            Timer::after(LINGER).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.scrolled_at.is_some_and(|t| t.elapsed() >= LINGER) {
+                    this.scrolled_at = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Scroll so the thumb's grab point sits at window y `y`.
+    fn drag_scrollbar(&mut self, y: Pixels, grab: f32, cx: &mut Context<Self>) {
+        let sb = self.term.scrollbar();
+        let h = f32::from(self.bounds.size.height).max(1.);
+        let frac = f32::from(y - self.bounds.origin.y) / h - grab;
+        let max = sb.total.saturating_sub(sb.len);
+        let row = (frac * sb.total as f32).round().clamp(0., max as f32) as u64;
+        self.term.scroll_to_row(row);
+        self.dirty = true;
+        self.show_scrollbar(cx);
+    }
+
+    fn on_scrollbar_down(&mut self, ev: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        let sb = self.term.scrollbar();
+        if sb.total == 0 {
+            return;
+        }
+        let h = f32::from(self.bounds.size.height).max(1.);
+        let frac = f32::from(ev.position.y - self.bounds.origin.y) / h;
+        let (top, len) = (
+            sb.offset as f32 / sb.total as f32,
+            sb.len as f32 / sb.total as f32,
+        );
+        // Grabbing the thumb keeps it under the pointer; clicking the track
+        // jumps there, centred.
+        let grab = if (top..top + len).contains(&frac) {
+            frac - top
+        } else {
+            len / 2.
+        };
+        self.scrollbar_grab = Some(grab);
+        self.drag_scrollbar(ev.position.y, grab, cx);
+    }
+
+    /// The program is reading a password: the PTY doesn't echo but reads
+    /// whole lines, the same test Ghostty uses for its lock icon.
+    fn password_input(&self) -> bool {
+        let Some(fd) = self.master.as_raw_fd() else {
+            return false;
+        };
+        // SAFETY: tcgetattr only writes the termios it's given.
+        let mut t: libc::termios = unsafe { std::mem::zeroed() };
+        let ok = unsafe { libc::tcgetattr(fd, &mut t) } == 0;
+        ok && t.c_lflag & libc::ECHO == 0 && t.c_lflag & libc::ICANON != 0
+    }
+
+    /// Shown while scrolled back, just after scrolling, or while dragged.
+    fn scrollbar_visible(&self) -> bool {
+        let sb = self.term.scrollbar();
+        let scrolled_back = sb.offset + sb.len < sb.total;
+        self.config.scrollbar
+            && sb.total > sb.len
+            && (scrolled_back || self.scrolled_at.is_some() || self.scrollbar_grab.is_some())
+    }
+
+    fn render_scrollbar(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        if !self.scrollbar_visible() {
+            return None;
+        }
+        let sb = self.term.scrollbar();
+        let total = sb.total as f32;
+        Some(
+            div()
+                .id("scrollbar")
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .w(px(SCROLLBAR_WIDTH))
+                .cursor_default()
+                .on_mouse_down(MouseButton::Left, cx.listener(Self::on_scrollbar_down))
+                .child(
+                    div()
+                        .absolute()
+                        .right(px(3.))
+                        .w(px(6.))
+                        .top(relative(sb.offset as f32 / total))
+                        .h(relative(sb.len as f32 / total))
+                        .min_h(px(20.))
+                        .rounded_full()
+                        .bg(rgba(0xffffff59)),
+                ),
+        )
     }
 
     fn on_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -1042,6 +1166,9 @@ impl TerminalView {
         if ev.click_count >= 2 {
             self.term.select_word(cell.0, cell.1);
             self.selecting = None;
+            if self.config.copy_on_select {
+                self.copy(cx);
+            }
         } else {
             self.term.clear_selection();
             self.selecting = Some(cell);
@@ -1050,8 +1177,12 @@ impl TerminalView {
         cx.notify();
     }
 
-    fn on_mouse_up(&mut self, ev: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
-        self.selecting = None;
+    fn on_mouse_up(&mut self, ev: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.scrollbar_grab = None;
+        // A click without a drag leaves no selection, so nothing is copied.
+        if self.selecting.take().is_some() && self.config.copy_on_select {
+            self.copy(cx);
+        }
         if let Some(b) = button_code(ev.button)
             && (self.mouse_buttons & (1 << b) != 0 || self.reporting(ev.modifiers))
         {
@@ -1061,6 +1192,12 @@ impl TerminalView {
     }
 
     fn on_mouse_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(grab) = self.scrollbar_grab {
+            if ev.pressed_button == Some(MouseButton::Left) {
+                return self.drag_scrollbar(ev.position.y, grab, cx);
+            }
+            self.scrollbar_grab = None;
+        }
         self.pointer = Some(ev.position);
         if self.update_link(ev.modifiers.platform && ev.pressed_button.is_none()) {
             cx.notify();
@@ -1099,6 +1236,23 @@ impl Render for TerminalView {
             .pending_paste
             .as_deref()
             .map(|text| self.render_paste_prompt(text, cx));
+        let scrollbar = self.render_scrollbar(cx);
+        // The find bar sits where the lock would.
+        let lock = (!self.find_open && self.password_input()).then(|| {
+            div()
+                .absolute()
+                .top(px(PADDING))
+                .right(px(PADDING * 2. + 4.))
+                .p(px(4.))
+                .rounded(px(5.))
+                .bg(rgba(0x000000a0))
+                .child(
+                    svg()
+                        .path("icons/lock.svg")
+                        .size(px(13.))
+                        .text_color(rgb(0xd0d0d0)),
+                )
+        });
         div()
             .id("terminal")
             .relative()
@@ -1176,6 +1330,8 @@ impl Render for TerminalView {
                 gpui::CursorStyle::IBeam
             })
             .child(TerminalElement { view: cx.entity() })
+            .children(scrollbar)
+            .children(lock)
             .children(find_bar)
             .children(paste_prompt)
     }

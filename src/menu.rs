@@ -5,8 +5,8 @@
 
 use crate::{
     About, CloseTab, CloseWorkspace, CommandPalette, FlashPane, FocusAddressBar, FocusDown,
-    FocusLeft, FocusRight, FocusUp, JumpToUnread, NewBrowser, NewTerminal, NewWorkspace, NextTab,
-    NextWorkspace, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab, RenameWorkspace,
+    FocusLeft, FocusRight, FocusUp, JumpToUnread, LastPane, NewBrowser, NewTerminal, NewWorkspace,
+    NextTab, NextWorkspace, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab, RenameWorkspace,
     SplitDown, SplitRight, ToggleNotifications, ToggleSidebar, ToggleZoom, WorkspaceSwitcher,
     browser, channel, terminal,
 };
@@ -56,7 +56,11 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("alt-cmd-h", HideOthers, None),
         KeyBinding::new("cmd-m", Minimize, None),
     ]);
+}
 
+/// Build the menu bar. macOS shows each item's shortcut from the keymap as
+/// it is now, so this runs again after the shortcuts change.
+pub fn set_menus(cx: &mut App) {
     let app = channel::app_name();
     // The Edit items send copy:/paste:/… down the responder chain, which is
     // the only way the browser's WKWebView gets ⌘C/⌘V/⌘A/⌘X. gpui views
@@ -167,6 +171,7 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Focus Pane Right", FocusRight),
                 MenuItem::action("Focus Pane Up", FocusUp),
                 MenuItem::action("Focus Pane Down", FocusDown),
+                MenuItem::action("Focus Last Pane", LastPane),
             ],
         },
         Menu {

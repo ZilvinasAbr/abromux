@@ -13,14 +13,42 @@
 //!     "resizeStep": 20,
 //!     "dividerColor": "#3a3935",
 //!     "focusBorderColor": "#c96442b0"
-//!   }
+//!   },
+//!   "shortcuts": {
+//!     "splitRight": "cmd-\\",
+//!     "closeTab": null,
+//!     "flashPane": ["cmd-shift-h", "ctrl-a f"],
+//!     "find": { "keys": "cmd-shift-f", "when": "Terminal" }
+//!   },
+//!   "commands": [
+//!     { "title": "Run Tests", "run": "cargo test", "shortcut": "cmd-alt-t" },
+//!     { "title": "Dev Server", "run": "npm run dev", "newTab": true },
+//!     { "title": "Open Docs", "url": "https://docs.rs" },
+//!     { "title": "Web Dev", "restart": "ignore", "workspace": {
+//!       "cwd": "~/code/web",
+//!       "layout": { "direction": "horizontal", "children": [
+//!         { "pane": { "surfaces": [{ "command": "npm run dev" }] } },
+//!         { "pane": { "surfaces": [{ "type": "browser", "url": "localhost:3000" }] } }
+//!       ] }
+//!     } }
+//!   ]
 //! }
 //! ```
+//!
+//! `"shortcuts"` maps the action names in `keymap::ACTIONS` to new keys;
+//! `null` or `[]` unbinds one. A project can add its own commands in
+//! `.abromux/config.json` (see `PROJECT_FILES`); they ask before their first
+//! run.
 
-use crate::theme::{ACCENT, BORDER};
+use crate::{
+    layout::WorkspaceSpec,
+    theme::{ACCENT, BORDER},
+};
+use gpui::Keystroke;
 use gpui::{Global, Rgba, rgb, rgba};
 use gpui_component::notification::Notification;
 use serde::{Deserialize, Deserializer};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -30,9 +58,187 @@ pub struct Settings {
     #[serde(rename = "$schema")]
     pub schema: Option<String>,
     pub panes: Panes,
+    /// Keys for the app's actions, by `keymap::ACTIONS` name.
+    #[serde(deserialize_with = "shortcuts")]
+    pub shortcuts: BTreeMap<String, Shortcut>,
+    /// Extra palette commands.
+    pub commands: Vec<Command>,
 }
 
 impl Global for Settings {}
+
+/// The keys bound to an action or command.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shortcut {
+    /// Each one a keystroke, or a chord of several.
+    pub keys: Vec<Vec<Keystroke>>,
+    /// The key context it's bound in, like `Terminal`; by default the
+    /// action's own contexts (app-wide for a command).
+    pub when: Option<String>,
+}
+
+/// A palette command from the config file or a project's. It types `run`
+/// into the focused terminal and presses return, opens `url` in a new
+/// browser tab, or builds `workspace` (`crate::layout`). cmux's `name` and
+/// `command` work for `title` and `run`, so a `cmux.json` reads as is.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Command {
+    #[serde(alias = "name")]
+    pub title: String,
+    /// Shown under the title in the palette.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// More words the palette finds it by.
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    #[serde(default, alias = "command")]
+    pub run: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub workspace: Option<WorkspaceSpec>,
+    /// What a workspace command does when a workspace of its name is open.
+    #[serde(default)]
+    pub restart: Restart,
+    /// Ask before every run.
+    #[serde(default)]
+    pub confirm: bool,
+    /// Run it in a new terminal tab instead of the focused terminal.
+    #[serde(default)]
+    pub new_tab: bool,
+    #[serde(default, deserialize_with = "shortcut")]
+    pub shortcut: Option<Shortcut>,
+}
+
+/// cmux's `restart`: what to do when the command's workspace is open.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Restart {
+    /// Open another one.
+    #[default]
+    New,
+    /// Switch to it.
+    Ignore,
+    /// Close it and build it again.
+    Recreate,
+    /// Ask, then recreate.
+    Confirm,
+}
+
+impl Command {
+    /// The workspace name a workspace command opens.
+    pub fn workspace_name(&self) -> Option<&str> {
+        let w = self.workspace.as_ref()?;
+        Some(w.name.as_deref().unwrap_or(&self.title))
+    }
+
+    /// What running it does, for a confirmation.
+    pub fn describe(&self) -> String {
+        if let Some(run) = &self.run {
+            return format!("Types into a terminal:\n{run}");
+        }
+        if let Some(url) = &self.url {
+            return format!("Opens {url}");
+        }
+        let Some(w) = &self.workspace else {
+            return String::new();
+        };
+        let mut lines = vec![format!(
+            "Opens the workspace “{}”.",
+            self.workspace_name().unwrap_or_default()
+        )];
+        let runs = w.commands();
+        if !runs.is_empty() {
+            lines.push(format!("Runs:\n{}", runs.join("\n")));
+        }
+        lines.join("\n")
+    }
+
+    fn check(&self) -> Result<(), String> {
+        let kinds = [
+            self.run.is_some(),
+            self.url.is_some(),
+            self.workspace.is_some(),
+        ];
+        if kinds.iter().filter(|k| **k).count() != 1 {
+            return Err(format!(
+                "command {:?} needs one of \"run\", \"url\" or \"workspace\"",
+                self.title
+            ));
+        }
+        if let Some(w) = &self.workspace {
+            w.check()
+                .map_err(|e| format!("command {:?}: {e}", self.title))?;
+        }
+        Ok(())
+    }
+}
+
+/// How the config file writes a shortcut: `"cmd-k"`, `["cmd-k", "ctrl-a k"]`,
+/// `{ "keys": …, "when": "Terminal" }`, or `null` for none.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawKeys {
+    One(String),
+    Many(Vec<String>),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawShortcut {
+    Keys(RawKeys),
+    Full { keys: RawKeys, when: Option<String> },
+}
+
+impl TryFrom<Option<RawShortcut>> for Shortcut {
+    type Error = String;
+
+    fn try_from(raw: Option<RawShortcut>) -> Result<Self, String> {
+        let (keys, when) = match raw {
+            None => (RawKeys::Many(vec![]), None),
+            Some(RawShortcut::Keys(k)) => (k, None),
+            Some(RawShortcut::Full { keys, when }) => (keys, when),
+        };
+        let keys = match keys {
+            RawKeys::One(k) => vec![k],
+            RawKeys::Many(ks) => ks,
+        };
+        if let Some(w) = &when {
+            crate::keymap::check_context(w)?;
+        }
+        Ok(Shortcut {
+            keys: keys
+                .iter()
+                .map(|k| crate::keymap::parse_seq(k))
+                .collect::<Result<_, _>>()?,
+            when,
+        })
+    }
+}
+
+fn shortcuts<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<String, Shortcut>, D::Error> {
+    let raw = BTreeMap::<String, Option<RawShortcut>>::deserialize(d)?;
+    raw.into_iter()
+        .map(|(name, s)| {
+            if crate::keymap::find(&name).is_none() {
+                return Err(format!(
+                    "unknown shortcut `{name}`; `abromux config shortcuts` lists them"
+                ));
+            }
+            let s = Shortcut::try_from(s).map_err(|e| format!("shortcut `{name}`: {e}"))?;
+            Ok((name, s))
+        })
+        .collect::<Result<_, String>>()
+        .map_err(serde::de::Error::custom)
+}
+
+fn shortcut<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Shortcut>, D::Error> {
+    Option::<RawShortcut>::deserialize(d)?
+        .map(|r| Shortcut::try_from(Some(r)))
+        .transpose()
+        .map_err(serde::de::Error::custom)
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
@@ -116,7 +322,95 @@ fn parse(text: &str) -> Result<Settings, serde_json::Error> {
     if text.trim().is_empty() {
         return Ok(Settings::default());
     }
-    serde_json::from_str(text)
+    let s: Settings = serde_json::from_str(text)?;
+    for c in &s.commands {
+        c.check().map_err(serde::de::Error::custom)?;
+    }
+    Ok(s)
+}
+
+/// A project's own commands file, looked for from a directory upward:
+/// `.abromux/config.json`, or cmux's `.cmux/cmux.json` or `cmux.json`.
+/// Only `"commands"` is read from it; other keys (cmux's `actions`, `ui`)
+/// are ignored.
+pub const PROJECT_FILES: [&str; 3] = [".abromux/config.json", ".cmux/cmux.json", "cmux.json"];
+
+#[derive(Deserialize)]
+struct ProjectFile {
+    #[serde(default)]
+    commands: Vec<serde_json::Value>,
+}
+
+/// The nearest project file at or above `dir`.
+pub fn find_project(dir: &Path) -> Option<PathBuf> {
+    dir.ancestors()
+        .flat_map(|d| PROJECT_FILES.iter().map(move |f| d.join(f)))
+        .find(|p| p.is_file())
+}
+
+/// The directory a project file belongs to: the one holding `.abromux/`,
+/// `.cmux/` or `cmux.json`.
+pub fn project_root(file: &Path) -> &Path {
+    let dir = file.parent().unwrap_or(file);
+    match dir.file_name().and_then(|n| n.to_str()) {
+        Some(".abromux" | ".cmux") => dir.parent().unwrap_or(dir),
+        _ => dir,
+    }
+}
+
+/// A project's commands, each with its JSON as written (what trusting it
+/// covers: a changed command asks again).
+pub fn read_project(path: &Path) -> Result<Vec<(Command, String)>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let at = |e: serde_json::Error| format!("{}: {e}", path.display());
+    let file: ProjectFile = serde_json::from_str(&text).map_err(at)?;
+    file.commands
+        .into_iter()
+        .map(|raw| {
+            let c: Command = serde_json::from_value(raw.clone()).map_err(at)?;
+            c.check().map_err(|e| format!("{}: {e}", path.display()))?;
+            Ok((c, raw.to_string()))
+        })
+        .collect()
+}
+
+/// Project commands the user has said may run, as `path\njson` lines, in
+/// the app's support folder.
+fn trust_path() -> PathBuf {
+    crate::channel::support_dir().join("trusted-commands.json")
+}
+
+fn trust_key(file: &Path, raw: &str) -> String {
+    format!("{}\n{raw}", file.display())
+}
+
+fn trusted_keys() -> Vec<String> {
+    std::fs::read_to_string(trust_path())
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+/// Whether the project command `raw` from `file` was trusted as it is now.
+pub fn is_trusted(file: &Path, raw: &str) -> bool {
+    trusted_keys().contains(&trust_key(file, raw))
+}
+
+/// Remember that the project command `raw` from `file` may run.
+pub fn trust(file: &Path, raw: &str) {
+    let mut keys = trusted_keys();
+    let key = trust_key(file, raw);
+    if keys.contains(&key) {
+        return;
+    }
+    keys.push(key);
+    let path = trust_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&keys) {
+        let _ = std::fs::write(path, json);
+    }
 }
 
 #[cfg(test)]
@@ -157,6 +451,102 @@ mod tests {
         let e = err(r#"{"panes": {"resizeStep": 0}}"#);
         assert!(e.contains("positive"), "{e}");
         assert!(err("{ \"panes\": ").contains("EOF"));
+    }
+
+    #[test]
+    fn shortcuts() {
+        let s = parse(
+            r#"{
+              "shortcuts": {
+                "splitRight": "cmd-\\",
+                "closeTab": null,
+                "flashPane": ["⌘⇧H", "ctrl-a f"],
+                "find": { "keys": "cmd-shift-f", "when": "Terminal" }
+              }
+            }"#,
+        )
+        .unwrap();
+        let sc = &s.shortcuts;
+        assert_eq!(sc["splitRight"].keys.len(), 1);
+        assert!(sc["closeTab"].keys.is_empty());
+        assert_eq!(sc["flashPane"].keys[1].len(), 2);
+        assert_eq!(sc["find"].when.as_deref(), Some("Terminal"));
+    }
+
+    #[test]
+    fn shortcut_errors() {
+        let err = |text: &str| parse(text).unwrap_err().to_string();
+        let e = err(r#"{"shortcuts": {"splitLeft": "cmd-d"}}"#);
+        assert!(e.contains("unknown shortcut `splitLeft`"), "{e}");
+        let e = err(r#"{"shortcuts": {"splitRight": "cmd-dd"}}"#);
+        assert!(
+            e.contains("shortcut `splitRight`") && e.contains("isn't a keystroke"),
+            "{e}"
+        );
+        let e = err(r#"{"shortcuts": {"find": {"keys": "cmd-f", "when": "a &&"}}}"#);
+        assert!(e.contains("key context"), "{e}");
+    }
+
+    #[test]
+    fn commands() {
+        let s = parse(
+            r#"{"commands": [
+              { "title": "Tests", "run": "cargo test", "shortcut": "cmd-alt-t" },
+              { "title": "Docs", "url": "https://docs.rs" }
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(s.commands[0].run.as_deref(), Some("cargo test"));
+        assert!(s.commands[0].shortcut.is_some() && !s.commands[0].new_tab);
+        assert!(s.commands[1].shortcut.is_none());
+        let e = parse(r#"{"commands": [{ "title": "x" }]}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("needs one of"), "{e}");
+        let e = parse(r#"{"commands": [{ "title": "x", "run": "a", "workspace": {} }]}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("needs one of"), "{e}");
+    }
+
+    #[test]
+    fn cmux_commands_and_project_files() {
+        let dir = std::env::temp_dir().join(format!("abromux-project-{}", std::process::id()));
+        let sub = dir.join("app/src");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir_all(dir.join(".cmux")).unwrap();
+        let file = dir.join(".cmux/cmux.json");
+        std::fs::write(
+            &file,
+            r#"{
+              "actions": {},
+              "commands": [
+                { "name": "Build", "command": "make", "keywords": ["compile"], "confirm": true },
+                { "name": "Web", "restart": "recreate", "workspace": { "layout": { "pane": { "surfaces": [{}] } } } }
+              ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(find_project(&sub).as_deref(), Some(file.as_path()));
+        assert_eq!(project_root(&file), dir);
+        let cmds = read_project(&file).unwrap();
+        assert_eq!(cmds[0].0.run.as_deref(), Some("make"));
+        assert!(cmds[0].0.confirm && cmds[0].1.contains("\"make\""));
+        assert_eq!(cmds[1].0.restart, Restart::Recreate);
+        assert_eq!(cmds[1].0.workspace_name(), Some("Web"));
+        // `.abromux/config.json` is closer, so it wins.
+        std::fs::create_dir_all(sub.join(".abromux")).unwrap();
+        std::fs::write(
+            sub.join(".abromux/config.json"),
+            r#"{"commands": [{"name": "x"}]}"#,
+        )
+        .unwrap();
+        assert!(
+            read_project(&find_project(&sub).unwrap())
+                .unwrap_err()
+                .contains("needs one of")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
