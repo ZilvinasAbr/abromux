@@ -247,9 +247,11 @@ struct AbroMux {
     badge: usize,
     /// The ⌘⇧P / ⌘P palette, while open.
     palette: Option<palette::Palette>,
-    /// The session this launch restored, for ⌘⇧O.
-    launch_session: Option<session::Session>,
-    /// Workspaces whose name an agent CLI is making (`server::auto_name`).
+    /// The session this launch restored (without scrollback), for ⌘⇧O,
+    /// with the id each of its workspaces was built as.
+    launch_session: Option<(session::Session, Vec<Option<usize>>)>,
+    /// Workspaces auto-naming has asked an agent CLI to name, once each
+    /// (`server::auto_name`); clearing a workspace's name lets it ask again.
     naming: Vec<usize>,
 }
 
@@ -295,7 +297,7 @@ impl AbroMux {
             notifications_open: false,
             badge: 0,
             palette: None,
-            launch_session: session.clone(),
+            launch_session: None,
             naming: vec![],
         };
         cx.observe_window_activation(window, |this, window, cx| {
@@ -788,9 +790,15 @@ impl AbroMux {
                 InputEvent::PressEnter { .. } => {
                     let name = one_line(&input.read(cx).value());
                     if let Some(ws) = this.workspaces.iter_mut().find(|w| w.id == id) {
-                        // Leaving the name as it was keeps it following the agent's title.
-                        let changed = !name.is_empty() && name != ws.auto_name(cx);
-                        ws.custom_name = changed.then_some(name);
+                        if name.is_empty() {
+                            // Back to following the terminal's title.
+                            ws.custom_name = None;
+                            ws.auto_title = None;
+                            this.naming.retain(|&n| n != id);
+                        } else if name != ws.name(cx) {
+                            ws.custom_name = Some(name);
+                        }
+                        // Left as shown, it keeps following whatever it followed.
                     }
                     this.renaming = None;
                     this.focus_active(window, cx);

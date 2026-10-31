@@ -311,7 +311,8 @@ impl BrowserView {
     }
 
     /// Bring back a back/forward list from [`history_state`](Self::history_state),
-    /// which also loads its current page. False if `state` isn't one.
+    /// which also loads its current page. False if `state` isn't one, or
+    /// WebKit didn't take it.
     pub fn restore_history(&mut self, state: &str, cx: &mut Context<Self>) -> bool {
         let Ok(c) = std::ffi::CString::new(state) else {
             return false;
@@ -324,9 +325,13 @@ impl BrowserView {
             if data.is_null() {
                 false
             } else {
-                let _: () = msg_send![self.wk_webview(cx), setInteractionState: data];
+                let wk = self.wk_webview(cx);
+                let _: () = msg_send![wk, setInteractionState: data];
                 let _: () = msg_send![data, release];
-                true
+                // WebKit ignores data it can't read; then there's no page.
+                let list: *mut Object = msg_send![wk, backForwardList];
+                let item: *mut Object = msg_send![list, currentItem];
+                !item.is_null()
             }
         };
         if ok {

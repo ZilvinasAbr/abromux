@@ -169,17 +169,15 @@ pub fn read(path: &std::path::Path) -> Result<Session, String> {
     }
 }
 
-/// Where `restore-session --from` reads: `stable`, `nightly`, or a file.
+/// Where `restore-session --from` reads: a channel's session (`stable`,
+/// `nightly`, `nightly-<name>`), or a file.
 pub fn source(from: &str) -> PathBuf {
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    let support = home.join("Library/Application Support");
-    match from {
-        "stable" => support.join("abromux/session.json"),
-        "nightly" => support.join("abromux-nightly/session.json"),
-        p => p
-            .strip_prefix("~/")
-            .map_or_else(|| p.into(), |rest| home.join(rest)),
+    if let Some(dir) = crate::channel::support_dir_named(from) {
+        return dir.join("session.json");
     }
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    from.strip_prefix("~/")
+        .map_or_else(|| from.into(), |rest| home.join(rest))
 }
 
 /// Write atomically (temp file + rename) so a crash mid-write can't leave a
@@ -267,10 +265,19 @@ impl AbroMux {
         cx: &mut Context<Self>,
     ) -> bool {
         let first = self.workspaces.len();
-        let added = self.add_workspaces(session.workspaces, session.groups, window, cx);
+        // Kept for ⌘⇧O without the terminals' output, which is the bulk
+        // of it.
+        let mut kept = session.clone();
+        for w in &mut kept.workspaces {
+            drop_scrollback(&mut w.root);
+        }
+        let group_ids = self.new_groups(&session.groups, |_| None);
+        let ids = self.add_workspaces(session.workspaces, &group_ids, window, cx);
+        let added = ids.iter().flatten().count();
         if added == 0 {
             return false;
         }
+        self.launch_session = Some((kept, ids));
         self.sidebar = session.sidebar;
         self.sidebar_width = session
             .sidebar_width
@@ -279,82 +286,151 @@ impl AbroMux {
         true
     }
 
-    /// ⌘⇧O and `restore-session`: add the workspaces of `session` (by
-    /// default the one this launch restored) that aren't open as they were,
-    /// e.g. ones closed since. Returns how many it added.
+    /// ⌘⇧O and `restore-session`: add back the workspaces of the session
+    /// this launch restored that have been closed since, or, given
+    /// `session` (`--from`), those of it that aren't open as they were.
+    /// Their groups are rejoined if still there. Returns how many it added.
     pub(crate) fn reopen_session(
         &mut self,
         session: Option<Session>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> usize {
-        let Some(session) = session.or_else(|| self.launch_session.clone()) else {
-            window.push_notification("There's no previous session to reopen.", cx);
-            return 0;
-        };
-        // Each open workspace accounts for one saved one at most, so two
-        // saved in the same folder aren't both taken for it.
-        let mut open: Vec<String> = self
-            .workspaces
-            .iter()
-            .map(|w| workspace_key(w.custom_name.as_deref(), &node_state(&w.root, false, cx)))
-            .collect();
-        let states: Vec<WorkspaceState> = session
-            .workspaces
-            .into_iter()
-            .filter(|w| {
-                let key = workspace_key(w.name.as_deref(), &w.root);
-                match open.iter().position(|k| *k == key) {
-                    Some(i) => {
-                        open.swap_remove(i);
-                        false
-                    }
-                    None => true,
+        let from_launch = session.is_none();
+        let (saved, launch_ids) = match session {
+            Some(s) => (s, None),
+            None => match self.launch_session.clone() {
+                Some((s, ids)) => (s, Some(ids)),
+                None => {
+                    window.push_notification("There's no previous session to reopen.", cx);
+                    return 0;
                 }
+            },
+        };
+        let is_open =
+            |this: &Self, id: Option<usize>| id.is_some_and(|id| this.ws_index(id).is_some());
+        let wanted: Vec<usize> = match &launch_ids {
+            // The launch's own workspaces are known by id, wherever their
+            // shells have gone since.
+            Some(ids) => (0..saved.workspaces.len())
+                .filter(|&i| !is_open(self, ids.get(i).copied().flatten()))
+                .collect(),
+            // Another session's: by name and layout. Each open workspace
+            // accounts for one saved one at most.
+            None => {
+                let mut open: Vec<String> = self
+                    .workspaces
+                    .iter()
+                    .map(|w| {
+                        workspace_key(w.custom_name.as_deref(), &node_state(&w.root, false, cx))
+                    })
+                    .collect();
+                (0..saved.workspaces.len())
+                    .filter(|&i| {
+                        let w = &saved.workspaces[i];
+                        match open
+                            .iter()
+                            .position(|k| *k == workspace_key(w.name.as_deref(), &w.root))
+                        {
+                            Some(k) => {
+                                open.swap_remove(k);
+                                false
+                            }
+                            None => true,
+                        }
+                    })
+                    .collect()
+            }
+        };
+        // A saved group still on screen is joined again: the group of an
+        // open workspace restored from it, or else one of the same name.
+        let reuse: Vec<Option<usize>> = (0..saved.groups.len())
+            .map(|g| {
+                let from_member = launch_ids.as_ref().and_then(|ids| {
+                    saved
+                        .workspaces
+                        .iter()
+                        .zip(ids)
+                        .filter(|(w, _)| w.group == Some(g))
+                        .find_map(|(_, id)| id.and_then(|id| self.ws_index(id)))
+                        .and_then(|i| self.workspaces[i].group)
+                });
+                from_member.or_else(|| {
+                    self.groups
+                        .iter()
+                        .find(|x| x.name == saved.groups[g].name)
+                        .map(|x| x.id)
+                })
             })
             .collect();
+        let group_ids = self.new_groups(&saved.groups, |g| reuse[g]);
+        let states: Vec<WorkspaceState> = wanted
+            .iter()
+            .map(|&i| saved.workspaces[i].clone())
+            .collect();
         let first = self.workspaces.len();
-        let added = self.add_workspaces(states, session.groups, window, cx);
+        let ids = self.add_workspaces(states, &group_ids, window, cx);
+        if from_launch && let Some((_, launch)) = &mut self.launch_session {
+            for (&i, id) in wanted.iter().zip(&ids) {
+                launch[i] = *id;
+            }
+        }
+        let added = ids.iter().flatten().count();
         let note = match added {
             0 => "Every workspace of that session is already open.".to_string(),
             1 => "Reopened 1 workspace.".to_string(),
             n => format!("Reopened {n} workspaces."),
         };
         window.push_notification(note, cx);
-        if added > 0 {
-            self.select_workspace(first, window, cx);
+        if let Some(i) = ids.iter().flatten().find_map(|&id| self.ws_index(id)) {
+            self.select_workspace(i, window, cx);
+        } else if added > 0 {
+            self.select_workspace(first.min(self.workspaces.len() - 1), window, cx);
         }
         cx.notify();
         added
     }
 
-    /// Build the saved workspaces after the open ones, with their groups.
-    /// Returns how many it built.
+    /// An id for each saved group: `reuse`'s, or a new group.
+    fn new_groups(
+        &mut self,
+        groups: &[GroupState],
+        reuse: impl Fn(usize) -> Option<usize>,
+    ) -> Vec<usize> {
+        groups
+            .iter()
+            .enumerate()
+            .map(|(i, g)| {
+                reuse(i).unwrap_or_else(|| {
+                    self.next_group += 1;
+                    self.groups.push(Group {
+                        id: self.next_group,
+                        name: g.name.clone(),
+                        color: g.color,
+                        collapsed: g.collapsed,
+                    });
+                    self.next_group
+                })
+            })
+            .collect()
+    }
+
+    /// Build the saved workspaces after the open ones, each saved group in
+    /// the group `group_ids` gives it. Returns the id each one was built as,
+    /// None for one that came back empty.
     pub(crate) fn add_workspaces(
         &mut self,
         states: Vec<WorkspaceState>,
-        groups: Vec<GroupState>,
+        group_ids: &[usize],
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> usize {
-        let group_ids: Vec<usize> = groups
-            .into_iter()
-            .map(|g| {
-                self.next_group += 1;
-                self.groups.push(Group {
-                    id: self.next_group,
-                    name: g.name,
-                    color: g.color,
-                    collapsed: g.collapsed,
-                });
-                self.next_group
-            })
-            .collect();
-        let first = self.workspaces.len();
+    ) -> Vec<Option<usize>> {
+        let mut ids = vec![];
         for state in states {
             self.next_ws += 1;
             let id = self.next_ws;
             let Some(root) = self.build_node(state.root, id, window, cx) else {
+                ids.push(None);
                 continue;
             };
             let panes: Vec<usize> = root.panes().iter().map(|p| p.id).collect();
@@ -369,9 +445,10 @@ impl AbroMux {
             ws.color = state.color;
             ws.group = state.group.and_then(|g| group_ids.get(g).copied());
             self.workspaces.push(ws);
+            ids.push(Some(id));
         }
         crate::workspace::tidy_groups(&mut self.workspaces, &mut self.groups);
-        self.workspaces.len() - first
+        ids
     }
 
     fn build_node(
@@ -468,6 +545,19 @@ impl AbroMux {
             s.set_custom_title(name, cx);
         }
         s
+    }
+}
+
+fn drop_scrollback(n: &mut NodeState) {
+    match n {
+        NodeState::Pane { tabs, .. } => {
+            for t in tabs {
+                if let TabState::Terminal { scrollback, .. } = t {
+                    *scrollback = None;
+                }
+            }
+        }
+        NodeState::Split { children, .. } => children.iter_mut().for_each(drop_scrollback),
     }
 }
 
@@ -613,6 +703,10 @@ mod tests {
         };
         let json = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<Session>(&json).unwrap(), s);
+
+        let mut root = s.workspaces[0].root.clone();
+        drop_scrollback(&mut root);
+        assert!(json.contains("[1mhi") && !serde_json::to_string(&root).unwrap().contains("[1mhi"));
 
         let minimal = r#"{"version":1,"active":0,"workspaces":[{"root":{"kind":"pane","tabs":[{"kind":"terminal","cwd":"/"}]}}]}"#;
         let m: Session = serde_json::from_str(minimal).unwrap();

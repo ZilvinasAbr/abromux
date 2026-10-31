@@ -597,7 +597,6 @@ fn summary(jsonl: &str) -> Option<String> {
         })
 }
 
-/// Text on one line, cut to `SUMMARY_CHARS`. None if it's blank.
 /// How much of a prompt goes to the app, to name its workspace from.
 const PROMPT_CHARS: usize = 2000;
 
@@ -642,20 +641,28 @@ pub fn title_for(kind: Kind, prompt: &str) -> Option<String> {
         }
     }
     let mut child = cmd.spawn().ok()?;
+    // Read as it comes: a child that fills the pipe would otherwise block
+    // until the timeout.
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut stdout, &mut text).ok();
+        text
+    });
     let start = std::time::Instant::now();
     let status = loop {
         match child.try_wait().ok()? {
             Some(s) => break s,
             None if start.elapsed() > std::time::Duration::from_secs(60) => {
                 let _ = child.kill();
+                let _ = child.wait();
                 let _ = std::fs::remove_file(&out);
                 return None;
             }
             None => std::thread::sleep(std::time::Duration::from_millis(200)),
         }
     };
-    let mut text = String::new();
-    std::io::Read::read_to_string(&mut child.stdout.take()?, &mut text).ok()?;
+    let text = reader.join().ok()?;
     let _ = std::fs::remove_file(&out);
     status.success().then(|| clean_title(&text)).flatten()
 }
@@ -673,6 +680,7 @@ fn clean_title(text: &str) -> Option<String> {
     (!title.is_empty()).then_some(title)
 }
 
+/// Text on one line, cut to `SUMMARY_CHARS`. None if it's blank.
 fn shorten(text: &str) -> Option<String> {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if text.is_empty() {

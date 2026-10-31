@@ -55,8 +55,25 @@ pub fn app_name() -> &'static str {
 /// `~/Library/Application Support/abromux` (or `abromux-nightly`, or
 /// `abromux-nightly-<name>`).
 pub fn support_dir() -> PathBuf {
+    support_dir_of(flavor())
+}
+
+/// The support folder of another channel, by name: `stable`, `nightly` or
+/// `nightly-<name>`. None for anything else.
+pub fn support_dir_named(channel: &str) -> Option<PathBuf> {
+    match channel {
+        "stable" => Some(support_dir_of(None)),
+        "nightly" => Some(support_dir_of(Some(""))),
+        c => c
+            .strip_prefix("nightly-")
+            .filter(|n| !n.is_empty())
+            .map(|n| support_dir_of(Some(n))),
+    }
+}
+
+fn support_dir_of(flavor: Option<&str>) -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    let dir = match flavor() {
+    let dir = match flavor {
         None => "abromux".into(),
         Some("") => "abromux-nightly".into(),
         Some(name) => format!("abromux-nightly-{name}"),
@@ -77,5 +94,14 @@ mod tests {
         assert_eq!(flavor_of(&plist("dev.abromux.nightly")), Some(""));
         assert_eq!(flavor_of(&plist("dev.abromux.nightly.zoom")), Some("zoom"));
         assert_eq!(flavor_of(&plist("dev.abromux.nightlyx")), None);
+    }
+
+    #[test]
+    fn named_channels() {
+        let name = |c: &str| support_dir_named(c).map(|p| p.file_name().unwrap().to_owned());
+        assert_eq!(name("stable").unwrap(), "abromux");
+        assert_eq!(name("nightly").unwrap(), "abromux-nightly");
+        assert_eq!(name("nightly-zoom").unwrap(), "abromux-nightly-zoom");
+        assert!(name("nightly-").is_none() && name("./x.json").is_none());
     }
 }

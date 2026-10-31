@@ -129,6 +129,32 @@ impl AbroMux {
         r
     }
 
+    /// Apply `f` to the order, as [`rearrange`](Self::rearrange) does, and
+    /// return the workspace ids in their new order. With `dry`, the order
+    /// is put back afterwards, so this only tells what `f` would do.
+    pub(crate) fn reorder(
+        &mut self,
+        dry: bool,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut Vec<Workspace>, &mut Vec<Group>),
+    ) -> Vec<usize> {
+        let before: Vec<(usize, Option<usize>)> =
+            self.workspaces.iter().map(|w| (w.id, w.group)).collect();
+        let groups = self.groups.clone();
+        self.rearrange(cx, f);
+        let after = self.workspaces.iter().map(|w| w.id).collect();
+        if dry {
+            self.rearrange(cx, |ws, gs| {
+                ws.sort_by_key(|w| before.iter().position(|(id, _)| *id == w.id));
+                for (w, (_, g)) in ws.iter_mut().zip(&before) {
+                    w.group = *g;
+                }
+                *gs = groups;
+            });
+        }
+        after
+    }
+
     /// Where a new workspace goes and the group it joins, given the
     /// selected one and the `newWorkspacePlacement` settings.
     pub(crate) fn new_workspace_slot(&self, cx: &App) -> (usize, Option<usize>) {
@@ -426,7 +452,12 @@ impl AbroMux {
     }
 
     /// Close the description editor, saving `text` if given.
-    fn finish_describe(&mut self, text: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+    fn finish_describe(
+        &mut self,
+        text: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some((id, _)) = self.describing.take() else {
             return;
         };
@@ -833,7 +864,12 @@ impl AbroMux {
         let drop_above = self.ws_drop.is_some_and(|(t, after)| {
             !after
                 && cx.has_active_drag()
-                && self.workspaces.iter().find(|w| w.group == Some(gid)).map(|w| w.id) == Some(t)
+                && self
+                    .workspaces
+                    .iter()
+                    .find(|w| w.group == Some(gid))
+                    .map(|w| w.id)
+                    == Some(t)
         });
         let z = cx.global::<Settings>().sidebar.font_size / 12.5;
         let count = self
@@ -1100,7 +1136,6 @@ impl AbroMux {
             .cursor_pointer()
             .when_some(bg, |s, bg| s.bg(bg))
             .when(!filled, |s| s.hover(|s| s.bg(rgba(HOVER))))
-
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
@@ -1121,8 +1156,8 @@ impl AbroMux {
             )
             // Where it would land shows as a line between rows: above this
             // one over its top half, below it over the bottom half.
-            .on_drag_move(cx.listener(
-                move |this, ev: &DragMoveEvent<DraggedWorkspace>, _, cx| {
+            .on_drag_move(
+                cx.listener(move |this, ev: &DragMoveEvent<DraggedWorkspace>, _, cx| {
                     if !ev.bounds.contains(&ev.event.position) {
                         return;
                     }
@@ -1131,10 +1166,13 @@ impl AbroMux {
                         this.ws_drop = at;
                         cx.notify();
                     }
-                },
-            ))
+                }),
+            )
             .on_drop(cx.listener(move |this, d: &DraggedWorkspace, _, cx| {
-                let after = this.ws_drop.take().is_some_and(|(t, after)| t == id && after);
+                let after = this
+                    .ws_drop
+                    .take()
+                    .is_some_and(|(t, after)| t == id && after);
                 if let (Some(from), Some(onto)) = (this.ws_index(d.id), this.ws_index(id)) {
                     this.drop_workspace(from, onto, after, cx);
                 }
@@ -1148,7 +1186,13 @@ impl AbroMux {
                         .h(px(2.))
                         .rounded_full()
                         .bg(rgb(ACCENT_BRIGHT))
-                        .map(|d| if after { d.bottom(px(-2.)) } else { d.top(px(-2.)) }),
+                        .map(|d| {
+                            if after {
+                                d.bottom(px(-2.))
+                            } else {
+                                d.top(px(-2.))
+                            }
+                        }),
                 )
             })
             .drag_over::<DraggedGroup>(|d, _, _, _| d.bg(rgba(DROP_TINT)))

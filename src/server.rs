@@ -289,23 +289,23 @@ impl AbroMux {
                 let base = str_param(p, "cwd")
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(|| std::env::var("HOME").unwrap_or_default().into());
-                let prev = self.active;
+                let prev = self.workspaces.get(self.active).map(|w| w.id);
                 let name = str_param(p, "name").map(String::from);
                 let wi = self.open_layout(&spec, name, &base, window, cx);
                 self.workspaces[wi].description =
                     str_param(p, "description").and_then(crate::sidebar::clean_description);
-                let wi = match str_param(p, "group") {
-                    Some(g) => {
-                        let g = self.find_group(g)?;
-                        self.set_group(wi, Some(g), cx);
-                        self.active
-                    }
-                    None => wi,
-                };
-                if !bool_param(p, "focus", true) {
-                    let prev = prev.min(self.workspaces.len() - 1);
-                    self.select_workspace(prev, window, cx);
+                let new_id = self.workspaces[wi].id;
+                if let Some(g) = str_param(p, "group") {
+                    let g = self.find_group(g)?;
+                    self.set_group(wi, Some(g), cx);
                 }
+                // By id: the new one may have gone in above it.
+                if !bool_param(p, "focus", true)
+                    && let Some(i) = prev.and_then(|id| self.ws_index(id))
+                {
+                    self.select_workspace(i, window, cx);
+                }
+                let wi = self.ws_index(new_id).unwrap_or(wi);
                 self.describe_ws(wi, false, cx)
             }
             "workspace.create" => {
@@ -374,42 +374,37 @@ impl AbroMux {
                     bail!("reorder-workspace needs --index, --before or --after");
                 };
                 let id = self.workspaces[wi].id;
-                if !bool_param(p, "dry_run", false) {
-                    let group = self.workspaces[wi].group;
-                    self.rearrange(cx, |ws, groups| {
-                        crate::workspace::move_workspace(ws, groups, wi, to, group)
-                    });
-                }
-                let at = if bool_param(p, "dry_run", false) {
-                    to
-                } else {
-                    self.ws_index(id).unwrap_or(to)
-                };
+                let group = self.workspaces[wi].group;
+                let dry = bool_param(p, "dry_run", false);
+                let order = self.reorder(dry, cx, |ws, groups| {
+                    crate::workspace::move_workspace(ws, groups, wi, to, group);
+                });
+                let at = order.iter().position(|&w| w == id).unwrap_or(to);
                 json!({ "workspace": format!("workspace:{id}"), "index": at })
             }
             "workspace.reorder_all" => {
                 let order = str_param(p, "order").context("missing --order")?;
-                let picked: Vec<usize> = order
-                    .split(',')
-                    .map(|s| self.find_workspace(s.trim()))
-                    .collect::<anyhow::Result<_>>()?;
-                let mut ids: Vec<usize> = picked.iter().map(|&i| self.workspaces[i].id).collect();
-                ids.dedup();
+                let mut ids: Vec<usize> = vec![];
+                for s in order.split(',') {
+                    let id = self.workspaces[self.find_workspace(s.trim())?].id;
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
                 // The ones not named keep their order, after the named ones.
                 for w in &self.workspaces {
                     if !ids.contains(&w.id) {
                         ids.push(w.id);
                     }
                 }
-                if !bool_param(p, "dry_run", false) {
-                    self.rearrange(cx, |ws, _| {
-                        ws.sort_by_key(|w| ids.iter().position(|&id| id == w.id));
-                    });
-                }
+                let dry = bool_param(p, "dry_run", false);
+                let order = self.reorder(dry, cx, |ws, _| {
+                    ws.sort_by_key(|w| ids.iter().position(|&id| id == w.id));
+                });
                 json!(
-                    self.workspaces
+                    order
                         .iter()
-                        .map(|w| format!("workspace:{}", w.id))
+                        .map(|id| format!("workspace:{id}"))
                         .collect::<Vec<_>>()
                 )
             }
@@ -1173,8 +1168,9 @@ impl AbroMux {
         let task = cx.background_spawn(async move { crate::agent::title_for(kind, &prompt) });
         cx.spawn(async move |this, cx| {
             let title = task.await;
+            // `naming` keeps the id either way: one try per workspace, so a
+            // CLI that fails doesn't run again on every prompt.
             this.update(cx, |this, cx| {
-                this.naming.retain(|&n| n != id);
                 if let (Some(t), Some(i)) = (title, this.ws_index(id))
                     && this.workspaces[i].custom_name.is_none()
                 {
@@ -1461,7 +1457,12 @@ impl AbroMux {
                     str_param(p, "title").context("rename needs --title")?,
                 ))
             }
-            "clear-name" => ws.custom_name = None,
+            // Back to following the terminal's title; auto-naming may name it again.
+            "clear-name" => {
+                ws.custom_name = None;
+                ws.auto_title = None;
+                self.naming.retain(|&n| n != id);
+            }
             "set-description" => {
                 ws.description = crate::sidebar::clean_description(
                     str_param(p, "description").context("set-description needs --description")?,
