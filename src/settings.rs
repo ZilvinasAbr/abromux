@@ -71,8 +71,8 @@ pub struct Settings {
 impl Global for Settings {}
 
 /// How terminals come back after abromux quits. Applies to terminals opened
-/// after it's set; ones already running in herdr-core are attached to again
-/// whatever it says.
+/// after it's set; ones already running in herdr-core or the holder are
+/// taken back whatever it says.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Persistence {
@@ -83,6 +83,9 @@ pub enum Persistence {
     /// Shells run in herdr-core and keep running; the next launch attaches
     /// to them.
     HerdrCore,
+    /// Shells run in abromux's own holder (`crate::hold`) and keep running;
+    /// the next launch takes them back as they were.
+    AbromuxHold,
 }
 
 impl Persistence {
@@ -91,6 +94,7 @@ impl Persistence {
         match self {
             Persistence::Abromux => "abromux",
             Persistence::HerdrCore => "herdr-core",
+            Persistence::AbromuxHold => "abromux-hold",
         }
     }
 }
@@ -541,6 +545,8 @@ mod tests {
     fn persistence() {
         let s = parse(r#"{"persistence": "herdr-core"}"#).unwrap();
         assert_eq!(s.persistence, Persistence::HerdrCore);
+        let s = parse(r#"{"persistence": "abromux-hold"}"#).unwrap();
+        assert_eq!(s.persistence, Persistence::AbromuxHold);
         assert!(parse(r#"{"persistence": "tmux"}"#).is_err());
     }
 

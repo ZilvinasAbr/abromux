@@ -285,9 +285,46 @@ unsafe extern "C" fn on_render_hold(t: GhosttyTerminal, ud: *mut c_void, held: b
 
 impl Terminal {
     pub fn new(cols: u16, rows: u16) -> anyhow::Result<Self> {
+        let mut raw = ptr::null_mut();
+        check(unsafe { ghostty_terminal_new(ptr::null(), &mut raw, cols, rows) })?;
+        Self::wrap(raw)
+    }
+
+    /// Its complete state (screen, scrollback, modes, colors) in libghostty-vt's
+    /// snapshot format. A sequence it's in the middle of is cancelled first:
+    /// encoding one needs tracking that would cost every byte.
+    pub fn snapshot(&mut self) -> Option<Vec<u8>> {
+        let encode = |raw| unsafe {
+            let (mut out, mut len) = (ptr::null_mut(), 0);
+            if ghostty_snapshot_encode_alloc(raw, ptr::null(), &mut out, &mut len) != GHOSTTY_SUCCESS {
+                return None;
+            }
+            let bytes = std::slice::from_raw_parts(out, len).to_vec();
+            ghostty_free(ptr::null(), out, len);
+            Some(bytes)
+        };
+        encode(self.raw).or_else(|| {
+            self.write(b"\x18"); // CAN: back to ground
+            encode(self.raw)
+        })
+    }
+
+    /// A terminal as `snapshot` left it.
+    pub fn from_snapshot(bytes: &[u8]) -> anyhow::Result<Self> {
         unsafe {
+            let mut dec = ptr::null_mut();
+            check(ghostty_snapshot_decoder_new_buf(ptr::null(), &mut dec, bytes.as_ptr(), bytes.len()))?;
             let mut raw = ptr::null_mut();
-            check(ghostty_terminal_new(ptr::null(), &mut raw, cols, rows))?;
+            let r = ghostty_snapshot_decoder_decode(dec, &mut raw);
+            ghostty_snapshot_decoder_free(dec);
+            check(r)?;
+            Self::wrap(raw)
+        }
+    }
+
+    /// Set up a new or decoded terminal: callbacks, render state, encoders.
+    fn wrap(raw: GhosttyTerminal) -> anyhow::Result<Self> {
+        unsafe {
             let mut render = ptr::null_mut();
             check(ghostty_render_state_new(ptr::null(), &mut render))?;
             let mut row_iter = ptr::null_mut();
@@ -1547,6 +1584,32 @@ fn check(r: GhosttyResult) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What abromux-hold relies on: a terminal comes back from its snapshot
+    /// as it was (scrollback, styles, alternate screen), and output after it
+    /// lands as it would have.
+    #[test]
+    fn snapshot_round_trip() {
+        let mut t = Terminal::new(20, 5).unwrap();
+        for i in 0..30 {
+            t.write(format!("\x1b[1;3{}mline {i}\x1b[0m\r\n", i % 8).as_bytes());
+        }
+        t.write(b"\x1b[?1049h\x1b[Hfull screen");
+        let snap = t.snapshot().unwrap();
+        let mut back = Terminal::from_snapshot(&snap).unwrap();
+        assert!(back.alt_screen());
+        assert_eq!(back.screen_text(), t.screen_text());
+        back.write(b"\x1b[?1049l");
+        t.write(b"\x1b[?1049l");
+        assert_eq!(back.screen_vt(), t.screen_vt());
+        assert!(back.screen_vt().contains("line 0"), "scrollback kept");
+
+        // Quit mid-sequence: the snapshot still works, minus that sequence.
+        t.write(b"\x1b[3");
+        let mut back = Terminal::from_snapshot(&t.snapshot().unwrap()).unwrap();
+        back.write(b"after");
+        assert!(back.screen_text().contains("after"));
+    }
 
     #[test]
     fn scrollbar_and_scroll_to_row() {

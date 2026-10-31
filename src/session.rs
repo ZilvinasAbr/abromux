@@ -11,6 +11,7 @@
 //! `ABROMUX_NO_RESTORE=1` turns it off, as do `ABROMUX_DEMO`/`ABROMUX_SCRIPT` unless
 //! a session path is given, so test runs never touch the real session.
 
+use crate::pty::Attach;
 use crate::{
     AbroMux,
     agent::Agent,
@@ -97,8 +98,11 @@ pub enum TabState {
         /// Its terminal in herdr-core, still running (`crate::hc`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hc: Option<String>,
+        /// Its terminal in abromux's holder, still running (`crate::hold`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        held: Option<String>,
         /// Its surface number, which that terminal's shell has in
-        /// `ABROMUX_SURFACE_ID`; only kept with `hc`.
+        /// `ABROMUX_SURFACE_ID`; only kept with `hc` or `held`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         surface: Option<usize>,
     },
@@ -296,10 +300,15 @@ impl AbroMux {
                 agent,
                 name,
                 hc,
+                held,
                 surface,
             } => {
                 let cwd = std::path::Path::new(&cwd).is_dir().then_some(cwd);
-                let attach = hc.as_deref().zip(surface).map(|(a, n)| (n, a));
+                let attach = hc
+                    .map(Attach::Hc)
+                    .or(held.map(Attach::Held))
+                    .zip(surface);
+                let attach = attach.as_ref().map(|(a, n)| (*n, a));
                 let s = self.make_terminal_full(cwd, ws, vec![], attach, window, cx);
                 if let Surface::Terminal(t) = &s {
                     t.update(cx, |t, cx| {
@@ -375,10 +384,15 @@ fn tab_state(s: &Surface, scrollback: bool, refs: &Refs, cx: &App) -> TabState {
         Surface::Terminal(t) => {
             let surface = refs.get(&t.entity_id()).copied();
             let t = t.read(cx);
-            let hc = t.hc_address().map(str::to_string);
+            let (hc, held) = match t.attach() {
+                Some(Attach::Hc(a)) => (Some(a), None),
+                Some(Attach::Held(id)) => (None, Some(id)),
+                None => (None, None),
+            };
             TabState::Terminal {
-                surface: surface.filter(|_| hc.is_some()),
+                surface: surface.filter(|_| hc.is_some() || held.is_some()),
                 hc,
+                held,
                 cwd: t.live_cwd(),
                 font_size: Some(t.font_size()),
                 scrollback: scrollback
@@ -434,6 +448,7 @@ mod tests {
                                 }),
                                 name: Some("server".into()),
                                 hc: Some("t3".into()),
+                                held: None,
                                 surface: Some(7),
                             }],
                         },

@@ -13,12 +13,13 @@ use crate::{
     sprite,
     theme::*,
 };
+use crate::pty::{Attach, Feed, Opened, Pty};
 use futures::{StreamExt, channel::mpsc};
 use gpui::{prelude::*, *};
 use gpui_component::input::{self, Input, InputEvent, InputState};
-use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::PtySize;
 use std::collections::HashMap;
-use std::io::{Read, Write};
+
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -80,9 +81,13 @@ struct HoverLink {
 pub struct TerminalView {
     term: ghostty::Terminal,
     pty: Pty,
-    /// It reattached to a shell that ran on in herdr-core while abromux was
-    /// away, so there's nothing to replay or resume.
+    /// Where the program's output waits for the main thread.
+    feed: Feed,
+    /// It reattached to a shell that ran on in herdr-core or the holder
+    /// while abromux was away, so there's nothing to replay or resume.
     pub attached: bool,
+    /// Closed or left for the next launch: its reader's end isn't an exit.
+    frozen: bool,
     focus: FocusHandle,
     /// Shared with the paint that draws it, so a paint doesn't copy it.
     frame: Rc<Frame>,
@@ -158,24 +163,34 @@ impl Focusable for TerminalView {
 }
 
 impl TerminalView {
-    /// A new shell in `cwd`, or with `attach`, herdr-core's terminal of that
-    /// address if it's still running (a new shell if not).
+    /// A new shell in `cwd`, or with `attach`, a terminal from the last
+    /// session if it's still running (a new shell if not).
     pub fn new(
         cwd: Option<String>,
         env: Vec<(String, String)>,
-        attach: Option<&str>,
+        attach: Option<&Attach>,
         cx: &mut Context<Self>,
     ) -> Self {
         let (cols, rows) = (80, 24);
         let cwd = cwd.unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
-        let (pty, attached) = spawn_shell(&cwd, &env, (cols, rows), 0, attach, cx);
+        let (opened, feed) = spawn_shell(&cwd, &env, (cols, rows), 0, attach, cx);
         let focus = cx.focus_handle();
         let config = cx.try_global::<Config>().cloned().unwrap_or_default();
         cx.on_release(Self::free_images).detach();
+        // A held terminal comes back as it was left, plus what it printed since.
+        let mut term = opened
+            .snapshot
+            .and_then(|s| ghostty::Terminal::from_snapshot(&s).ok())
+            .map(|t| configure(t, &config))
+            .unwrap_or_else(|| new_term(cols, rows, &config));
+        term.write(&opened.backlog);
+        let _ = term.take_effects();
         Self {
-            term: new_term(cols, rows, &config),
-            pty,
-            attached,
+            term,
+            pty: opened.pty,
+            attached: opened.attached,
+            feed,
+            frozen: false,
             focus,
             frame: Rc::default(),
             dirty: true,
@@ -246,7 +261,8 @@ impl TerminalView {
         let cwd = self.live_cwd();
         self.pty.kill();
         self.generation += 1;
-        (self.pty, _) = spawn_shell(&cwd, &self.env, self.grid, self.generation, None, cx);
+        let (opened, feed) = spawn_shell(&cwd, &self.env, self.grid, self.generation, None, cx);
+        (self.pty, self.feed) = (opened.pty, feed);
         self.attached = false;
         self.term = new_term(self.grid.0, self.grid.1, &self.config);
         // Size the new PTY and terminal to the pane, cell pixels included.
@@ -326,17 +342,39 @@ impl TerminalView {
         }
     }
 
-    /// Closing its tab: end the shell, which a herdr-core one wouldn't on its
-    /// own (dropping the view only detaches, as quitting does).
+    /// Closing its tab: end the shell, which a herdr-core or held one
+    /// wouldn't on its own (dropping the view only lets go, as quitting does).
     pub fn close(&mut self) {
+        self.frozen = true;
         self.pty.kill();
     }
 
-    /// herdr-core's address for this terminal, to attach again next launch.
-    pub fn hc_address(&self) -> Option<&str> {
-        match &self.pty {
-            Pty::Hc(t) => Some(&t.address),
-            Pty::Local { .. } => None,
+    /// herdr-core's address or the holder's id for this terminal, to take
+    /// it back next launch.
+    pub fn attach(&self) -> Option<Attach> {
+        self.pty.attach()
+    }
+
+    /// Quitting: a held terminal stops reading, takes in what was already
+    /// read, and leaves its state for the next launch (`hold::snapshot_path`).
+    /// The holder takes the PTY over once the app is gone.
+    pub fn freeze(&mut self) {
+        if self.frozen {
+            return;
+        }
+        let Some(id) = self.pty.freeze() else { return };
+        self.frozen = true;
+        let q = self.feed.take();
+        self.term.write(&q.bytes);
+        if let Some(snap) = self.term.snapshot() {
+            let path = crate::hold::snapshot_path(&id);
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let tmp = path.with_extension("tmp");
+            if std::fs::write(&tmp, snap).is_ok() {
+                let _ = std::fs::rename(tmp, path);
+            }
         }
     }
 
@@ -1927,97 +1965,17 @@ fn sprite_char(c: &ghostty::Cell) -> Option<char> {
     (chars.next().is_none() && !c.invisible && sprite::covers(ch)).then_some(ch)
 }
 
-/// Where a terminal's program runs.
-enum Pty {
-    /// A PTY of abromux's own: the shell ends with the app.
-    Local {
-        writer: Box<dyn Write + Send>,
-        master: Box<dyn MasterPty + Send>,
-        child: Box<dyn portable_pty::Child + Send + Sync>,
-    },
-    /// A terminal in herdr-core, which outlives the app (`crate::hc`).
-    Hc(crate::hc::Terminal),
-}
-
-impl Pty {
-    fn write(&mut self, bytes: &[u8]) {
-        match self {
-            Pty::Local { writer, .. } => {
-                let _ = writer.write_all(bytes);
-                let _ = writer.flush();
-            }
-            Pty::Hc(t) => t.write(bytes),
-        }
-    }
-
-    fn resize(&self, size: PtySize) {
-        match self {
-            Pty::Local { master, .. } => {
-                let _ = master.resize(size);
-            }
-            Pty::Hc(t) => t.resize(size.cols, size.rows),
-        }
-    }
-
-    /// The shell's pid (herdr-core's terminals run on this machine too).
-    fn pid(&self) -> Option<u32> {
-        match self {
-            Pty::Local { child, .. } => child.process_id(),
-            Pty::Hc(t) => t.pid,
-        }
-    }
-
-    /// End the program for good. Dropping a `Pty` ends a local shell too, but
-    /// only detaches from herdr-core's.
-    fn kill(&mut self) {
-        match self {
-            Pty::Local { child, .. } => {
-                let _ = child.kill();
-            }
-            Pty::Hc(t) => t.kill(),
-        }
-    }
-
-    fn raw_fd(&self) -> Option<i32> {
-        match self {
-            Pty::Local { master, .. } => master.as_raw_fd(),
-            Pty::Hc(_) => None,
-        }
-    }
-}
-
-/// Start the user's login shell at `size` (or attach to herdr-core's
-/// terminal `attach`), and drain its output into the view on the main
-/// thread. Output and the exit of a shell from an older `generation` (one
-/// `respawn` replaced) are dropped. The flag says whether it attached.
+/// Start the user's login shell at `size` (or take back `attach`), and
+/// drain its output into the view on the main thread. Output and the exit
+/// of a shell from an older `generation` (one `respawn` replaced) are dropped.
 fn spawn_shell(
     cwd: &str,
     env: &[(String, String)],
     size: (u16, u16),
     generation: usize,
-    attach: Option<&str>,
+    attach: Option<&Attach>,
     cx: &mut Context<TerminalView>,
-) -> (Pty, bool) {
-    let (tx, rx) = mpsc::unbounded::<Vec<u8>>();
-    let (pty, attached) = open_pty(cwd, env, size, attach, tx, cx);
-    drain(rx, generation, cx);
-    (pty, attached)
-}
-
-fn open_pty(
-    cwd: &str,
-    env: &[(String, String)],
-    (cols, rows): (u16, u16),
-    attach: Option<&str>,
-    tx: mpsc::UnboundedSender<Vec<u8>>,
-    cx: &mut Context<TerminalView>,
-) -> (Pty, bool) {
-    if let Some(address) = attach {
-        match crate::hc::Terminal::attach(address, (cols, rows), hc_sink(tx.clone())) {
-            Ok(t) => return (Pty::Hc(t), true),
-            Err(e) => eprintln!("abromux: herdr-core terminal {address}: {e}"),
-        }
-    }
+) -> (Opened, Feed) {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let mut vars: Vec<(String, String)> = [
         ("TERM", "xterm-256color"),
@@ -2033,114 +1991,55 @@ fn open_pty(
     {
         vars.extend(crate::shell::inject(&shell, env));
     }
-    if cx
+    let persistence = cx
         .try_global::<Settings>()
-        .is_some_and(|s| s.persistence == Persistence::HerdrCore)
-    {
-        // herdr-core starts programs with its own environment, not ours.
-        let all = std::env::vars().chain(vars.iter().cloned()).collect();
-        let argv = [shell.clone(), "-l".into()];
-        match crate::hc::Terminal::spawn(cwd, &argv, &all, (cols, rows), hc_sink(tx.clone())) {
-            Ok(t) => return (Pty::Hc(t), false),
-            Err(e) => eprintln!("abromux: herdr-core: {e}; starting the shell here instead"),
-        }
-    }
-
-    let pty = native_pty_system()
-        .openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("openpty");
-    let mut cmd = CommandBuilder::new(&shell);
-    cmd.arg("-l");
-    for (k, v) in vars {
-        cmd.env(k, v);
-    }
-    cmd.cwd(cwd);
-    let child = pty.slave.spawn_command(cmd).expect("spawn shell");
-    drop(pty.slave);
-
-    let mut reader = pty.master.try_clone_reader().expect("pty reader");
-    let writer = pty.master.take_writer().expect("pty writer");
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 64 * 1024];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    crate::activity::output();
-                    if tx.unbounded_send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-    (
-        Pty::Local {
-            writer,
-            master: pty.master,
-            child,
-        },
-        false,
-    )
+        .map_or(Persistence::Abromux, |s| s.persistence);
+    let (feed, wake) = Feed::new();
+    let opened = crate::pty::open(cwd, &shell, &vars, size, attach, persistence, &feed);
+    drain(feed.clone(), wake, generation, cx);
+    (opened, feed)
 }
 
-/// herdr-core's output into the same channel a local PTY's goes to.
-fn hc_sink(
-    tx: mpsc::UnboundedSender<Vec<u8>>,
-) -> impl FnMut(crate::hc::Output) -> bool + Send + 'static {
-    move |out| match out {
-        crate::hc::Output::Bytes(b) => {
-            crate::activity::output();
-            tx.unbounded_send(b).is_ok()
-        }
-        crate::hc::Output::Closed => {
-            tx.close_channel();
-            false
-        }
-    }
-}
-
-/// Drain the program's output on the main thread; batch whatever is queued
+/// Take the program's output on the main thread, all that's queued at once,
 /// so a flood of output costs one repaint.
-fn drain(
-    mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
-    generation: usize,
-    cx: &mut Context<TerminalView>,
-) {
+fn drain(feed: Feed, mut wake: mpsc::Receiver<()>, generation: usize, cx: &mut Context<TerminalView>) {
     cx.spawn(async move |this, cx| {
-        while let Some(first) = rx.next().await {
-            let mut chunk = first;
-            while let Ok(more) = rx.try_recv() {
-                chunk.extend_from_slice(&more);
-            }
-            let live = this.update(cx, |this, cx| {
-                let live = this.generation == generation;
-                if live {
-                    this.process(&chunk, cx);
+        loop {
+            let woke = wake.next().await.is_some();
+            let q = feed.take();
+            if !q.bytes.is_empty() {
+                let live = this.update(cx, |this, cx| {
+                    let live = this.generation == generation;
+                    if live {
+                        this.process(&q.bytes, cx);
+                    }
+                    live
+                });
+                if !matches!(live, Ok(true)) {
+                    return;
                 }
-                live
-            });
-            if !matches!(live, Ok(true)) {
+            }
+            if q.closed || !woke {
+                let _ = this.update(cx, |this, cx| {
+                    if this.generation == generation && !this.frozen {
+                        cx.emit(TerminalEvent::Exited)
+                    }
+                });
                 return;
             }
         }
-        let _ = this.update(cx, |this, cx| {
-            if this.generation == generation {
-                cx.emit(TerminalEvent::Exited)
-            }
-        });
     })
     .detach();
 }
 
 /// A libghostty-vt terminal with the config's colors and cursor.
 fn new_term(cols: u16, rows: u16, config: &Config) -> ghostty::Terminal {
-    let mut term = ghostty::Terminal::new(cols, rows).expect("libghostty-vt terminal");
+    let term = ghostty::Terminal::new(cols, rows).expect("libghostty-vt terminal");
+    configure(term, config)
+}
+
+/// The config's colors and cursor on a new or restored terminal.
+fn configure(mut term: ghostty::Terminal, config: &Config) -> ghostty::Terminal {
     term.set_colors(
         config.foreground,
         config.background,

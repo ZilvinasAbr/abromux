@@ -4,7 +4,7 @@
     scripts/perf.py run              build, measure, record, compare (~1.5 min)
     scripts/perf.py run --headless   only the parts that need no window (~10 s)
     scripts/perf.py run --full       longer idle windows and more startup runs
-    scripts/perf.py run --persistence herdr-core   (or abromux) to compare the two
+    scripts/perf.py run --persistence herdr-core   (or abromux, abromux-hold) to compare them
     scripts/perf.py compare [ID]     compare a recorded run (default: latest)
     scripts/perf.py history [METRIC] recent runs, or one metric over time
     scripts/perf.py report [--md]    HTML (or Markdown) report with charts
@@ -86,12 +86,13 @@ METRICS = {
     "kitty_frame_p99_ms":   ("ms",   "lower",  0.30, 5,    "p99 frame draw while streaming kitty frames"),
     "kitty_footprint_mb":   ("MB",   "lower",  0.25, 10,   "footprint growth after shared-memory kitty frames"),
     "browser_open_ms":      ("ms",   "lower",  0.25, 30,   "browser split -> local page loaded"),
-    # Only with --persistence herdr-core: what herdr-core's own processes
-    # (core, holder, one `hc connect` per terminal) add on top of the app.
-    "hc_idle_mb":           ("MB",   "lower",  0.10, 2,    "herdr-core footprint, idle, 1 terminal"),
-    "hc_per_terminal_mb":   ("MB",   "lower",  0.25, 0.3,  "herdr-core footprint per extra terminal"),
-    "hc_idle_cpu_11_pct":   ("%",    "lower",  0.50, 0.5,  "herdr-core idle CPU, 11 terminals"),
-    "hc_throughput_cpu_s":  ("s",    "lower",  0.15, 0.2,  "herdr-core CPU time for the throughput run"),
+    # Only with --persistence herdr-core or abromux-hold: what the process(es)
+    # keeping shells alive add on top of the app (herdr-core's core, holder and
+    # `hc connect`s, or `abromux hold`).
+    "hc_idle_mb":           ("MB",   "lower",  0.10, 2,    "persistence daemon footprint, idle, 1 terminal"),
+    "hc_per_terminal_mb":   ("MB",   "lower",  0.25, 0.3,  "persistence daemon footprint per extra terminal"),
+    "hc_idle_cpu_11_pct":   ("%",    "lower",  0.50, 0.5,  "persistence daemon idle CPU, 11 terminals"),
+    "hc_throughput_cpu_s":  ("s",    "lower",  0.15, 0.2,  "persistence daemon CPU time for the throughput run"),
 }
 
 MODES = {
@@ -370,6 +371,7 @@ class Suite:
             (xdg / "abromux").mkdir()
             (xdg / "abromux" / "config.json").write_text(json.dumps({"persistence": self.persistence}))
             self.env["HC_SESSION"] = self.hc_session
+            self.env["ABROMUX_HOLD_SOCKET"] = str(tmp / "hold.sock")
         self.proc = None
         try:
             self._app(tmp)
@@ -387,9 +389,20 @@ class Suite:
                            capture_output=True, text=True, timeout=30)
         return r.stdout
 
+    def holder_pids(self):
+        """`abromux hold` processes of this run (--persistence abromux-hold)."""
+        out = sh("pgrep", "-f", f"{self.bin} hold", check=False)
+        return [int(p) for p in out.split()]
+
     def hc_reset(self, start=True):
         """No terminals left from an earlier launch (quitting leaves them
-        running); with `start`, a warm core, as when it's in daily use."""
+        running); with `start`, a warm core, as when it's in daily use. The
+        holder starts with the first terminal, as it does in daily use."""
+        if self.persistence == "abromux-hold":
+            for p in self.holder_pids():
+                os.kill(p, signal.SIGTERM)  # its shells hang up with it
+            time.sleep(0.2)
+            return
         if self.persistence != "herdr-core":
             return
         self.hc("server", "stop")
@@ -400,8 +413,10 @@ class Suite:
             shutil.rmtree(state / "herdr-core" / self.hc_session, ignore_errors=True)
 
     def hc_pids(self):
-        """herdr-core's processes serving this app: core, holder, and the
-        app's `hc connect` children."""
+        """The persistence daemon's processes serving this app: herdr-core's
+        core, holder and the app's `hc connect` children, or `abromux hold`."""
+        if self.persistence == "abromux-hold":
+            return self.holder_pids()
         if self.persistence != "herdr-core":
             return []
         try:
@@ -1090,7 +1105,7 @@ def main():
     g.add_argument("--headless", action="store_true", help="skip the app; binary size + VT parse only")
     g.add_argument("--full", action="store_true", help="longer settle/idle windows, 5 startup runs")
     r.add_argument("--label", help="free-form note stored with the run")
-    r.add_argument("--persistence", choices=["abromux", "herdr-core"],
+    r.add_argument("--persistence", choices=["abromux", "herdr-core", "abromux-hold"],
                    help="run the app with this persistence (compared only with runs of the same one); "
                         "throughput is timed with a kitty query either way, so the two compare")
     r.add_argument("--no-build", action="store_true", help="use the existing release binary")

@@ -13,6 +13,7 @@ mod cursor;
 mod debug;
 mod ghostty;
 mod hc;
+mod hold;
 mod icon;
 mod ipc;
 mod keymap;
@@ -22,6 +23,7 @@ mod menu;
 mod notification;
 mod osc99;
 mod palette;
+mod pty;
 mod quit;
 mod server;
 mod session;
@@ -110,6 +112,7 @@ actions!(
         ReloadConfig,
         PersistenceAbromux,
         PersistenceHerdrCore,
+        PersistenceAbromuxHold,
         LastPane,
         SwapLeft,
         SwapRight,
@@ -413,6 +416,7 @@ impl AbroMux {
         })
         .detach();
         cx.on_app_quit(|this, cx| {
+            this.freeze_held(cx);
             session::save(&this.snapshot(true, cx));
             async {}
         })
@@ -420,10 +424,25 @@ impl AbroMux {
         let this = cx.entity().downgrade();
         window.on_window_should_close(cx, move |_, cx| {
             if let Some(this) = this.upgrade() {
+                this.update(cx, |this, cx| this.freeze_held(cx));
                 session::save(&this.read(cx).snapshot(true, cx));
             }
             true
         });
+    }
+
+    /// Before quitting: terminals in abromux's holder leave their state for
+    /// the next launch (`TerminalView::freeze`).
+    fn freeze_held(&mut self, cx: &mut Context<Self>) {
+        for ws in &self.workspaces {
+            for p in ws.root.panes() {
+                for s in &p.tabs {
+                    if let Surface::Terminal(t) = s {
+                        t.update(cx, |t, _| t.freeze());
+                    }
+                }
+            }
+        }
     }
 
     /// Split ids (pane, workspace and surface ids have their own counters).
@@ -478,7 +497,7 @@ impl AbroMux {
         cwd: Option<String>,
         ws: usize,
         mut env: Vec<(String, String)>,
-        attach: Option<(usize, &str)>,
+        attach: Option<(usize, &crate::pty::Attach)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Surface {
@@ -2366,6 +2385,9 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &PersistenceHerdrCore, window, cx| {
                 this.set_persistence(settings::Persistence::HerdrCore, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &PersistenceAbromuxHold, window, cx| {
+                this.set_persistence(settings::Persistence::AbromuxHold, window, cx)
+            }))
             .when(self.notifications_open, |d| {
                 d.capture_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
                     if ev.keystroke.key == "escape" {
@@ -2594,6 +2616,14 @@ fn main() {
     }
     if args.first().is_some_and(|a| a == "bench-kitty") {
         std::process::exit(bench::kitty(&args[1..]));
+    }
+    // The background process of `"persistence": "abromux-hold"` (hold.rs).
+    if args.first().is_some_and(|a| a == "hold") {
+        if let Err(e) = hold::serve(&hold::socket_path()) {
+            eprintln!("abromux hold: {e}");
+            std::process::exit(1);
+        }
+        std::process::exit(0);
     }
     if !args.is_empty() {
         std::process::exit(cli::run(args));
