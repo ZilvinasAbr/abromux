@@ -570,8 +570,7 @@ impl AbroMux {
                     let ws = self.workspaces.get(self.active).map_or(0, |w| w.id);
                     let s = self.make_terminal_running(None, ws, vec![], Some(cmd), window, cx);
                     if let Surface::Terminal(t) = &s {
-                        t.update(cx, |t, _| t.browser_url = Some(url.into()));
-                        terminal_browser::watch(t, cx);
+                        terminal_browser::attach(t, url, cx);
                     }
                     return s;
                 }

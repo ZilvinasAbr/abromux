@@ -626,11 +626,11 @@ fn tab_state(s: &Surface, scrollback: bool, cx: &App) -> TabState {
     match s {
         Surface::Terminal(t) => {
             let t = t.read(cx);
-            // A terminal-browser tab comes back as a browser on the page it
-            // opened (abromux doesn't see where it went from there).
-            if let Some(url) = &t.browser_url {
+            // A tab whose app shows a page (terminal-browser) comes back as a
+            // browser tab on that page, in whichever engine is set then.
+            if let Some(url) = t.app.as_ref().and_then(|a| a.page_url()) {
                 return TabState::Browser {
-                    url: url.clone(),
+                    url: url.into(),
                     name: t.custom_title.clone(),
                     history: None,
                 };

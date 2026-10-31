@@ -15,6 +15,7 @@ use futures::{StreamExt, channel::mpsc};
 use gpui::{prelude::*, *};
 use gpui_component::input::{self, Input, InputEvent, InputState};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use std::any::Any;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::ops::Range;
@@ -52,6 +53,31 @@ actions!(
 const MATCH_BG: Rgb = Rgb(0xff, 0xe0, 0x82);
 const MATCH_SELECTED_BG: Rgb = Rgb(0xf2, 0xa5, 0x7e);
 const MATCH_FG: Rgb = Rgb(0, 0, 0);
+
+/// An app a terminal tab was opened to run, full-screen, that presents the
+/// tab as something other than a shell (terminal-browser shows a web page).
+/// The tab bar, the keymap and the session ask it instead of reading the
+/// terminal; the app's module keeps its own state behind it. Each method is
+/// a cheap read: they run as the tab draws.
+pub trait TerminalApp: Any {
+    /// The tab's icon (an `icons/` name).
+    fn icon(&self) -> &'static str;
+    /// The tab's title, unless the user named the tab.
+    fn title(&self) -> String;
+    /// The terminal's key context, to bind keys for this app only.
+    fn key_context(&self) -> &'static str {
+        "Terminal"
+    }
+    /// ⌘-keys left unbound in that context go to the program, not the app.
+    fn takes_cmd_keys(&self) -> bool {
+        false
+    }
+    /// A web page the tab shows: ⌘-clicked links open beside it as they do
+    /// beside a browser, and the session saves it as a browser tab there.
+    fn page_url(&self) -> Option<&str> {
+        None
+    }
+}
 
 pub enum TerminalEvent {
     TitleChanged,
@@ -153,11 +179,9 @@ pub struct TerminalView {
     pending_paste: Option<String>,
     /// What the shell runs instead of an interactive session (`$SHELL -l -c`).
     command: Option<String>,
-    /// Set on a tab running terminal-browser: the page it shows (at first
-    /// the one it opened), saved as a browser tab.
-    pub browser_url: Option<String>,
-    /// That page's title, once terminal-browser reports it.
-    pub browser_title: String,
+    /// An app this terminal was opened to run, which presents the tab
+    /// (`terminal_browser::Tab`); None for a shell.
+    pub app: Option<Box<dyn TerminalApp>>,
     /// Kept to start the shell again the same way (`respawn-pane`).
     env: Vec<(String, String)>,
     /// Bumped on respawn so the old shell's output and exit are ignored.
@@ -239,8 +263,7 @@ impl TerminalView {
             custom_title: None,
             pending_paste: None,
             command,
-            browser_url: None,
-            browser_title: String::new(),
+            app: None,
             env,
             generation: 0,
             hold_timer: false,
@@ -276,16 +299,14 @@ impl TerminalView {
         self.master.tty_name()
     }
 
-    /// The page terminal-browser reports for this tab.
-    pub fn set_browser_page(&mut self, page: crate::terminal_browser::Page, cx: &mut Context<Self>) {
-        let url = (!page.url.is_empty()).then_some(page.url);
-        if self.browser_title == page.title && (url.is_none() || self.browser_url == url) {
-            return;
-        }
-        self.browser_title = page.title;
-        if url.is_some() {
-            self.browser_url = url;
-        }
+    /// The tab's app as its concrete type, for the module that owns it.
+    pub fn app_mut<A: TerminalApp>(&mut self) -> Option<&mut A> {
+        let app: &mut dyn Any = self.app.as_deref_mut()?;
+        app.downcast_mut()
+    }
+
+    /// The app changed how the tab should look.
+    pub fn app_changed(&mut self, cx: &mut Context<Self>) {
         cx.emit(TerminalEvent::TitleChanged);
         cx.notify();
     }
@@ -1023,9 +1044,9 @@ impl TerminalView {
         self.send_key(ks, ffi::GHOSTTY_KEY_ACTION_PRESS, cx)
     }
 
-    /// `send_keystroke` as a press or a repeat. A terminal-browser tab also
-    /// takes ⌘-keys: the ones abromux leaves it (see
-    /// `keymap::TERMINAL_BROWSER_KEYS`) reach here unbound.
+    /// `send_keystroke` as a press or a repeat. A tab whose app takes
+    /// ⌘-keys sends them too: the ones bound to nothing in its key context
+    /// reach here.
     fn send_key(
         &mut self,
         ks: &Keystroke,
@@ -1037,7 +1058,7 @@ impl TerminalView {
             return true;
         }
         let m = ks.modifiers;
-        if m.platform && self.browser_url.is_none() {
+        if m.platform && !self.app.as_ref().is_some_and(|a| a.takes_cmd_keys()) {
             return false;
         }
         let Some((key, unshifted)) = map_key(&ks.key) else {
@@ -1538,13 +1559,7 @@ impl Render for TerminalView {
         div()
             .id("terminal")
             .relative()
-            // A terminal-browser tab keeps the browser's ⌘-keys (see
-            // `keymap::TERMINAL_BROWSER_KEYS`).
-            .key_context(if self.browser_url.is_some() {
-                "Terminal TerminalBrowser"
-            } else {
-                "Terminal"
-            })
+            .key_context(self.app.as_ref().map_or("Terminal", |a| a.key_context()))
             .track_focus(&self.focus)
             .size_full()
             .bg(rgb_to_hsla(if bg == Rgb::default() {

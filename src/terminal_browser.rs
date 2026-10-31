@@ -22,7 +22,7 @@ use std::{
 /// from joining a neighbouring one as a tab: each abromux tab is one browser.
 /// abromux shows kitty graphics, so terminal-browser needn't ask. Find,
 /// devtools and console take the built-in browser's keys (⌘F, ⌥⌘I, ⌥⌘C),
-/// which abromux leaves to the tab (`keymap::TERMINAL_BROWSER_KEYS`).
+/// which abromux leaves to the tab (`KEYS`).
 pub fn command(url: &str) -> Option<String> {
     let bin = find()?;
     let mut cmd = format!(
@@ -136,9 +136,99 @@ fn find_page(tty: &Path, known: Option<&Path>) -> Option<(PathBuf, Page)> {
         .find_map(|s| ask(&s).filter(mine).map(|p| (s, p)))
 }
 
+/// Make `term`, which runs `command(url)`, a terminal-browser tab: it shows
+/// a globe and the page's title, keeps the browser's keys, and is saved as a
+/// browser tab on the page it shows.
+pub fn attach(term: &Entity<TerminalView>, url: &str, cx: &mut gpui::App) {
+    term.update(cx, |t, _| {
+        t.app = Some(Box::new(Tab {
+            url: url.into(),
+            title: String::new(),
+        }))
+    });
+    watch(term, cx);
+}
+
+/// What a terminal-browser tab shows, as its control socket last said.
+pub struct Tab {
+    /// At first the page it opened.
+    url: String,
+    title: String,
+}
+
+/// The key context of a terminal-browser tab: `KEYS` are bound to nothing
+/// there, so they reach terminal-browser.
+pub const KEY_CONTEXT: &str = "TerminalBrowser";
+
+/// The ⌘-keys a terminal-browser tab keeps, as the built-in browser has them:
+/// address bar, reload, back/forward, find, devtools and console (`command`
+/// starts it with those on ⌘F, ⌥⌘I, ⌥⌘C), zoom, and editing in the page.
+/// Window-level keys (⌘T, ⌘W, ⌘P, …) stay abromux's.
+pub const KEYS: &[&str] = &[
+    "cmd-l",
+    "cmd-r",
+    "cmd-[",
+    "cmd-]",
+    "cmd-f",
+    "alt-cmd-i",
+    "alt-cmd-c",
+    "cmd-=",
+    "cmd-+",
+    "cmd--",
+    "cmd-0",
+    "cmd-a",
+    "cmd-c",
+    "cmd-x",
+    "cmd-z",
+    "cmd-shift-z",
+];
+
+impl Tab {
+    /// Take in a reported page; true if the tab should redraw.
+    fn update(&mut self, page: Page) -> bool {
+        let url_moved = !page.url.is_empty() && page.url != self.url;
+        if page.title == self.title && !url_moved {
+            return false;
+        }
+        self.title = page.title;
+        if url_moved {
+            self.url = page.url;
+        }
+        true
+    }
+}
+
+impl crate::terminal::TerminalApp for Tab {
+    fn icon(&self) -> &'static str {
+        "globe"
+    }
+
+    fn title(&self) -> String {
+        if !self.title.is_empty() {
+            self.title.clone()
+        } else if !self.url.is_empty() {
+            self.url.clone()
+        } else {
+            "New Tab".into()
+        }
+    }
+
+    fn key_context(&self) -> &'static str {
+        "Terminal TerminalBrowser"
+    }
+
+    fn takes_cmd_keys(&self) -> bool {
+        true
+    }
+
+    fn page_url(&self) -> Option<&str> {
+        Some(&self.url)
+    }
+}
+
 /// Keep `term`'s page title and URL up to date while it runs
 /// terminal-browser: often while the first page loads, then once a second.
-pub fn watch(term: &Entity<TerminalView>, cx: &mut gpui::App) {
+fn watch(term: &Entity<TerminalView>, cx: &mut gpui::App) {
     let term = term.downgrade();
     cx.spawn(async move |cx: &mut AsyncApp| {
         let mut known: Option<PathBuf> = None;
@@ -155,7 +245,11 @@ pub fn watch(term: &Entity<TerminalView>, cx: &mut gpui::App) {
                 .await;
             let Some((socket, page)) = found else { continue };
             known = Some(socket);
-            let alive = term.update(cx, |t, cx| t.set_browser_page(page, cx));
+            let alive = term.update(cx, |t, cx| {
+                if t.app_mut::<Tab>().is_some_and(|tab| tab.update(page)) {
+                    t.app_changed(cx);
+                }
+            });
             if alive.is_err() {
                 return;
             }
@@ -167,6 +261,43 @@ pub fn watch(term: &Entity<TerminalView>, cx: &mut gpui::App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keys_parse_and_reach_the_tab() {
+        use crate::terminal::TerminalApp;
+        for k in KEYS {
+            let ks = gpui::Keystroke::parse(k).unwrap_or_else(|e| panic!("{k}: {e}"));
+            assert!(ks.modifiers.platform, "{k} is a ⌘-key");
+        }
+        let tab = Tab {
+            url: "https://a.b/".into(),
+            title: String::new(),
+        };
+        let ctx = tab.key_context();
+        assert!(ctx.split(' ').any(|c| c == KEY_CONTEXT), "{ctx}");
+        assert!(ctx.split(' ').any(|c| c == "Terminal"), "{ctx}");
+        assert!(tab.takes_cmd_keys());
+    }
+
+    #[test]
+    fn tab_follows_the_page() {
+        use crate::terminal::TerminalApp;
+        let mut tab = Tab {
+            url: "https://a.b/".into(),
+            title: String::new(),
+        };
+        assert_eq!(tab.title(), "https://a.b/", "the URL until a title comes");
+        let page = |url: &str, title: &str| Page {
+            url: url.into(),
+            title: title.into(),
+            tty: None,
+        };
+        assert!(tab.update(page("https://a.b/", "A")));
+        assert!(!tab.update(page("https://a.b/", "A")), "no change, no redraw");
+        assert!(tab.update(page("https://c.d/", "C")));
+        assert_eq!((tab.title(), tab.page_url()), ("C".into(), Some("https://c.d/")));
+        assert!(!tab.update(page("", "C")), "an empty URL keeps the last one");
+    }
 
     #[test]
     fn quotes_for_the_shell() {

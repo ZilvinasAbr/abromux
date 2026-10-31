@@ -21,7 +21,7 @@ impl Surface {
     /// A terminal running a coding agent shows the agent's logo.
     pub fn icon(&self, cx: &App) -> &'static str {
         match self {
-            Surface::Terminal(t) if t.read(cx).browser_url.is_some() => "globe",
+            Surface::Terminal(t) if let Some(app) = &t.read(cx).app => app.icon(),
             Surface::Terminal(t) => match t.read(cx).agent.as_ref() {
                 Some(a) if a.alive() => match Kind::parse(&a.kind) {
                     Some(Kind::Claude) => "claude",
@@ -47,15 +47,8 @@ impl Surface {
         match self {
             Surface::Terminal(t) => {
                 let t = t.read(cx);
-                // A terminal-browser tab reads like a browser tab.
-                if let Some(url) = &t.browser_url {
-                    return if !t.browser_title.is_empty() {
-                        t.browser_title.clone()
-                    } else if !url.is_empty() {
-                        url.clone()
-                    } else {
-                        "New Tab".into()
-                    };
+                if let Some(app) = &t.app {
+                    return app.title();
                 }
                 if !t.shown_title().is_empty() {
                     t.shown_title().to_string()
@@ -104,7 +97,11 @@ impl Surface {
     /// A browser tab: the built-in one, or a terminal running `terminal-browser`.
     pub fn is_browser(&self, cx: &App) -> bool {
         match self {
-            Surface::Terminal(t) => t.read(cx).browser_url.is_some(),
+            Surface::Terminal(t) => t
+                .read(cx)
+                .app
+                .as_ref()
+                .is_some_and(|a| a.page_url().is_some()),
             Surface::Browser(_) => true,
         }
     }
