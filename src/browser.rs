@@ -3,6 +3,7 @@
 
 use crate::{
     browser_find,
+    browser_history::{self, Entry},
     webauthn,
     terminal::{Find, FindNext, FindPrevious, UseSelectionForFind},
     theme::*,
@@ -26,8 +27,22 @@ use std::{
 
 actions!(
     browser,
-    [Back, Forward, Reload, ToggleDevTools, ShowConsole]
+    [
+        Back,
+        Forward,
+        Reload,
+        ToggleDevTools,
+        ShowConsole,
+        SuggestNext,
+        SuggestPrev,
+        DismissSuggestions,
+        RemoveSuggestion
+    ]
 );
+
+/// Key context of the address bar, for its bindings in main.rs.
+pub const OMNIBAR: &str = "Omnibar";
+const MAX_SUGGESTIONS: usize = 8;
 
 /// A toolbar button, indexing `BrowserView::nav_presses`.
 #[derive(Clone, Copy, PartialEq)]
@@ -46,7 +61,8 @@ pub enum BrowserEvent {
 
 enum WebMsg {
     Title(String),
-    Url(String),
+    /// A page load started, or `finished`.
+    Url { url: String, finished: bool },
     /// A find script's result, or the page selection for ⌘E.
     Find(String),
     Selection(String),
@@ -77,6 +93,16 @@ pub struct BrowserView {
     /// WKWebView's `isLoading`, while `watch_loading` polls it.
     loading: bool,
     polling: bool,
+    /// History matching the address bar's text, best first, while it's
+    /// being edited. The page hides while there are any, since it draws
+    /// above gpui.
+    suggestions: Vec<Entry>,
+    /// The highlighted suggestion; None leaves Return to the typed text.
+    selected: Option<usize>,
+    /// Whether the native webview is on screen: `shown` and no suggestions.
+    native_shown: bool,
+    /// The title the loading page set, for its history entry.
+    load_title: Option<String>,
 }
 
 impl EventEmitter<BrowserEvent> for BrowserView {}
@@ -105,8 +131,9 @@ impl BrowserView {
             .with_document_title_changed_handler(move |t| {
                 let _ = tx_title.unbounded_send(WebMsg::Title(t));
             })
-            .with_on_page_load_handler(move |_, url| {
-                let _ = tx_url.unbounded_send(WebMsg::Url(url));
+            .with_on_page_load_handler(move |ev, url| {
+                let finished = matches!(ev, wry::PageLoadEvent::Finished);
+                let _ = tx_url.unbounded_send(WebMsg::Url { url, finished });
             })
             .with_initialization_script(LINKS_SCRIPT)
             .with_ipc_handler(move |req| {
@@ -144,13 +171,31 @@ impl BrowserView {
             |this, input, ev: &InputEvent, window, cx| match ev {
                 InputEvent::PressEnter { .. } => {
                     let text = input.read(cx).value().trim().to_string();
-                    if !text.is_empty() {
-                        this.navigate(&normalize_url(&text), cx);
-                        this.focus_page(window, cx);
+                    let picked = this.selected.and_then(|i| this.suggestions.get(i));
+                    let url = match picked {
+                        Some(e) => e.url.clone(),
+                        None if text.is_empty() => return,
+                        None => normalize_url(&text),
+                    };
+                    let picked = picked.is_some();
+                    // A search isn't a URL the user would type again.
+                    if picked || !is_search(&url) {
+                        browser_history::typed(&url);
+                    }
+                    if picked {
+                        this.address.update(cx, |a, cx| a.set_value(url.clone(), window, cx));
+                    }
+                    this.set_suggestions(vec![], cx);
+                    this.navigate(&url, cx);
+                    this.focus_page(window, cx);
+                }
+                InputEvent::Change => {
+                    if input.read(cx).focus_handle(cx).is_focused(window) {
+                        this.update_suggestions(cx);
                     }
                 }
                 InputEvent::Focus => cx.emit(BrowserEvent::Focused),
-                _ => {}
+                InputEvent::Blur => this.set_suggestions(vec![], cx),
             },
         )
         .detach();
@@ -159,13 +204,22 @@ impl BrowserView {
             while let Some(msg) = rx.next().await {
                 let ok = this.update_in(cx, |this, window, cx| {
                     match msg {
-                        WebMsg::Title(t) => this.title = t,
-                        WebMsg::Url(u) => {
+                        WebMsg::Title(t) => {
+                            browser_history::retitle(&this.url, &t);
+                            this.load_title = Some(t.clone());
+                            this.title = t;
+                        }
+                        WebMsg::Url { url: u, finished } => {
                             let u = if u.starts_with("about:blank") {
                                 String::new()
                             } else {
                                 u
                             };
+                            if finished {
+                                browser_history::visit(&u, this.load_title.as_deref());
+                            } else {
+                                this.load_title = None;
+                            }
                             this.url = u.clone();
                             this.watch_loading(cx);
                             this.address.update(cx, |a, cx| a.set_value(u, window, cx));
@@ -221,6 +275,10 @@ impl BrowserView {
             nav_presses: [0; 3],
             loading: false,
             polling: false,
+            suggestions: vec![],
+            selected: None,
+            native_shown: true,
+            load_title: None,
         }
     }
 
@@ -272,11 +330,184 @@ impl BrowserView {
     /// Native views float above gpui content, so hidden panes must be hidden
     /// explicitly.
     pub fn set_shown(&mut self, shown: bool, cx: &mut App) {
-        if self.shown != shown {
-            self.shown = shown;
+        self.shown = shown;
+        self.sync_native(cx);
+    }
+
+    fn sync_native(&mut self, cx: &mut App) {
+        let shown = self.shown && self.suggestions.is_empty();
+        if self.native_shown != shown {
+            self.native_shown = shown;
             self.webview
                 .update(cx, |w, _| if shown { w.show() } else { w.hide() });
         }
+    }
+
+    fn set_suggestions(&mut self, suggestions: Vec<Entry>, cx: &mut Context<Self>) {
+        if suggestions.is_empty() && self.suggestions.is_empty() {
+            return;
+        }
+        self.suggestions = suggestions;
+        self.selected = None;
+        self.sync_native(cx);
+        cx.notify();
+    }
+
+    /// Suggest history for the address bar's text, unless it's the page's
+    /// own URL (as when a load sets it).
+    fn update_suggestions(&mut self, cx: &mut Context<Self>) {
+        let text = self.address.read(cx).value().trim().to_string();
+        let list = if text.is_empty() || text == self.url {
+            vec![]
+        } else {
+            browser_history::suggest(&text, MAX_SUGGESTIONS)
+        };
+        self.set_suggestions(list, cx);
+    }
+
+    /// Down/Up in the address bar. Down opens the list if it's closed (the
+    /// most typed and recent URLs, for the page's own URL or no text); Up
+    /// past the first goes back to the typed text.
+    fn move_suggestion(&mut self, down: bool, cx: &mut Context<Self>) {
+        if self.suggestions.is_empty() {
+            if down {
+                let text = self.address.read(cx).value().trim().to_string();
+                let query = if text == self.url { "" } else { text.as_str() };
+                self.set_suggestions(browser_history::suggest(query, MAX_SUGGESTIONS), cx);
+            }
+            return;
+        }
+        let last = self.suggestions.len() - 1;
+        self.selected = match (self.selected, down) {
+            (None, true) => Some(0),
+            (Some(i), true) => Some((i + 1).min(last)),
+            (Some(0) | None, false) => None,
+            (Some(i), false) => Some(i - 1),
+        };
+        cx.notify();
+    }
+
+    /// Esc in the address bar closes the suggestions, or else puts back
+    /// the page's URL.
+    fn dismiss_suggestions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.suggestions.is_empty() {
+            self.set_suggestions(vec![], cx);
+        } else {
+            let url = self.url.clone();
+            self.address.update(cx, |a, cx| a.set_value(url, window, cx));
+        }
+    }
+
+    /// Shift-Backspace on a highlighted suggestion deletes it from history.
+    fn remove_suggestion(&mut self, cx: &mut Context<Self>) {
+        let Some(i) = self.selected else {
+            cx.propagate();
+            return;
+        };
+        let e = self.suggestions.remove(i);
+        browser_history::remove(&e.url);
+        self.selected = if self.suggestions.is_empty() {
+            None
+        } else {
+            Some(i.min(self.suggestions.len() - 1))
+        };
+        self.sync_native(cx);
+        cx.notify();
+    }
+
+    /// Go to suggestion `i` (clicked).
+    fn open_suggestion(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(e) = self.suggestions.get(i) else { return };
+        let url = e.url.clone();
+        browser_history::typed(&url);
+        self.address.update(cx, |a, cx| a.set_value(url.clone(), window, cx));
+        self.set_suggestions(vec![], cx);
+        self.navigate(&url, cx);
+        self.focus_page(window, cx);
+    }
+
+    fn render_suggestions(&self, cx: &mut Context<Self>) -> Option<Div> {
+        if self.suggestions.is_empty() {
+            return None;
+        }
+        let rows: Vec<_> = self
+            .suggestions
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                let selected = self.selected == Some(i);
+                let shown_url = e
+                    .url
+                    .strip_prefix("https://")
+                    .unwrap_or(&e.url)
+                    .trim_end_matches('/')
+                    .to_string();
+                let title = e.title.clone().filter(|t| !t.is_empty());
+                div()
+                    .id(("suggestion", i))
+                    .mx(px(6.))
+                    .px(px(8.))
+                    .py(px(5.))
+                    .rounded(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .cursor_pointer()
+                    .when(selected, |d| d.bg(rgba(0xffffff1a)))
+                    .when(!selected, |d| d.hover(|s| s.bg(rgba(HOVER))))
+                    // On mouse down, before the address bar loses focus and
+                    // closes the list.
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.open_suggestion(i, window, cx);
+                        }),
+                    )
+                    .child(icon("globe").flex_none().text_color(rgb(MUTED)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_baseline()
+                            .gap(px(8.))
+                            .children(title.map(|t| {
+                                div()
+                                    .flex_shrink()
+                                    .min_w(px(80.))
+                                    .truncate()
+                                    .text_size(px(12.5))
+                                    .text_color(rgb(TEXT))
+                                    .child(t)
+                            }))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(11.5))
+                                    .text_color(rgb(MUTED))
+                                    .child(shown_url),
+                            ),
+                    )
+            })
+            .collect();
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .py(px(6.))
+                .flex()
+                .flex_col()
+                .gap(px(1.))
+                .bg(rgb(TABBAR_BG))
+                .border_b_1()
+                .border_color(rgb(BORDER))
+                .children(rows),
+        )
     }
 
     pub fn script(&self, js: &str, cx: &App) {
@@ -699,6 +930,19 @@ impl Render for BrowserView {
                             .rounded(px(6.))
                             .bg(rgb(INPUT_BG))
                             .text_size(px(12.))
+                            .key_context(OMNIBAR)
+                            .on_action(cx.listener(|this, _: &SuggestNext, _, cx| {
+                                this.move_suggestion(true, cx)
+                            }))
+                            .on_action(cx.listener(|this, _: &SuggestPrev, _, cx| {
+                                this.move_suggestion(false, cx)
+                            }))
+                            .on_action(cx.listener(|this, _: &DismissSuggestions, window, cx| {
+                                this.dismiss_suggestions(window, cx)
+                            }))
+                            .on_action(cx.listener(|this, _: &RemoveSuggestion, _, cx| {
+                                this.remove_suggestion(cx)
+                            }))
                             .child(
                                 Input::new(&self.address)
                                     .appearance(false)
@@ -707,7 +951,14 @@ impl Render for BrowserView {
                     ),
             )
             .children(find_bar)
-            .child(div().flex_1().min_h_0().child(self.webview.clone()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(self.webview.clone())
+                    .children(self.render_suggestions(cx)),
+            )
     }
 }
 
@@ -802,6 +1053,13 @@ fn installed_safari_version() -> Option<String> {
     }
 }
 
+const SEARCH: &str = "https://www.google.com/search?q=";
+
+/// Whether `url` is a search `normalize_url` made.
+fn is_search(url: &str) -> bool {
+    url.starts_with(SEARCH)
+}
+
 pub fn normalize_url(text: &str) -> String {
     if text.contains("://") || text.starts_with("about:") {
         text.into()
@@ -818,7 +1076,7 @@ pub fn normalize_url(text: &str) -> String {
                 _ => format!("%{b:02X}"),
             })
             .collect();
-        format!("https://www.google.com/search?q={q}")
+        format!("{SEARCH}{q}")
     }
 }
 

@@ -6,6 +6,7 @@ mod bench;
 mod browser;
 mod browser_auto;
 mod browser_find;
+mod browser_history;
 mod channel;
 mod cli;
 mod config;
@@ -2417,6 +2418,12 @@ fn run_app(cwd: Option<String>) {
             ),
             KeyBinding::new("enter", palette::Confirm, Some("CommandPalette > Input")),
             KeyBinding::new("escape", palette::Dismiss, Some("CommandPalette > Input")),
+            KeyBinding::new("down", browser::SuggestNext, Some("Omnibar > Input")),
+            KeyBinding::new("ctrl-n", browser::SuggestNext, Some("Omnibar > Input")),
+            KeyBinding::new("up", browser::SuggestPrev, Some("Omnibar > Input")),
+            KeyBinding::new("ctrl-p", browser::SuggestPrev, Some("Omnibar > Input")),
+            KeyBinding::new("escape", browser::DismissSuggestions, Some("Omnibar > Input")),
+            KeyBinding::new("shift-backspace", browser::RemoveSuggestion, Some("Omnibar > Input")),
             // Keybindings run before key listeners; let these reach the PTY.
             KeyBinding::new("tab", NoAction, Some("Terminal")),
             KeyBinding::new("shift-tab", NoAction, Some("Terminal")),
