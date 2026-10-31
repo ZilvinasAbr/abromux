@@ -23,6 +23,34 @@ pub fn icon(name: &str) -> Svg {
         .flex_none()
 }
 
+/// Claude Code's own working animation: its star grows through these and
+/// shrinks back.
+const CLAUDE_FRAMES: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✽"];
+/// How long each frame shows.
+pub const CLAUDE_FRAME_MS: u64 = 120;
+
+/// Claude Code's star at this moment of its animation, in Claude's orange.
+/// Whoever shows it redraws while Claude works (`AbroMux::tick_spinner`).
+pub fn claude_spinner(size: Pixels) -> Div {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let n = CLAUDE_FRAMES.len();
+    let step = START.get_or_init(std::time::Instant::now).elapsed().as_millis()
+        / CLAUDE_FRAME_MS as u128;
+    // 0 1 2 3 4 5 4 3 2 1 0 …
+    let i = (step % (2 * n as u128 - 2)) as usize;
+    let i = if i < n { i } else { 2 * n - 2 - i };
+    div()
+        .size(size)
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(size)
+        .line_height(size)
+        .text_color(rgb(ACCENT_BRIGHT))
+        .child(CLAUDE_FRAMES[i])
+}
+
 pub fn icon_button(id: impl Into<ElementId>, name: &str) -> Stateful<Div> {
     tinted_icon_button(id, name, MUTED)
 }

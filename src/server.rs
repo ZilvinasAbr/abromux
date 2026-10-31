@@ -10,9 +10,11 @@ use crate::{
     AbroMux, BrowserView, DEFAULT_URL,
     agent::{Agent, Kind},
     browser::normalize_url,
-    browser_auto, debug, ipc,
+    browser_auto, debug, ipc, one_line,
     status::{self, RUNNING, WARNING},
-    workspace::{Dir, LogLevel, Progress, Status, Surface, Workspace, git_branch, parse_color},
+    workspace::{
+        Dir, LogLevel, Progress, Status, Surface, Workspace, git_branch, group_span, parse_color,
+    },
 };
 use anyhow::{Context as _, anyhow, bail};
 use futures::{
@@ -20,7 +22,7 @@ use futures::{
     channel::{mpsc, oneshot},
     future::{Either, LocalBoxFuture, select},
 };
-use gpui::{App, AsyncApp, Axis, Context, Entity, Keystroke, Timer, Window};
+use gpui::{App, AppContext as _, AsyncApp, Axis, Context, Entity, Keystroke, Timer, Window};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Write},
@@ -287,20 +289,45 @@ impl AbroMux {
                 let base = str_param(p, "cwd")
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(|| std::env::var("HOME").unwrap_or_default().into());
-                let prev = self.active;
+                let prev = self.workspaces.get(self.active).map(|w| w.id);
                 let name = str_param(p, "name").map(String::from);
                 let wi = self.open_layout(&spec, name, &base, window, cx);
-                if !bool_param(p, "focus", true) {
-                    self.select_workspace(prev, window, cx);
+                self.workspaces[wi].description =
+                    str_param(p, "description").and_then(crate::sidebar::clean_description);
+                let new_id = self.workspaces[wi].id;
+                if let Some(g) = str_param(p, "group") {
+                    let g = self.find_group(g)?;
+                    self.set_group(wi, Some(g), cx);
                 }
+                // By id: the new one may have gone in above it.
+                if !bool_param(p, "focus", true)
+                    && let Some(i) = prev.and_then(|id| self.ws_index(id))
+                {
+                    self.select_workspace(i, window, cx);
+                }
+                let wi = self.ws_index(new_id).unwrap_or(wi);
                 self.describe_ws(wi, false, cx)
             }
             "workspace.create" => {
                 let cwd = str_param(p, "cwd").map(String::from);
-                let wi = self.create_workspace(cwd, bool_param(p, "focus", true), window, cx);
+                let group = str_param(p, "group")
+                    .map(|g| self.find_group(g))
+                    .transpose()?;
+                let prev = self.workspaces.get(self.active).map(|w| w.id);
+                if let Some((start, _)) = group.and_then(|g| group_span(&self.workspaces, g)) {
+                    // With one of its workspaces selected, the new one lands in the group.
+                    self.active = start;
+                }
+                let focus = bool_param(p, "focus", true);
+                let wi = self.create_workspace(cwd, focus, window, cx);
+                if !focus {
+                    self.active = prev.and_then(|id| self.ws_index(id)).unwrap_or(0);
+                }
                 if let Some(name) = str_param(p, "name") {
                     self.workspaces[wi].custom_name = Some(name.into());
                 }
+                self.workspaces[wi].description =
+                    str_param(p, "description").and_then(crate::sidebar::clean_description);
                 if let (Some(cmd), Some(Surface::Terminal(t))) = (
                     str_param(p, "command"),
                     self.workspaces[wi].focused_surface(),
@@ -326,6 +353,145 @@ impl AbroMux {
                 self.workspaces[wi].custom_name = Some(title.into());
                 cx.notify();
                 self.describe_ws(wi, false, cx)
+            }
+            "workspace.action" => return self.workspace_action(p, window, cx),
+            "workspace.reorder" => {
+                let wi = self.workspace_target(p)?;
+                let n = self.workspaces.len();
+                let to = if let Some(i) = p.get("index") {
+                    let i = match i {
+                        Value::String(s) => s.parse().context("bad --index")?,
+                        v => v.as_u64().context("bad --index")? as usize,
+                    };
+                    i.min(n - 1)
+                } else if let Some(b) = str_param(p, "before") {
+                    let t = self.find_workspace(b)?;
+                    if t > wi { t - 1 } else { t }
+                } else if let Some(a) = str_param(p, "after") {
+                    let t = self.find_workspace(a)?;
+                    if t >= wi { t } else { t + 1 }
+                } else {
+                    bail!("reorder-workspace needs --index, --before or --after");
+                };
+                let id = self.workspaces[wi].id;
+                let group = self.workspaces[wi].group;
+                let dry = bool_param(p, "dry_run", false);
+                let order = self.reorder(dry, cx, |ws, groups| {
+                    crate::workspace::move_workspace(ws, groups, wi, to, group);
+                });
+                let at = order.iter().position(|&w| w == id).unwrap_or(to);
+                json!({ "workspace": format!("workspace:{id}"), "index": at })
+            }
+            "workspace.reorder_all" => {
+                let order = str_param(p, "order").context("missing --order")?;
+                let mut ids: Vec<usize> = vec![];
+                for s in order.split(',') {
+                    let id = self.workspaces[self.find_workspace(s.trim())?].id;
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+                // The ones not named keep their order, after the named ones.
+                for w in &self.workspaces {
+                    if !ids.contains(&w.id) {
+                        ids.push(w.id);
+                    }
+                }
+                let dry = bool_param(p, "dry_run", false);
+                let order = self.reorder(dry, cx, |ws, _| {
+                    ws.sort_by_key(|w| ids.iter().position(|&id| id == w.id));
+                });
+                json!(
+                    order
+                        .iter()
+                        .map(|id| format!("workspace:{id}"))
+                        .collect::<Vec<_>>()
+                )
+            }
+            "group.list" => json!(
+                self.groups
+                    .iter()
+                    .map(|g| self.describe_group(g.id))
+                    .collect::<Vec<_>>()
+            ),
+            "group.create" => {
+                let wi = self.workspace_target(p)?;
+                let g = self.new_group(wi, cx).context("no workspace")?;
+                if let Some(name) = str_param(p, "name") {
+                    self.groups.iter_mut().find(|x| x.id == g).unwrap().name = one_line(name);
+                }
+                self.describe_group(g)
+            }
+            "group.add" => {
+                let wi = self.workspace_target(p)?;
+                let g = self.find_group(str_param(p, "group").context("missing --group")?)?;
+                self.set_group(wi, Some(g), cx);
+                self.describe_group(g)
+            }
+            "group.remove" => {
+                let wi = self.workspace_target(p)?;
+                self.set_group(wi, None, cx);
+                json!(null)
+            }
+            "group.by_folder" => json!({ "created": self.group_by_folder(cx) }),
+            "group.rename" | "group.color" | "group.collapse" | "group.expand"
+            | "group.ungroup" => {
+                let g = match str_param(p, "group") {
+                    Some(g) => self.find_group(g)?,
+                    None => self.workspaces[self.workspace_target(p)?]
+                        .group
+                        .context("the workspace isn't in a group; pass --group")?,
+                };
+                let colors = cx
+                    .global::<crate::settings::Settings>()
+                    .workspace_colors
+                    .clone();
+                let group = self.groups.iter_mut().find(|x| x.id == g).unwrap();
+                match method {
+                    "group.rename" => {
+                        group.name = one_line(str_param(p, "title").context("missing title")?)
+                    }
+                    "group.color" => {
+                        group.color = match str_param(p, "color") {
+                            None | Some("none" | "clear") => None,
+                            Some(c) => Some(
+                                colors
+                                    .parse(c)
+                                    .with_context(|| format!("unknown color {c:?}"))?,
+                            ),
+                        }
+                    }
+                    "group.collapse" => group.collapsed = true,
+                    "group.expand" => group.collapsed = false,
+                    _ => {
+                        self.ungroup(g, cx);
+                        return Ok(Reply::Now(json!(null)));
+                    }
+                }
+                cx.notify();
+                self.describe_group(g)
+            }
+            "session.restore" => {
+                let session = match str_param(p, "from") {
+                    Some(from) => Some(
+                        crate::session::read(&crate::session::source(from))
+                            .map_err(anyhow::Error::msg)?,
+                    ),
+                    None if self.launch_session.is_none() => {
+                        bail!("this launch restored no session; pass --from <stable|nightly|file>")
+                    }
+                    None => None,
+                };
+                json!({ "added": self.reopen_session(session, window, cx) })
+            }
+            "session.export" => {
+                let path = std::path::PathBuf::from(str_param(p, "path").context("missing path")?);
+                if path.exists() && !bool_param(p, "force", false) {
+                    bail!("{} exists; pass --force to replace it", path.display());
+                }
+                crate::session::write(&self.snapshot(true, cx), &path)
+                    .with_context(|| format!("writing {}", path.display()))?;
+                json!({ "path": path })
             }
             "workspace.tree" => {
                 if bool_param(p, "all", false) {
@@ -567,6 +733,9 @@ impl AbroMux {
                 let (wi, pane, _) = self.surface_target(p)?;
                 let mut p = p.clone();
                 p["type"] = json!("browser");
+                // The automation commands that follow only drive the built-in
+                // browser, whatever `browser.engine` says.
+                p["builtIn"] = json!(true);
                 self.split_with(
                     wi,
                     pane,
@@ -943,6 +1112,9 @@ impl AbroMux {
             return;
         };
         let (label, title) = (kind.label(), kind.title());
+        if let Some(prompt) = str_param(p, "prompt") {
+            self.auto_name(surface, kind, prompt.to_string(), cx);
+        }
         match str_param(p, "event").unwrap_or_default() {
             "UserPromptSubmit" | "PostToolUse" => {
                 self.set_agent_status(surface, label, Some(("Running", RUNNING)), cx)
@@ -970,6 +1142,48 @@ impl AbroMux {
             "SessionEnd" => self.set_agent_status(surface, label, None, cx),
             _ => {}
         }
+    }
+
+    /// `automation.workspaceAutoNaming`: name the workspace of `surface`
+    /// from the first prompt its agent gets, unless it has a name already.
+    fn auto_name(
+        &mut self,
+        surface: gpui::EntityId,
+        kind: Kind,
+        prompt: String,
+        cx: &mut Context<Self>,
+    ) {
+        if !cx
+            .global::<crate::settings::Settings>()
+            .automation
+            .workspace_auto_naming
+        {
+            return;
+        }
+        let Some(ws) = self.workspaces.iter().find(|w| w.contains(surface)) else {
+            return;
+        };
+        let id = ws.id;
+        if ws.custom_name.is_some() || ws.auto_title.is_some() || self.naming.contains(&id) {
+            return;
+        }
+        self.naming.push(id);
+        let task = cx.background_spawn(async move { crate::agent::title_for(kind, &prompt) });
+        cx.spawn(async move |this, cx| {
+            let title = task.await;
+            // `naming` keeps the id either way: one try per workspace, so a
+            // CLI that fails doesn't run again on every prompt.
+            this.update(cx, |this, cx| {
+                if let (Some(t), Some(i)) = (title, this.ws_index(id))
+                    && this.workspaces[i].custom_name.is_none()
+                {
+                    this.workspaces[i].auto_title = Some(one_line(&t));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // ---- targets --------------------------------------------------------
@@ -1140,7 +1354,11 @@ impl AbroMux {
                 let url = str_param(p, "url")
                     .map(normalize_url)
                     .unwrap_or_else(|| DEFAULT_URL.into());
-                self.make_browser(&url, window, cx)
+                if bool_param(p, "builtIn", false) {
+                    self.make_builtin_browser(&url, window, cx)
+                } else {
+                    self.make_browser(&url, window, cx)
+                }
             }
             t => bail!("unknown surface type {t:?} (terminal or browser)"),
         })
@@ -1208,6 +1426,106 @@ impl AbroMux {
             .collect()
     }
 
+    fn find_group(&self, s: &str) -> anyhow::Result<usize> {
+        match parse_sel(s, "group")? {
+            Sel::Ref(id) => self.groups.iter().any(|g| g.id == id).then_some(id),
+            Sel::Index(i) => self.groups.get(i).map(|g| g.id),
+        }
+        .with_context(|| format!("no group {s}"))
+    }
+
+    fn describe_group(&self, id: usize) -> Value {
+        let Some(g) = self.groups.iter().find(|g| g.id == id) else {
+            return json!(null);
+        };
+        json!({
+            "ref": format!("group:{id}"),
+            "name": g.name,
+            "color": g.color.map(|c| format!("#{c:06x}")),
+            "collapsed": g.collapsed,
+            "workspaces": self.workspaces.iter().filter(|w| w.group == Some(id)).map(|w| format!("workspace:{}", w.id)).collect::<Vec<_>>(),
+        })
+    }
+
+    /// `workspace-action`: cmux's workspace context-menu actions.
+    fn workspace_action(
+        &mut self,
+        p: &Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Reply> {
+        let wi = self.workspace_target(p)?;
+        let id = self.workspaces[wi].id;
+        let action = str_param(p, "action").context("missing --action")?;
+        let ws = &mut self.workspaces[wi];
+        match action {
+            "rename" => {
+                ws.custom_name = Some(one_line(
+                    str_param(p, "title").context("rename needs --title")?,
+                ))
+            }
+            // Back to following the terminal's title; auto-naming may name it again.
+            "clear-name" => {
+                ws.custom_name = None;
+                ws.auto_title = None;
+                self.naming.retain(|&n| n != id);
+            }
+            "set-description" => {
+                ws.description = crate::sidebar::clean_description(
+                    str_param(p, "description").context("set-description needs --description")?,
+                )
+            }
+            "clear-description" => ws.description = None,
+            "set-color" => {
+                let c = str_param(p, "color").context("set-color needs --color")?;
+                let colors = &cx.global::<crate::settings::Settings>().workspace_colors;
+                ws.color = Some(colors.parse(c).with_context(|| {
+                    let names: Vec<&str> = colors.colors.iter().map(|(n, _)| n.as_str()).collect();
+                    format!(
+                        "unknown color {c:?}; use #rrggbb or one of {}",
+                        names.join(", ")
+                    )
+                })?);
+            }
+            "clear-color" => ws.color = None,
+            "move-up" => self.nudge_workspace(wi, false, cx),
+            "move-down" => self.nudge_workspace(wi, true, cx),
+            "move-top" => self.workspace_to_top(wi, cx),
+            "close-others" => self.close_others(wi, window, cx),
+            "close-above" | "close-below" => {
+                let ids: Vec<usize> = match action {
+                    "close-above" => self.workspaces[..wi].iter().map(|w| w.id).collect(),
+                    _ => self.workspaces[wi + 1..].iter().map(|w| w.id).collect(),
+                };
+                for id in ids {
+                    if let Some(i) = self.ws_index(id) {
+                        self.close_workspace(i, window, cx);
+                    }
+                }
+            }
+            "mark-read" => {
+                let ws = &self.workspaces[wi];
+                for n in self.notifications.iter_mut() {
+                    if ws.contains(n.surface) {
+                        n.read = true;
+                    }
+                }
+            }
+            "pin" | "unpin" | "mark-unread" => bail!("abromux has no {action:?} yet"),
+            a => bail!(
+                "unknown action {a:?}; expected rename, clear-name, set-description, clear-description, \
+                 set-color, clear-color, move-up, move-down, move-top, close-others, close-above, \
+                 close-below or mark-read"
+            ),
+        }
+        cx.notify();
+        let v = match self.ws_index(id) {
+            Some(i) => self.describe_ws(i, false, cx),
+            None => json!(null),
+        };
+        Ok(Reply::Now(v))
+    }
+
     fn describe_ws(&self, wi: usize, panes: bool, cx: &App) -> Value {
         let ws = &self.workspaces[wi];
         let cwd = ws.cwd(cx);
@@ -1220,6 +1538,9 @@ impl AbroMux {
             "cwd": cwd,
             "branch": cwd.as_deref().and_then(git_branch),
             "pane_count": ws.root.panes().len(),
+            "description": ws.description,
+            "color": ws.color.map(|c| format!("#{c:06x}")),
+            "group": ws.group.map(|g| format!("group:{g}")),
             "status": ws.status.iter().map(status::status_json).collect::<Vec<_>>(),
             "progress": ws.progress.as_ref().map(|p| json!({ "value": (p.value as f64 * 1000.).round() / 1000., "label": p.label })),
         });

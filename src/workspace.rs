@@ -21,6 +21,7 @@ impl Surface {
     /// A terminal running a coding agent shows the agent's logo.
     pub fn icon(&self, cx: &App) -> &'static str {
         match self {
+            Surface::Terminal(t) if let Some(app) = &t.read(cx).app => app.icon(),
             Surface::Terminal(t) => match t.read(cx).agent.as_ref() {
                 Some(a) if a.alive() => match Kind::parse(&a.kind) {
                     Some(Kind::Claude) => "claude",
@@ -34,6 +35,11 @@ impl Surface {
         }
     }
 
+    /// Claude Code is working in it; its logo turns.
+    pub fn claude_running(&self, cx: &App) -> bool {
+        matches!(self, Surface::Terminal(t) if t.read(cx).claude_running())
+    }
+
     pub fn title(&self, cx: &App) -> String {
         if let Some(t) = self.custom_title(cx) {
             return t;
@@ -41,8 +47,11 @@ impl Surface {
         match self {
             Surface::Terminal(t) => {
                 let t = t.read(cx);
-                if !t.title.is_empty() {
-                    t.title.clone()
+                if let Some(app) = &t.app {
+                    return app.title();
+                }
+                if !t.shown_title().is_empty() {
+                    t.shown_title().to_string()
                 } else {
                     tilde(&t.cwd)
                 }
@@ -82,6 +91,18 @@ impl Surface {
                 b.custom_title = title;
                 cx.notify();
             }),
+        }
+    }
+
+    /// A browser tab: the built-in one, or a terminal running `terminal-browser`.
+    pub fn is_browser(&self, cx: &App) -> bool {
+        match self {
+            Surface::Terminal(t) => t
+                .read(cx)
+                .app
+                .as_ref()
+                .is_some_and(|a| a.page_url().is_some()),
+            Surface::Browser(_) => true,
         }
     }
 
@@ -346,6 +367,16 @@ fn dummy() -> Pane {
 pub struct Workspace {
     pub id: usize,
     pub custom_name: Option<String>,
+    /// A name `automation.workspaceAutoNaming` made from its agent's
+    /// first prompt; `custom_name` wins over it.
+    pub auto_title: Option<String>,
+    /// Shown under the name (⌥⌘E, `workspace-action set-description`).
+    pub description: Option<String>,
+    /// `#rrggbb`, from cmux's palette or any.
+    pub color: Option<u32>,
+    /// The id of the [`Group`] it's in. A group's workspaces sit together
+    /// in the sidebar; [`tidy_groups`] keeps them so.
+    pub group: Option<usize>,
     pub root: Node,
     pub focused_pane: usize,
     /// The pane filling the workspace (⌘⇧↩), hiding the others. Only holds
@@ -434,6 +465,10 @@ impl Workspace {
         Self {
             id,
             custom_name,
+            auto_title: None,
+            description: None,
+            color: None,
+            group: None,
             root,
             focused_pane,
             zoom: None,
@@ -643,8 +678,17 @@ impl Workspace {
         })
     }
 
+    /// Claude Code is working in one of its terminals.
+    pub fn claude_running(&self, cx: &App) -> bool {
+        self.root
+            .panes()
+            .iter()
+            .flat_map(|p| p.tabs.iter())
+            .any(|s| s.claude_running(cx))
+    }
+
     pub fn name(&self, cx: &App) -> String {
-        match &self.custom_name {
+        match self.custom_name.as_ref().or(self.auto_title.as_ref()) {
             Some(n) => n.clone(),
             None => self.auto_name(cx),
         }
@@ -655,7 +699,7 @@ impl Workspace {
     pub fn auto_name(&self, cx: &App) -> String {
         let title = |s: &Surface| match s {
             Surface::Terminal(t) => {
-                Some(t.read(cx).title.trim().to_string()).filter(|t| !t.is_empty())
+                Some(t.read(cx).shown_title().trim().to_string()).filter(|t| !t.is_empty())
             }
             Surface::Browser(_) => None,
         };
@@ -682,6 +726,70 @@ impl Workspace {
             })
             .unwrap_or_else(|| format!("Workspace {}", self.id))
     }
+}
+
+/// Workspaces in a sidebar section: a header named `name` above the
+/// workspaces whose `group` is `id`, which can be folded away.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Group {
+    pub id: usize,
+    pub name: String,
+    pub color: Option<u32>,
+    pub collapsed: bool,
+}
+
+/// Put each group's workspaces right after its first one, keeping every
+/// other order as it was, and drop groups nobody is in.
+pub fn tidy_groups(ws: &mut Vec<Workspace>, groups: &mut Vec<Group>) {
+    for w in ws.iter_mut() {
+        if w.group.is_some_and(|g| !groups.iter().any(|x| x.id == g)) {
+            w.group = None;
+        }
+    }
+    let mut out: Vec<Workspace> = Vec::with_capacity(ws.len());
+    let mut rest: Vec<Option<Workspace>> = ws.drain(..).map(Some).collect();
+    for i in 0..rest.len() {
+        let Some(w) = rest[i].take() else { continue };
+        let g = w.group;
+        out.push(w);
+        if let Some(g) = g {
+            for later in rest[i + 1..].iter_mut() {
+                if later.as_ref().is_some_and(|l| l.group == Some(g)) {
+                    out.push(later.take().unwrap());
+                }
+            }
+        }
+    }
+    *ws = out;
+    groups.retain(|g| ws.iter().any(|w| w.group == Some(g.id)));
+}
+
+/// The indexes `[start, end)` of the workspaces in group `group`
+/// (contiguous after [`tidy_groups`]).
+pub fn group_span(ws: &[Workspace], group: usize) -> Option<(usize, usize)> {
+    let start = ws.iter().position(|w| w.group == Some(group))?;
+    let len = ws[start..]
+        .iter()
+        .take_while(|w| w.group == Some(group))
+        .count();
+    Some((start, start + len))
+}
+
+/// Move workspace `from` so it sits at `to` (an index into the list
+/// without it), in group `group`. Returns its new index.
+pub fn move_workspace(
+    ws: &mut Vec<Workspace>,
+    groups: &mut Vec<Group>,
+    from: usize,
+    to: usize,
+    group: Option<usize>,
+) -> usize {
+    let mut w = ws.remove(from);
+    w.group = group;
+    let id = w.id;
+    ws.insert(to.min(ws.len()), w);
+    tidy_groups(ws, groups);
+    ws.iter().position(|w| w.id == id).expect("still there")
 }
 
 pub fn tilde(path: &str) -> String {
@@ -830,6 +938,68 @@ mod tests {
         ws.toggle_zoom();
         ws.root.remove(2);
         assert_eq!(ws.zoomed(), None, "the last pane left isn't zoomed");
+    }
+
+    fn wss(groups: &[Option<usize>]) -> Vec<Workspace> {
+        groups
+            .iter()
+            .enumerate()
+            .map(|(i, g)| {
+                let mut w = Workspace::new(i, None, Node::Leaf(pane(i)), i);
+                w.group = *g;
+                w
+            })
+            .collect()
+    }
+    fn order(ws: &[Workspace]) -> Vec<(usize, Option<usize>)> {
+        ws.iter().map(|w| (w.id, w.group)).collect()
+    }
+    fn group(id: usize) -> Group {
+        Group {
+            id,
+            name: format!("g{id}"),
+            color: None,
+            collapsed: false,
+        }
+    }
+
+    #[test]
+    fn groups_stay_together() {
+        let mut groups = vec![group(7), group(8)];
+        let mut ws = wss(&[Some(7), None, Some(7), Some(9)]);
+        tidy_groups(&mut ws, &mut groups);
+        assert_eq!(
+            order(&ws),
+            [(0, Some(7)), (2, Some(7)), (1, None), (3, None)],
+            "members follow the first; an unknown group is dropped"
+        );
+        assert_eq!(groups, [group(7)], "and so is one nobody's in");
+        assert_eq!(group_span(&ws, 7), Some((0, 2)));
+        assert_eq!(group_span(&ws, 8), None);
+    }
+
+    #[test]
+    fn moving_in_and_out_of_groups() {
+        let mut groups = vec![group(7)];
+        let mut ws = wss(&[None, Some(7), Some(7), None]);
+        // Into the group, at its end.
+        assert_eq!(move_workspace(&mut ws, &mut groups, 3, 3, Some(7)), 3);
+        assert_eq!(
+            order(&ws),
+            [(0, None), (1, Some(7)), (2, Some(7)), (3, Some(7))]
+        );
+        // Out of it, above it.
+        assert_eq!(move_workspace(&mut ws, &mut groups, 2, 0, None), 0);
+        assert_eq!(
+            order(&ws),
+            [(2, None), (0, None), (1, Some(7)), (3, Some(7))]
+        );
+        // A grouped one dropped among ungrouped ones is pulled back to its group.
+        assert_eq!(move_workspace(&mut ws, &mut groups, 3, 0, Some(7)), 0);
+        assert_eq!(
+            order(&ws),
+            [(3, Some(7)), (1, Some(7)), (2, None), (0, None)]
+        );
     }
 
     #[test]

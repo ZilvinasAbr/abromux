@@ -21,6 +21,7 @@
 //!     "flashPane": ["cmd-shift-h", "ctrl-a f"],
 //!     "find": { "keys": "cmd-shift-f", "when": "Terminal" }
 //!   },
+//!   "browser": { "engine": "terminalBrowser" },
 //!   "commands": [
 //!     { "title": "Run Tests", "run": "cargo test", "shortcut": "cmd-alt-t" },
 //!     { "title": "Dev Server", "run": "npm run dev", "newTab": true },
@@ -64,8 +65,15 @@ pub struct Settings {
     pub shortcuts: BTreeMap<String, Shortcut>,
     /// Extra palette commands.
     pub commands: Vec<Command>,
-    /// What keeps terminals going across a quit (`crate::hc`).
+    /// What keeps terminals going across a quit (`crate::hold`).
     pub persistence: Persistence,
+    pub app: AppSettings,
+    pub sidebar: SidebarSettings,
+    pub sidebar_appearance: SidebarAppearance,
+    pub workspace_colors: WorkspaceColors,
+    pub workspace_groups: WorkspaceGroups,
+    pub automation: Automation,
+    pub browser: BrowserSettings,
 }
 
 impl Global for Settings {}
@@ -92,6 +100,42 @@ impl Persistence {
         match self {
             Persistence::Abromux => "abromux",
             Persistence::CmuxLike => "cmux-like",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct BrowserSettings {
+    /// What a browser tab is.
+    pub engine: BrowserEngine,
+}
+
+/// The built-in WebKit browser, or a terminal running `terminal-browser`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum BrowserEngine {
+    #[default]
+    BuiltIn,
+    #[serde(alias = "terminal-browser")]
+    TerminalBrowser,
+}
+
+/// cmux's `app` keys that abromux has.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct AppSettings {
+    /// ⌘N starts in the focused terminal's directory; off, in home.
+    pub workspace_inherit_working_directory: bool,
+    /// Where a new workspace goes in the sidebar, outside a group.
+    pub new_workspace_placement: Placement,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            workspace_inherit_working_directory: true,
+            new_workspace_placement: Placement::End,
         }
     }
 }
@@ -179,6 +223,181 @@ fn string_end(bytes: &[u8], start: usize) -> Option<usize> {
         i += 1;
     }
     None
+}
+
+/// Where a new workspace is put: first, right after the selected one (or
+/// its group), or last.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum Placement {
+    Top,
+    #[default]
+    AfterCurrent,
+    End,
+}
+
+/// The sidebar's rows, with cmux's `sidebar` keys.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct SidebarSettings {
+    /// The workspace name's size in points; the smaller lines scale with it.
+    #[serde(deserialize_with = "font_size")]
+    pub font_size: f32,
+    /// Only names: no description, notification, status, branch or path.
+    pub hide_all_details: bool,
+    /// Let long names wrap instead of cutting them off.
+    pub wrap_workspace_titles: bool,
+    pub show_workspace_description: bool,
+    #[serde(deserialize_with = "opt_color")]
+    pub workspace_description_color: Option<Rgba>,
+    pub show_notification_message: bool,
+    /// The git branch and directory line.
+    pub show_branch_directory: bool,
+    /// The branch and the directory on lines of their own.
+    pub stack_branch_directory: bool,
+    /// Only the directory's last part (`…/api`), not the whole `~/` path.
+    pub path_last_segment_only: bool,
+    pub show_progress: bool,
+    pub show_log: bool,
+    /// Status pills from `set-status` and agents.
+    pub show_custom_metadata: bool,
+    /// The selected workspace's row; `workspaceColors.selectionColor` too.
+    #[serde(deserialize_with = "opt_color")]
+    pub selection_color: Option<Rgba>,
+}
+
+impl Default for SidebarSettings {
+    fn default() -> Self {
+        Self {
+            font_size: 12.5,
+            hide_all_details: false,
+            wrap_workspace_titles: false,
+            show_workspace_description: true,
+            workspace_description_color: None,
+            show_notification_message: true,
+            show_branch_directory: true,
+            stack_branch_directory: false,
+            path_last_segment_only: false,
+            show_progress: true,
+            show_log: true,
+            show_custom_metadata: true,
+            selection_color: None,
+        }
+    }
+}
+
+/// A tint over the sidebar's background.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct SidebarAppearance {
+    #[serde(deserialize_with = "opt_color")]
+    pub tint_color: Option<Rgba>,
+    /// 0–1.
+    #[serde(deserialize_with = "unit")]
+    pub tint_opacity: f32,
+}
+
+impl Default for SidebarAppearance {
+    fn default() -> Self {
+        Self {
+            tint_color: None,
+            tint_opacity: 0.18,
+        }
+    }
+}
+
+/// How workspace colors show, and the named ones to pick from.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkspaceColors {
+    pub indicator_style: IndicatorStyle,
+    #[serde(deserialize_with = "opt_color")]
+    pub selection_color: Option<Rgba>,
+    /// With `solidFill`, how strongly rows other than the selected one show
+    /// their color.
+    #[serde(deserialize_with = "unit")]
+    pub unselected_fill_opacity: f32,
+    /// The palette, by name; cmux's sixteen by default. Set, it replaces
+    /// them all, as cmux's does.
+    #[serde(deserialize_with = "named_colors")]
+    pub colors: Vec<(String, u32)>,
+}
+
+/// The cmux palette, in its order.
+pub const WORKSPACE_COLORS: [(&str, u32); 16] = [
+    ("Red", 0xC0392B),
+    ("Crimson", 0x922B21),
+    ("Orange", 0xA04000),
+    ("Amber", 0x7D6608),
+    ("Olive", 0x4A5C18),
+    ("Green", 0x196F3D),
+    ("Teal", 0x006B6B),
+    ("Aqua", 0x0E6B8C),
+    ("Blue", 0x1565C0),
+    ("Navy", 0x1A5276),
+    ("Indigo", 0x283593),
+    ("Purple", 0x6A1B9A),
+    ("Magenta", 0xAD1457),
+    ("Rose", 0x880E4F),
+    ("Brown", 0x7B3F00),
+    ("Charcoal", 0x3E4B5E),
+];
+
+impl Default for WorkspaceColors {
+    fn default() -> Self {
+        Self {
+            indicator_style: IndicatorStyle::LeftRail,
+            selection_color: None,
+            unselected_fill_opacity: 0.7,
+            colors: WORKSPACE_COLORS
+                .iter()
+                .map(|(n, c)| (n.to_string(), *c))
+                .collect(),
+        }
+    }
+}
+
+impl WorkspaceColors {
+    /// A palette name (any case) or `#rrggbb`.
+    pub fn parse(&self, s: &str) -> Option<u32> {
+        self.colors
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(s))
+            .map(|(_, c)| *c)
+            .or_else(|| {
+                s.starts_with('#')
+                    .then(|| crate::workspace::parse_color(s))
+                    .flatten()
+            })
+    }
+}
+
+/// How a workspace's color marks its row.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum IndicatorStyle {
+    /// A bar down the row's left edge.
+    #[default]
+    LeftRail,
+    /// The whole row, faded unless it's selected.
+    SolidFill,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkspaceGroups {
+    /// Where a new workspace goes inside a group (⌘N from one of its
+    /// workspaces, or its header's +): after the selected one, second
+    /// (after the group's first), or last.
+    pub new_workspace_placement: Placement,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct Automation {
+    /// Name a workspace from its agent's first prompt, summarised by that
+    /// agent's own CLI (`claude -p`, `codex exec`). A name you give it wins.
+    pub workspace_auto_naming: bool,
 }
 
 /// The keys bound to an action or command.
@@ -400,6 +619,56 @@ fn color<'de, D: Deserializer<'de>>(d: D) -> Result<Rgba, D::Error> {
     })
 }
 
+fn opt_color<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Rgba>, D::Error> {
+    #[derive(Deserialize)]
+    struct C(#[serde(deserialize_with = "color")] Rgba);
+    Ok(Option::<C>::deserialize(d)?.map(|c| c.0))
+}
+
+fn font_size<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let v = f32::deserialize(d)?;
+    if (8. ..=24.).contains(&v) {
+        Ok(v)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "fontSize must be 8–24 points, got {v}"
+        )))
+    }
+}
+
+fn unit<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let v = f32::deserialize(d)?;
+    if (0. ..=1.).contains(&v) {
+        Ok(v)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "an opacity is 0–1, got {v}"
+        )))
+    }
+}
+
+/// `{ "Red": "#C0392B", … }`, sorted by name.
+fn named_colors<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<(String, u32)>, D::Error> {
+    let map = serde_json::Map::<String, serde_json::Value>::deserialize(d)?;
+    let mut colors = map
+        .into_iter()
+        .map(|(name, v)| {
+            v.as_str()
+                .and_then(crate::workspace::parse_color)
+                .map(|c| (name.clone(), c))
+                .ok_or_else(|| serde::de::Error::custom(format!("color {name:?} isn't #rrggbb")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    colors.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(colors)
+}
+
+/// Whether browser tabs open as `terminal-browser`.
+pub fn terminal_browser(cx: &gpui::App) -> bool {
+    cx.try_global::<Settings>()
+        .is_some_and(|s| s.browser.engine == BrowserEngine::TerminalBrowser)
+}
+
 /// The toast for a config file that couldn't be read. It stays until
 /// closed, and a newer one replaces it.
 pub fn error_notification(e: String) -> Notification {
@@ -429,6 +698,84 @@ pub fn read(path: &Path) -> Result<Settings, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
         Err(e) => Err(format!("{}: {e}", path.display())),
     }
+}
+
+/// Set one key of the config file, as the Settings window does: `key` is
+/// its path (`["sidebar", "fontSize"]`), and `None` removes it so the
+/// default applies. The rest of the file stays as it was, in its order;
+/// objects left empty are removed. The result must parse, or nothing is
+/// written. Returns the new settings.
+pub fn edit(key: &[&str], value: Option<serde_json::Value>) -> Result<Settings, String> {
+    edit_file(&path(), key, value)
+}
+
+pub fn edit_file(
+    path: &Path,
+    key: &[&str],
+    value: Option<serde_json::Value>,
+) -> Result<Settings, String> {
+    use serde_json::{Map, Value};
+    let at = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(at(&e)),
+    };
+    let mut root = if text.trim().is_empty() {
+        Value::Object(Map::new())
+    } else {
+        serde_json::from_str(&text).map_err(|e| at(&e))?
+    };
+    let Some((last, parents)) = key.split_last() else {
+        return Err("no key to set".into());
+    };
+    fn set(obj: &mut Map<String, Value>, parents: &[&str], last: &str, value: Option<Value>) {
+        let Some((first, rest)) = parents.split_first() else {
+            match value {
+                Some(v) => {
+                    obj.insert(last.to_string(), v);
+                }
+                None => {
+                    obj.shift_remove(last);
+                }
+            }
+            return;
+        };
+        if value.is_none() && !obj.get(*first).is_some_and(Value::is_object) {
+            return;
+        }
+        let child = obj
+            .entry(first.to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !child.is_object() {
+            *child = Value::Object(Map::new());
+        }
+        let Value::Object(child) = child else {
+            unreachable!()
+        };
+        set(child, rest, last, value);
+        if child.is_empty() {
+            obj.shift_remove(*first);
+        }
+    }
+    let Value::Object(obj) = &mut root else {
+        return Err(at(&"the file isn't a JSON object"));
+    };
+    set(obj, parents, last, value);
+    let mut out = serde_json::to_string_pretty(&root).map_err(|e| at(&e))?;
+    out.push('\n');
+    let settings = parse(&out).map_err(|e| at(&e))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| at(&e))?;
+    }
+    // Write next to it and rename, so a crash never leaves half a file. A
+    // symlinked file (dotfiles) is written where it points, keeping the link.
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let tmp = target.with_extension("json.tmp");
+    std::fs::write(&tmp, out)
+        .and_then(|()| std::fs::rename(&tmp, &target))
+        .map_err(|e| at(&e))?;
+    Ok(settings)
 }
 
 fn parse(text: &str) -> Result<Settings, serde_json::Error> {
@@ -702,8 +1049,127 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_and_workspace_keys() {
+        let s = parse(
+            r##"{
+              "app": { "workspaceInheritWorkingDirectory": false, "newWorkspacePlacement": "afterCurrent" },
+              "sidebar": { "fontSize": 14, "hideAllDetails": true, "selectionColor": "#336699" },
+              "sidebarAppearance": { "tintColor": "#000", "tintOpacity": 0.3 },
+              "workspaceColors": { "indicatorStyle": "solidFill", "colors": { "Ocean": "#0066aa" } },
+              "workspaceGroups": { "newWorkspacePlacement": "top" },
+              "automation": { "workspaceAutoNaming": true }
+            }"##,
+        )
+        .unwrap();
+        assert!(!s.app.workspace_inherit_working_directory);
+        assert_eq!(s.app.new_workspace_placement, Placement::AfterCurrent);
+        assert_eq!(s.sidebar.font_size, 14.);
+        assert!(s.sidebar.hide_all_details && s.sidebar.show_log);
+        assert_eq!(s.sidebar.selection_color, Some(rgb(0x336699)));
+        assert_eq!(s.sidebar_appearance.tint_opacity, 0.3);
+        assert_eq!(
+            s.workspace_colors.indicator_style,
+            IndicatorStyle::SolidFill
+        );
+        assert_eq!(s.workspace_colors.parse("ocean"), Some(0x0066aa));
+        assert_eq!(
+            s.workspace_colors.parse("Red"),
+            None,
+            "a palette replaces cmux's"
+        );
+        assert_eq!(s.workspace_colors.parse("#ff0000"), Some(0xff0000));
+        assert_eq!(s.workspace_groups.new_workspace_placement, Placement::Top);
+        assert!(s.automation.workspace_auto_naming);
+        let d = Settings::default();
+        assert_eq!(d.workspace_colors.parse("amber"), Some(0x7D6608));
+        assert_eq!(d.app.new_workspace_placement, Placement::End);
+        let err = |text: &str| parse(text).unwrap_err().to_string();
+        assert!(err(r#"{"sidebar": {"fontSize": 50}}"#).contains("8–24"));
+        assert!(
+            err(r#"{"workspaceColors": {"indicatorStyle": "wash"}}"#).contains("unknown variant")
+        );
+        assert!(err(r#"{"workspaceColors": {"colors": {"X": "blue"}}}"#).contains("isn't #rrggbb"));
+    }
+
+    #[test]
+    fn browser_engine() {
+        assert_eq!(Settings::default().browser.engine, BrowserEngine::BuiltIn);
+        for v in ["terminalBrowser", "terminal-browser"] {
+            let s = parse(&format!(r#"{{"browser": {{"engine": "{v}"}}}}"#)).unwrap();
+            assert_eq!(s.browser.engine, BrowserEngine::TerminalBrowser);
+        }
+        let s = parse(r#"{"browser": {"engine": "builtIn"}}"#).unwrap();
+        assert_eq!(s.browser.engine, BrowserEngine::BuiltIn);
+        let e = parse(r#"{"browser": {"engine": "chrome"}}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("unknown variant"), "{e}");
+    }
+
+    #[test]
     fn missing_file_is_defaults() {
         let p = Path::new("/nonexistent/abromux/config.json");
         assert_eq!(read(p).unwrap(), Settings::default());
+    }
+
+    #[test]
+    fn edit_keeps_the_rest_of_the_file() {
+        use serde_json::json;
+        let dir = std::env::temp_dir().join(format!("abromux-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let p = dir.join("sub/config.json");
+
+        // A missing file and folder are created.
+        let s = edit_file(&p, &["sidebar", "fontSize"], Some(json!(14))).unwrap();
+        assert_eq!(s.sidebar.font_size, 14.);
+
+        std::fs::write(
+            &p,
+            r#"{ "panes": { "resizeStep": 30 }, "commands": [{ "title": "t", "run": "ls" }],
+                "sidebar": { "showLog": false, "fontSize": 14 } }"#,
+        )
+        .unwrap();
+        let s = edit_file(&p, &["app", "newWorkspacePlacement"], Some(json!("top"))).unwrap();
+        assert_eq!(s.app.new_workspace_placement, Placement::Top);
+        assert_eq!(s.panes.resize_step, 30.);
+        assert_eq!(s.commands.len(), 1);
+        let keys = |p: &Path| -> Vec<String> {
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+            v.as_object().unwrap().keys().cloned().collect()
+        };
+        assert_eq!(
+            keys(&p),
+            ["panes", "commands", "sidebar", "app"],
+            "order kept"
+        );
+
+        // Removing the last key of an object removes the object.
+        edit_file(&p, &["sidebar", "showLog"], None).unwrap();
+        edit_file(&p, &["sidebar", "fontSize"], None).unwrap();
+        assert_eq!(keys(&p), ["panes", "commands", "app"]);
+        // Removing what isn't there is fine.
+        edit_file(&p, &["automation", "workspaceAutoNaming"], None).unwrap();
+
+        // A value the settings reject isn't written.
+        let before = std::fs::read_to_string(&p).unwrap();
+        let e = edit_file(&p, &["sidebar", "fontSize"], Some(json!(99))).unwrap_err();
+        assert!(e.contains("fontSize must be 8–24"), "{e}");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), before);
+
+        // Nor is anything over a file that isn't JSON.
+        std::fs::write(&p, "{ oops").unwrap();
+        assert!(edit_file(&p, &["sidebar", "showLog"], Some(json!(true))).is_err());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "{ oops");
+
+        // A symlinked file stays a symlink.
+        let real = dir.join("real.json");
+        std::fs::write(&real, "{}").unwrap();
+        let link = dir.join("link.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        edit_file(&link, &["sidebar", "showLog"], Some(json!(false))).unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(std::fs::read_to_string(&real).unwrap().contains("showLog"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

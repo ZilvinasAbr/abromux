@@ -139,6 +139,21 @@ impl Pty {
         }
     }
 
+    /// The PTY's device (`/dev/ttys004`), which programs in it see as their tty.
+    pub fn tty_name(&self) -> Option<std::path::PathBuf> {
+        match self {
+            Pty::Local { master, .. } => master.tty_name(),
+            Pty::Held { held, .. } => {
+                // SAFETY: ptsname returns a static buffer, copied at once.
+                let name = unsafe { libc::ptsname(held.fd.as_raw_fd()) };
+                (!name.is_null()).then(|| {
+                    let s = unsafe { std::ffi::CStr::from_ptr(name) };
+                    std::path::PathBuf::from(s.to_string_lossy().into_owned())
+                })
+            }
+        }
+    }
+
     pub fn raw_fd(&self) -> Option<i32> {
         match self {
             Pty::Local { master, .. } => master.as_raw_fd(),
@@ -206,12 +221,12 @@ fn install_wake() {
     });
 }
 
-/// Start the user's login shell at `size`, or take back the holder's
-/// terminal `attach`. `vars` is what abromux sets on top of its own
+/// Start `argv` (the user's login shell) at `size`, or take back the
+/// holder's terminal `attach`. `vars` is what abromux sets on top of its own
 /// environment.
 pub fn open(
     cwd: &str,
-    shell: &str,
+    argv: &[String],
     vars: &[(String, String)],
     size: (u16, u16),
     attach: Option<&str>,
@@ -244,7 +259,6 @@ pub fn open(
         }
     }
 
-    let argv = [shell.to_string(), "-l".into()];
     if persistence == Persistence::Abromux {
         // The holder starts programs with exactly the environment it's
         // given, so it gets all of ours.
@@ -253,7 +267,7 @@ pub fn open(
             .collect::<std::collections::BTreeMap<_, _>>()
             .into_iter()
             .collect();
-        match crate::hold::Held::spawn(&argv, cwd, &env, size) {
+        match crate::hold::Held::spawn(argv, cwd, &env, size) {
             Ok(held) => {
                 if let Some(pty) = held_pty(held, feed) {
                     return opened(pty);
@@ -262,7 +276,7 @@ pub fn open(
             Err(e) => eprintln!("abromux: abromux hold: {e}; starting the shell here instead"),
         }
     }
-    opened(local(cwd, &argv, vars, size, feed))
+    opened(local(cwd, argv, vars, size, feed))
 }
 
 fn local(cwd: &str, argv: &[String], vars: &[(String, String)], (cols, rows): (u16, u16), feed: &Feed) -> Pty {

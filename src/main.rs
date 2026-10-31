@@ -1,4 +1,5 @@
 mod about;
+mod alert;
 mod activity;
 mod agent;
 mod banner;
@@ -6,6 +7,7 @@ mod bench;
 mod browser;
 mod browser_auto;
 mod browser_find;
+mod browser_history;
 mod channel;
 mod cli;
 mod config;
@@ -27,11 +29,14 @@ mod quit;
 mod server;
 mod session;
 mod settings;
+mod settings_window;
 mod shell;
+mod sidebar;
 mod skills;
 mod sprite;
 mod status;
 mod terminal;
+mod terminal_browser;
 mod theme;
 mod titlebar;
 mod webauthn;
@@ -60,6 +65,7 @@ actions!(
     abromux,
     [
         About,
+        OpenSettings,
         Quit,
         NewWorkspace,
         CloseWorkspace,
@@ -115,7 +121,15 @@ actions!(
         SwapLeft,
         SwapRight,
         SwapUp,
-        SwapDown
+        SwapDown,
+        EditDescription,
+        MoveWorkspaceUp,
+        MoveWorkspaceDown,
+        NewGroup,
+        GroupByFolder,
+        Ungroup,
+        ToggleGroup,
+        ReopenSession
     ]
 );
 
@@ -180,7 +194,15 @@ impl AssetSource for Assets {
             "pencil",
             "maximize-2",
             "lock",
-            "bot"
+            "bot",
+            // The Settings window.
+            "minus",
+            "undo-2",
+            "keyboard",
+            "sliders-horizontal",
+            "palette",
+            // gpui-component's menus mark checked items with it.
+            "check"
         );
         Ok(bytes.map(Cow::Borrowed))
     }
@@ -203,6 +225,15 @@ struct AbroMux {
     /// Last seen window frame, for the session file.
     window_bounds: Option<Bounds<Pixels>>,
     renaming: Option<(usize, Entity<InputState>)>,
+    /// The workspace whose description is being edited (⌥⌘E).
+    describing: Option<(usize, Entity<InputState>)>,
+    /// Sidebar groups, by id; a workspace's `group` names one.
+    groups: Vec<workspace::Group>,
+    next_group: usize,
+    renaming_group: Option<(usize, Entity<InputState>)>,
+    /// Where a dragged workspace would land: beside workspace id, after it
+    /// or before.
+    ws_drop: Option<(usize, bool)>,
     /// The tab being renamed in its tab bar.
     renaming_tab: Option<(EntityId, Entity<InputState>)>,
     sidebar: bool,
@@ -233,6 +264,14 @@ struct AbroMux {
     badge: usize,
     /// The ⌘⇧P / ⌘P palette, while open.
     palette: Option<palette::Palette>,
+    /// The session this launch restored (without scrollback), for ⌘⇧O,
+    /// with the id each of its workspaces was built as.
+    launch_session: Option<(session::Session, Vec<Option<usize>>)>,
+    /// Workspaces auto-naming has asked an agent CLI to name, once each
+    /// (`server::auto_name`); clearing a workspace's name lets it ask again.
+    naming: Vec<usize>,
+    /// A task is redrawing the window while Claude's logo turns somewhere.
+    spinning: bool,
 }
 
 impl AbroMux {
@@ -253,6 +292,11 @@ impl AbroMux {
             socket: None,
             window_bounds: None,
             renaming: None,
+            describing: None,
+            groups: vec![],
+            next_group: 0,
+            renaming_group: None,
+            ws_drop: None,
             renaming_tab: None,
             sidebar: true,
             sidebar_width: SIDEBAR_WIDTH,
@@ -272,6 +316,9 @@ impl AbroMux {
             notifications_open: false,
             badge: 0,
             palette: None,
+            launch_session: None,
+            naming: vec![],
+            spinning: false,
         };
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
@@ -484,18 +531,33 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Surface {
-        self.make_terminal_full(cwd, ws, env, None, window, cx)
+        self.make_terminal_running(cwd, ws, env, None, window, cx)
     }
 
-    /// `make_terminal_with` that can take back a terminal the holder kept
+    /// `make_terminal_with` whose shell runs `command` instead of a session.
+    fn make_terminal_running(
+        &mut self,
+        cwd: Option<String>,
+        ws: usize,
+        env: Vec<(String, String)>,
+        command: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Surface {
+        self.make_terminal_full(cwd, ws, env, command, None, window, cx)
+    }
+
+    /// `make_terminal_running` that can take back a terminal the holder kept
     /// from the last session: `(its surface number, its holder id)`. The shell
     /// kept the `ABROMUX_SURFACE_ID` it started with, so the surface keeps that
     /// number.
+    #[allow(clippy::too_many_arguments)]
     fn make_terminal_full(
         &mut self,
         cwd: Option<String>,
         ws: usize,
         mut env: Vec<(String, String)>,
+        command: Option<String>,
         attach: Option<(usize, &str)>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -511,7 +573,7 @@ impl AbroMux {
                 path.to_string_lossy().into_owned(),
             ));
         }
-        let term = cx.new(|cx| TerminalView::new(cwd, env, attach.map(|(_, a)| a), cx));
+        let term = cx.new(|cx| TerminalView::new(cwd, env, command, attach.map(|(_, a)| a), cx));
         // Its env names `surface` even when the shell is a new one; restore
         // reserved the numbers the last session used, so it's free.
         self.surface_refs.insert(term.entity_id(), surface);
@@ -540,7 +602,39 @@ impl AbroMux {
         Surface::Terminal(term)
     }
 
+    /// A browser tab for `url`: the built-in one, or with `browser.engine`
+    /// set to `terminalBrowser`, a terminal running `terminal-browser`
+    /// (the built-in one, with a warning, if it isn't installed).
     fn make_browser(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> Surface {
+        if settings::terminal_browser(cx) {
+            match terminal_browser::command(url) {
+                Some(cmd) => {
+                    let ws = self.workspaces.get(self.active).map_or(0, |w| w.id);
+                    let s = self.make_terminal_running(None, ws, vec![], Some(cmd), window, cx);
+                    if let Surface::Terminal(t) = &s {
+                        terminal_browser::attach(t, url, cx);
+                    }
+                    return s;
+                }
+                None => window.push_notification(
+                    Notification::warning(
+                        "`browser.engine` is terminalBrowser, but terminal-browser isn't on \
+                         PATH or in ~/.local/bin, so this tab uses the built-in browser.",
+                    )
+                    .title("terminal-browser not found"),
+                    cx,
+                ),
+            }
+        }
+        self.make_builtin_browser(url, window, cx)
+    }
+
+    fn make_builtin_browser(
+        &mut self,
+        url: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Surface {
         let browser = cx.new(|cx| BrowserView::new(url, window, cx));
         self.surface_ref(browser.entity_id());
         cx.subscribe_in(&browser, window, |this, b, ev, window, cx| match ev {
@@ -594,7 +688,7 @@ impl AbroMux {
                 .into_iter()
                 .find(|p| p.id == r)
                 .and_then(|p| p.active_surface())
-                .is_some_and(|s| matches!(s, Surface::Browser(_)))
+                .is_some_and(|s| s.is_browser(cx))
         });
         let surface = self.make_browser(&url, window, cx);
         match right {
@@ -689,6 +783,79 @@ impl AbroMux {
         cx.notify();
     }
 
+    /// A close the user asked for: if it would end a Claude Code session,
+    /// confirm first, as cmux does.
+    fn request_close_surface(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
+        let claude = self.workspaces.iter().any(|ws| {
+            ws.root.panes().iter().any(|p| {
+                p.tabs
+                    .iter()
+                    .any(|s| s.entity_id() == id && surface_has_claude(s, cx))
+            })
+        });
+        if !claude {
+            return self.close_surface(id, window, cx);
+        }
+        let rx = alert::confirm(
+            window,
+            alert::Confirm {
+                message: "Close tab?",
+                info: "Claude Code is running in this tab. Closing it will end the session.",
+                button: "Close",
+                suppress: "Don't ask again",
+                skip_key: "AbroMuxSkipCloseClaudeWarning",
+            },
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if rx.await == Ok(true) {
+                let _ = this.update_in(cx, |this, window, cx| this.close_surface(id, window, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// Like `request_close_surface`, for a whole workspace.
+    pub(crate) fn request_close_workspace(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ws) = self.workspaces.get(index) else {
+            return;
+        };
+        let claude = ws
+            .root
+            .panes()
+            .iter()
+            .any(|p| p.tabs.iter().any(|s| surface_has_claude(s, cx)));
+        if !claude {
+            return self.close_workspace(index, window, cx);
+        }
+        let ws_id = ws.id;
+        let rx = alert::confirm(
+            window,
+            alert::Confirm {
+                message: "Close workspace?",
+                info: "Claude Code is running in this workspace. Closing it will close all of its panels and end the session.",
+                button: "Close",
+                suppress: "Don't ask again",
+                skip_key: "AbroMuxSkipCloseClaudeWarning",
+            },
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if rx.await == Ok(true) {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    // Indices may have moved while the sheet was up.
+                    if let Some(i) = this.ws_index(ws_id) {
+                        this.close_workspace(i, window, cx)
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
     // ---- workspaces -----------------------------------------------------
 
     fn ws(&self) -> &Workspace {
@@ -697,6 +864,17 @@ impl AbroMux {
 
     fn new_workspace(&mut self, cwd: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         self.create_workspace(cwd, true, window, cx);
+    }
+
+    /// ⌘N: a new workspace in the focused terminal's directory, unless
+    /// `app.workspaceInheritWorkingDirectory` is off.
+    fn new_workspace_here(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let inherit = cx
+            .global::<settings::Settings>()
+            .app
+            .workspace_inherit_working_directory;
+        let cwd = inherit.then(|| self.focused_cwd(cx)).flatten();
+        self.new_workspace(cwd, window, cx)
     }
 
     /// Returns the new workspace's index.
@@ -716,13 +894,28 @@ impl AbroMux {
             active: 0,
         };
         let focused = pane.id;
-        let ws = Workspace::new(id, None, Node::Leaf(pane), focused);
-        self.workspaces.push(ws);
-        let index = self.workspaces.len() - 1;
+        let mut ws = Workspace::new(id, None, Node::Leaf(pane), focused);
+        let (index, group) = self.new_workspace_slot(cx);
+        ws.group = group;
+        let index = self.insert_workspace(index, ws);
+        if let Some(g) = self.groups.iter_mut().find(|g| Some(g.id) == group) {
+            g.collapsed = false;
+        }
         if select {
             self.select_workspace(index, window, cx);
         }
         cx.notify();
+        index
+    }
+
+    /// Put `ws` at `index`, keeping the selected workspace selected.
+    /// Returns where it went.
+    fn insert_workspace(&mut self, index: usize, ws: Workspace) -> usize {
+        let index = index.min(self.workspaces.len());
+        self.workspaces.insert(index, ws);
+        if self.workspaces.len() > 1 && self.active >= index {
+            self.active += 1;
+        }
         index
     }
 
@@ -749,6 +942,7 @@ impl AbroMux {
         if self.active > index || self.active >= self.workspaces.len() {
             self.active = self.active.saturating_sub(1);
         }
+        workspace::tidy_groups(&mut self.workspaces, &mut self.groups);
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -774,9 +968,15 @@ impl AbroMux {
                 InputEvent::PressEnter { .. } => {
                     let name = one_line(&input.read(cx).value());
                     if let Some(ws) = this.workspaces.iter_mut().find(|w| w.id == id) {
-                        // Leaving the name as it was keeps it following the agent's title.
-                        let changed = !name.is_empty() && name != ws.auto_name(cx);
-                        ws.custom_name = changed.then_some(name);
+                        if name.is_empty() {
+                            // Back to following the terminal's title.
+                            ws.custom_name = None;
+                            ws.auto_title = None;
+                            this.naming.retain(|&n| n != id);
+                        } else if name != ws.name(cx) {
+                            ws.custom_name = Some(name);
+                        }
+                        // Left as shown, it keeps following whatever it followed.
                     }
                     this.renaming = None;
                     this.focus_active(window, cx);
@@ -1291,11 +1491,7 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let result = settings::load().map(|s| {
-            keymap::apply(&s, cx);
-            cx.set_global(s);
-            menu::set_menus(cx);
-        });
+        let result = settings::load().map(|s| settings_window::apply(s, cx));
         let note = match &result {
             Ok(()) => Notification::success(format!(
                 "Reloaded {}",
@@ -1345,6 +1541,30 @@ impl AbroMux {
                     cx.notify();
                 }
             });
+        })
+        .detach();
+    }
+
+    /// While Claude works in any terminal, redraw once per frame of the star
+    /// animation in its tab and sidebar row. A timer rather than `with_animation`, which would
+    /// redraw the whole window at the display's rate.
+    fn tick_spinner(&mut self, cx: &mut Context<Self>) {
+        if self.spinning || !self.workspaces.iter().any(|w| w.claude_running(cx)) {
+            return;
+        }
+        self.spinning = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                Timer::after(Duration::from_millis(CLAUDE_FRAME_MS)).await;
+                let more = this.update(cx, |this, cx| {
+                    cx.notify();
+                    this.spinning = this.workspaces.iter().any(|w| w.claude_running(cx));
+                    this.spinning
+                });
+                if !matches!(more, Ok(true)) {
+                    break;
+                }
+            }
         })
         .detach();
     }
@@ -1415,276 +1635,6 @@ impl AbroMux {
 
     // ---- rendering ------------------------------------------------------
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let rows: Vec<AnyElement> = self
-            .workspaces
-            .iter()
-            .enumerate()
-            .map(|(i, ws)| {
-                let active = i == self.active;
-                let name = ws.name(cx);
-                let subtitle = ws
-                    .focused_surface()
-                    .map(|s| s.title(cx))
-                    .unwrap_or_default();
-                let cwd = ws.cwd(cx);
-                let branch = cwd.as_deref().and_then(|c| self.branch(c));
-                let meta = match (&branch, &cwd) {
-                    (Some(b), Some(c)) => format!("{b} • {}", tilde(c)),
-                    (None, Some(c)) => tilde(c),
-                    _ => String::new(),
-                };
-                let fg = if active { rgb(0xffffff) } else { rgb(TEXT) };
-                let sub = if active { rgba(0xffffffc0) } else { rgb(MUTED) };
-                let renaming = self
-                    .renaming
-                    .as_ref()
-                    .filter(|(id, _)| *id == ws.id)
-                    .map(|(_, input)| input.clone());
-                let is_renaming = renaming.is_some();
-                let group: SharedString = format!("ws-{}", ws.id).into();
-                let hint = shortcut_digit(i, self.workspaces.len())
-                    .filter(|_| self.hints == Some(Hints::Command));
-                let latest = self.latest_unread(ws).map(|n| n.text());
-                let status = self.render_ws_status(ws, active);
-
-                div()
-                    .id(("ws", ws.id))
-                    .group(group.clone())
-                    .relative()
-                    .mx(px(8.))
-                    .px(px(10.))
-                    .py(px(7.))
-                    .rounded(px(7.))
-                    .cursor_pointer()
-                    .when(active, |s| s.bg(rgb(ACCENT)))
-                    .when(!active, |s| s.hover(|s| s.bg(rgba(HOVER))))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
-                            if ev.click_count >= 2 {
-                                this.start_rename(i, window, cx);
-                            } else {
-                                this.select_workspace(i, window, cx);
-                            }
-                        }),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .when(latest.is_some(), |s| {
-                                s.child(
-                                    div()
-                                        .size(px(7.))
-                                        .flex_none()
-                                        .rounded_full()
-                                        .bg(rgb(ACCENT_BRIGHT)),
-                                )
-                            })
-                            .child(match renaming {
-                                // Edit in place: same font and line as the title, in a
-                                // dark inset so it reads as a field on the accent row.
-                                Some(input) => div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .h(px(20.))
-                                    .my(px(-2.))
-                                    .mx(px(-5.))
-                                    .px(px(4.))
-                                    .flex()
-                                    .items_center()
-                                    .rounded(px(5.))
-                                    .bg(rgba(0x0000004d))
-                                    .border_1()
-                                    .border_color(rgba(0xffffff59))
-                                    .text_color(rgb(TEXT))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                        cx.stop_propagation()
-                                    })
-                                    .capture_key_down(cx.listener(
-                                        |this, ev: &KeyDownEvent, window, cx| {
-                                            if ev.keystroke.key == "escape" {
-                                                this.renaming = None;
-                                                this.focus_active(window, cx);
-                                                cx.notify();
-                                            }
-                                        },
-                                    ))
-                                    .child(
-                                        Input::new(&input)
-                                            .appearance(false)
-                                            .text_size(px(12.5))
-                                            .h_full()
-                                            .px_0()
-                                            .py_0(),
-                                    )
-                                    .into_any_element(),
-                                None => div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(px(12.5))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(fg)
-                                    .child(name.clone())
-                                    .into_any_element(),
-                            })
-                            .when(!is_renaming, |s| {
-                                s.child(
-                                    div()
-                                        .id(("ws-close", ws.id))
-                                        .invisible()
-                                        .group_hover(group.clone(), |s| s.visible())
-                                        .flex_none()
-                                        .rounded(px(4.))
-                                        .p(px(2.))
-                                        .hover(|s| s.bg(rgba(0xffffff22)))
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                            cx.stop_propagation()
-                                        })
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.close_workspace(i, window, cx)
-                                        }))
-                                        .child(icon("x").size(px(11.)).text_color(sub)),
-                                )
-                            }),
-                    )
-                    .when(
-                        !subtitle.is_empty()
-                            && subtitle != name
-                            && Some(&subtitle) != cwd.as_ref().map(|c| tilde(c)).as_ref(),
-                        |s| {
-                            s.child(
-                                div()
-                                    .mt(px(2.))
-                                    .text_size(px(11.))
-                                    .text_color(sub)
-                                    .line_clamp(2)
-                                    .child(subtitle),
-                            )
-                        },
-                    )
-                    .when_some(latest, |s, text| {
-                        s.child(
-                            div()
-                                .mt(px(2.))
-                                .flex()
-                                .gap(px(4.))
-                                .text_size(px(11.))
-                                .text_color(if active {
-                                    rgb(0xffffff)
-                                } else {
-                                    rgb(ACCENT_BRIGHT)
-                                })
-                                .child(icon("bell").mt(px(1.)).size(px(10.)).text_color(
-                                    if active {
-                                        rgb(0xffffff)
-                                    } else {
-                                        rgb(ACCENT_BRIGHT)
-                                    },
-                                ))
-                                .child(div().flex_1().min_w_0().line_clamp(2).child(text)),
-                        )
-                    })
-                    .children(status)
-                    .when_some(hint, |s, d| {
-                        s.child(
-                            hint_pill(format!("⌘{d}"))
-                                .absolute()
-                                .top(px(6.))
-                                .right(px(8.)),
-                        )
-                    })
-                    .when(!meta.is_empty(), |s| {
-                        s.child(
-                            div()
-                                .mt(px(2.))
-                                .flex()
-                                .items_center()
-                                .gap(px(4.))
-                                .text_size(px(10.5))
-                                .text_color(sub)
-                                .when(branch.is_some(), |s| {
-                                    s.child(icon("git-branch").size(px(10.)).text_color(sub))
-                                })
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .font_family(terminal::FONT_FAMILY)
-                                        .child(meta),
-                                ),
-                        )
-                    })
-                    .into_any_element()
-            })
-            .collect();
-
-        div()
-            .w(px(self.sidebar_width))
-            .h_full()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .relative()
-            .bg(rgba(SIDEBAR_BG))
-            .border_r_1()
-            .border_color(rgb(BORDER))
-            .child(
-                // Titlebar row: traffic lights live on the left.
-                div()
-                    .h(px(TITLEBAR_H))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap_1()
-                    .pr(px(10.))
-                    .on_mouse_down(MouseButton::Left, |ev, window, _| {
-                        titlebar::drag_or_zoom(ev, window)
-                    })
-                    .children(self.titlebar_buttons(cx)),
-            )
-            .child(
-                div()
-                    .id("workspaces")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .pb_2()
-                    .children(rows),
-            )
-            .child(
-                // Drag the right edge to resize; double-click resets.
-                div()
-                    .id("sidebar-edge")
-                    .absolute()
-                    .top_0()
-                    .right_0()
-                    .w(px(6.))
-                    .h_full()
-                    .cursor_col_resize()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, ev: &MouseDownEvent, _, cx| {
-                            if ev.click_count >= 2 {
-                                this.sidebar_width = SIDEBAR_WIDTH;
-                                cx.notify();
-                            } else {
-                                this.resizing_sidebar = true;
-                            }
-                            cx.stop_propagation();
-                        }),
-                    ),
-            )
-            .into_any_element()
-    }
-
     /// Sidebar toggle and new-workspace buttons, shown in the sidebar's
     /// titlebar row or next to the traffic lights when it's hidden. Holding
     /// ⌘ swaps them for their shortcuts.
@@ -1747,7 +1697,7 @@ impl AbroMux {
                 .into_any_element(),
             button("new-ws", "plus", "⌘N")
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(|this, _, window, cx| this.new_workspace(None, window, cx)))
+                .on_click(cx.listener(|this, _, window, cx| this.new_workspace_here(window, cx)))
                 .into_any_element(),
         ]
     }
@@ -1924,7 +1874,7 @@ impl AbroMux {
                 )
                 .on_mouse_down(
                     MouseButton::Middle,
-                    cx.listener(move |this, _, window, cx| this.close_surface(sid, window, cx)),
+                    cx.listener(move |this, _, window, cx| this.request_close_surface(sid, window, cx)),
                 )
                 .on_drag(
                     DraggedTab {
@@ -1955,11 +1905,14 @@ impl AbroMux {
                             .bg(rgb(ACCENT_BRIGHT)),
                     )
                 })
-                .child(
+                .child(if s.claude_running(cx) {
+                    claude_spinner(px(12.)).into_any_element()
+                } else {
                     icon(s.icon(cx))
                         .size(px(12.))
-                        .text_color(icon_color(s.icon(cx), active || unread)),
-                )
+                        .text_color(icon_color(s.icon(cx), active || unread))
+                        .into_any_element()
+                })
                 .child(match renaming.clone() {
                     Some(input) => div()
                         .flex_1()
@@ -2010,7 +1963,7 @@ impl AbroMux {
                             .hover(|d| d.bg(rgba(0xffffff18)))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.close_surface(sid, window, cx)
+                                this.request_close_surface(sid, window, cx)
                             }))
                             .child(icon("x").size(px(10.)).text_color(rgb(MUTED))),
                     )
@@ -2116,9 +2069,15 @@ impl AbroMux {
             Some(Surface::Browser(b)) => b.clone().into_any_element(),
             None => div().into_any_element(),
         };
+        let browser = matches!(pane.active_surface(), Some(Surface::Browser(_)));
 
         // A ring around panes with unread notifications, like cmux.
         let ring = pane.tabs.iter().any(|s| self.surface_unread(s.entity_id()));
+        // A webview is a native view drawn above everything gpui paints, so
+        // it would cover the ring or focus border; keep it inside them. The
+        // inset doesn't follow focus, so switching splits doesn't resize
+        // (and reflow) the page.
+        let border = if multi || ring { px(2.) } else { px(0.) };
         div()
             .id(("pane", pane_id))
             .size_full()
@@ -2136,6 +2095,7 @@ impl AbroMux {
                     .flex_1()
                     .min_h_0()
                     .relative()
+                    .when(browser, |d| d.px(border).pb(border))
                     .child(content)
                     // Unfocused splits are dimmed, like cmux/ghostty.
                     .when(multi && !focused, |d| {
@@ -2207,8 +2167,10 @@ impl Render for AbroMux {
         }
         if !cx.has_active_drag() {
             self.tab_drop = None;
+            self.ws_drop = None;
         }
         self.sync_webviews(cx);
+        self.tick_spinner(cx);
         let notifications = self
             .notifications_open
             .then(|| self.render_notifications(cx));
@@ -2249,12 +2211,41 @@ impl Render for AbroMux {
             .text_color(rgb(TEXT))
             .font_family(".AppleSystemUIFont")
             .on_action(cx.listener(|_, _: &Quit, window, cx| quit::request(window, cx)))
-            .on_action(cx.listener(|this, _: &NewWorkspace, window, cx| {
-                let cwd = this.focused_cwd(cx);
-                this.new_workspace(cwd, window, cx)
+            .on_action(
+                cx.listener(|this, _: &NewWorkspace, window, cx| {
+                    this.new_workspace_here(window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &EditDescription, window, cx| {
+                this.start_describe(this.active, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MoveWorkspaceUp, _, cx| {
+                this.nudge_workspace(this.active, false, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MoveWorkspaceDown, _, cx| {
+                this.nudge_workspace(this.active, true, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NewGroup, _, cx| {
+                this.new_group(this.active, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GroupByFolder, _, cx| {
+                this.group_by_folder(cx);
+            }))
+            .on_action(cx.listener(|this, _: &Ungroup, _, cx| {
+                if let Some(g) = this.ws().group {
+                    this.ungroup(g, cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ToggleGroup, _, cx| {
+                if let Some(g) = this.ws().group {
+                    this.toggle_group(g, cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ReopenSession, window, cx| {
+                this.reopen_session(None, window, cx);
             }))
             .on_action(cx.listener(|this, _: &CloseWorkspace, window, cx| {
-                this.close_workspace(this.active, window, cx)
+                this.request_close_workspace(this.active, window, cx)
             }))
             .on_action(cx.listener(|this, _: &RenameWorkspace, window, cx| {
                 this.sidebar = true;
@@ -2286,7 +2277,7 @@ impl Render for AbroMux {
             }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 if let Some(id) = this.ws().focused_surface().map(|s| s.entity_id()) {
-                    this.close_surface(id, window, cx)
+                    this.request_close_surface(id, window, cx)
                 }
             }))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| this.cycle_tab(1, window, cx)))
@@ -2565,6 +2556,10 @@ impl Render for DraggedTab {
 
 /// A name typed into a single-line field: a newline that slipped in would
 /// panic gpui's line shaping wherever the name is drawn.
+fn surface_has_claude(s: &Surface, cx: &App) -> bool {
+    matches!(s, Surface::Terminal(t) if t.read(cx).has_claude())
+}
+
 fn one_line(s: &str) -> String {
     s.split(['\n', '\r'])
         .map(str::trim)
@@ -2653,10 +2648,16 @@ fn run_app(cwd: Option<String>) {
             }
         });
         cx.on_action(|_: &About, cx| about::show(cx));
+        cx.on_action(|_: &OpenSettings, cx| settings_window::show(cx));
         // The fixed bindings; the shortcuts users can change are in keymap.rs.
         cx.bind_keys([
             KeyBinding::new("cmd-w", about::CloseAbout, Some("About")),
             KeyBinding::new("escape", about::CloseAbout, Some("About")),
+            KeyBinding::new(
+                "cmd-w",
+                settings_window::CloseSettings,
+                Some("SettingsWindow"),
+            ),
             KeyBinding::new("down", palette::SelectNext, Some("CommandPalette > Input")),
             KeyBinding::new(
                 "ctrl-n",
@@ -2671,6 +2672,12 @@ fn run_app(cwd: Option<String>) {
             ),
             KeyBinding::new("enter", palette::Confirm, Some("CommandPalette > Input")),
             KeyBinding::new("escape", palette::Dismiss, Some("CommandPalette > Input")),
+            KeyBinding::new("down", browser::SuggestNext, Some("Omnibar > Input")),
+            KeyBinding::new("ctrl-n", browser::SuggestNext, Some("Omnibar > Input")),
+            KeyBinding::new("up", browser::SuggestPrev, Some("Omnibar > Input")),
+            KeyBinding::new("ctrl-p", browser::SuggestPrev, Some("Omnibar > Input")),
+            KeyBinding::new("escape", browser::DismissSuggestions, Some("Omnibar > Input")),
+            KeyBinding::new("shift-backspace", browser::RemoveSuggestion, Some("Omnibar > Input")),
             // Keybindings run before key listeners; let these reach the PTY.
             KeyBinding::new("tab", NoAction, Some("Terminal")),
             KeyBinding::new("shift-tab", NoAction, Some("Terminal")),

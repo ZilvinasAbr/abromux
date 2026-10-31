@@ -8,7 +8,7 @@ I love [cmux](https://cmux.com) and use it every day. But with many agents and b
 
 ## What it does
 
-- **Workspaces** in a sidebar, each with its git branch, cwd and status.
+- **Workspaces** in a sidebar, each with its git branch, cwd and status, a description and a color, in groups you can fold and drag to reorder.
 - **Split panes** with tabs of terminals (libghostty) and browsers (native WebKit).
 - **Agent aware**: Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi show when they're running or need input, notify you, and resume after a restart.
 - **Session restore**: shells keep running while abromux is closed and come back as they were; after a reboot, layout, scrollback and agent sessions come back.

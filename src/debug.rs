@@ -33,6 +33,93 @@ pub fn snapshot(window: &Window, path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `ui:down|up|move|drag,X,Y[,left|right][,clicks=N]`: queue a native mouse
+/// event to our window, which AppKit then delivers like a real one.
+fn post_mouse(window: &Window, arg: &str) -> anyhow::Result<()> {
+    let parts: Vec<&str> = arg.split(',').map(str::trim).collect();
+    let num = |i: usize| -> anyhow::Result<f64> {
+        parts
+            .get(i)
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(|| anyhow!("missing number {i}"))
+    };
+    let (x, y) = (num(1)?, num(2)?);
+    let right = parts.contains(&"right");
+    let clicks: isize = parts
+        .iter()
+        .find_map(|p| p.strip_prefix("clicks="))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(1);
+    // NSEventType: left down/up 1/2, right down/up 3/4, moved 5, left dragged 6.
+    let kind: usize = match (parts[0], right) {
+        ("down", false) => 1,
+        ("up", false) => 2,
+        ("down", true) => 3,
+        ("up", true) => 4,
+        ("move", _) => 5,
+        ("drag", _) => 6,
+        (k, _) => bail!("unknown mouse action {k}"),
+    };
+    let RawWindowHandle::AppKit(h) = HasWindowHandle::window_handle(window)?.as_raw() else {
+        bail!("not an AppKit window")
+    };
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Point {
+        x: f64,
+        y: f64,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Rect {
+        origin: Point,
+        size: Point,
+    }
+    unsafe {
+        let view = h.ns_view.as_ptr() as *mut Object;
+        let win: *mut Object = msg_send![view, window];
+        let number: isize = msg_send![win, windowNumber];
+        let content: *mut Object = msg_send![win, contentView];
+        let frame: Rect = msg_send![content, frame];
+        // AppKit's window coordinates start at the bottom left.
+        let at = Point {
+            x,
+            y: frame.size.y - y,
+        };
+        let nil: *mut Object = std::ptr::null_mut();
+        let ev: *mut Object = msg_send![objc::class!(NSEvent),
+            mouseEventWithType: kind
+            location: at
+            modifierFlags: 0usize
+            timestamp: 0f64
+            windowNumber: number
+            context: nil
+            eventNumber: 0isize
+            clickCount: clicks
+            pressure: 1f32];
+        if ev.is_null() {
+            bail!("NSEvent refused it");
+        }
+        // Such an event is always button 0, which gpui reads as left; set
+        // the button on its CGEvent and make a new NSEvent from that.
+        let ev = if right {
+            #[link(name = "CoreGraphics", kind = "framework")]
+            unsafe extern "C" {
+                fn CGEventSetIntegerValueField(event: *mut Object, field: u32, value: i64);
+            }
+            const BUTTON_NUMBER: u32 = 3;
+            let cg: *mut Object = msg_send![ev, CGEvent];
+            CGEventSetIntegerValueField(cg, BUTTON_NUMBER, 1);
+            msg_send![objc::class!(NSEvent), eventWithCGEvent: cg]
+        } else {
+            ev
+        };
+        let app: *mut Object = msg_send![objc::class!(NSApplication), sharedApplication];
+        let _: () = msg_send![app, postEvent: ev atStart: false];
+    }
+    Ok(())
+}
+
 /// Mouse steps go to this (gpui's own dispatch_event isn't callable from
 /// outside the crate).
 pub type OnMouse<V> = fn(&mut V, PlatformInput, &mut Window, &mut Context<V>);
@@ -41,7 +128,9 @@ pub type OnMouse<V> = fn(&mut V, PlatformInput, &mut Window, &mut Context<V>);
 /// `wait:MS`, `key:cmd-n` (gpui keystroke syntax), `type:TEXT`, `snap:PATH`, `quit`,
 /// `mouse:down|up|move,X,Y[,left|right|middle][,shift][,cmd]` and `scroll:X,Y,DY`
 /// (window pixels; positive DY scrolls up), and `mods:cmd|ctrl|none` for a
-/// modifier-only change.
+/// modifier-only change. Those go to the focused terminal; `ui:` takes the
+/// same arguments as `mouse:` and goes through gpui's hit testing like a
+/// real event, to whatever is under it (sidebar rows, menus, drags).
 pub fn run_script<V: 'static>(
     script: String,
     on_mouse: OnMouse<V>,
@@ -76,6 +165,7 @@ pub fn run_step<V: 'static>(
 ) -> anyhow::Result<()> {
     let (cmd, arg) = step.split_once(':').unwrap_or((step, ""));
     match cmd {
+        "ui" => post_mouse(window, arg).with_context(|| format!("bad ui step {arg}"))?,
         "mouse" | "scroll" | "mods" => {
             let ev = mouse_event(cmd, arg).with_context(|| format!("bad {cmd} step {arg}"))?;
             view.update(cx, |v, cx| on_mouse(v, ev, window, cx));
