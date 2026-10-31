@@ -149,6 +149,10 @@ struct Userdata {
     render: GhosttyRenderState,
     /// When the program started holding the screen (synchronized output).
     held_since: Option<Instant>,
+    /// The grid and cell pixels from the last `resize`, for XTWINOPS
+    /// size queries (CSI 14/16/18 t), which image programs such as
+    /// terminal-browser wait on.
+    size: GhosttySizeReportSize,
 }
 
 /// How long a program may hold the screen before it's drawn anyway, in
@@ -215,6 +219,19 @@ unsafe extern "C" fn on_write_pty(
     let fx = unsafe { &mut (*(ud as *mut Userdata)).fx };
     fx.pty_response
         .extend_from_slice(unsafe { std::slice::from_raw_parts(data, len) });
+}
+unsafe extern "C" fn on_size(
+    _: GhosttyTerminal,
+    ud: *mut c_void,
+    out: *mut GhosttySizeReportSize,
+) -> bool {
+    let size = unsafe { (*(ud as *mut Userdata)).size };
+    // Before the first layout the cell size isn't known; say nothing.
+    if size.cell_width == 0 || size.cell_height == 0 {
+        return false;
+    }
+    unsafe { *out = size };
+    true
 }
 unsafe extern "C" fn on_title(_: GhosttyTerminal, ud: *mut c_void) {
     unsafe { (*(ud as *mut Userdata)).fx.title_changed = true };
@@ -324,6 +341,12 @@ impl Terminal {
                 fx: Effects::default(),
                 render,
                 held_since: None,
+                size: GhosttySizeReportSize {
+                    rows,
+                    columns: cols,
+                    cell_width: 0,
+                    cell_height: 0,
+                },
             });
             let ud_ptr: *mut Userdata = &mut *ud;
             ghostty_terminal_set(raw, GHOSTTY_TERMINAL_OPT_USERDATA, ud_ptr as *const c_void);
@@ -337,6 +360,7 @@ impl Terminal {
                 on_title as *const c_void,
             );
             set_cb(GHOSTTY_TERMINAL_OPT_PWD_CHANGED, on_pwd as *const c_void);
+            set_cb(GHOSTTY_TERMINAL_OPT_SIZE, on_size as *const c_void);
             set_cb(GHOSTTY_TERMINAL_OPT_BELL, on_bell as *const c_void);
             set_cb(
                 GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
@@ -504,14 +528,35 @@ impl Terminal {
         on
     }
 
+    /// The pointer shape the program asked for with OSC 22 (`text`, the
+    /// I-beam, until it does).
+    pub fn mouse_shape(&self) -> GhosttyMouseShape {
+        let mut shape = GHOSTTY_MOUSE_SHAPE_TEXT;
+        unsafe {
+            ghostty_terminal_get(
+                self.raw,
+                GHOSTTY_TERMINAL_DATA_MOUSE_SHAPE,
+                &mut shape as *mut _ as *mut c_void,
+            )
+        };
+        shape
+    }
+
     /// Whether the program turned on bracketed paste (mode 2004).
     pub fn bracketed_paste(&self) -> bool {
-        // GHOSTTY_MODE_BRACKETED_PASTE: ghostty_mode_new(2004, false) is an
-        // inline function, so bindgen doesn't see it.
-        let mut q = GhosttyTerminalModeConfig {
-            mode: 2004,
-            value: false,
-        };
+        self.dec_mode(2004)
+    }
+
+    /// Whether the program asked for focus in/out reports (mode 1004).
+    pub fn focus_reporting(&self) -> bool {
+        self.dec_mode(1004)
+    }
+
+    /// A DEC private mode (`CSI ? n h`).
+    fn dec_mode(&self, mode: u16) -> bool {
+        // ghostty_mode_new(n, false) is an inline function, so bindgen
+        // doesn't see it; the struct is the same.
+        let mut q = GhosttyTerminalModeConfig { mode, value: false };
         unsafe {
             ghostty_terminal_get(
                 self.raw,
@@ -671,6 +716,12 @@ impl Terminal {
         mem::take(&mut self.ud.fx)
     }
 
+    /// Just the replies owed to the program, leaving the other effects for
+    /// `take_effects`.
+    pub fn take_pty_response(&mut self) -> Vec<u8> {
+        mem::take(&mut self.ud.fx.pty_response)
+    }
+
     /// Whether the program is holding the screen mid-redraw (synchronized
     /// output), so drawing shows the frame from before it.
     pub fn held(&self) -> bool {
@@ -678,6 +729,12 @@ impl Terminal {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16, cell_w: u32, cell_h: u32) {
+        self.ud.size = GhosttySizeReportSize {
+            rows: rows.max(1),
+            columns: cols.max(1),
+            cell_width: cell_w,
+            cell_height: cell_h,
+        };
         unsafe {
             ghostty_terminal_resize(self.raw, cols.max(1), rows.max(1), cell_w, cell_h);
         }
@@ -758,10 +815,13 @@ impl Terminal {
         }
     }
 
-    /// Encode a key press via libghostty's encoder (honours kitty keyboard,
-    /// application cursor keys, etc). Returns bytes for the PTY.
-    pub fn encode_key(
+    /// Encode a key press, repeat or release via libghostty's encoder
+    /// (honours kitty keyboard, application cursor keys, etc). Returns bytes
+    /// for the PTY. Most programs get nothing for a release or a lone
+    /// modifier; only those that asked the kitty keyboard protocol do.
+    pub fn encode_key_action(
         &mut self,
+        action: GhosttyKeyAction,
         key: GhosttyKey,
         mods: GhosttyMods,
         text: Option<&str>,
@@ -770,7 +830,7 @@ impl Terminal {
         unsafe {
             ghostty_key_encoder_setopt_from_terminal(self.key_encoder, self.raw);
             let ev = self.key_event;
-            ghostty_key_event_set_action(ev, GHOSTTY_KEY_ACTION_PRESS);
+            ghostty_key_event_set_action(ev, action);
             ghostty_key_event_set_key(ev, key);
             ghostty_key_event_set_mods(ev, mods);
             ghostty_key_event_set_consumed_mods(ev, 0);
@@ -1624,6 +1684,54 @@ mod tests {
     }
 
     #[test]
+    fn pointer_shape_and_lone_command_key() {
+        let mut t = Terminal::new(20, 3).unwrap();
+        assert_eq!(t.mouse_shape(), GHOSTTY_MOUSE_SHAPE_TEXT);
+        t.write(b"\x1b]22;pointer\x1b\\");
+        assert_eq!(t.mouse_shape(), GHOSTTY_MOUSE_SHAPE_POINTER);
+        t.write(b"\x1b]22;default\x1b\\");
+        assert_eq!(t.mouse_shape(), GHOSTTY_MOUSE_SHAPE_DEFAULT);
+
+        let sup = GHOSTTY_MODS_SUPER as u16;
+        let mut cmd = |t: &mut Terminal, action, mods| {
+            String::from_utf8(t.encode_key_action(action, GHOSTTY_KEY_META_LEFT, mods, None, 0))
+                .unwrap()
+        };
+        assert_eq!(cmd(&mut t, GHOSTTY_KEY_ACTION_PRESS, sup), "", "plain programs get nothing");
+        // terminal-browser's flags: all keys as escape codes, with releases.
+        t.write(b"\x1b[>27u");
+        assert_eq!(cmd(&mut t, GHOSTTY_KEY_ACTION_PRESS, sup), "\x1b[57444;9u");
+        assert_eq!(cmd(&mut t, GHOSTTY_KEY_ACTION_RELEASE, 0), "\x1b[57444;1:3u");
+
+        // ⌘L, a held key's repeat and its release, as terminal-browser gets them.
+        let mut key = |t: &mut Terminal, action, k, mods, cp: char| {
+            String::from_utf8(t.encode_key_action(action, k, mods, None, cp as u32)).unwrap()
+        };
+        assert_eq!(key(&mut t, GHOSTTY_KEY_ACTION_PRESS, GHOSTTY_KEY_L, sup, 'l'), "\x1b[108;9u");
+        assert_eq!(key(&mut t, GHOSTTY_KEY_ACTION_REPEAT, GHOSTTY_KEY_A, 0, 'a'), "\x1b[97;1:2u");
+        assert_eq!(key(&mut t, GHOSTTY_KEY_ACTION_RELEASE, GHOSTTY_KEY_A, 0, 'a'), "\x1b[97;1:3u");
+    }
+
+    #[test]
+    fn answers_size_queries() {
+        let mut t = Terminal::new(20, 3).unwrap();
+        let mut ask = |t: &mut Terminal, q: &[u8]| {
+            t.write(q);
+            String::from_utf8_lossy(&t.take_effects().pty_response).into_owned()
+        };
+        assert_eq!(ask(&mut t, b"\x1b[16t"), "", "no cell size before layout");
+        t.resize(20, 3, 10, 20);
+        assert_eq!(ask(&mut t, b"\x1b[16t"), "\x1b[6;20;10t", "cell size");
+        assert_eq!(ask(&mut t, b"\x1b[14t"), "\x1b[4;60;200t", "text area");
+        assert_eq!(ask(&mut t, b"\x1b[18t"), "\x1b[8;3;20t", "grid");
+        // In-band size reports (mode 2048): one on enabling, one per resize.
+        assert_eq!(ask(&mut t, b"\x1b[?2048h"), "\x1b[48;3;20;60;200t");
+        t.resize(30, 4, 10, 20);
+        let after = String::from_utf8_lossy(&t.take_effects().pty_response).into_owned();
+        assert_eq!(after, "\x1b[48;4;30;80;300t");
+    }
+
+    #[test]
     fn kitty_placeholder_cells_show_the_image_not_the_character() {
         let mut t = Terminal::new(20, 3).unwrap();
         t.resize(20, 3, 10, 20);
@@ -1902,11 +2010,12 @@ mod tests {
         t.select((6, 0), (10, 0));
         assert_eq!(t.selection_text().as_deref(), Some("world"));
         assert_eq!(
-            t.encode_key(ffi::GHOSTTY_KEY_ARROW_UP, 0, None, 0),
+            t.encode_key_action(GHOSTTY_KEY_ACTION_PRESS, ffi::GHOSTTY_KEY_ARROW_UP, 0, None, 0),
             b"\x1b[A"
         );
         assert_eq!(
-            t.encode_key(
+            t.encode_key_action(
+                GHOSTTY_KEY_ACTION_PRESS,
                 ffi::GHOSTTY_KEY_C,
                 ffi::GHOSTTY_MODS_CTRL as u16,
                 None,

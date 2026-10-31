@@ -102,6 +102,18 @@ abromux's own settings live in `~/.config/abromux/config.json` (or `$XDG_CONFIG_
 
 `resizeStep` is how many pixels ⌃⇧H/J/K/L and `resize-pane` move a divider. `dividerColor` is the line between split panes, and `focusBorderColor` the border around the focused one. Colors are `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`. Unknown keys are errors, so a typo doesn't go unnoticed.
 
+### Browser engine
+
+```json
+{ "browser": { "engine": "terminalBrowser" } }
+```
+
+`engine` is `builtIn` (the default, the WebKit browser pane) or `terminalBrowser` (`"terminal-browser"` works too); Settings has it under General › Browser. With `terminalBrowser`, every new browser tab (⌘⇧L, the globe, ⌘-clicked links, `url` commands, layouts, `abromux new-surface --type browser`) is a terminal running `terminal-browser open --no-merge <url>` in your login shell, and closing the browser closes the tab. The tab shows a globe and the page's title, as a built-in one does: abromux asks terminal-browser's control socket (`~/.local/state/terminal-browser-*/instances/*.sock`) for the active tab's title and URL, matched to the tab by its tty.
+
+A terminal-browser tab takes the built-in browser's keys: ⌘L, ⌘R, ⌘[ / ⌘], ⌘F (find), ⌥⌘I (devtools), ⌥⌘C (console), ⌘= / ⌘- / ⌘0 (zoom), and ⌘A, ⌘C, ⌘X, ⌘Z, ⇧⌘Z in the page; abromux starts it with `--find-key`, `--devtools-key` and `--console-key` set to match. Window-level keys (⌘T, ⌘W, ⌘P, ⌘N, …) stay abromux's. ⌘-click opens a link in a new terminal-browser tab, the pointer follows the page (a hand over links), and the page gets key releases, focus and blur, and sideways scrolling.
+
+abromux looks for `terminal-browser` on PATH, in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`; if it isn't there, the tab falls back to the built-in browser with a warning. The setting applies to tabs opened after it changes; open ones stay as they are. A terminal-browser tab is restored as a browser tab on the page it last showed (its own back/forward history isn't kept). The `abromux browser` automation commands only drive built-in tabs, so `abromux browser open` always opens one (use `terminal-browser action` to drive a terminal-browser).
+
 ### Sidebar and workspace settings
 
 These use cmux's key names. Shown with their defaults:
@@ -346,6 +358,7 @@ History lives in `<git common dir>/abromux-perf/history.jsonl`, outside the tree
 - `src/ghostty/`: FFI bindings and a safe wrapper (`Terminal`, `Frame` snapshots, key encoding, selection)
 - `src/terminal.rs`: PTY plumbing plus a custom GPUI `Element` that paints the grid
 - `src/browser.rs`: the webview pane; `src/webauthn.{rs,js,m}`: the passkey bridge
+- `src/terminal_browser.rs`: browser tabs that run terminal-browser (`browser.engine`)
 - `src/workspace.rs`: the workspace, split-tree and surface model
 - `src/main.rs`: the app shell (pane tab bars, splits, actions); `src/sidebar.rs`: the sidebar's rows, groups, menus and drag to reorder
 - `src/bench.rs`: `abromux bench-vt` and `abromux bench-kitty`, the headless parse benchmarks used by `scripts/perf.py`

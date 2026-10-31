@@ -21,6 +21,7 @@ impl Surface {
     /// A terminal running a coding agent shows the agent's logo.
     pub fn icon(&self, cx: &App) -> &'static str {
         match self {
+            Surface::Terminal(t) if let Some(app) = &t.read(cx).app => app.icon(),
             Surface::Terminal(t) => match t.read(cx).agent.as_ref() {
                 Some(a) if a.alive() => match Kind::parse(&a.kind) {
                     Some(Kind::Claude) => "claude",
@@ -46,6 +47,9 @@ impl Surface {
         match self {
             Surface::Terminal(t) => {
                 let t = t.read(cx);
+                if let Some(app) = &t.app {
+                    return app.title();
+                }
                 if !t.shown_title().is_empty() {
                     t.shown_title().to_string()
                 } else {
@@ -87,6 +91,18 @@ impl Surface {
                 b.custom_title = title;
                 cx.notify();
             }),
+        }
+    }
+
+    /// A browser tab: the built-in one, or a terminal running `terminal-browser`.
+    pub fn is_browser(&self, cx: &App) -> bool {
+        match self {
+            Surface::Terminal(t) => t
+                .read(cx)
+                .app
+                .as_ref()
+                .is_some_and(|a| a.page_url().is_some()),
+            Surface::Browser(_) => true,
         }
     }
 

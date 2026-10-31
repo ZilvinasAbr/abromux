@@ -20,6 +20,7 @@
 //!     "flashPane": ["cmd-shift-h", "ctrl-a f"],
 //!     "find": { "keys": "cmd-shift-f", "when": "Terminal" }
 //!   },
+//!   "browser": { "engine": "terminalBrowser" },
 //!   "commands": [
 //!     { "title": "Run Tests", "run": "cargo test", "shortcut": "cmd-alt-t" },
 //!     { "title": "Dev Server", "run": "npm run dev", "newTab": true },
@@ -69,9 +70,27 @@ pub struct Settings {
     pub workspace_colors: WorkspaceColors,
     pub workspace_groups: WorkspaceGroups,
     pub automation: Automation,
+    pub browser: BrowserSettings,
 }
 
 impl Global for Settings {}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct BrowserSettings {
+    /// What a browser tab is.
+    pub engine: BrowserEngine,
+}
+
+/// The built-in WebKit browser, or a terminal running `terminal-browser`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum BrowserEngine {
+    #[default]
+    BuiltIn,
+    #[serde(alias = "terminal-browser")]
+    TerminalBrowser,
+}
 
 /// cmux's `app` keys that abromux has.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -530,6 +549,12 @@ fn named_colors<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<(String, u32)>, D
     Ok(colors)
 }
 
+/// Whether browser tabs open as `terminal-browser`.
+pub fn terminal_browser(cx: &gpui::App) -> bool {
+    cx.try_global::<Settings>()
+        .is_some_and(|s| s.browser.engine == BrowserEngine::TerminalBrowser)
+}
+
 /// The toast for a config file that couldn't be read. It stays until
 /// closed, and a newer one replaces it.
 pub fn error_notification(e: String) -> Notification {
@@ -912,6 +937,21 @@ mod tests {
             err(r#"{"workspaceColors": {"indicatorStyle": "wash"}}"#).contains("unknown variant")
         );
         assert!(err(r#"{"workspaceColors": {"colors": {"X": "blue"}}}"#).contains("isn't #rrggbb"));
+    }
+
+    #[test]
+    fn browser_engine() {
+        assert_eq!(Settings::default().browser.engine, BrowserEngine::BuiltIn);
+        for v in ["terminalBrowser", "terminal-browser"] {
+            let s = parse(&format!(r#"{{"browser": {{"engine": "{v}"}}}}"#)).unwrap();
+            assert_eq!(s.browser.engine, BrowserEngine::TerminalBrowser);
+        }
+        let s = parse(r#"{"browser": {"engine": "builtIn"}}"#).unwrap();
+        assert_eq!(s.browser.engine, BrowserEngine::BuiltIn);
+        let e = parse(r#"{"browser": {"engine": "chrome"}}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("unknown variant"), "{e}");
     }
 
     #[test]

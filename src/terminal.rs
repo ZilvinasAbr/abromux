@@ -15,6 +15,7 @@ use futures::{StreamExt, channel::mpsc};
 use gpui::{prelude::*, *};
 use gpui_component::input::{self, Input, InputEvent, InputState};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use std::any::Any;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::ops::Range;
@@ -27,6 +28,9 @@ const LINE_HEIGHT: f32 = 1.25;
 const PADDING: f32 = 6.;
 /// The scrollbar's strip at the right edge, which takes its clicks.
 const SCROLLBAR_WIDTH: f32 = 12.;
+/// The kitty keyboard protocol's "report event types" flag: the program
+/// wants repeats and releases.
+const KITTY_REPORT_EVENTS: u8 = 2;
 
 actions!(
     terminal,
@@ -49,6 +53,31 @@ actions!(
 const MATCH_BG: Rgb = Rgb(0xff, 0xe0, 0x82);
 const MATCH_SELECTED_BG: Rgb = Rgb(0xf2, 0xa5, 0x7e);
 const MATCH_FG: Rgb = Rgb(0, 0, 0);
+
+/// An app a terminal tab was opened to run, full-screen, that presents the
+/// tab as something other than a shell (terminal-browser shows a web page).
+/// The tab bar, the keymap and the session ask it instead of reading the
+/// terminal; the app's module keeps its own state behind it. Each method is
+/// a cheap read: they run as the tab draws.
+pub trait TerminalApp: Any {
+    /// The tab's icon (an `icons/` name).
+    fn icon(&self) -> &'static str;
+    /// The tab's title, unless the user named the tab.
+    fn title(&self) -> String;
+    /// The terminal's key context, to bind keys for this app only.
+    fn key_context(&self) -> &'static str {
+        "Terminal"
+    }
+    /// ⌘-keys left unbound in that context go to the program, not the app.
+    fn takes_cmd_keys(&self) -> bool {
+        false
+    }
+    /// A web page the tab shows: ⌘-clicked links open beside it as they do
+    /// beside a browser, and the session saves it as a browser tab there.
+    fn page_url(&self) -> Option<&str> {
+        None
+    }
+}
 
 pub enum TerminalEvent {
     TitleChanged,
@@ -112,6 +141,20 @@ pub struct TerminalView {
     ime_cursor: Bounds<Pixels>,
     /// Bitmask of mouse buttons held while reporting to the program.
     mouse_buttons: u8,
+    /// ⌘ is down as far as the program knows: we sent it a press (only
+    /// programs that asked the kitty keyboard protocol for lone modifiers
+    /// get one) and owe it a release.
+    cmd_down: bool,
+    /// Keys sent to the program as presses that it will want a release
+    /// for (kitty keyboard protocol with event types), by gpui key name.
+    pressed: Vec<String>,
+    /// The focus the program was last told of (mode 1004).
+    focus_reported: bool,
+    /// The focus in/out listeners are registered (on the first render,
+    /// which has the window).
+    focus_hooked: bool,
+    /// Sub-column horizontal wheel/trackpad deltas carried between events.
+    scroll_accum_x: f32,
     /// Sub-line wheel/trackpad deltas carried between events.
     scroll_accum: f32,
     /// Whether the shell reports its cwd itself (OSC 7); if not, it's polled.
@@ -134,6 +177,11 @@ pub struct TerminalView {
     pub custom_title: Option<String>,
     /// Text held back by paste protection until the user confirms it.
     pending_paste: Option<String>,
+    /// What the shell runs instead of an interactive session (`$SHELL -l -c`).
+    command: Option<String>,
+    /// An app this terminal was opened to run, which presents the tab
+    /// (`terminal_browser::Tab`); None for a shell.
+    pub app: Option<Box<dyn TerminalApp>>,
     /// Kept to start the shell again the same way (`respawn-pane`).
     env: Vec<(String, String)>,
     /// Bumped on respawn so the old shell's output and exit are ignored.
@@ -155,10 +203,18 @@ impl Focusable for TerminalView {
 }
 
 impl TerminalView {
-    pub fn new(cwd: Option<String>, env: Vec<(String, String)>, cx: &mut Context<Self>) -> Self {
+    /// A login shell in `cwd`; with a `command`, the shell runs it and the
+    /// terminal closes when it ends.
+    pub fn new(
+        cwd: Option<String>,
+        env: Vec<(String, String)>,
+        command: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let (cols, rows) = (80, 24);
         let cwd = cwd.unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
-        let (writer, master, child) = spawn_shell(&cwd, &env, (cols, rows), 0, cx);
+        let (writer, master, child) =
+            spawn_shell(&cwd, &env, command.as_deref(), (cols, rows), 0, cx);
         let focus = cx.focus_handle();
         let config = cx.try_global::<Config>().cloned().unwrap_or_default();
         cx.on_release(Self::free_images).detach();
@@ -188,6 +244,11 @@ impl TerminalView {
             marked: None,
             ime_cursor: Bounds::default(),
             mouse_buttons: 0,
+            cmd_down: false,
+            pressed: Vec::new(),
+            focus_reported: false,
+            focus_hooked: false,
+            scroll_accum_x: 0.,
             scroll_accum: 0.,
             osc7: false,
             cwd_checked: std::time::Instant::now(),
@@ -201,6 +262,8 @@ impl TerminalView {
             link: None,
             custom_title: None,
             pending_paste: None,
+            command,
+            app: None,
             env,
             generation: 0,
             hold_timer: false,
@@ -231,13 +294,37 @@ impl TerminalView {
         }
     }
 
+    /// The PTY's device (`/dev/ttys004`), which programs in it see as their tty.
+    pub fn tty_name(&self) -> Option<std::path::PathBuf> {
+        self.master.tty_name()
+    }
+
+    /// The tab's app as its concrete type, for the module that owns it.
+    pub fn app_mut<A: TerminalApp>(&mut self) -> Option<&mut A> {
+        let app: &mut dyn Any = self.app.as_deref_mut()?;
+        app.downcast_mut()
+    }
+
+    /// The app changed how the tab should look.
+    pub fn app_changed(&mut self, cx: &mut Context<Self>) {
+        cx.emit(TerminalEvent::TitleChanged);
+        cx.notify();
+    }
+
     /// Kill the shell (and whatever it runs) and start a fresh one in its
     /// cwd, on a clean screen, like `tmux respawn-pane -k`.
     pub fn respawn(&mut self, cx: &mut Context<Self>) {
         let cwd = self.live_cwd();
         let _ = self.child.kill();
         self.generation += 1;
-        let (writer, master, child) = spawn_shell(&cwd, &self.env, self.grid, self.generation, cx);
+        let (writer, master, child) = spawn_shell(
+            &cwd,
+            &self.env,
+            self.command.as_deref(),
+            self.grid,
+            self.generation,
+            cx,
+        );
         (self.writer, self.master, self.child) = (writer, master, child);
         self.term = new_term(self.grid.0, self.grid.1, &self.config);
         // Size the new PTY and terminal to the pane, cell pixels included.
@@ -250,6 +337,9 @@ impl TerminalView {
         self.clear_pending = false;
         self.marked = None;
         self.mouse_buttons = 0;
+        self.cmd_down = false;
+        self.pressed.clear();
+        self.focus_reported = false;
         self.selecting = None;
         self.link = None;
         self.pending_paste = None;
@@ -426,6 +516,12 @@ impl TerminalView {
             pixel_width: cols * cw as u16,
             pixel_height: rows * ch as u16,
         });
+        // A program with in-band size reports (mode 2048) gets its report
+        // now, not when it next prints.
+        let reply = self.term.take_pty_response();
+        if !reply.is_empty() {
+            let _ = self.writer.write_all(&reply);
+        }
         self.dirty = true;
     }
 
@@ -905,34 +1001,92 @@ impl TerminalView {
         if text_like && self.config.keybind(ks).is_none() && self.term.kitty_flags() == 0 {
             return;
         }
-        if self.send_keystroke(ks, cx) {
+        let action = if ev.is_held {
+            ffi::GHOSTTY_KEY_ACTION_REPEAT
+        } else {
+            ffi::GHOSTTY_KEY_ACTION_PRESS
+        };
+        if self.send_key(ks, action, cx) {
             cx.stop_propagation();
         }
+    }
+
+    /// A key let go: its release, to a program that was sent its press and
+    /// asked for releases (kitty keyboard protocol, "report event types").
+    /// Web pages in terminal-browser get their `keyup` from these.
+    fn on_key_up(&mut self, ev: &KeyUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        let Some(i) = self.pressed.iter().position(|k| *k == ks.key) else {
+            return;
+        };
+        self.pressed.swap_remove(i);
+        self.send_release(&ks.key, mods(ks.modifiers));
+    }
+
+    fn send_release(&mut self, key: &str, mods: ffi::GhosttyMods) {
+        let Some((code, unshifted)) = map_key(key) else {
+            return;
+        };
+        let bytes =
+            self.term
+                .encode_key_action(ffi::GHOSTTY_KEY_ACTION_RELEASE, code, mods, None, unshifted);
+        if !bytes.is_empty() {
+            self.send(&bytes);
+        }
+    }
+
+    /// Release every key and ⌘ the program thinks is still down, as focus
+    /// leaves: the key-ups will go to another view.
+    fn release_all(&mut self) {
+        for key in std::mem::take(&mut self.pressed) {
+            self.send_release(&key, 0);
+        }
+        self.sync_cmd(false);
     }
 
     /// Encode a keystroke for the shell (Ghostty keybinds first) and write
     /// it. False if it maps to nothing, including unbound ⌘-shortcuts, which
     /// belong to the app.
     pub fn send_keystroke(&mut self, ks: &Keystroke, cx: &mut Context<Self>) -> bool {
+        self.send_key(ks, ffi::GHOSTTY_KEY_ACTION_PRESS, cx)
+    }
+
+    /// `send_keystroke` as a press or a repeat. A tab whose app takes
+    /// ⌘-keys sends them too: the ones bound to nothing in its key context
+    /// reach here.
+    fn send_key(
+        &mut self,
+        ks: &Keystroke,
+        action: ffi::GhosttyKeyAction,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if let Some(bytes) = self.config.keybind(ks).map(<[u8]>::to_vec) {
             self.input(&bytes, cx);
             return true;
         }
-        if ks.modifiers.platform {
+        let m = ks.modifiers;
+        if m.platform && !self.app.as_ref().is_some_and(|a| a.takes_cmd_keys()) {
             return false;
         }
         let Some((key, unshifted)) = map_key(&ks.key) else {
             return false;
         };
-        let m = ks.modifiers;
         let mods = mods(m);
         // Like Ghostty's default (macos-option-as-alt = false), Option composes
-        // characters; named keys (enter, arrows, …) carry no text.
+        // characters; named keys (enter, arrows, …) carry no text, and
+        // neither does a ⌘-shortcut.
         let printable = ks.key.chars().count() == 1 || ks.key == "space";
-        let text = ks.key_char.as_deref().filter(|_| printable && !m.control);
-        let bytes = self.term.encode_key(key, mods, text, unshifted);
+        let text = ks
+            .key_char
+            .as_deref()
+            .filter(|_| printable && !m.control && !m.platform);
+        let bytes = self.term.encode_key_action(action, key, mods, text, unshifted);
         if bytes.is_empty() {
             return false;
+        }
+        // Owe the program a release if it asked for them.
+        if self.term.kitty_flags() & KITTY_REPORT_EVENTS != 0 && !self.pressed.contains(&ks.key) {
+            self.pressed.push(ks.key.clone());
         }
         self.input(&bytes, cx);
         true
@@ -958,6 +1112,111 @@ impl TerminalView {
             PlatformInput::MouseMove(e) => self.on_mouse_move(&e, window, cx),
             PlatformInput::ScrollWheel(e) => self.on_scroll(&e, window, cx),
             _ => {}
+        }
+    }
+
+    /// Bring the program up to date on focus: this pane focused in the
+    /// active window. A program with mode 1004 gets `CSI I` / `CSI O`; any
+    /// program losing focus gets the releases of keys still down.
+    fn update_focus(&mut self, window: &Window) {
+        let focused = self.focus.is_focused(window) && window.is_window_active();
+        if focused == self.focus_reported {
+            return;
+        }
+        self.focus_reported = focused;
+        if !focused {
+            self.release_all();
+        }
+        if self.term.focus_reporting() {
+            self.send(if focused { b"\x1b[I" } else { b"\x1b[O" });
+        }
+    }
+
+    /// Watch focus and window activation for `update_focus`, once the view
+    /// has a window.
+    fn hook_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.focus_hooked, true) {
+            return;
+        }
+        let focus = self.focus.clone();
+        cx.on_focus_in(&focus, window, |this, window, _| this.update_focus(window))
+            .detach();
+        cx.on_focus_out(&focus, window, |this, _, window, _| this.update_focus(window))
+            .detach();
+        cx.observe_window_activation(window, |this, window, _| this.update_focus(window))
+            .detach();
+        self.update_focus(window);
+    }
+
+    /// Tell the program ⌘ went down or up, as a lone-modifier key event.
+    /// Mouse reports can't carry ⌘, so a program that wants ⌘-click (like
+    /// terminal-browser's open-in-new-tab) tracks the key itself. Programs
+    /// that didn't ask for such events get no bytes.
+    fn sync_cmd(&mut self, down: bool) {
+        if down == self.cmd_down {
+            return;
+        }
+        let (action, mods) = if down {
+            (ffi::GHOSTTY_KEY_ACTION_PRESS, ffi::GHOSTTY_MODS_SUPER as u16)
+        } else {
+            (ffi::GHOSTTY_KEY_ACTION_RELEASE, 0)
+        };
+        let bytes = self
+            .term
+            .encode_key_action(action, ffi::GHOSTTY_KEY_META_LEFT, mods, None, 0);
+        // Only count a press the program was sent, so a release follows it.
+        self.cmd_down = down && !bytes.is_empty();
+        // Not `input`: ⌘ on its own mustn't clear a selection (⌘C is next)
+        // or scroll.
+        if !bytes.is_empty() {
+            self.send(&bytes);
+        }
+    }
+
+    /// The pointer over the grid: a hand on a ⌘-hovered link, else the
+    /// shape the program asked for (OSC 22), the I-beam by default.
+    fn pointer_style(&self) -> gpui::CursorStyle {
+        use gpui::CursorStyle as C;
+        if self.link.is_some() {
+            return C::PointingHand;
+        }
+        match self.term.mouse_shape() {
+            ffi::GHOSTTY_MOUSE_SHAPE_DEFAULT
+            | ffi::GHOSTTY_MOUSE_SHAPE_HELP
+            | ffi::GHOSTTY_MOUSE_SHAPE_PROGRESS
+            | ffi::GHOSTTY_MOUSE_SHAPE_WAIT
+            | ffi::GHOSTTY_MOUSE_SHAPE_ZOOM_IN
+            | ffi::GHOSTTY_MOUSE_SHAPE_ZOOM_OUT => C::Arrow,
+            ffi::GHOSTTY_MOUSE_SHAPE_POINTER => C::PointingHand,
+            ffi::GHOSTTY_MOUSE_SHAPE_CONTEXT_MENU => C::ContextualMenu,
+            ffi::GHOSTTY_MOUSE_SHAPE_CELL | ffi::GHOSTTY_MOUSE_SHAPE_CROSSHAIR => C::Crosshair,
+            ffi::GHOSTTY_MOUSE_SHAPE_VERTICAL_TEXT => C::IBeamCursorForVerticalLayout,
+            ffi::GHOSTTY_MOUSE_SHAPE_ALIAS => C::DragLink,
+            ffi::GHOSTTY_MOUSE_SHAPE_COPY => C::DragCopy,
+            ffi::GHOSTTY_MOUSE_SHAPE_NO_DROP | ffi::GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED => {
+                C::OperationNotAllowed
+            }
+            ffi::GHOSTTY_MOUSE_SHAPE_MOVE
+            | ffi::GHOSTTY_MOUSE_SHAPE_GRAB
+            | ffi::GHOSTTY_MOUSE_SHAPE_ALL_SCROLL => C::OpenHand,
+            ffi::GHOSTTY_MOUSE_SHAPE_GRABBING => C::ClosedHand,
+            ffi::GHOSTTY_MOUSE_SHAPE_COL_RESIZE | ffi::GHOSTTY_MOUSE_SHAPE_EW_RESIZE => {
+                C::ResizeLeftRight
+            }
+            ffi::GHOSTTY_MOUSE_SHAPE_ROW_RESIZE | ffi::GHOSTTY_MOUSE_SHAPE_NS_RESIZE => {
+                C::ResizeUpDown
+            }
+            ffi::GHOSTTY_MOUSE_SHAPE_E_RESIZE => C::ResizeRight,
+            ffi::GHOSTTY_MOUSE_SHAPE_W_RESIZE => C::ResizeLeft,
+            ffi::GHOSTTY_MOUSE_SHAPE_N_RESIZE => C::ResizeUp,
+            ffi::GHOSTTY_MOUSE_SHAPE_S_RESIZE => C::ResizeDown,
+            ffi::GHOSTTY_MOUSE_SHAPE_NE_RESIZE
+            | ffi::GHOSTTY_MOUSE_SHAPE_SW_RESIZE
+            | ffi::GHOSTTY_MOUSE_SHAPE_NESW_RESIZE => C::ResizeUpRightDownLeft,
+            ffi::GHOSTTY_MOUSE_SHAPE_NW_RESIZE
+            | ffi::GHOSTTY_MOUSE_SHAPE_SE_RESIZE
+            | ffi::GHOSTTY_MOUSE_SHAPE_NWSE_RESIZE => C::ResizeUpLeftDownRight,
+            _ => C::IBeam,
         }
     }
 
@@ -1027,6 +1286,27 @@ impl TerminalView {
             ScrollDelta::Pixels(_) => self.config.scroll_precision,
             ScrollDelta::Lines(_) => self.config.scroll_discrete,
         };
+        // Sideways: wheel left/right (buttons 6/7), one per column, to a
+        // program that takes the mouse. Scrollback has no sideways.
+        if self.reporting(ev.modifiers) {
+            let dx = f32::from(ev.delta.pixel_delta(self.cell.height).x)
+                / f32::from(self.cell.width).max(1.)
+                * multiplier;
+            if dx * self.scroll_accum_x < 0. {
+                self.scroll_accum_x = 0.;
+            }
+            self.scroll_accum_x += dx;
+            let cols = self.scroll_accum_x.trunc() as isize;
+            self.scroll_accum_x -= cols as f32;
+            for _ in 0..cols.unsigned_abs() {
+                self.report_mouse(
+                    MouseAction::Press,
+                    Some(if cols > 0 { 6 } else { 7 }),
+                    ev.modifiers,
+                    ev.position,
+                );
+            }
+        }
         let delta = f32::from(ev.delta.pixel_delta(self.cell.height).y)
             / f32::from(self.cell.height)
             * multiplier;
@@ -1182,6 +1462,8 @@ impl TerminalView {
         if self.reporting(ev.modifiers)
             && let Some(b) = button_code(ev.button)
         {
+            // ⌘ may have gone down while another pane had focus.
+            self.sync_cmd(ev.modifiers.platform);
             self.mouse_buttons |= 1 << b;
             self.report_mouse(MouseAction::Press, Some(b), ev.modifiers, ev.position);
             return;
@@ -1252,7 +1534,8 @@ impl TerminalView {
 }
 
 impl Render for TerminalView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.hook_focus(window, cx);
         let bg = self.frame.background;
         let find_bar = self
             .find_input
@@ -1283,7 +1566,7 @@ impl Render for TerminalView {
         div()
             .id("terminal")
             .relative()
-            .key_context("Terminal")
+            .key_context(self.app.as_ref().map_or("Terminal", |a| a.key_context()))
             .track_focus(&self.focus)
             .size_full()
             .bg(rgb_to_hsla(if bg == Rgb::default() {
@@ -1292,6 +1575,7 @@ impl Render for TerminalView {
                 bg
             }))
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_key_up(cx.listener(Self::on_key_up))
             .on_action(cx.listener(|this, _: &Copy, _, cx| {
                 this.copy(cx);
             }))
@@ -1343,19 +1627,21 @@ impl Render for TerminalView {
                     }
                 }
             }))
-            .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, _, cx| {
-                if this.update_link(ev.modifiers.platform) {
+            .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, window, cx| {
+                // A press only to the focused terminal; a release to any
+                // that was told of a press.
+                let cmd = ev.modifiers.platform;
+                if !cmd || this.focus.is_focused(window) {
+                    this.sync_cmd(cmd);
+                }
+                if this.update_link(cmd) {
                     cx.notify();
                 }
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up(MouseButton::Right, cx.listener(Self::on_mouse_up))
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_mouse_up))
-            .cursor(if self.link.is_some() {
-                gpui::CursorStyle::PointingHand
-            } else {
-                gpui::CursorStyle::IBeam
-            })
+            .cursor(self.pointer_style())
             .child(TerminalElement { view: cx.entity() })
             .children(scrollbar)
             .children(lock)
@@ -1932,13 +2218,15 @@ fn sprite_char(c: &ghostty::Cell) -> Option<char> {
     (chars.next().is_none() && !c.invisible && sprite::covers(ch)).then_some(ch)
 }
 
-/// Start the user's login shell on a new PTY of `size`, and drain its output
+/// Start the user's login shell on a new PTY of `size` (running `command`
+/// if there is one), and drain its output
 /// into the view on the main thread. Output and the exit of a shell from
 /// an older `generation` (one `respawn` replaced) are dropped.
 #[allow(clippy::type_complexity)]
 fn spawn_shell(
     cwd: &str,
     env: &[(String, String)],
+    command: Option<&str>,
     (cols, rows): (u16, u16),
     generation: usize,
     cx: &mut Context<TerminalView>,
@@ -1958,6 +2246,9 @@ fn spawn_shell(
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let mut cmd = CommandBuilder::new(&shell);
     cmd.arg("-l");
+    if let Some(c) = command {
+        cmd.args(["-c", c]);
+    }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "abromux");

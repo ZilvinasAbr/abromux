@@ -168,6 +168,12 @@ pub fn apply(settings: &Settings, cx: &mut App) {
     }
     let mut bindings = cx.global::<Base>().0.clone();
     bindings.extend(bindings_for(settings));
+    // Keys a terminal-browser tab keeps: last, so they win over the
+    // Terminal bindings in the same view, and bound to nothing, so they fall
+    // through to the terminal, which sends them on.
+    bindings.extend(crate::terminal_browser::KEYS.iter().map(|k| {
+        KeyBinding::new(k, gpui::NoAction, Some(crate::terminal_browser::KEY_CONTEXT))
+    }));
     cx.clear_key_bindings();
     cx.bind_keys(bindings);
 }

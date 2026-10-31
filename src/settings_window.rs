@@ -14,7 +14,7 @@
 
 use crate::{
     channel, keymap, menu,
-    settings::{self, IndicatorStyle, Placement, Settings},
+    settings::{self, BrowserEngine, IndicatorStyle, Placement, Settings},
     theme::*,
 };
 use gpui::{prelude::*, *};
@@ -596,6 +596,13 @@ fn placement(p: Placement) -> &'static str {
     }
 }
 
+fn engine(e: BrowserEngine) -> &'static str {
+    match e {
+        BrowserEngine::BuiltIn => "builtIn",
+        BrowserEngine::TerminalBrowser => "terminalBrowser",
+    }
+}
+
 fn percent(v: f32) -> String {
     format!("{}%", (v * 100.).round())
 }
@@ -654,6 +661,20 @@ fn general_page() -> Page {
                         |s| s.app.workspace_inherit_working_directory,
                     ),
                 ],
+            ),
+            group(
+                "Browser",
+                [choice(
+                    "Browser",
+                    "What new browser tabs open in. terminal-browser runs in a terminal \
+                     tab; `abromux browser open` stays built-in for automation.",
+                    &["browser", "engine"],
+                    &[
+                        ("builtIn", "Built-in"),
+                        ("terminalBrowser", "terminal-browser"),
+                    ],
+                    |s| engine(s.browser.engine),
+                )],
             ),
             group(
                 "Automation",
