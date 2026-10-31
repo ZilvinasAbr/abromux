@@ -149,6 +149,10 @@ struct Userdata {
     render: GhosttyRenderState,
     /// When the program started holding the screen (synchronized output).
     held_since: Option<Instant>,
+    /// The grid and cell pixels from the last `resize`, for XTWINOPS
+    /// size queries (CSI 14/16/18 t), which image programs such as
+    /// terminal-browser wait on.
+    size: GhosttySizeReportSize,
 }
 
 /// How long a program may hold the screen before it's drawn anyway, in
@@ -215,6 +219,19 @@ unsafe extern "C" fn on_write_pty(
     let fx = unsafe { &mut (*(ud as *mut Userdata)).fx };
     fx.pty_response
         .extend_from_slice(unsafe { std::slice::from_raw_parts(data, len) });
+}
+unsafe extern "C" fn on_size(
+    _: GhosttyTerminal,
+    ud: *mut c_void,
+    out: *mut GhosttySizeReportSize,
+) -> bool {
+    let size = unsafe { (*(ud as *mut Userdata)).size };
+    // Before the first layout the cell size isn't known; say nothing.
+    if size.cell_width == 0 || size.cell_height == 0 {
+        return false;
+    }
+    unsafe { *out = size };
+    true
 }
 unsafe extern "C" fn on_title(_: GhosttyTerminal, ud: *mut c_void) {
     unsafe { (*(ud as *mut Userdata)).fx.title_changed = true };
@@ -324,6 +341,12 @@ impl Terminal {
                 fx: Effects::default(),
                 render,
                 held_since: None,
+                size: GhosttySizeReportSize {
+                    rows,
+                    columns: cols,
+                    cell_width: 0,
+                    cell_height: 0,
+                },
             });
             let ud_ptr: *mut Userdata = &mut *ud;
             ghostty_terminal_set(raw, GHOSTTY_TERMINAL_OPT_USERDATA, ud_ptr as *const c_void);
@@ -337,6 +360,7 @@ impl Terminal {
                 on_title as *const c_void,
             );
             set_cb(GHOSTTY_TERMINAL_OPT_PWD_CHANGED, on_pwd as *const c_void);
+            set_cb(GHOSTTY_TERMINAL_OPT_SIZE, on_size as *const c_void);
             set_cb(GHOSTTY_TERMINAL_OPT_BELL, on_bell as *const c_void);
             set_cb(
                 GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
@@ -678,6 +702,12 @@ impl Terminal {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16, cell_w: u32, cell_h: u32) {
+        self.ud.size = GhosttySizeReportSize {
+            rows: rows.max(1),
+            columns: cols.max(1),
+            cell_width: cell_w,
+            cell_height: cell_h,
+        };
         unsafe {
             ghostty_terminal_resize(self.raw, cols.max(1), rows.max(1), cell_w, cell_h);
         }
@@ -1621,6 +1651,20 @@ mod tests {
 
         t.write(b"\x1b_Ga=d,d=A,q=2\x1b\\");
         assert!(t.frame().images.is_empty(), "deleted images leave the list");
+    }
+
+    #[test]
+    fn answers_size_queries() {
+        let mut t = Terminal::new(20, 3).unwrap();
+        let mut ask = |t: &mut Terminal, q: &[u8]| {
+            t.write(q);
+            String::from_utf8_lossy(&t.take_effects().pty_response).into_owned()
+        };
+        assert_eq!(ask(&mut t, b"\x1b[16t"), "", "no cell size before layout");
+        t.resize(20, 3, 10, 20);
+        assert_eq!(ask(&mut t, b"\x1b[16t"), "\x1b[6;20;10t", "cell size");
+        assert_eq!(ask(&mut t, b"\x1b[14t"), "\x1b[4;60;200t", "text area");
+        assert_eq!(ask(&mut t, b"\x1b[18t"), "\x1b[8;3;20t", "grid");
     }
 
     #[test]
