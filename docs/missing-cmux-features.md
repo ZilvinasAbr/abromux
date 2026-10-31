@@ -27,11 +27,11 @@ So the list below reads in context:
 - [x] **Clear scrollback**: ⌘K, plus `clear-history` in the CLI.
 - [x] **Find in terminal**: ⌘F, find next/previous (⌘G / ⌥⌘G), use selection for find (⌘E), hide the find bar. *(browser pages have their own, see Find in page)*
 - [ ] **Find in directory**: ⌘⇧F, a ripgrep-backed project search.
-- [ ] **Scrollbar**, plus a scroll-speed setting.
-- [ ] **Copy options**: copy-on-select, a copy confirmation, reflowing hard wraps on copy.
+- [x] **Scrollbar**, plus a scroll-speed setting. *(Ghostty's `scrollbar` and `mouse-scroll-multiplier`; an overlay bar that shows while scrolled back)*
+- [x] **Copy options**: copy-on-select, a copy confirmation, reflowing hard wraps on copy. *(partial: `copy-on-select = clipboard` from the Ghostty config; no copy confirmation or reflowing)*
 - [x] **Safe paste**: confirm before pasting multi-line or otherwise unsafe text. *(Ghostty's rule and its `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` settings: a newline only counts as unsafe when the program hasn't turned on bracketed paste)*
 - [x] **Clickable links**: URLs and file paths, opening in a browser pane. *(partial: ⌘-click; a URL wrapped onto the next row isn't found, and `path:line` opens the file without going to the line)*
-- [ ] **Password input indicator**: shows when the terminal is in no-echo mode.
+- [x] **Password input indicator**: shows when the terminal is in no-echo mode.
 - [x] **Text-editing gestures**: ⌥←/→ word movement and ⌘←/→ line movement in the shell prompt. *(Ghostty's default macOS text keybinds, plus ⌘⌫)*
 - [ ] **Max content width and alignment**, for wide displays.
 - [x] **Terminal drag & drop**: drop files to paste their paths.
@@ -50,7 +50,7 @@ So the list below reads in context:
 - [x] **Renaming tabs**: `rename-tab`, overriding the shell's title. *(double-click a tab, the palette, or `rename-tab`; saved with the session)*
 - [ ] **Dragging tabs**: reorder them within a pane, move them to another pane, or drop them on an edge to make a new split. The CLI equivalents are `move-surface`, `reorder-surface`, `split-off` and `drag-surface-to-split`.
 - [ ] **Moving tabs to a new workspace** (`move-tab-to-new-workspace`, `break-pane`).
-- [ ] **Joining or swapping panes** (`join-pane`, `swap-pane`), and switching to the last pane (`last-pane`).
+- [x] **Joining or swapping panes** (`join-pane`, `swap-pane`), and switching to the last pane (`last-pane`). *(partial: `swap-pane` and `last-pane`, in the CLI and the palette; no `join-pane`)*
 - [x] **Focused-pane border**: an active-pane border color and a configurable divider color. *(`panes.focusBorderColor` and `panes.dividerColor` in the config file)*
 - [ ] **Keeping the workspace open when its last tab closes** (a setting).
 - [ ] **Canvas layout**: a freeform canvas workspace with pane gaps and snapping. This is beta in cmux.
@@ -136,8 +136,8 @@ What's missing beyond the browser commands above:
 
 - [x] **A `cmux.json`-style config file** with a JSON schema, `config doctor`/`check`/`validate`, and `reload-config` (⌘⇧,), which reloads in place with no restart. *(partial: `~/.config/abromux/config.json` with `config check`, `config path` and `reload-config`; only pane settings so far, no JSON schema, no project-level file)*
 - [ ] **Settings window**: ⌘,.
-- [ ] **Customizable keyboard shortcuts**, including two-step chords and `when` conditions.
-- [ ] **Custom commands and actions**: project-specific commands and workspace layouts that you launch from the palette, tab-bar buttons or the plus-button menu. Also packs and setting presets.
+- [x] **Customizable keyboard shortcuts**, including two-step chords and `when` conditions. *(`"shortcuts"` in config.json, listed by `abromux config shortcuts`; `when` takes a key context)*
+- [x] **Custom commands and actions**: project-specific commands and workspace layouts that you launch from the palette, tab-bar buttons or the plus-button menu. Also packs and setting presets. *(partial: `"commands"` in config.json run text in a terminal or open a URL, from the palette or their own shortcut; no layouts, buttons, project-level file, packs or presets)*
 - [x] **Command palette**: ⌘⇧P for commands, ⌘P to switch workspaces. *(partial: the switcher lists workspaces, not surfaces; no custom commands or rename/description modes)*
 - [ ] **App preferences**: light/dark/system appearance, accent color, app icon, window-title template, menu-bar-only mode, minimal mode.
 - [ ] **Themes**: `themes list/set/clear`.
@@ -182,11 +182,10 @@ What's missing beyond the browser commands above:
 
 If the goal is daily-driver parity, a reasonable sequence is:
 
-Done so far: a config file with reload; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; Claude Code and Codex status and notifications; sidebar status, progress and log.
+Done so far: customizable shortcuts and custom palette commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; Claude Code and Codex status and notifications; sidebar status, progress and log.
 
 Next:
 
-1. **Customizable shortcuts** in the config file (the palette's command list is the place to name actions for them), then custom palette commands with their own shortcuts.
-2. **Quick wins**: copy-on-select, a password input indicator, a scrollbar, `last-pane` / `swap-pane`.
-3. **Hooks for other agents** (OpenCode, Gemini, …).
-4. **Dragging tabs, multiple windows, SSH/tmux**, as the workspace model matures.
+1. **Hooks for other agents** (OpenCode, Gemini, …).
+2. **Custom commands that build layouts** (cmux's workspace commands), and a project-level config file.
+3. **Dragging tabs, multiple windows, SSH/tmux**, as the workspace model matures.

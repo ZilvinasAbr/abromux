@@ -112,6 +112,14 @@ pub struct ImagePixels {
     pub bgra: Vec<u8>,
 }
 
+/// The scrollable area, in rows (`Terminal::scrollbar`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Scrollbar {
+    pub total: u64,
+    pub offset: u64,
+    pub len: u64,
+}
+
 /// The columns `x` of viewport row `y` that a search match covers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Match {
@@ -682,6 +690,35 @@ impl Terminal {
         };
         v.value.delta = delta_rows;
         unsafe { ghostty_terminal_scroll_viewport(self.raw, v) }
+    }
+
+    /// Make scrollable row `row` (0 is the oldest scrollback line) the top
+    /// of the viewport, in the row space of [`scrollbar`](Self::scrollbar).
+    pub fn scroll_to_row(&mut self, row: u64) {
+        let mut v = GhosttyTerminalScrollViewport {
+            tag: GHOSTTY_SCROLL_VIEWPORT_ROW,
+            ..Default::default()
+        };
+        v.value.row = row as _;
+        unsafe { ghostty_terminal_scroll_viewport(self.raw, v) }
+    }
+
+    /// The scrollable area in rows: its total, where the viewport starts in
+    /// it, and the viewport's length.
+    pub fn scrollbar(&self) -> Scrollbar {
+        let mut sb = GhosttyTerminalScrollbar::default();
+        unsafe {
+            ghostty_terminal_get(
+                self.raw,
+                GHOSTTY_TERMINAL_DATA_SCROLLBAR,
+                &mut sb as *mut _ as *mut c_void,
+            )
+        };
+        Scrollbar {
+            total: sb.total,
+            offset: sb.offset,
+            len: sb.len,
+        }
     }
 
     pub fn scroll_to_bottom(&mut self) {

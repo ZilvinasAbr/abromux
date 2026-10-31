@@ -29,6 +29,8 @@ Commands:
   tree [--all] [--workspace <id|ref|index>]
   list-panes [--workspace <id|ref|index>]
   focus-pane --pane <id|ref|index> [--workspace <id|ref|index>]
+  last-pane [--workspace <id|ref|index>]                     (focus the pane focused before this one)
+  swap-pane [--pane <id|ref|index>] [--workspace <id|ref|index>] [-L|-R|-U|-D]   (swap tabs with the pane that way; default -R)
   resize-pane [--pane <id|ref|index>] [--workspace <id|ref|index>] [-L|-R|-U|-D] [--amount <px>]   (default -R, panes.resizeStep: 20px)
   new-pane [--type <terminal|browser>] [--direction <left|right|up|down>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>]
   new-split <left|right|up|down> [--surface <ref>] [--workspace <ref>] [--type <terminal|browser>] [--url <url>] [--command <text>] [--focus <true|false>]
@@ -62,6 +64,7 @@ Commands:
   reload-config                                              (read the config file again, like ⌘⇧,)
   config path                                                (where abromux's config.json lives)
   config check [<file>]                                      (validate the config file; needs no running app)
+  config shortcuts                                           (each shortcut's name for config.json, and its keys now)
   hooks install|uninstall                                    (Claude Code and Codex hooks: agent status, notifications, resume on restore)
   skills install|uninstall                                   (Claude Code and Codex skills that teach them this CLI)
   skills show [abromux|abromux-browser]                      (print a skill: an agent-facing guide)
@@ -213,6 +216,20 @@ fn dispatch(
         "tree" => ("workspace.tree", tree),
         "list-panes" => ("pane.list", |v| lines(v, pane_line)),
         "focus-pane" => ("pane.focus", |v| format!("OK {}", s(&v["pane"]))),
+        "last-pane" => ("pane.last", |v| format!("OK {}", s(&v["pane"]))),
+        "swap-pane" => {
+            let dir = match pos.first().map(String::as_str) {
+                None | Some("-R") => "right",
+                Some("-L") => "left",
+                Some("-U") => "up",
+                Some("-D") => "down",
+                Some(d) => {
+                    return Err(format!("swap-pane: expected -L, -R, -U or -D, got {d:?}"));
+                }
+            };
+            opts.insert("direction".into(), json!(dir));
+            ("pane.swap", |v| format!("OK {}", s(&v["pane"])))
+        }
         "resize-pane" => {
             let dir = match pos.first().map(String::as_str) {
                 None | Some("-R") => "right",
@@ -387,7 +404,8 @@ fn dispatch(
     Ok(())
 }
 
-/// `config path` and `config check [<file>]`, which need no running app.
+/// `config path`, `config check [<file>]` and `config shortcuts`, which
+/// need no running app.
 fn config(pos: &[String]) -> Result<(), String> {
     match pos.first().map(String::as_str) {
         Some("path") => println!("{}", settings::path().display()),
@@ -401,7 +419,11 @@ fn config(pos: &[String]) -> Result<(), String> {
             };
             println!("OK {}{note}", path.display());
         }
-        _ => return Err("config: expected path or check".into()),
+        Some("shortcuts") => {
+            let settings = settings::load()?;
+            print!("{}", crate::keymap::describe(&settings));
+        }
+        _ => return Err("config: expected path, check or shortcuts".into()),
     }
     Ok(())
 }

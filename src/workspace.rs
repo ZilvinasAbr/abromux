@@ -355,6 +355,10 @@ pub struct Workspace {
     pub progress: Option<Progress>,
     /// `abromux log` entries, oldest first; the sidebar shows the newest.
     pub log: Vec<LogEntry>,
+    /// The pane focused before this one, for `last-pane`, and the one
+    /// `track_focus` last saw.
+    prev_pane: Option<usize>,
+    seen_pane: usize,
 }
 
 pub struct Status {
@@ -435,7 +439,51 @@ impl Workspace {
             status: vec![],
             progress: None,
             log: vec![],
+            prev_pane: None,
+            seen_pane: focused_pane,
         }
+    }
+
+    /// Notice a change of `focused_pane` since the last call. Focus moves in
+    /// many places; this runs on every render, which follows each of them.
+    pub fn track_focus(&mut self) {
+        if self.seen_pane != self.focused_pane {
+            self.prev_pane = Some(std::mem::replace(&mut self.seen_pane, self.focused_pane));
+        }
+    }
+
+    /// The previously focused pane, if it's still open (tmux's `last-pane`).
+    pub fn last_pane(&mut self) -> Option<usize> {
+        self.track_focus();
+        let prev = self.prev_pane?;
+        self.root
+            .panes()
+            .iter()
+            .any(|p| p.id == prev)
+            .then_some(prev)
+    }
+
+    /// Swap pane `id`'s tabs with those of the pane next to it in `dir`, as
+    /// tmux's `swap-pane`. The swapped pane keeps focus, so focus moves to
+    /// where it went. False if there's no pane that way.
+    pub fn swap_pane(&mut self, id: usize, dir: Dir) -> bool {
+        let Some(other) = self.root.neighbor(id, dir) else {
+            return false;
+        };
+        let take = |root: &mut Node, id| {
+            let p = root.pane_mut(id).expect("pane exists");
+            (std::mem::take(&mut p.tabs), p.active)
+        };
+        let (a, b) = (take(&mut self.root, id), take(&mut self.root, other));
+        for (target, (tabs, active)) in [(id, b), (other, a)] {
+            let p = self.root.pane_mut(target).expect("pane exists");
+            (p.tabs, p.active) = (tabs, active);
+        }
+        if self.focused_pane == id {
+            self.focused_pane = other;
+        }
+        self.zoom = None;
+        true
     }
 
     pub fn focused(&self) -> Option<&Pane> {
@@ -731,6 +779,29 @@ mod tests {
             "left/up wraps put the new pane first"
         );
         assert_eq!(root.neighbor(3, Dir::Left), Some(4));
+    }
+
+    #[test]
+    fn swap_and_last_pane() {
+        let mut ws = Workspace::new(0, None, Node::Leaf(pane(1)), 1);
+        assert!(
+            ws.root
+                .split(1, Axis::Horizontal, false, pane(2), 100)
+                .is_ok()
+        );
+        // `active` stands in for the tabs, which need a window to make.
+        ws.root.pane_mut(1).unwrap().active = 7;
+        assert!(!ws.swap_pane(1, Dir::Left), "nothing left of pane 1");
+        assert!(ws.swap_pane(1, Dir::Right));
+        assert_eq!(ws.root.pane_mut(2).unwrap().active, 7);
+        assert_eq!(ws.root.pane_mut(1).unwrap().active, 0);
+        assert_eq!(ws.focused_pane, 2, "focus follows the swapped pane");
+
+        assert_eq!(ws.last_pane(), Some(1));
+        ws.focused_pane = 1;
+        assert_eq!(ws.last_pane(), Some(2));
+        assert!(ws.root.remove(2));
+        assert_eq!(ws.last_pane(), None, "a closed pane isn't last");
     }
 
     #[test]

@@ -84,11 +84,41 @@ abromux's own settings live in `~/.config/abromux/config.json` (or `$XDG_CONFIG_
 
 `resizeStep` is how many pixels ⌃⇧H/J/K/L and `resize-pane` move a divider. `dividerColor` is the line between split panes, and `focusBorderColor` the border around the focused one. Colors are `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`. Unknown keys are errors, so a typo doesn't go unnoticed.
 
+### Shortcuts and commands
+
+`"shortcuts"` changes the keys of any action, by name. `abromux config shortcuts` lists every name with its keys as they are now, marking the ones your file sets:
+
+```json
+{
+  "shortcuts": {
+    "splitRight": "cmd-\\",
+    "closeTab": null,
+    "lastPane": "ctrl-a l",
+    "flashPane": ["⌘⇧H", "ctrl-a f"],
+    "find": { "keys": "cmd-shift-f", "when": "Terminal" }
+  },
+  "commands": [
+    { "title": "Run Tests", "run": "cargo test", "shortcut": "cmd-alt-t" },
+    { "title": "Dev Server", "run": "npm run dev", "newTab": true },
+    { "title": "Open Docs", "url": "https://docs.rs" }
+  ]
+}
+```
+
+- A shortcut is a keystroke like `cmd-shift-p` (modifiers `cmd`, `alt`/`option`, `ctrl`, `shift`) or `⌘⇧P`, or several separated by spaces for a two-step chord (`ctrl-a l`). A list gives an action several; `null` or `[]` unbinds it.
+- Setting an action's keys replaces all of its defaults. A key you give one action is taken from whatever else had it by default, so `"splitRight": "cmd-k"` also frees ⌘K from Clear Scrollback.
+- `when` binds it only in a key context: `Terminal`, `Browser`, `Browser > Input` (the address bar and find field), or a gpui context expression. By default an action keeps the contexts its defaults had (find works in terminals and browsers), and a command's shortcut works everywhere.
+- Shift with punctuation is written either way: `cmd-shift-]` and `cmd-}` are the same key.
+
+`"commands"` adds your own entries to the command palette (⌘⇧P), each with an optional `shortcut`. `run` types the text into the focused terminal and presses Return; with `"newTab": true`, or when a browser has focus, it runs in a new terminal tab instead. `url` opens a page in a new browser tab.
+
+Reloading the config applies new shortcuts at once, in the menus too.
+
 ⌘⇧, (or ⌘⇧P → Reload Config, or `abromux reload-config`) reads the file again without a restart. If it doesn't parse, the current settings stay and a toast shows the error with its line and column, and it does the same at launch. `abromux config check [<file>]` validates a file without the app, and `abromux config path` prints where it's read from. The Ghostty config below is separate and is still read only at launch.
 
 ## Ghostty config
 
-Terminals read your Ghostty config: `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`), then `~/Library/Application Support/com.mitchellh.ghostty/config`, plus their `config-file` includes. abromux uses `theme` (from `~/.config/ghostty/themes` or Ghostty.app), `font-family`, `font-size`, `foreground`, `background`, `palette`, `cursor-color`, `cursor-text`, `cursor-style`, `selection-background`/`-foreground`, `keybind`s whose action is `text:`, `csi:` or `esc:`, and `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` (on by default, as in Ghostty: pasting text that could run commands, such as a newline when the program hasn't turned on bracketed paste, asks first; Enter pastes, Esc cancels). `shell-integration = none` turns off abromux's shell integration (below). Other keys are ignored for now. Changes apply to new terminals.
+Terminals read your Ghostty config: `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`), then `~/Library/Application Support/com.mitchellh.ghostty/config`, plus their `config-file` includes. abromux uses `theme` (from `~/.config/ghostty/themes` or Ghostty.app), `font-family`, `font-size`, `foreground`, `background`, `palette`, `cursor-color`, `cursor-text`, `cursor-style`, `selection-background`/`-foreground`, `keybind`s whose action is `text:`, `csi:` or `esc:`, and `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` (on by default, as in Ghostty: pasting text that could run commands, such as a newline when the program hasn't turned on bracketed paste, asks first; Enter pastes, Esc cancels). `copy-on-select = clipboard` copies a selection to the clipboard when you let go of the mouse (Ghostty's default `true` uses a selection pasteboard macOS doesn't have, so it does nothing here). `mouse-scroll-multiplier` scales scrolling, as one number or `precision:<n>,discrete:<n>` for the trackpad and the mouse wheel. `scrollbar = never` hides the overlay scrollbar. `shell-integration = none` turns off abromux's shell integration (below). Other keys are ignored for now. Changes apply to new terminals.
 
 ## Shell integration
 
@@ -108,6 +138,8 @@ abromux send-key --surface surface:3 ctrl-c
 abromux read-screen --surface surface:3 --scrollback --lines 50
 abromux rename-tab --surface surface:3 'dev server'   # no title: back to the program's own
 abromux respawn-pane --surface surface:3 --command 'npm run dev'   # kill the shell, start a fresh one
+abromux last-pane                           # back to the pane focused before
+abromux swap-pane -L                        # swap the focused pane's tabs with the pane to its left
 abromux browser open https://example.com
 abromux browser eval 'document.title'
 abromux notify --title 'Tests' --body 'all green'   # rings the pane it runs in
@@ -153,6 +185,8 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Cycle tabs | | ⌘⇧[ / ⌘⇧], ⌃Tab / ⌃⇧Tab |
 | Select tab in focused pane | click | ⌃1…⌃8, ⌃9 for the last (hold ⌃ to see the numbers) |
 | Focus pane in a direction | click | ⌥⌘← → ↑ ↓ |
+| Focus the previously focused pane | | ⌘⇧P → Focus Last Pane |
+| Swap the focused pane with its neighbour | | ⌘⇧P → Swap Pane Left / Right / Up / Down (focus moves with it) |
 | Resize focused pane | drag a divider | ⌃⇧H / J / K / L (20 px a press, `panes.resizeStep` in the [config file](#config-file)) |
 | Flash focused pane | | ⌘⇧H |
 | Zoom focused pane to fill the workspace, or unzoom | | ⌘⇧↩ (focusing another pane unzooms) |
@@ -162,7 +196,9 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Jump to newest unread notification | click it in the list | ⌘⇧U |
 | Open a link in a terminal | ⌘-click | |
 | Toggle sidebar | sidebar icon | ⌘B |
-| Copy / paste in terminal | drag to select, double-click selects a word | ⌘C / ⌘V (asks first if the text could run commands) |
+| Copy / paste in terminal | drag to select, double-click selects a word (with `copy-on-select = clipboard` it's copied right away) | ⌘C / ⌘V (asks first if the text could run commands) |
+| Scroll back | wheel or trackpad; the scrollbar shows while scrolled back and can be dragged | |
+| Password prompt | a lock icon in the corner while the terminal doesn't echo what you type | |
 | Paste file paths | drop files on a terminal (shell-escaped) | |
 | Restart the shell (kills what runs in it) | | ⌘⇧P → Restart Shell |
 | Font size (per terminal) | | ⌘+ / ⌘- / ⌘0 |
@@ -172,6 +208,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Browser back / forward / reload | arrows and ↻ next to the address bar | ⌘[ / ⌘], ⌘R |
 | Web inspector / JS console | | ⌥⌘I / ⌥⌘C |
 | Reload the config file | | ⌘⇧, |
+| Change any of these keys | | `"shortcuts"` in the [config file](#shortcuts-and-commands) |
 
 ## Performance
 

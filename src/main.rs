@@ -13,6 +13,7 @@ mod debug;
 mod ghostty;
 mod icon;
 mod ipc;
+mod keymap;
 mod link;
 mod menu;
 mod notification;
@@ -103,7 +104,12 @@ actions!(
         CommandPalette,
         WorkspaceSwitcher,
         RenameTab,
-        ReloadConfig
+        ReloadConfig,
+        LastPane,
+        SwapLeft,
+        SwapRight,
+        SwapUp,
+        SwapDown
     ]
 );
 
@@ -164,7 +170,8 @@ impl AssetSource for Assets {
             "search",
             "circle-x",
             "pencil",
-            "maximize-2"
+            "maximize-2",
+            "lock"
         );
         Ok(bytes.map(Cow::Borrowed))
     }
@@ -954,6 +961,59 @@ impl AbroMux {
         }
     }
 
+    fn last_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let ws = &mut self.workspaces[self.active];
+        let Some(id) = ws.last_pane() else {
+            return false;
+        };
+        ws.focused_pane = id;
+        self.focus_active(window, cx);
+        cx.notify();
+        true
+    }
+
+    fn swap_dir(&mut self, dir: Dir, window: &mut Window, cx: &mut Context<Self>) {
+        let ws = &mut self.workspaces[self.active];
+        if ws.swap_pane(ws.focused_pane, dir) {
+            self.focus_active(window, cx);
+            cx.notify();
+        }
+    }
+
+    /// The config file's `"commands"[index]`, from the palette or its shortcut.
+    fn run_command(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(c) = cx
+            .global::<settings::Settings>()
+            .commands
+            .get(index)
+            .cloned()
+        else {
+            return;
+        };
+        if let Some(url) = &c.url {
+            let s = self.make_browser(&browser::normalize_url(url), window, cx);
+            return self.add_tab(s, window, cx);
+        }
+        let Some(run) = c.run else { return };
+        let term = match self.ws().focused_surface() {
+            Some(Surface::Terminal(t)) if !c.new_tab => t.clone(),
+            // No terminal to type into: open one, as `newTab` does.
+            _ => {
+                let cwd = self.focused_cwd(cx);
+                let ws = self.ws().id;
+                let s = self.make_terminal(cwd, ws, window, cx);
+                let Surface::Terminal(t) = &s else { return };
+                let t = t.clone();
+                self.add_tab(s, window, cx);
+                t
+            }
+        };
+        term.update(cx, |t, cx| {
+            t.send(format!("{run}\r").as_bytes());
+            cx.notify();
+        });
+    }
+
     fn focus_dir(&mut self, dir: Dir, window: &mut Window, cx: &mut Context<Self>) {
         let ws = &mut self.workspaces[self.active];
         if let Some(id) = ws.root.neighbor(ws.focused_pane, dir) {
@@ -1013,7 +1073,11 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let result = settings::load().map(|s| cx.set_global(s));
+        let result = settings::load().map(|s| {
+            keymap::apply(&s, cx);
+            cx.set_global(s);
+            menu::set_menus(cx);
+        });
         let note = match &result {
             Ok(()) => Notification::success(format!(
                 "Reloaded {}",
@@ -1847,6 +1911,9 @@ impl AbroMux {
 
 impl Render for AbroMux {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        for ws in &mut self.workspaces {
+            ws.track_focus();
+        }
         self.window_bounds = Some(window.window_bounds().get_bounds());
         self.mark_viewed(window);
         for ws in &mut self.workspaces {
@@ -1997,6 +2064,16 @@ impl Render for AbroMux {
             .map(|d| self.palette_actions(d, cx))
             .on_action(cx.listener(|this, _: &JumpToUnread, window, cx| {
                 this.jump_to_unread(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &LastPane, window, cx| {
+                this.last_pane(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwapLeft, w, cx| this.swap_dir(Dir::Left, w, cx)))
+            .on_action(cx.listener(|this, _: &SwapRight, w, cx| this.swap_dir(Dir::Right, w, cx)))
+            .on_action(cx.listener(|this, _: &SwapUp, w, cx| this.swap_dir(Dir::Up, w, cx)))
+            .on_action(cx.listener(|this, _: &SwapDown, w, cx| this.swap_dir(Dir::Down, w, cx)))
+            .on_action(cx.listener(|this, a: &keymap::RunCommand, window, cx| {
+                this.run_command(a.index, window, cx)
             }))
             .on_action(cx.listener(|this, _: &ReloadConfig, window, cx| {
                 // A toast says how it went.
@@ -2257,62 +2334,10 @@ fn run_app(cwd: Option<String>) {
             }
         });
         cx.on_action(|_: &About, cx| about::show(cx));
+        // The fixed bindings; the shortcuts users can change are in keymap.rs.
         cx.bind_keys([
-            KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("cmd-w", about::CloseAbout, Some("About")),
             KeyBinding::new("escape", about::CloseAbout, Some("About")),
-            KeyBinding::new("cmd-n", NewWorkspace, None),
-            KeyBinding::new("cmd-shift-w", CloseWorkspace, None),
-            KeyBinding::new("cmd-shift-r", RenameWorkspace, None),
-            KeyBinding::new("ctrl-cmd-]", NextWorkspace, None),
-            KeyBinding::new("ctrl-cmd-[", PrevWorkspace, None),
-            KeyBinding::new("cmd-t", NewTerminal, None),
-            KeyBinding::new("cmd-shift-l", NewBrowser, None),
-            KeyBinding::new("cmd-d", SplitRight, None),
-            KeyBinding::new("cmd-shift-d", SplitDown, None),
-            KeyBinding::new("cmd-w", CloseTab, None),
-            // ⌘⇧] arrives from macOS as cmd-} (shift folded into the key), so
-            // "cmd-shift-]" would never match.
-            KeyBinding::new("cmd-}", NextTab, None),
-            KeyBinding::new("cmd-{", PrevTab, None),
-            KeyBinding::new("cmd-b", ToggleSidebar, None),
-            KeyBinding::new("cmd-l", FocusAddressBar, None),
-            KeyBinding::new("cmd-1", Ws1, None),
-            KeyBinding::new("cmd-2", Ws2, None),
-            KeyBinding::new("cmd-3", Ws3, None),
-            KeyBinding::new("cmd-4", Ws4, None),
-            KeyBinding::new("cmd-5", Ws5, None),
-            KeyBinding::new("cmd-6", Ws6, None),
-            KeyBinding::new("cmd-7", Ws7, None),
-            KeyBinding::new("cmd-8", Ws8, None),
-            KeyBinding::new("cmd-9", Ws9, None),
-            KeyBinding::new("ctrl-1", Tab1, None),
-            KeyBinding::new("ctrl-2", Tab2, None),
-            KeyBinding::new("ctrl-3", Tab3, None),
-            KeyBinding::new("ctrl-4", Tab4, None),
-            KeyBinding::new("ctrl-5", Tab5, None),
-            KeyBinding::new("ctrl-6", Tab6, None),
-            KeyBinding::new("ctrl-7", Tab7, None),
-            KeyBinding::new("ctrl-8", Tab8, None),
-            KeyBinding::new("ctrl-9", Tab9, None),
-            KeyBinding::new("ctrl-tab", NextTab, None),
-            KeyBinding::new("ctrl-shift-tab", PrevTab, None),
-            KeyBinding::new("alt-cmd-left", FocusLeft, None),
-            KeyBinding::new("alt-cmd-right", FocusRight, None),
-            KeyBinding::new("alt-cmd-up", FocusUp, None),
-            KeyBinding::new("alt-cmd-down", FocusDown, None),
-            KeyBinding::new("ctrl-shift-h", ResizeLeft, None),
-            KeyBinding::new("ctrl-shift-j", ResizeDown, None),
-            KeyBinding::new("ctrl-shift-k", ResizeUp, None),
-            KeyBinding::new("ctrl-shift-l", ResizeRight, None),
-            KeyBinding::new("cmd-shift-h", FlashPane, None),
-            KeyBinding::new("cmd-shift-enter", ToggleZoom, None),
-            KeyBinding::new("cmd-i", ToggleNotifications, None),
-            KeyBinding::new("cmd-shift-u", JumpToUnread, None),
-            KeyBinding::new("cmd-shift-p", CommandPalette, None),
-            KeyBinding::new("cmd-p", WorkspaceSwitcher, None),
-            // ⌘⇧, arrives as cmd-< (see cmd-} below).
-            KeyBinding::new("cmd-<", ReloadConfig, None),
             KeyBinding::new("down", palette::SelectNext, Some("CommandPalette > Input")),
             KeyBinding::new(
                 "ctrl-n",
@@ -2331,35 +2356,11 @@ fn run_app(cwd: Option<String>) {
             KeyBinding::new("tab", NoAction, Some("Terminal")),
             KeyBinding::new("shift-tab", NoAction, Some("Terminal")),
             KeyBinding::new("ctrl-shift-i", NoAction, Some("Terminal")),
-            KeyBinding::new("cmd-c", terminal::Copy, Some("Terminal")),
-            KeyBinding::new("cmd-v", terminal::Paste, Some("Terminal")),
-            KeyBinding::new("cmd-=", terminal::IncreaseFontSize, Some("Terminal")),
-            KeyBinding::new("cmd-+", terminal::IncreaseFontSize, Some("Terminal")),
-            KeyBinding::new("cmd--", terminal::DecreaseFontSize, Some("Terminal")),
-            KeyBinding::new("cmd-0", terminal::ResetFontSize, Some("Terminal")),
-            KeyBinding::new("cmd-k", terminal::ClearScrollback, Some("Terminal")),
-            KeyBinding::new("cmd-f", terminal::Find, Some("Terminal")),
-            KeyBinding::new("cmd-g", terminal::FindNext, Some("Terminal")),
-            KeyBinding::new("cmd-shift-g", terminal::FindPrevious, Some("Terminal")),
-            KeyBinding::new("alt-cmd-g", terminal::FindPrevious, Some("Terminal")),
-            KeyBinding::new("cmd-e", terminal::UseSelectionForFind, Some("Terminal")),
             KeyBinding::new("shift-enter", terminal::FindPrevious, Some("FindBar")),
-            KeyBinding::new("cmd-[", browser::Back, Some("Browser")),
-            KeyBinding::new("cmd-]", browser::Forward, Some("Browser")),
-            KeyBinding::new("cmd-r", browser::Reload, Some("Browser")),
-            KeyBinding::new("alt-cmd-i", browser::ToggleDevTools, Some("Browser")),
-            KeyBinding::new("alt-cmd-c", browser::ShowConsole, Some("Browser")),
-            KeyBinding::new("cmd-f", terminal::Find, Some("Browser")),
-            KeyBinding::new("cmd-g", terminal::FindNext, Some("Browser")),
-            KeyBinding::new("cmd-shift-g", terminal::FindPrevious, Some("Browser")),
-            KeyBinding::new("alt-cmd-g", terminal::FindPrevious, Some("Browser")),
-            KeyBinding::new("cmd-e", terminal::UseSelectionForFind, Some("Browser")),
-            // The address and find fields take these for search and indent.
-            KeyBinding::new("cmd-f", terminal::Find, Some("Browser > Input")),
-            KeyBinding::new("cmd-[", browser::Back, Some("Browser > Input")),
-            KeyBinding::new("cmd-]", browser::Forward, Some("Browser > Input")),
         ]);
         menu::init(cx);
+        keymap::apply(&cx.global::<settings::Settings>().clone(), cx);
+        menu::set_menus(cx);
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
                 cx.quit();

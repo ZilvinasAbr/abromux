@@ -329,6 +329,37 @@ impl AbroMux {
                 cx.notify();
                 json!({ "pane": format!("pane:{pane}") })
             }
+            "pane.last" => {
+                let wi = self.workspace_target(p)?;
+                let pane = self.workspaces[wi]
+                    .last_pane()
+                    .context("no previously focused pane")?;
+                self.workspaces[wi].focused_pane = pane;
+                if wi == self.active {
+                    self.focus_active(window, cx);
+                }
+                cx.notify();
+                json!({ "pane": format!("pane:{pane}") })
+            }
+            "pane.swap" => {
+                let (wi, pane) = self.pane_target(p)?;
+                let dir = match str_param(p, "direction").unwrap_or("right") {
+                    "left" => Dir::Left,
+                    "right" => Dir::Right,
+                    "up" => Dir::Up,
+                    "down" => Dir::Down,
+                    _ => bail!("direction must be left, right, up or down"),
+                };
+                if !self.workspaces[wi].swap_pane(pane, dir) {
+                    bail!("pane:{pane} has no pane to swap with in that direction");
+                }
+                if wi == self.active {
+                    self.focus_active(window, cx);
+                }
+                cx.notify();
+                let to = self.workspaces[wi].root.neighbor(pane, dir).unwrap_or(pane);
+                json!({ "pane": format!("pane:{to}") })
+            }
             "pane.resize" => {
                 let (wi, pane) = self.pane_target(p)?;
                 let dir = match str_param(p, "direction").unwrap_or("right") {

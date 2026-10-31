@@ -7,8 +7,8 @@
 //! shortcut would.
 
 use crate::{
-    AbroMux, TITLEBAR_H, browser, channel, shortcut_digit, terminal, theme::*, workspace::Surface,
-    workspace::tilde,
+    AbroMux, TITLEBAR_H, channel, keymap, settings::Settings, shortcut_digit, theme::*,
+    workspace::Surface, workspace::tilde,
 };
 use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -51,66 +51,23 @@ pub struct Palette {
     scroll: ScrollHandle,
 }
 
-/// Commands in palette order. Ws1–9 and Tab1–9 are left out: the switcher
-/// and the tab bar cover them.
-fn commands() -> Vec<(&'static str, Box<dyn Action>)> {
-    use crate::{
-        CloseTab, CloseWorkspace, FlashPane, FocusAddressBar, FocusDown, FocusLeft, FocusRight,
-        FocusUp, JumpToUnread, NewBrowser, NewTerminal, NewWorkspace, NextTab, NextWorkspace,
-        PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab, RenameWorkspace, ResizeDown,
-        ResizeLeft, ResizeRight, ResizeUp, SplitDown, SplitRight, ToggleNotifications,
-        ToggleSidebar, ToggleZoom,
-    };
-    vec![
-        ("New Workspace", Box::new(NewWorkspace)),
-        ("Rename Workspace…", Box::new(RenameWorkspace)),
-        ("Close Workspace", Box::new(CloseWorkspace)),
-        ("Next Workspace", Box::new(NextWorkspace)),
-        ("Previous Workspace", Box::new(PrevWorkspace)),
-        ("New Terminal Tab", Box::new(NewTerminal)),
-        ("New Browser Tab", Box::new(NewBrowser)),
-        ("Split Right", Box::new(SplitRight)),
-        ("Split Down", Box::new(SplitDown)),
-        ("Rename Tab…", Box::new(RenameTab)),
-        ("Close Tab", Box::new(CloseTab)),
-        ("Next Tab", Box::new(NextTab)),
-        ("Previous Tab", Box::new(PrevTab)),
-        ("Focus Pane Left", Box::new(FocusLeft)),
-        ("Focus Pane Right", Box::new(FocusRight)),
-        ("Focus Pane Up", Box::new(FocusUp)),
-        ("Focus Pane Down", Box::new(FocusDown)),
-        ("Resize Pane Left", Box::new(ResizeLeft)),
-        ("Resize Pane Right", Box::new(ResizeRight)),
-        ("Resize Pane Up", Box::new(ResizeUp)),
-        ("Resize Pane Down", Box::new(ResizeDown)),
-        ("Flash Focused Pane", Box::new(FlashPane)),
-        ("Toggle Pane Zoom", Box::new(ToggleZoom)),
-        ("Toggle Sidebar", Box::new(ToggleSidebar)),
-        ("Show Notifications", Box::new(ToggleNotifications)),
-        ("Jump to Latest Unread", Box::new(JumpToUnread)),
-        ("Reload Config", Box::new(ReloadConfig)),
-        ("Copy", Box::new(terminal::Copy)),
-        ("Paste", Box::new(terminal::Paste)),
-        ("Find…", Box::new(terminal::Find)),
-        ("Find Next", Box::new(terminal::FindNext)),
-        ("Find Previous", Box::new(terminal::FindPrevious)),
-        (
-            "Use Selection for Find",
-            Box::new(terminal::UseSelectionForFind),
-        ),
-        ("Clear Scrollback", Box::new(terminal::ClearScrollback)),
-        ("Restart Shell", Box::new(terminal::RestartShell)),
-        ("Increase Font Size", Box::new(terminal::IncreaseFontSize)),
-        ("Decrease Font Size", Box::new(terminal::DecreaseFontSize)),
-        ("Reset Font Size", Box::new(terminal::ResetFontSize)),
-        ("Focus Address Bar", Box::new(FocusAddressBar)),
-        ("Back", Box::new(browser::Back)),
-        ("Forward", Box::new(browser::Forward)),
-        ("Reload Page", Box::new(browser::Reload)),
-        ("Toggle Developer Tools", Box::new(browser::ToggleDevTools)),
-        ("Show JavaScript Console", Box::new(browser::ShowConsole)),
-        ("Quit", Box::new(Quit)),
-    ]
+/// Commands in palette order: the actions with a title, then the config
+/// file's commands. Ws1–9 and Tab1–9 have none: the switcher and the tab
+/// bar cover them.
+fn commands(cx: &App) -> Vec<(String, Box<dyn Action>)> {
+    let builtin = keymap::ACTIONS
+        .iter()
+        .filter_map(|a| a.title.map(|t| (t.to_string(), (a.action)())));
+    let custom = cx
+        .global::<Settings>()
+        .commands
+        .iter()
+        .enumerate()
+        .map(|(index, c)| {
+            let action: Box<dyn Action> = Box::new(keymap::RunCommand { index });
+            (c.title.clone(), action)
+        });
+    builtin.chain(custom).collect()
 }
 
 impl AbroMux {
@@ -228,7 +185,7 @@ impl AbroMux {
     /// The commands that apply to what has focus now, with their shortcuts.
     fn command_entries(&self, window: &Window, cx: &mut App) -> Vec<Entry> {
         let browser = matches!(self.ws().focused_surface(), Some(Surface::Browser(_)));
-        let available: Vec<_> = commands()
+        let available: Vec<_> = commands(cx)
             .into_iter()
             // Root actions are always available; this drops terminal ones
             // when a browser has focus and the other way round.
@@ -242,9 +199,9 @@ impl AbroMux {
         available
             .into_iter()
             .map(|(title, action)| {
-                let title = match title {
+                let title = match title.as_str() {
                     "Quit" => format!("Quit {}", channel::app_name()),
-                    t => t.to_string(),
+                    _ => title,
                 };
                 // The first binding whose context applies is the main one
                 // (⌘⇧] before ⌃⇥). gpui's own lookup would hide ⌥⌘I behind
@@ -490,7 +447,7 @@ fn highlighted(title: &SharedString, positions: &[usize]) -> StyledText {
 }
 
 /// A shortcut the way macOS menus show it: ⌃⌥⇧⌘ then the key.
-fn key_label(m: &Modifiers, key: &str) -> String {
+pub(crate) fn key_label(m: &Modifiers, key: &str) -> String {
     // gpui folds shift into these keys (cmd-} is ⌘⇧]).
     let (shift, key) = match key {
         "{" => (true, "["),
