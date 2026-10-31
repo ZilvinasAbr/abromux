@@ -396,12 +396,19 @@ class Suite:
 
     def hc_reset(self, start=True):
         """No terminals left from an earlier launch (quitting leaves them
-        running); with `start`, a warm core, as when it's in daily use. The
-        holder starts with the first terminal, as it does in daily use."""
+        running); with `start`, a warm core or holder, as on a relaunch in
+        daily use (it outlives the app while it holds terminals)."""
         if self.persistence == "abromux-hold":
             for p in self.holder_pids():
                 os.kill(p, signal.SIGTERM)  # its shells hang up with it
             time.sleep(0.2)
+            if start:
+                sock = Path(self.env["ABROMUX_HOLD_SOCKET"])
+                subprocess.Popen([str(self.bin), "hold"], env=self.env, start_new_session=True,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                end = time.monotonic() + 5
+                while not sock.exists() and time.monotonic() < end:
+                    time.sleep(0.01)
             return
         if self.persistence != "herdr-core":
             return
@@ -442,7 +449,6 @@ class Suite:
         return r
 
     def launch(self):
-        self.hc_reset()
         self.session.write_text(json.dumps({"version": 1, "window": {"x": 364, "y": 200, "width": 1000, "height": 700}, "active": 0,
                                             "workspaces": [{"root": {"kind": "pane", "tabs": [{"kind": "terminal", "cwd": str(Path.home())}]}}]}))
         self.proc = subprocess.Popen([str(self.bin)], env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -480,6 +486,7 @@ class Suite:
         log("startup")
         sock, prompt = [], []
         for r in range(c["startup_runs"]):
+            self.hc_reset()  # outside the timing: it stops and starts processes
             t0 = time.monotonic()
             self.launch()
             while self.cli("ping").returncode:
@@ -616,6 +623,7 @@ clear
         (zdot / ".zshrc").write_text(f"PROMPT='{BARE_PROMPT}'\nunsetopt PROMPT_SP\n")
         self.env = {**self.env, "SHELL": "/bin/zsh", "ZDOTDIR": str(zdot)}
         prompt = re.escape(BARE_PROMPT.strip()) + r" *$"
+        self.hc_reset()
         self.launch()
         while self.cli("ping").returncode:
             if self.proc.poll() is not None:

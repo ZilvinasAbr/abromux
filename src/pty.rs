@@ -13,7 +13,7 @@ use crate::settings::Persistence;
 use futures::channel::mpsc;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
 
 /// A terminal from the last session to take back.
@@ -76,8 +76,8 @@ pub enum Pty {
     Held {
         held: crate::hold::Held,
         file: std::fs::File,
-        /// Stops its reader (the write end of a pipe it polls), and the reader.
-        stop: Option<(OwnedFd, std::thread::JoinHandle<()>)>,
+        /// Stops its reader (`freeze`).
+        stop: Option<Stop>,
     },
 }
 
@@ -181,12 +181,42 @@ impl Pty {
     }
 }
 
-fn stop_reader(stop: &mut Option<(OwnedFd, std::thread::JoinHandle<()>)>) {
-    if let Some((w, reader)) = stop.take() {
-        // SAFETY: one byte to a pipe we own.
-        unsafe { libc::write(w.as_raw_fd(), b"x".as_ptr().cast(), 1) };
+fn stop_reader(stop: &mut Option<Stop>) {
+    use std::os::unix::thread::JoinHandleExt;
+    if let Some((stopped, reader)) = stop.take() {
+        stopped.store(true, std::sync::atomic::Ordering::Release);
+        // Interrupt its blocking read (EINTR). Again until it's out: the
+        // signal can land just before it enters read.
+        while !reader.is_finished() {
+            // SAFETY: the thread is alive (not finished) and the handler is set.
+            unsafe { libc::pthread_kill(reader.as_pthread_t(), WAKE) };
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         let _ = reader.join();
     }
+}
+
+/// How `freeze` stops a held PTY's reader: a flag it checks after each read,
+/// and the thread, whose blocking read `WAKE` interrupts.
+type Stop = (Arc<std::sync::atomic::AtomicBool>, std::thread::JoinHandle<()>);
+
+/// The signal that interrupts a held reader's read. Its handler does
+/// nothing and is installed without SA_RESTART, so read returns EINTR.
+const WAKE: libc::c_int = libc::SIGUSR2;
+
+fn install_wake() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    extern "C" fn nothing(_: libc::c_int) {}
+    ONCE.call_once(|| {
+        // SAFETY: a handler that does nothing, without SA_RESTART.
+        unsafe {
+            let mut sa: libc::sigaction = std::mem::zeroed();
+            sa.sa_sigaction = nothing as *const () as usize;
+            libc::sigemptyset(&mut sa.sa_mask);
+            sa.sa_flags = 0;
+            libc::sigaction(WAKE, &sa, std::ptr::null_mut());
+        }
+    });
 }
 
 /// Start the user's login shell at `size`, or take back `attach`. `vars`
@@ -305,60 +335,48 @@ fn local(cwd: &str, argv: &[String], vars: &[(String, String)], (cols, rows): (u
 }
 
 /// A held PTY, read on a thread that `freeze` can stop between reads.
+///
+/// It reads exactly as a local PTY's reader does, one blocking read per
+/// chunk: macOS PTYs give small chunks, so anything more per chunk (a poll
+/// first, or a non-blocking read that comes back empty) costs throughput.
+/// `freeze` interrupts the read with a signal instead.
 fn held_pty(held: crate::hold::Held, feed: &Feed) -> Option<Pty> {
-    let file = std::fs::File::from(held.fd.try_clone().ok()?);
+    install_wake();
     let read_fd = held.fd.try_clone().ok()?;
-    let mut pipe = [0; 2];
-    // SAFETY: pipe fills the two descriptors, which we then own.
-    if unsafe { libc::pipe(pipe.as_mut_ptr()) } != 0 {
-        return None;
+    // SAFETY: fcntl on a descriptor we own: blocking, whatever an earlier
+    // owner left it as.
+    unsafe {
+        let flags = libc::fcntl(read_fd.as_raw_fd(), libc::F_GETFL);
+        libc::fcntl(read_fd.as_raw_fd(), libc::F_SETFL, flags & !libc::O_NONBLOCK);
     }
-    use std::os::fd::FromRawFd;
-    let (stop_r, stop_w) = unsafe { (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1])) };
+    let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_flag = stopped.clone();
     let mut feed = feed.clone();
     let reader = std::thread::spawn(move || {
+        use std::sync::atomic::Ordering;
         let mut buf = vec![0u8; 64 * 1024];
         loop {
-            let mut fds = [
-                libc::pollfd {
-                    fd: read_fd.as_raw_fd(),
-                    events: libc::POLLIN,
-                    revents: 0,
-                },
-                libc::pollfd {
-                    fd: stop_r.as_raw_fd(),
-                    events: libc::POLLIN,
-                    revents: 0,
-                },
-            ];
-            // SAFETY: two valid pollfds.
-            if unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) } < 0 {
-                if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
-                    continue;
-                }
-                break;
-            }
-            if fds[1].revents != 0 {
-                return; // frozen: the holder takes over, no exit
-            }
             // SAFETY: reads into `buf`, valid for its length.
             let n = unsafe { libc::read(read_fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
+            if n > 0 && !feed.push(&buf[..n as usize]) {
+                return;
+            }
+            if stop_flag.load(Ordering::Acquire) {
+                return; // frozen: the holder takes over, no exit
+            }
             if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
                 continue;
             }
             if n <= 0 {
                 break; // the program ended (EIO)
             }
-            if !feed.push(&buf[..n as usize]) {
-                return;
-            }
         }
         feed.close();
     });
     Some(Pty::Held {
+        file: std::fs::File::from(held.fd.try_clone().ok()?),
+        stop: Some((stopped, reader)),
         held,
-        file,
-        stop: Some((stop_w, reader)),
     })
 }
 

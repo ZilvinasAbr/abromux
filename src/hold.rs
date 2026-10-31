@@ -183,6 +183,14 @@ pub fn serve(path: &Path) -> io::Result<()> {
             let Some(fd) = t.master.as_raw_fd() else { continue };
             // SAFETY: reads into `buf`, which is valid for its length.
             let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+            if n < 0
+                && matches!(
+                    io::Error::last_os_error().kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                )
+            {
+                continue; // abromux left it non-blocking; nothing after all
+            }
             if n <= 0 {
                 t.eof = true;
                 continue;
