@@ -3,9 +3,9 @@
 
 use crate::{
     browser_find,
+    webauthn,
     terminal::{Find, FindNext, FindPrevious, UseSelectionForFind},
     theme::*,
-    webauthn,
 };
 use futures::{
     StreamExt,
@@ -282,7 +282,8 @@ impl BrowserView {
             let mut idle = 0;
             loop {
                 let polling = this.update(cx, |this, cx| {
-                    let loading: bool = unsafe { msg_send![this.wk_webview(cx), isLoading] };
+                    let loading: bool =
+                        unsafe { msg_send![this.wk_webview(cx), isLoading] };
                     if loading != this.loading {
                         this.loading = loading;
                         this.nav_presses[Nav::Reload as usize] += 1;
@@ -536,9 +537,8 @@ impl BrowserView {
             icon.into_any_element()
         } else {
             let animation = match nav {
-                Nav::Reload => {
-                    Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint())
-                }
+                Nav::Reload => Animation::new(Duration::from_millis(180))
+                    .with_easing(ease_out_quint()),
                 _ => Animation::new(Duration::from_millis(250)),
             };
             icon.with_animation((id, presses), animation, move |icon, t| {
@@ -760,9 +760,6 @@ mod tests {
     #[test]
     fn user_agent_looks_like_safari() {
         let ua = user_agent();
-        assert!(
-            ua.contains(" Version/") && ua.ends_with(" Safari/605.1.15"),
-            "{ua}"
-        );
+        assert!(ua.contains(" Version/") && ua.ends_with(" Safari/605.1.15"), "{ua}");
     }
 }
