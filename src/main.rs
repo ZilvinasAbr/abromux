@@ -1357,8 +1357,8 @@ impl AbroMux {
         .detach();
     }
 
-    /// While Claude works in any terminal, redraw once per frame of its tab's
-    /// star animation. A timer rather than `with_animation`, which would
+    /// While Claude works in any terminal, redraw once per frame of the star
+    /// animation in its tab and sidebar row. A timer rather than `with_animation`, which would
     /// redraw the whole window at the display's rate.
     fn tick_spinner(&mut self, cx: &mut Context<Self>) {
         if self.spinning || !self.workspaces.iter().any(|w| w.claude_running(cx)) {
