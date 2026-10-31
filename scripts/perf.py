@@ -4,7 +4,7 @@
     scripts/perf.py run              build, measure, record, compare (~1.5 min)
     scripts/perf.py run --headless   only the parts that need no window (~10 s)
     scripts/perf.py run --full       longer idle windows and more startup runs
-    scripts/perf.py run --persistence abromux   the old way (shells end with the app), to compare
+    scripts/perf.py run --persistence cmux-like   the old way (shells end with the app), to compare
     scripts/perf.py compare [ID]     compare a recorded run (default: latest)
     scripts/perf.py history [METRIC] recent runs, or one metric over time
     scripts/perf.py report [--md]    HTML (or Markdown) report with charts
@@ -86,7 +86,7 @@ METRICS = {
     "kitty_frame_p99_ms":   ("ms",   "lower",  0.30, 5,    "p99 frame draw while streaming kitty frames"),
     "kitty_footprint_mb":   ("MB",   "lower",  0.25, 10,   "footprint growth after shared-memory kitty frames"),
     "browser_open_ms":      ("ms",   "lower",  0.25, 30,   "browser split -> local page loaded"),
-    # What `abromux hold` adds on top of the app (not with --persistence abromux).
+    # What `abromux hold` adds on top of the app (not with --persistence cmux-like).
     "holder_idle_mb":       ("MB",   "lower",  0.10, 2,    "holder footprint, idle, 1 terminal"),
     "holder_per_terminal_mb": ("MB", "lower",  0.25, 0.3,  "holder footprint per extra terminal"),
     "holder_idle_cpu_11_pct": ("%",  "lower",  0.50, 0.5,  "holder idle CPU, 11 terminals"),
@@ -319,10 +319,10 @@ class Suite:
         self.metrics = {}
         self.samples = {}
         # --persistence: set it in the app's config. Without it the app uses
-        # its default, abromux-hold, so the holder is there either way unless
-        # it's "abromux".
+        # its default, "abromux", so the holder is there either way unless
+        # it's "cmux-like".
         self.persistence = persistence
-        self.holding = persistence != "abromux"
+        self.holding = persistence != "cmux-like"
 
     def put(self, name, value, samples=None):
         if value is None:
@@ -383,7 +383,7 @@ class Suite:
     # -- abromux hold --
 
     def holder_pids(self):
-        """This run's `abromux hold` (none with --persistence abromux)."""
+        """This run's `abromux hold` (none with --persistence cmux-like)."""
         if not self.holding:
             return []
         out = sh("pgrep", "-f", f"{self.bin} hold", check=False)
@@ -1080,9 +1080,9 @@ def main():
     g.add_argument("--headless", action="store_true", help="skip the app; binary size + VT parse only")
     g.add_argument("--full", action="store_true", help="longer settle/idle windows, 5 startup runs")
     r.add_argument("--label", help="free-form note stored with the run")
-    r.add_argument("--persistence", choices=["abromux-hold", "abromux"],
+    r.add_argument("--persistence", choices=["abromux", "cmux-like"],
                    help="run the app with this persistence set in its config (compared only with runs "
-                        "of the same one); without it, the app's default (abromux-hold)")
+                        "of the same one); without it, the app's default (abromux)")
     r.add_argument("--no-build", action="store_true", help="use the existing release binary")
     r.add_argument("--busy", action="store_true", help="mark the run as not representative (kept out of baselines)")
     r.add_argument("--dry-run", action="store_true", help="don't record the run")

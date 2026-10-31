@@ -9,7 +9,7 @@
 //!
 //! ```json
 //! {
-//!   "persistence": "abromux",
+//!   "persistence": "cmux-like",
 //!   "panes": {
 //!     "resizeStep": 20,
 //!     "dividerColor": "#3a3935",
@@ -76,21 +76,22 @@ impl Global for Settings {}
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Persistence {
-    /// Shells run in abromux's holder (`crate::hold`) and keep running; the
-    /// next launch takes them back as they were.
+    /// `"abromux"`: shells run in abromux's holder (`crate::hold`) and keep
+    /// running; the next launch takes them back as they were.
     #[default]
-    AbromuxHold,
-    /// Shells end with the app; the next launch starts new ones in the same
-    /// folders, replays their output and resumes coding agents.
     Abromux,
+    /// `"cmux-like"`: shells end with the app; the next launch starts new
+    /// ones in the same folders, replays their output and resumes coding
+    /// agents, as cmux does.
+    CmuxLike,
 }
 
 impl Persistence {
     /// Its value in the config file.
     pub fn key(self) -> &'static str {
         match self {
-            Persistence::AbromuxHold => "abromux-hold",
             Persistence::Abromux => "abromux",
+            Persistence::CmuxLike => "cmux-like",
         }
     }
 }
@@ -539,35 +540,37 @@ mod tests {
 
     #[test]
     fn persistence() {
-        assert_eq!(Settings::default().persistence, Persistence::AbromuxHold);
+        assert_eq!(Settings::default().persistence, Persistence::Abromux);
         let s = parse(r#"{"persistence": "abromux"}"#).unwrap();
         assert_eq!(s.persistence, Persistence::Abromux);
-        let s = parse(r#"{"persistence": "abromux-hold"}"#).unwrap();
-        assert_eq!(s.persistence, Persistence::AbromuxHold);
-        assert!(parse(r#"{"persistence": "herdr-core"}"#).is_err());
+        let s = parse(r#"{"persistence": "cmux-like"}"#).unwrap();
+        assert_eq!(s.persistence, Persistence::CmuxLike);
+        for gone in ["abromux-hold", "herdr-core"] {
+            assert!(parse(&format!(r#"{{"persistence": "{gone}"}}"#)).is_err());
+        }
     }
 
     #[test]
     fn setting_persistence_keeps_the_rest_of_the_file() {
-        let old = Persistence::Abromux;
+        let old = Persistence::CmuxLike;
         assert_eq!(
             with_persistence("", old).unwrap(),
-            "{\n  \"persistence\": \"abromux\"\n}\n"
+            "{\n  \"persistence\": \"cmux-like\"\n}\n"
         );
         assert_eq!(
             with_persistence("{}", old).unwrap(),
-            "{\n  \"persistence\": \"abromux\"}"
+            "{\n  \"persistence\": \"cmux-like\"}"
         );
         // Added first; key order, spacing and nested strings stay.
         let file = "{\n    \"panes\": { \"resizeStep\": 30 },\n    \"commands\": [{ \"title\": \"persistence\", \"run\": \"echo \\\"persistence\\\"\" }]\n}\n";
         let new = with_persistence(file, old).unwrap();
         assert_eq!(
             new,
-            format!("{{\n  \"persistence\": \"abromux\",{}", &file[1..])
+            format!("{{\n  \"persistence\": \"cmux-like\",{}", &file[1..])
         );
         // Replaced in place, and back again.
-        let back = with_persistence(&new, Persistence::AbromuxHold).unwrap();
-        assert_eq!(back, new.replace("\"abromux\"", "\"abromux-hold\""));
+        let back = with_persistence(&new, Persistence::Abromux).unwrap();
+        assert_eq!(back, new.replace("\"cmux-like\"", "\"abromux\""));
         assert_eq!(parse(&back).unwrap().panes.resize_step, 30.);
         // A broken file is left alone.
         assert!(with_persistence("{ \"panes\": ", old).is_err());

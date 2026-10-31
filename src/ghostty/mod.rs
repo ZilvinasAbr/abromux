@@ -1585,7 +1585,7 @@ fn check(r: GhosttyResult) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    /// What abromux-hold relies on: a terminal comes back from its snapshot
+    /// What `abromux hold` relies on: a terminal comes back from its snapshot
     /// as it was (scrollback, styles, alternate screen), and output after it
     /// lands as it would have.
     #[test]

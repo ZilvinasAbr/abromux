@@ -109,8 +109,8 @@ actions!(
         WorkspaceSwitcher,
         RenameTab,
         ReloadConfig,
+        PersistenceCmuxLike,
         PersistenceAbromux,
-        PersistenceAbromuxHold,
         LastPane,
         SwapLeft,
         SwapRight,
@@ -2375,11 +2375,11 @@ impl Render for AbroMux {
                 // A toast says how it went.
                 let _ = this.reload_settings(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &PersistenceCmuxLike, window, cx| {
+                this.set_persistence(settings::Persistence::CmuxLike, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &PersistenceAbromux, window, cx| {
                 this.set_persistence(settings::Persistence::Abromux, window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &PersistenceAbromuxHold, window, cx| {
-                this.set_persistence(settings::Persistence::AbromuxHold, window, cx)
             }))
             .when(self.notifications_open, |d| {
                 d.capture_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
@@ -2610,7 +2610,7 @@ fn main() {
     if args.first().is_some_and(|a| a == "bench-kitty") {
         std::process::exit(bench::kitty(&args[1..]));
     }
-    // The background process of `"persistence": "abromux-hold"` (hold.rs).
+    // The background process that keeps shells running (`"persistence": "abromux"`, hold.rs).
     if args.first().is_some_and(|a| a == "hold") {
         if let Err(e) = hold::serve(&hold::socket_path()) {
             eprintln!("abromux hold: {e}");

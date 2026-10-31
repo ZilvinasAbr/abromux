@@ -1,9 +1,9 @@
 //! Where a terminal's program runs, by `"persistence"`:
 //!
-//! - `Held` (`"abromux-hold"`, the default): a PTY that abromux's holder
+//! - `Held` (`"abromux"`, the default): a PTY that abromux's holder
 //!   keeps (`crate::hold`), so the shell outlives the app; read and written
 //!   directly, like a local one.
-//! - `Local` (`"abromux"`): a PTY of abromux's own (`portable-pty`); the
+//! - `Local` (`"cmux-like"`): a PTY of abromux's own (`portable-pty`); the
 //!   shell ends with the app.
 //!
 //! Output from either goes into a `Feed`, which the view drains on the main
@@ -245,7 +245,7 @@ pub fn open(
     }
 
     let argv = [shell.to_string(), "-l".into()];
-    if persistence == Persistence::AbromuxHold {
+    if persistence == Persistence::Abromux {
         // The holder starts programs with exactly the environment it's
         // given, so it gets all of ours.
         let env: Vec<(String, String)> = std::env::vars()

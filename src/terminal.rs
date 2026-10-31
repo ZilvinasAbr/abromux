@@ -1994,7 +1994,7 @@ fn spawn_shell(
     // a session (ABROMUX_NO_RESTORE, demos, scripted tests) would only leave
     // them running unseen.
     let persistence = match crate::session::path() {
-        None => Persistence::Abromux,
+        None => Persistence::CmuxLike,
         Some(_) => cx
             .try_global::<Settings>()
             .map_or(Persistence::default(), |s| s.persistence),

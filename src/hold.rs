@@ -1,5 +1,5 @@
-//! abromux-hold: abromux's own way to keep shells running across a quit,
-//! crash or update (`"persistence": "abromux-hold"`).
+//! `abromux hold`: how abromux keeps shells running across a quit, crash
+//! or update (`"persistence": "abromux"`, the default).
 //!
 //! `abromux hold` is a small background process, one per app, started on
 //! demand and detached from it (its own session, so quitting abromux doesn't
