@@ -16,6 +16,11 @@ use std::{ffi::CString, sync::Mutex};
 #[link(name = "UserNotifications", kind = "framework")]
 unsafe extern "C" {}
 
+#[link(name = "Foundation", kind = "framework")]
+unsafe extern "C" {
+    fn NSLog(format: *mut Object, ...);
+}
+
 /// Where clicked banners send their notification id.
 static CLICKS: Mutex<Option<mpsc::UnboundedSender<usize>>> = Mutex::new(None);
 
@@ -35,6 +40,20 @@ fn rust_string(s: *mut Object) -> Option<String> {
         unsafe { std::ffi::CStr::from_ptr(p) }
             .to_string_lossy()
             .into_owned()
+    })
+}
+
+/// Log to the unified log (Console.app, `log show`), where an app opened
+/// from Finder can be heard; its stderr goes nowhere.
+fn log(msg: &str) {
+    unsafe { NSLog(nsstring("abromux: %@"), nsstring(msg)) }
+}
+
+/// An NSError's description, or None for nil.
+fn error_text(err: *mut Object) -> Option<String> {
+    (!err.is_null()).then(|| {
+        let text: *mut Object = unsafe { msg_send![err, localizedDescription] };
+        rust_string(text).unwrap_or_default()
     })
 }
 
@@ -66,7 +85,14 @@ pub fn init() -> mpsc::UnboundedReceiver<usize> {
         let delegate: *mut Object = msg_send![decl.register(), new];
         // The center holds its delegate weakly; this one lives for the app.
         let _: () = msg_send![center, setDelegate: delegate];
-        let done = block::ConcreteBlock::new(|_granted: bool, _err: *mut Object| {}).copy();
+        let done = block::ConcreteBlock::new(|granted: bool, err: *mut Object| {
+            match error_text(err) {
+                Some(e) => log(&format!("notification permission failed: {e}")),
+                None if !granted => log("notifications are turned off for this app"),
+                None => {}
+            }
+        })
+        .copy();
         // UNAuthorizationOptionBadge | Sound | Alert.
         let _: () =
             msg_send![center, requestAuthorizationWithOptions: 0b111u64 completionHandler: &*done];
@@ -107,7 +133,13 @@ pub fn post(id: usize, title: &str, body: &str) {
         let ident = nsstring(&format!("{ID_PREFIX}{id}"));
         let nil: *mut Object = std::ptr::null_mut();
         let request: *mut Object = msg_send![class!(UNNotificationRequest), requestWithIdentifier: ident content: content trigger: nil];
-        let _: () = msg_send![center, addNotificationRequest: request withCompletionHandler: nil];
+        let done = block::ConcreteBlock::new(|err: *mut Object| {
+            if let Some(e) = error_text(err) {
+                log(&format!("banner not shown: {e}"));
+            }
+        })
+        .copy();
+        let _: () = msg_send![center, addNotificationRequest: request withCompletionHandler: &*done];
         let _: () = msg_send![content, release];
     }
 }
