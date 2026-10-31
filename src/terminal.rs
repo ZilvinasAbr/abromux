@@ -25,6 +25,8 @@ use std::sync::Arc;
 pub const FONT_FAMILY: &str = "JetBrains Mono";
 const LINE_HEIGHT: f32 = 1.25;
 const PADDING: f32 = 6.;
+/// The scrollbar's strip at the right edge, which takes its clicks.
+const SCROLLBAR_WIDTH: f32 = 12.;
 
 actions!(
     terminal,
@@ -917,6 +919,13 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         match ev {
+            // gpui's hit test would give the scrollbar its strip.
+            PlatformInput::MouseDown(e)
+                if self.scrollbar_visible()
+                    && e.position.x >= self.bounds.right() - px(SCROLLBAR_WIDTH) =>
+            {
+                self.on_scrollbar_down(&e, window, cx)
+            }
             PlatformInput::MouseDown(e) => self.on_mouse_down(&e, window, cx),
             PlatformInput::MouseUp(e) => self.on_mouse_up(&e, window, cx),
             PlatformInput::MouseMove(e) => self.on_mouse_move(&e, window, cx),
@@ -1092,15 +1101,20 @@ impl TerminalView {
         ok && t.c_lflag & libc::ECHO == 0 && t.c_lflag & libc::ICANON != 0
     }
 
-    fn render_scrollbar(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    /// Shown while scrolled back, just after scrolling, or while dragged.
+    fn scrollbar_visible(&self) -> bool {
         let sb = self.term.scrollbar();
         let scrolled_back = sb.offset + sb.len < sb.total;
-        let show = self.config.scrollbar
+        self.config.scrollbar
             && sb.total > sb.len
-            && (scrolled_back || self.scrolled_at.is_some() || self.scrollbar_grab.is_some());
-        if !show {
+            && (scrolled_back || self.scrolled_at.is_some() || self.scrollbar_grab.is_some())
+    }
+
+    fn render_scrollbar(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        if !self.scrollbar_visible() {
             return None;
         }
+        let sb = self.term.scrollbar();
         let total = sb.total as f32;
         Some(
             div()
@@ -1109,7 +1123,7 @@ impl TerminalView {
                 .top_0()
                 .bottom_0()
                 .right_0()
-                .w(px(12.))
+                .w(px(SCROLLBAR_WIDTH))
                 .cursor_default()
                 .on_mouse_down(MouseButton::Left, cx.listener(Self::on_scrollbar_down))
                 .child(

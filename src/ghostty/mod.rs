@@ -1549,6 +1549,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn scrollbar_and_scroll_to_row() {
+        let mut t = Terminal::new(10, 5).unwrap();
+        for i in 0..50 {
+            t.write(format!("{i}\r\n").as_bytes());
+        }
+        let sb = t.scrollbar();
+        assert_eq!((sb.len, sb.offset + sb.len), (5, sb.total), "at the bottom: {sb:?}");
+        t.scroll_to_row(10);
+        assert_eq!(t.scrollbar().offset, 10);
+        t.scroll_to_row(0);
+        assert_eq!(t.scrollbar().offset, 0);
+    }
+
+    #[test]
     fn parses_output_and_answers_queries() {
         let mut t = Terminal::new(20, 3).unwrap();
         t.write(b"hi \x1b[1;32mworld\x1b[0m\r\n\x1b]0;title\x07\x1b[c");
