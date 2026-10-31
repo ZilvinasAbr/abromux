@@ -9,6 +9,7 @@ mod browser_find;
 mod channel;
 mod cli;
 mod config;
+mod cursor;
 mod debug;
 mod ghostty;
 mod icon;

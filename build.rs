@@ -5,6 +5,7 @@ fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     version(&root);
     webauthn();
+    cursor();
 
     let vt = root.join("vendor/ghostty-vt-out");
     let lib = vt.join("lib/libghostty-vt.a");
@@ -113,4 +114,14 @@ fn newer(out: &Path, inputs: &[&Path]) -> bool {
     let mtime = |p: &Path| fs::metadata(p).and_then(|m| m.modified()).ok();
     let Some(t) = mtime(out) else { return false };
     inputs.iter().all(|i| mtime(i).is_some_and(|m| m <= t))
+}
+
+/// The cursor guard for browser panes (src/cursor.m).
+fn cursor() {
+    println!("cargo:rerun-if-changed=src/cursor.m");
+    cc::Build::new()
+        .file("src/cursor.m")
+        .flag("-fobjc-arc")
+        .flag("-mmacosx-version-min=13.0")
+        .compile("abromux-cursor");
 }

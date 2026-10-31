@@ -105,6 +105,7 @@ impl BrowserView {
             .build_as_child(window)
             .expect("create webview");
         webauthn::install(&raw);
+        crate::cursor::install();
         if !url.is_empty() {
             let _ = raw.load_url(url);
         }
