@@ -40,6 +40,8 @@ enum Nav {
 pub enum BrowserEvent {
     TitleChanged,
     Focused,
+    /// ⌘- or middle-click on a link; `focus` (⇧ held) switches to the new tab.
+    OpenTab { url: String, focus: bool },
 }
 
 enum WebMsg {
@@ -48,7 +50,11 @@ enum WebMsg {
     /// A find script's result, or the page selection for ⌘E.
     Find(String),
     Selection(String),
+    OpenTab { url: String, focus: bool },
 }
+
+/// Page script for ⌘-click / middle-click on links.
+const LINKS_SCRIPT: &str = include_str!("browser_links.js");
 
 pub struct BrowserView {
     webview: Entity<WebView>,
@@ -84,7 +90,7 @@ impl Focusable for BrowserView {
 impl BrowserView {
     pub fn new(url: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (tx, mut rx) = mpsc::unbounded::<WebMsg>();
-        let (tx_title, tx_url) = (tx.clone(), tx.clone());
+        let (tx_title, tx_url, tx_ipc) = (tx.clone(), tx.clone(), tx.clone());
         let builder = wry::WebViewBuilder::new();
         // A blank page gets the pane's background rather than white. A URL
         // loads once the WebAuthn bridge is in, so its first page has it.
@@ -102,9 +108,26 @@ impl BrowserView {
             .with_on_page_load_handler(move |_, url| {
                 let _ = tx_url.unbounded_send(WebMsg::Url(url));
             })
+            .with_initialization_script(LINKS_SCRIPT)
+            .with_ipc_handler(move |req| {
+                #[derive(serde::Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Msg {
+                    open_tab: String,
+                    #[serde(default)]
+                    focus: bool,
+                }
+                let Ok(Msg { open_tab: url, focus }) = serde_json::from_str(req.body()) else {
+                    return;
+                };
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    let _ = tx_ipc.unbounded_send(WebMsg::OpenTab { url, focus });
+                }
+            })
             .build_as_child(window)
             .expect("create webview");
         webauthn::install(&raw);
+        crate::cursor::install();
         if !url.is_empty() {
             let _ = raw.load_url(url);
         }
@@ -167,6 +190,10 @@ impl BrowserView {
                                 }
                                 this.run_find(cx);
                             }
+                        }
+                        WebMsg::OpenTab { url, focus } => {
+                            cx.emit(BrowserEvent::OpenTab { url, focus });
+                            return;
                         }
                     }
                     cx.emit(BrowserEvent::TitleChanged);
