@@ -50,6 +50,8 @@ pub const ACTIONS: &[Act] = {
         "newWorkspace", Some("New Workspace"), NewWorkspace, [(None, ["cmd-n"])];
         "newFolderWorkspace", Some("New Workspace Folder"), NewFolderWorkspace,
             [(None, ["cmd-shift-i"])];
+        "cleanUpWorkspaceFolder", Some("Clean Up and Delete Workspace Folder…"), CleanUpWorkspaceFolder,
+            [(None, ["cmd-shift-x"])];
         "renameWorkspace", Some("Rename Workspace…"), RenameWorkspace, [(None, ["cmd-shift-r"])];
         "editWorkspaceDescription", Some("Edit Workspace Description…"), EditDescription,
             [(None, ["alt-cmd-e"])];
