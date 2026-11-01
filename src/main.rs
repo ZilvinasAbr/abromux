@@ -37,6 +37,7 @@ mod sidebar;
 mod skills;
 mod sprite;
 mod status;
+mod tabs;
 mod terminal;
 mod terminal_browser;
 mod theme;
@@ -81,6 +82,7 @@ actions!(
         SplitRight,
         SplitDown,
         CloseTab,
+        MoveTabToNewWorkspace,
         NextTab,
         PrevTab,
         ToggleSidebar,
@@ -814,6 +816,46 @@ impl AbroMux {
     /// A close the user asked for: if it would end a Claude Code session,
     /// confirm first, as cmux does.
     fn request_close_surface(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
+        self.request_close(id, false, window, cx)
+    }
+
+    /// ⌘W on a workspace's last tab with
+    /// `app.keepWorkspaceOpenWhenClosingLastSurface`: a fresh terminal in
+    /// the same directory takes its place, so the workspace stays.
+    fn request_replace_last_surface(
+        &mut self,
+        id: EntityId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_close(id, true, window, cx)
+    }
+
+    /// Close tab `id`, first opening a terminal beside it with `replace`.
+    fn close_or_replace(
+        &mut self,
+        id: EntityId,
+        replace: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if replace && let Some(wi) = self.workspaces.iter().position(|w| w.contains(id)) {
+            let ws = &self.workspaces[wi];
+            let (pane, _, _) = ws.tab_position(id).unwrap();
+            let cwd = ws.cwd(cx);
+            let term = self.make_terminal(cwd, ws.id, window, cx);
+            self.add_tab_to(wi, pane, term, true, window, cx);
+        }
+        self.close_surface(id, window, cx)
+    }
+
+    fn request_close(
+        &mut self,
+        id: EntityId,
+        replace: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let claude = self.workspaces.iter().any(|ws| {
             ws.root.panes().iter().any(|p| {
                 p.tabs
@@ -822,7 +864,7 @@ impl AbroMux {
             })
         });
         if !claude {
-            return self.close_surface(id, window, cx);
+            return self.close_or_replace(id, replace, window, cx);
         }
         let rx = alert::confirm(
             window,
@@ -836,7 +878,9 @@ impl AbroMux {
         );
         cx.spawn_in(window, async move |this, cx| {
             if rx.await == Ok(true) {
-                let _ = this.update_in(cx, |this, window, cx| this.close_surface(id, window, cx));
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.close_or_replace(id, replace, window, cx)
+                });
             }
         })
         .detach();
@@ -1579,9 +1623,10 @@ impl AbroMux {
         );
     }
 
-    fn flash_pane(&mut self, cx: &mut Context<Self>) {
+    /// Flash pane `pane` (⌘⇧H flashes the focused one, `trigger-flash` any).
+    fn flash_pane(&mut self, pane: usize, cx: &mut Context<Self>) {
         let n = self.flash.map_or(0, |(_, n)| n + 1);
-        self.flash = Some((self.ws().focused_pane, n));
+        self.flash = Some((pane, n));
         cx.notify();
         cx.spawn(async move |this, cx| {
             Timer::after(Duration::from_millis(700)).await;
@@ -2346,7 +2391,16 @@ impl Render for AbroMux {
             }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 if let Some(id) = this.ws().focused_surface().map(|s| s.entity_id()) {
-                    this.request_close_surface(id, window, cx)
+                    let keep = cx
+                        .global::<settings::Settings>()
+                        .app
+                        .keep_workspace_open_when_closing_last_surface;
+                    let last = this.ws().root.panes().iter().map(|p| p.tabs.len()).sum::<usize>() == 1;
+                    if keep && last {
+                        this.request_replace_last_surface(id, window, cx)
+                    } else {
+                        this.request_close_surface(id, window, cx)
+                    }
                 }
             }))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| this.cycle_tab(1, window, cx)))
@@ -2395,7 +2449,18 @@ impl Render for AbroMux {
             .on_action(
                 cx.listener(|this, _: &ResizeDown, _, cx| this.resize_focused(Dir::Down, cx)),
             )
-            .on_action(cx.listener(|this, _: &FlashPane, _, cx| this.flash_pane(cx)))
+            .on_action(
+                cx.listener(|this, _: &FlashPane, _, cx| {
+                    this.flash_pane(this.ws().focused_pane, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &MoveTabToNewWorkspace, window, cx| {
+                if let Some(id) = this.ws().focused_surface().map(|s| s.entity_id())
+                    && let Err(e) = this.tab_to_new_workspace(id, None, true, window, cx)
+                {
+                    window.push_notification(Notification::warning(e.to_string()), cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToggleZoom, _, cx| {
                 if this.workspaces[this.active].toggle_zoom() {
                     cx.notify()

@@ -1213,6 +1213,11 @@ impl AbroMux {
                     this.drop_group(d.id, onto, cx);
                 }
             }))
+            // A tab dropped on a workspace moves into it.
+            .drag_over::<crate::DraggedTab>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
+            .on_drop(cx.listener(move |this, d: &crate::DraggedTab, window, cx| {
+                this.drop_tab_on_workspace(d.sid, id, window, cx)
+            }))
             .when_some(rail, |s, c| {
                 s.child(
                     div()

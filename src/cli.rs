@@ -60,6 +60,18 @@ Commands:
   focus-surface --surface <ref>
   rename-tab [--surface <ref>] [--workspace <ref>] [<title>]  (no title: back to the program's own)
   respawn-pane [--surface <ref>] [--workspace <ref>] [--command <text>]   (kill the shell and start a fresh one in its cwd)
+  move-surface [--surface] <ref> [--pane <ref> | --workspace <ref>] [--index <n> | --before <ref> | --after <ref>] [--focus <true|false>]
+                                                             (to another pane or workspace; default: the end of the
+                                                             workspace's focused pane. A workspace it empties closes)
+  reorder-surface [--surface] <ref> (--index <n> | --before <ref> | --after <ref>)   (within its pane)
+  split-off [--surface <ref>] <left|right|up|down> [--focus <true|false>]   (into a new pane beside its own; alias
+                                                             drag-surface-to-split; focus stays put by default)
+  move-tab-to-new-workspace [--surface <ref>] [--title <text>] [--focus <true|false>]   (aliases detach-tab,
+                                                             break-pane --pane <ref>: that pane's active tab)
+  join-pane --target-pane <ref> [--surface <ref> | --pane <ref>] [--focus <true|false>]   (move a tab, or a pane's
+                                                             active tab, to the end of another pane, in any workspace)
+  zoom-pane [--pane <ref>] [--workspace <ref>] [on|off|toggle]   (fill the workspace with the pane, like ⌘⇧↩)
+  trigger-flash [--surface <ref>] [--workspace <ref>]        (flash the pane holding it, like ⌘⇧H)
   send [--surface <ref>] [--workspace <ref>] <text>          (\\n presses enter; also \\t \\e \\\\)
   send-key [--surface <ref>] [--workspace <ref>] <key>       (enter, tab, escape, up, ctrl-c, alt-b, ...)
   read-screen [--surface <ref>] [--workspace <ref>] [--scrollback] [--lines <n>]
@@ -256,6 +268,20 @@ fn call(method: &str, params: Map<String, Value>) -> Result<Value, String> {
     ipc::call(method, Value::Object(params)).map_err(|e| e.to_string())
 }
 
+/// cmux's other names for `--surface`, `--before` and `--after`.
+fn surface_aliases(opts: &mut Map<String, Value>) {
+    for (alias, name) in [
+        ("panel", "surface"),
+        ("tab", "surface"),
+        ("before_surface", "before"),
+        ("after_surface", "after"),
+    ] {
+        if let Some(v) = opts.remove(alias) {
+            opts.entry(name).or_insert(v);
+        }
+    }
+}
+
 fn dispatch(
     cmd: &str,
     mut pos: Vec<String>,
@@ -443,6 +469,62 @@ fn dispatch(
             })
         }
         "respawn-pane" => ("surface.respawn", |v| format!("OK {}", s(&v["ref"]))),
+        "move-surface" | "reorder-surface" => {
+            surface_aliases(&mut opts);
+            if !opts.contains_key("surface") && !pos.is_empty() {
+                opts.insert("surface".into(), json!(pos.remove(0)));
+            }
+            let method = if cmd == "move-surface" {
+                "surface.move"
+            } else {
+                "surface.reorder"
+            };
+            (method, |v| {
+                format!("OK {} {} index {}", s(&v["ref"]), s(&v["pane"]), v["index"])
+            })
+        }
+        "split-off" | "drag-surface-to-split" => {
+            surface_aliases(&mut opts);
+            first("direction", &mut opts)?;
+            ("surface.split_off", |v| {
+                format!("OK {} {}", s(&v["ref"]), s(&v["pane"]))
+            })
+        }
+        "move-tab-to-new-workspace" | "detach-tab" | "break-pane" => {
+            surface_aliases(&mut opts);
+            if !opts.contains_key("title") && !pos.is_empty() {
+                opts.insert("title".into(), json!(pos.join(" ")));
+            }
+            ("surface.move_to_new_workspace", |v| {
+                format!("OK {} {}", s(&v["ref"]), s(&v["workspace"]))
+            })
+        }
+        "join-pane" => {
+            surface_aliases(&mut opts);
+            if !opts.contains_key("target_pane") && !pos.is_empty() {
+                opts.insert("target_pane".into(), json!(pos.remove(0)));
+            }
+            ("pane.join", |v| {
+                format!("OK {} {}", s(&v["ref"]), s(&v["pane"]))
+            })
+        }
+        "zoom-pane" => {
+            if let Some(state) = pos.first() {
+                opts.insert("state".into(), json!(state));
+            }
+            ("pane.zoom", |v| {
+                let state = if v["zoomed"] == true {
+                    "zoomed"
+                } else {
+                    "unzoomed"
+                };
+                format!("OK {} {state}", s(&v["pane"]))
+            })
+        }
+        "trigger-flash" => {
+            surface_aliases(&mut opts);
+            ("surface.flash", |v| format!("OK {}", s(&v["pane"])))
+        }
         "send" => {
             first("text", &mut opts)?;
             ("surface.send_text", |_| "OK".into())
@@ -1090,5 +1172,28 @@ mod tests {
         let a = args(&["send", "--", "--not-a-flag"]);
         assert_eq!(a.pos, ["send", "--not-a-flag"]);
         assert!(parse(&["--pane".to_string()]).is_err());
+    }
+
+    #[test]
+    fn cmux_surface_aliases() {
+        let mut a = args(&[
+            "move-surface",
+            "--panel",
+            "surface:2",
+            "--after-surface",
+            "surface:3",
+            "--target-pane",
+            "pane:4",
+        ]);
+        surface_aliases(&mut a.opts);
+        assert_eq!(a.opts["surface"], "surface:2");
+        assert_eq!(a.opts["after"], "surface:3");
+        assert_eq!(a.opts["target_pane"], "pane:4");
+        assert!(!a.opts.contains_key("panel"));
+
+        // An explicit --surface wins over its alias.
+        let mut a = args(&["x", "--surface", "surface:1", "--tab", "surface:9"]);
+        surface_aliases(&mut a.opts);
+        assert_eq!(a.opts["surface"], "surface:1");
     }
 }

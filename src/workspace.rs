@@ -670,6 +670,51 @@ impl Workspace {
         true
     }
 
+    /// Pane id, index and the pane's tab count for tab `id`.
+    pub fn tab_position(&self, id: EntityId) -> Option<(usize, usize, usize)> {
+        self.find_tab(id)
+    }
+
+    /// Take tab `id` out, for another workspace. A pane it leaves empty
+    /// closes; if it was the workspace's last tab the root pane is left
+    /// empty, and the second value is true: the caller closes the workspace.
+    pub fn detach_tab(&mut self, id: EntityId) -> Option<(Surface, bool)> {
+        let (from, idx, count) = self.find_tab(id)?;
+        let src = self.root.pane_mut(from)?;
+        let surface = src.tabs.remove(idx);
+        if src.active > idx || src.active >= src.tabs.len() {
+            src.active = src.active.saturating_sub(1);
+        }
+        if count > 1 {
+            return Some((surface, false));
+        }
+        if !self.root.remove(from) {
+            return Some((surface, true));
+        }
+        if self.focused_pane == from {
+            self.focused_pane = self.root.panes()[0].id;
+        }
+        self.zoom = None;
+        Some((surface, false))
+    }
+
+    /// Put `surface` in pane `pane` at `index` (past the end appends), as
+    /// its active tab. Hands it back if there's no such pane.
+    pub fn insert_tab(
+        &mut self,
+        pane: usize,
+        index: usize,
+        surface: Surface,
+    ) -> Result<(), Surface> {
+        let Some(p) = self.root.pane_mut(pane) else {
+            return Err(surface);
+        };
+        let at = index.min(p.tabs.len());
+        p.tabs.insert(at, surface);
+        p.active = at;
+        Ok(())
+    }
+
     /// cwd of the focused terminal, or of any terminal in the workspace.
     pub fn cwd(&self, cx: &App) -> Option<String> {
         self.focused_surface().and_then(|s| s.cwd(cx)).or_else(|| {

@@ -10,7 +10,7 @@ Everything AbroMux does, in detail. For a quick start, see the [README](../READM
 - **Coding agents** (Claude Code, Codex, Gemini CLI, Droid, Cursor CLI, OpenCode and Pi) show up in the sidebar once you've run `abromux hooks install`: a "Running" pill while the agent works and "Needs input" when it asks for permission (Cursor's hooks can't say when it asks). When it asks, or finishes a turn, its terminal gets a notification ("Codex: Asks to run …", "Claude Code: <the start of its reply>"). Their tabs show the agent's logo (Claude Code and Codex) or a robot.
 - **Notifications** come from terminal programs (OSC 9, OSC 99 and OSC 777, as Claude Code, Codex and others send them), from the bell, and from `abromux notify`. One you aren't looking at rings its pane, puts a dot on its tab and on its workspace, shows its text under the workspace in the sidebar, counts on the dock icon, and, while AbroMux is in the background, shows a macOS banner that takes you to it when clicked (banners need AbroMux.app; a `cargo run` build has the rest). It's read once you look at that terminal. ⌘I lists them all; ⌘⇧U jumps to the newest unread one.
 - **Links** in terminal output underline while you hold ⌘ over them: URLs, OSC 8 hyperlinks, and paths to files that exist (relative ones from the shell's directory, `path:line` too). ⌘-click opens web links in a browser to the right of the terminal (a new tab there if that pane already shows one) and anything else with its default app.
-- **Panes** split right or down, and each pane has a tab bar of terminal and browser tabs. Drag a divider to resize. Drag a tab to reorder it, onto another pane's tab bar or middle to move it there, onto a pane's edge to split that pane, or onto the outer edge of the pane area to split the whole workspace (full width or height). A highlight shows where it will land.
+- **Panes** split right or down, and each pane has a tab bar of terminal and browser tabs. Drag a divider to resize. Drag a tab to reorder it, onto another pane's tab bar or middle to move it there, onto a pane's edge to split that pane, or onto the outer edge of the pane area to split the whole workspace (full width or height), or onto a workspace in the sidebar to move it into that workspace. A highlight shows where it will land. Move Tab to New Workspace (⌘⇧P) gives the focused tab a workspace of its own.
 
 ## Build from source
 
@@ -167,7 +167,8 @@ These use cmux's key names. Shown with their defaults:
     "workspaceInheritWorkingDirectory": true,
     "newWorkspacePlacement": "end",
     "automaticallyCheckForUpdates": true,
-    "workspaceFoldersDirectory": null
+    "workspaceFoldersDirectory": null,
+    "keepWorkspaceOpenWhenClosingLastSurface": false
   },
   "sidebar": {
     "fontSize": 12.5,
@@ -197,6 +198,7 @@ These use cmux's key names. Shown with their defaults:
 ```
 
 - `workspaceInheritWorkingDirectory`: ⌘N and the `+` start in the focused terminal's directory; `false` starts in your home folder.
+- `keepWorkspaceOpenWhenClosingLastSurface`: ⌘W on a workspace's last tab opens a fresh terminal in the same directory instead of closing the workspace. Only ⌘W: a shell that exits, or the tab's `×`, still closes it.
 - `automaticallyCheckForUpdates`: look for a new release once a day ([Updates](#updates)).
 - `workspaceFoldersDirectory`: where ⇧⌘I makes [workspace folders](#workspace-folders); `null` is `~/.abromux/ws` (per channel for nightlies).
 - `newWorkspacePlacement`: where a new workspace goes, `top`, `afterCurrent` (after the selected one, or after its group) or `end`. `workspaceGroups.newWorkspacePlacement` is the same inside a group, where `top` means right after the group's first workspace.
@@ -285,6 +287,13 @@ abromux rename-tab --surface surface:3 'dev server'   # no title: back to the pr
 abromux respawn-pane --surface surface:3 --command 'npm run dev'   # kill the shell, start a fresh one
 abromux last-pane                           # back to the pane focused before
 abromux swap-pane -L                        # swap the focused pane's tabs with the pane to its left
+abromux move-surface surface:3 --pane pane:2 --index 0   # or --workspace workspace:2, --before/--after surface:5
+abromux reorder-surface surface:3 --after surface:5      # within its pane
+abromux split-off --surface surface:3 right            # into a new pane beside its own (alias drag-surface-to-split)
+abromux move-tab-to-new-workspace --surface surface:3 --title logs   # aliases detach-tab, break-pane
+abromux join-pane --target-pane pane:2 --pane pane:4   # pane:4's active tab to the end of pane:2
+abromux zoom-pane                           # like ⌘⇧↩; on, off or toggle
+abromux trigger-flash --surface surface:3   # flash its pane, like ⌘⇧H
 abromux browser open https://example.com
 abromux browser eval 'document.title'
 abromux notify --title 'Tests' --body 'all green'   # rings the pane it runs in
@@ -337,9 +346,9 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | New terminal tab | terminal icon in pane tab bar | ⌘T |
 | New browser tab | globe icon | ⌘⇧L (⌘L focuses address bar) |
 | Split right / down | split icons | ⌘D / ⌘⇧D |
-| Move tab / split by dragging | drag a tab onto a tab bar, a pane's edge or the window's edge | |
+| Move tab / split by dragging | drag a tab onto a tab bar, a pane's edge, the window's edge or a workspace in the sidebar | ⌘⇧P → Move Tab to New Workspace |
 | Rename tab | double-click it (Enter saves, Esc cancels; an empty name goes back to the program's title) | ⌘R (in a browser tab ⌘R reloads; use ⌘⇧P → Rename Tab…) |
-| Close tab | tab `×` / middle-click | ⌘W (last tab closes the pane; last pane closes the workspace) |
+| Close tab | tab `×` / middle-click | ⌘W (last tab closes the pane; last pane closes the workspace, unless `app.keepWorkspaceOpenWhenClosingLastSurface`) |
 | Cycle tabs | | ⌘⇧[ / ⌘⇧], ⌃Tab / ⌃⇧Tab |
 | Select tab in focused pane | click | ⌃1…⌃8, ⌃9 for the last (hold ⌃ to see the numbers) |
 | Focus pane in a direction | click | ⌥⌘← → ↑ ↓ |

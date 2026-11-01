@@ -22,7 +22,9 @@ use futures::{
     channel::{mpsc, oneshot},
     future::{Either, LocalBoxFuture, select},
 };
-use gpui::{App, AppContext as _, AsyncApp, Axis, Context, Entity, Keystroke, Timer, Window};
+use gpui::{
+    App, AppContext as _, AsyncApp, Axis, Context, Entity, EntityId, Keystroke, Timer, Window,
+};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Write},
@@ -181,6 +183,21 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
 
 fn str_param<'a>(p: &'a Value, key: &str) -> Option<&'a str> {
     p.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
+}
+
+/// A count given as a number or (from the CLI) as text.
+fn usize_param(p: &Value, key: &str) -> anyhow::Result<Option<usize>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => s
+            .parse()
+            .map(Some)
+            .with_context(|| format!("bad --{key} {s:?}")),
+        Some(v) => v
+            .as_u64()
+            .map(|n| Some(n as usize))
+            .with_context(|| format!("--{key} must be a number")),
+    }
 }
 
 fn bool_param(p: &Value, key: &str, default: bool) -> bool {
@@ -679,6 +696,136 @@ impl AbroMux {
                     }
                 });
                 self.describe_surface(&Surface::Terminal(t), true, cx)
+            }
+            "surface.move" | "surface.reorder" => {
+                // `--workspace` is where it goes, not where to find it.
+                let mut src_p = p.clone();
+                src_p.as_object_mut().map(|o| o.remove("workspace"));
+                let (swi, spane, s) = self.surface_target(&src_p)?;
+                let id = s.entity_id();
+                let anchor = match (str_param(p, "before"), str_param(p, "after")) {
+                    (Some(_), Some(_)) => bail!("pass --before or --after, not both"),
+                    (Some(b), None) => Some((self.find_surface(b, Some(swi))?, false)),
+                    (None, Some(a)) => Some((self.find_surface(a, Some(swi))?, true)),
+                    (None, None) => None,
+                };
+                let index = usize_param(p, "index")?;
+                let (dwi, dpane) = if method == "surface.reorder" {
+                    if anchor.is_none() && index.is_none() {
+                        bail!("reorder-surface needs --index, --before or --after");
+                    }
+                    if let Some(((awi, apane, _), _)) = &anchor
+                        && (*awi, *apane) != (swi, spane)
+                    {
+                        bail!("--before/--after must name a tab in the same pane");
+                    }
+                    (swi, spane)
+                } else if str_param(p, "pane").is_some() {
+                    self.pane_target(p)?
+                } else if let Some(((awi, apane, _), _)) = &anchor {
+                    (*awi, *apane)
+                } else if str_param(p, "workspace").is_some() {
+                    let wi = self.workspace_target(p)?;
+                    (wi, self.workspaces[wi].focused_pane)
+                } else {
+                    bail!("move-surface needs --pane, --workspace, --before or --after");
+                };
+                let at = match (&anchor, index) {
+                    (Some(((_, _, a), after)), _) => {
+                        let pane = self.workspaces[dwi]
+                            .root
+                            .panes()
+                            .into_iter()
+                            .find(|x| x.id == dpane);
+                        let i = pane
+                            .and_then(|x| {
+                                x.tabs.iter().position(|t| t.entity_id() == a.entity_id())
+                            })
+                            .context("--before/--after tab isn't in the target pane")?;
+                        if a.entity_id() == id {
+                            bail!("--before/--after names the tab being moved");
+                        }
+                        i + usize::from(*after)
+                    }
+                    (None, Some(i)) => {
+                        // An index into the pane as it will be: past the tab's
+                        // own slot when it moves later within its pane.
+                        match self.workspaces[dwi].tab_position(id) {
+                            Some((from, idx, _)) if from == dpane && i > idx => i + 1,
+                            _ => i,
+                        }
+                    }
+                    (None, None) => usize::MAX,
+                };
+                self.move_surface(id, dwi, dpane, at, bool_param(p, "focus", true), window, cx)?;
+                self.describe_moved(id, cx)?
+            }
+            "surface.split_off" => {
+                let (_, _, s) = self.surface_target(p)?;
+                let dir = match str_param(p, "direction").context("missing direction")? {
+                    "left" => Dir::Left,
+                    "right" => Dir::Right,
+                    "up" => Dir::Up,
+                    "down" => Dir::Down,
+                    _ => bail!("direction must be left, right, up or down"),
+                };
+                let id = s.entity_id();
+                self.split_off(id, dir, bool_param(p, "focus", false), window, cx)?;
+                self.describe_moved(id, cx)?
+            }
+            "surface.move_to_new_workspace" => {
+                let (_, _, s) = self.source_surface(p)?;
+                let id = s.entity_id();
+                let name = str_param(p, "title").map(one_line);
+                self.tab_to_new_workspace(id, name, bool_param(p, "focus", false), window, cx)?;
+                self.describe_moved(id, cx)?
+            }
+            "pane.join" => {
+                let target =
+                    str_param(p, "target_pane").context("join-pane needs --target-pane")?;
+                let mut tp = p.clone();
+                tp["pane"] = json!(target);
+                let (dwi, dpane) = self.pane_target(&tp)?;
+                let (_, spane, s) = self.source_surface(p)?;
+                if spane == dpane {
+                    bail!("it's already in pane:{dpane}");
+                }
+                let id = s.entity_id();
+                self.move_surface(
+                    id,
+                    dwi,
+                    dpane,
+                    usize::MAX,
+                    bool_param(p, "focus", false),
+                    window,
+                    cx,
+                )?;
+                self.describe_moved(id, cx)?
+            }
+            "pane.zoom" => {
+                let (wi, pane) = self.pane_target(p)?;
+                let ws = &mut self.workspaces[wi];
+                let on = match str_param(p, "state").unwrap_or("toggle") {
+                    "on" => true,
+                    "off" => false,
+                    "toggle" => ws.zoomed() != Some(pane),
+                    s => bail!("expected on, off or toggle, got {s:?}"),
+                };
+                if on && !matches!(ws.root, crate::workspace::Node::Split { .. }) {
+                    bail!("the workspace has one pane; there's nothing to zoom");
+                }
+                ws.focused_pane = pane;
+                ws.zoom = on.then_some(pane);
+                if wi == self.active {
+                    self.focus_active(window, cx);
+                }
+                cx.notify();
+                json!({ "pane": format!("pane:{pane}"), "zoomed": on })
+            }
+            "surface.flash" => {
+                let (_, pane, _) = self.surface_target(p)?;
+                self.flash_pane(pane, cx);
+                json!({ "pane": format!("pane:{pane}") })
             }
             "surface.clear_history" => {
                 let t = self.terminal_target(p)?;
@@ -1329,6 +1476,40 @@ impl AbroMux {
             }
         }
         .with_context(|| format!("no pane {s}"))
+    }
+
+    /// `--surface`, else `--pane`'s active tab, else the usual target.
+    fn source_surface(&self, p: &Value) -> anyhow::Result<(usize, usize, Surface)> {
+        if str_param(p, "surface").is_none() && str_param(p, "pane").is_some() {
+            let (wi, pane) = self.pane_target(p)?;
+            let s = self.workspaces[wi]
+                .root
+                .panes()
+                .into_iter()
+                .find(|x| x.id == pane)
+                .and_then(|x| x.active_surface())
+                .cloned()
+                .context("that pane has no tabs")?;
+            return Ok((wi, pane, s));
+        }
+        self.surface_target(p)
+    }
+
+    /// Where tab `id` is after a move: its ref, workspace, pane and index.
+    fn describe_moved(&self, id: EntityId, cx: &App) -> anyhow::Result<Value> {
+        let wi = self.workspace_of(id).context("the tab is gone")?;
+        let ws = &self.workspaces[wi];
+        let (pane, index, _) = ws.tab_position(id).context("the tab is gone")?;
+        let s = self.find_tab(id).context("the tab is gone")?;
+        let mut v = self.describe_surface(
+            &s,
+            ws.focused_surface().is_some_and(|f| f.entity_id() == id),
+            cx,
+        );
+        v["workspace"] = json!(self.ws_ref(wi));
+        v["pane"] = json!(format!("pane:{pane}"));
+        v["index"] = json!(index);
+        Ok(v)
     }
 
     // ---- actions --------------------------------------------------------

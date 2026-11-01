@@ -708,6 +708,13 @@ fn general_page() -> Page {
                         &["app", "workspaceInheritWorkingDirectory"],
                         |s| s.app.workspace_inherit_working_directory,
                     ),
+                    switch(
+                        "Keep workspace open",
+                        "⌘W on a workspace's last tab opens a fresh terminal instead of \
+                         closing the workspace.",
+                        &["app", "keepWorkspaceOpenWhenClosingLastSurface"],
+                        |s| s.app.keep_workspace_open_when_closing_last_surface,
+                    ),
                     folder_row(
                         "Workspace folders",
                         "Where ⇧⌘I makes a workspace's own folder.",

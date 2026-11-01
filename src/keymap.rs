@@ -74,6 +74,8 @@ pub const ACTIONS: &[Act] = {
         "splitDown", Some("Split Down"), SplitDown, [(None, ["cmd-shift-d"])];
         "renameTab", Some("Rename Tab…"), RenameTab, [(None, ["cmd-r"])];
         "closeTab", Some("Close Tab"), CloseTab, [(None, ["cmd-w"])];
+        "moveTabToNewWorkspace", Some("Move Tab to New Workspace"), MoveTabToNewWorkspace,
+            [(None, [])];
         // ⌘⇧] arrives from macOS as cmd-} (shift folded into the key), so
         // "cmd-shift-]" would never match. `normalize` folds it the same way.
         "nextTab", Some("Next Tab"), NextTab, [(None, ["cmd-}", "ctrl-tab"])];

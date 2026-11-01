@@ -92,6 +92,9 @@ abromux workspace-action set-description 'Migrating auth to OAuth'   # a line un
 abromux workspace-action set-color Teal  # cmux's color names or #rrggbb; clear-color
 abromux group list                       # sidebar groups; group add --group group:1 puts yours in one
 abromux focus-surface --surface surface:7    # take the user there (only when asked)
+abromux move-surface surface:7 --workspace workspace:2   # move a tab; or --pane pane:4 [--index 0]
+abromux split-off --surface surface:7 right  # a tab into its own pane beside; focus stays put
+abromux move-tab-to-new-workspace --surface surface:7 --title 'dev server'
 abromux list-notifications
 abromux clear-history --surface surface:7    # like ⌘K
 abromux rpc <method> '<json>'            # raw socket call

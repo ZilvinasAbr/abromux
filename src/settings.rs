@@ -134,6 +134,9 @@ pub struct AppSettings {
     /// Where ⇧⌘I makes workspace folders (`~` allowed); None for the
     /// channel's own, `~/.abromux/ws`.
     pub workspace_folders_directory: Option<String>,
+    /// ⌘W on a workspace's last tab opens a fresh terminal in its place
+    /// instead of closing the workspace.
+    pub keep_workspace_open_when_closing_last_surface: bool,
 }
 
 impl Default for AppSettings {
@@ -143,6 +146,7 @@ impl Default for AppSettings {
             new_workspace_placement: Placement::End,
             automatically_check_for_updates: true,
             workspace_folders_directory: None,
+            keep_workspace_open_when_closing_last_surface: false,
         }
     }
 }
@@ -1059,7 +1063,8 @@ mod tests {
     fn sidebar_and_workspace_keys() {
         let s = parse(
             r##"{
-              "app": { "workspaceInheritWorkingDirectory": false, "newWorkspacePlacement": "afterCurrent" },
+              "app": { "workspaceInheritWorkingDirectory": false, "newWorkspacePlacement": "afterCurrent",
+                       "keepWorkspaceOpenWhenClosingLastSurface": true },
               "sidebar": { "fontSize": 14, "hideAllDetails": true, "selectionColor": "#336699" },
               "sidebarAppearance": { "tintColor": "#000", "tintOpacity": 0.3 },
               "workspaceColors": { "indicatorStyle": "solidFill", "colors": { "Ocean": "#0066aa" } },
@@ -1069,6 +1074,8 @@ mod tests {
         )
         .unwrap();
         assert!(!s.app.workspace_inherit_working_directory);
+        assert!(s.app.keep_workspace_open_when_closing_last_surface);
+        assert!(!AppSettings::default().keep_workspace_open_when_closing_last_surface);
         assert_eq!(s.app.new_workspace_placement, Placement::AfterCurrent);
         assert_eq!(s.sidebar.font_size, 14.);
         assert!(s.sidebar.hide_all_details && s.sidebar.show_log);

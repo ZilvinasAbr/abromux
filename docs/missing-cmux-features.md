@@ -26,7 +26,6 @@ So the list below reads in context:
 - [x] **Font size controls**: ⌘+ / ⌘- / ⌘0.
 - [x] **Clear scrollback**: ⌘K, plus `clear-history` in the CLI.
 - [x] **Find in terminal**: ⌘F, find next/previous (⌘G / ⌥⌘G), use selection for find (⌘E), hide the find bar. *(browser pages have their own, see Find in page)*
-- [ ] **Find in directory**: ⌘⇧F, a ripgrep-backed project search.
 - [x] **Scrollbar**, plus a scroll-speed setting. *(Ghostty's `scrollbar` and `mouse-scroll-multiplier`; an overlay bar that shows while scrolled back)*
 - [x] **Copy options**: copy-on-select, a copy confirmation, reflowing hard wraps on copy. *(partial: `copy-on-select = clipboard` from the Ghostty config; no copy confirmation or reflowing)*
 - [x] **Safe paste**: confirm before pasting multi-line or otherwise unsafe text. *(Ghostty's rule and its `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` settings: a newline only counts as unsafe when the program hasn't turned on bracketed paste)*
@@ -43,18 +42,18 @@ So the list below reads in context:
 - [x] **Directional pane focus**: ⌥⌘ ← → ↑ ↓.
 - [x] **Shortcut hints**: holding ⌘ shows each workspace's ⌘N, holding ⌃ shows the focused pane's ⌃N tab numbers.
 - [x] **Keyboard pane resizing**: ⌃⇧ H J K L with a configurable step, plus `resize-pane` in the CLI. *(the step is `panes.resizeStep` in the config file)*
-- [x] **Flash the focused panel**: ⌘⇧H, plus `trigger-flash` in the CLI. *(partial: no `trigger-flash`)*
-- [x] **Pane zoom**: ⌘⇧↩ makes the focused pane fill the workspace, and again restores the split. *(partial: no `zoom-pane` in the CLI)*
+- [x] **Flash the focused panel**: ⌘⇧H, plus `trigger-flash` in the CLI.
+- [x] **Pane zoom**: ⌘⇧↩ makes the focused pane fill the workspace, and again restores the split. *(also `zoom-pane [on|off|toggle]`, which cmux doesn't have)*
 - [x] **Jump to tab N**: ⌃1–8, and ⌃9 for the last tab.
 - [x] **Tab cycling with ⌃Tab / ⌃⇧Tab.**
 - [x] **Renaming tabs**: `rename-tab`, overriding the shell's title. *(⌘R, double-click a tab, the palette, or `rename-tab`; saved with the session)*
-- [ ] **Dragging tabs**: reorder them within a pane, move them to another pane, or drop them on an edge to make a new split. The CLI equivalents are `move-surface`, `reorder-surface`, `split-off` and `drag-surface-to-split`.
-- [ ] **Moving tabs to a new workspace** (`move-tab-to-new-workspace`, `break-pane`).
-- [x] **Joining or swapping panes** (`join-pane`, `swap-pane`), and switching to the last pane (`last-pane`). *(partial: `swap-pane` and `last-pane`, in the CLI and the palette; no `join-pane`)*
+- [x] **Dragging tabs**: reorder them within a pane, move them to another pane, or drop them on an edge to make a new split. The CLI equivalents are `move-surface`, `reorder-surface`, `split-off` and `drag-surface-to-split`. *(also drop a tab on a sidebar workspace to move it there)*
+- [x] **Moving tabs to a new workspace** (`move-tab-to-new-workspace`, `break-pane`). *(also `detach-tab`, and Move Tab to New Workspace in the palette)*
+- [x] **Joining or swapping panes** (`join-pane`, `swap-pane`), and switching to the last pane (`last-pane`). *(`swap-pane` and `last-pane` are also in the palette)*
 - [x] **Focused-pane border**: an active-pane border color and a configurable divider color. *(`panes.focusBorderColor` and `panes.dividerColor` in the config file)*
-- [ ] **Keeping the workspace open when its last tab closes** (a setting).
+- [x] **Keeping the workspace open when its last tab closes** (a setting). *(`app.keepWorkspaceOpenWhenClosingLastSurface`, as in cmux only for ⌘W: a fresh terminal takes the tab's place)*
 - [ ] **Canvas layout**: a freeform canvas workspace with pane gaps and snapping. This is beta in cmux.
-- [ ] **Built-in viewers as surfaces**: a Markdown viewer with live reload (`cmux markdown`), a diff viewer for unstaged, staged, branch or last-turn changes (`cmux diff`), and a file editor with syntax highlighting.
+- [ ] **Markdown viewer as a surface**: live reload (`cmux markdown`).
 
 ## 3. Workspaces and sidebar
 
@@ -63,9 +62,7 @@ So the list below reads in context:
 - [x] **Workspace colors**: per-workspace color, indicator style and selection color. *(partial: `leftRail` and `solidFill` styles only; `workspace-action set-color`, the right-click menu)*
 - [x] **Reordering workspaces**: drag in the sidebar, plus `reorder-workspace(s)` in the CLI. *(also `workspace-action move-up/move-down/move-top`)*
 - [x] **Workspace groups**: grouping by cwd and choosing where new workspaces are placed. *(partial: groups you make, or Group Workspaces by Folder, with `workspaceGroups.newWorkspacePlacement`; no `byCwd` icons or header context-menu entries from the config; `abromux group …` instead of cmux's group flags beyond `new-workspace --group`)*
-- [ ] **More sidebar metadata**:
-  - [ ] linked PR status and number
-  - [ ] listening ports
+- [x] **More sidebar metadata**:
   - [x] the latest notification's text
   - [x] status pills set by scripts (`set-status`, `clear-status`, `list-status`) *(partial: `--icon` only knows abromux's bundled icons; not saved with the session)*
   - [x] a progress bar (`set-progress`, `clear-progress`)
@@ -73,8 +70,6 @@ So the list below reads in context:
 - [x] **Sidebar settings**: font size, hiding details, wrapping titles, branch layout, last path segment only, tint and opacity. *(cmux's `sidebar`, `sidebarAppearance` and `workspaceColors` keys; not `matchTerminalBackground`, light/dark tints, badge or spinner positions, compact status)*
 - [x] **New workspaces inherit the cwd** (a setting). *(`app.workspaceInheritWorkingDirectory`, and `app.newWorkspacePlacement`)*
 - [x] **Auto-naming workspaces** from what the agent is doing. *(`automation.workspaceAutoNaming`, off by default: Claude Code and Codex name it from the first prompt; not tabs)*
-- [ ] **Right sidebar**: toggle it (⌥⌘B), focus it (⌘⇧E), and switch between modes such as file explorer, find, sessions, feed and dock.
-- [ ] **Dock**: custom terminal controls in the right sidebar, defined in `.cmux/dock.json` or `~/.config/cmux/dock.json`.
 - [ ] **Custom sidebars**: user-written, SwiftUI-style sidebar files. Beta in cmux.
 
 ## 4. Notifications and attention
@@ -98,7 +93,6 @@ So the list below reads in context:
 - [ ] **Search-engine settings and search suggestions.**
 - [ ] **Downloads**: ask where to save, list downloads, wait for one to finish.
 - [ ] **Profiles**: separate cookie jars, with list, add, rename, clear and delete.
-- [ ] **Importing from other browsers**: cookies, history and sessions from Chrome, Firefox, Arc and others.
 - [ ] **Discarding hidden webviews**: memory budgeting for background tabs.
 - [ ] **Link-hover preview** of the URL.
 - [x] **Browser automation in the CLI**: *(partial: events are synthesized with JavaScript, so they aren't trusted input; no iframes)*
@@ -118,14 +112,13 @@ So the list below reads in context:
 
 What's missing beyond the browser commands above:
 
-- [ ] **Windows**: `list-windows`, `current-window`, `new-window`, `focus-window`, `close-window`, `rename-window`, `move-workspace-to-window`, `next-window` / `previous-window` / `last-window`. abromux has a single window.
 - [ ] **UUID handles** (`--id-format uuids|both`). abromux has only short refs and indexes.
 - [ ] **Socket auth**: control modes, socket password, and only allowing processes started inside the app.
 - [ ] **`capabilities`, `events`**: an event stream with cursors, filters and reconnect.
 - [ ] **`wait-for`**: named signals between scripts.
 - [ ] **`read-selection`**, and `read-screen --selection`.
 - [x] **Starting a workspace from a JSON layout**: `new-workspace --layout <json>` and `--description`. *(partial: `--layout`, from JSON or `@file`; no `--description`)*
-- [ ] **`workspace-action`, `tab-action`**: one-shot actions with title, color, description and URL.
+- [x] **`workspace-action`, `tab-action`**: one-shot actions with title, color, description and URL. *(partial: `workspace-action`; no `tab-action`)*
 - [ ] **`top` / `memory`**: CPU, memory and process trees per workspace or surface.
 - [ ] **`surface-health`, `refresh-surfaces`, `debug-terminals`.**
 - [ ] **tmux-style buffers and hooks**: `set-buffer`, `list-buffers`, `paste-buffer`, `set-hook`, `display-message`, `find-window`.
@@ -151,25 +144,37 @@ What's missing beyond the browser commands above:
 
 ## 9. Coding-agent integrations
 
-- [x] **Agent hooks**: `hooks setup` for Claude Code, Codex, OpenCode, Gemini, Kiro, Amp, Cursor, Pi and others. They feed notifications, status and session IDs. *(partial: `hooks install` for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; it feeds session IDs, the sidebar status and notifications. No Kiro, Amp or Copilot yet)*
-- [x] **Agent session resume**: `restore` and `fork` from checkpoints, plus `surface resume` commands. *(partial: session restore resumes the sessions of every agent with hooks; no `fork` or CLI commands)*
-- [ ] **Agent hibernation**: put idle agents to sleep under memory pressure and wake them later.
-- [ ] **Feed**: an approval inbox for agent permission prompts and turn-complete events.
-- [ ] **Multi-agent teams as panes**: `claude-teams`, `codex-teams`, and oh-my-opencode (`omo`/`omx`/`omc`). Subagents become native splits.
-- [ ] **Agent-to-agent messages.**
-- [ ] **Vault**: search agent sessions, checkpoint them and fork them.
-- [ ] **Todo list per workspace**: `todo add/list/check/...`.
+- [x] **Agent hooks**: `hooks setup` for Claude Code, Codex, OpenCode, Gemini, Kiro, Amp, Cursor, Pi and others. They feed notifications, status and session IDs. *(`hooks install` for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; it feeds session IDs, the sidebar status and notifications. Kiro, Amp and Copilot are descoped, below)*
+- [x] **Agent session resume**: `restore` and `fork` from checkpoints, plus `surface resume` commands. *(session restore resumes the sessions of every agent with hooks; `fork` and the CLI commands are descoped, below)*
 - [ ] **Computer use**: `cmux-cua`, giving agents control of native apps.
 
 ## 10. App and platform
 
-- [ ] **Multiple windows**: ⌘⇧N.
 - [x] **App bundle and distribution**: a `.app` with an icon, DMG, Homebrew cask, auto-update (Sparkle) and a nightly channel. *(partial: `scripts/bundle-app.sh` builds the `.app`, a notarized DMG with `--dist`, and the Nightly app; updates work like cmux's (daily check, update pill, Install and Relaunch) without Sparkle; no cask)*
 - [x] **CLI installed on PATH**: abromux's CLI lives inside the binary. *(partial: the README's `ln -sf` puts it on PATH; nothing does it for you)*
 - [x] **Menu bar menus**: File, Edit, View, Window and Help. *(partial: abromux has these plus Notifications, built from its existing actions; no History or "Open in…" items)*
 - [ ] **Sleepy Mode**: an idle screen. Cosmetic.
 
-## 11. cmux Cloud and paid extras (probably out of scope)
+## 11. Descoped until asked
+
+Left out on purpose (2026-11-01). Don't pick these up for parity work until the user asks for them again.
+
+- **Hooks for Kiro, Amp and Copilot.** *(from 9)*
+- **Multiple windows**: ⌘⇧N, and the window commands in the CLI: `list-windows`, `current-window`, `new-window`, `focus-window`, `close-window`, `rename-window`, `move-workspace-to-window`, `next-window` / `previous-window` / `last-window`. abromux has a single window. *(from 6 and 10)*
+- **Right sidebar**: toggle it (⌥⌘B), focus it (⌘⇧E), and its modes: file explorer, find in directory (⌘⇧F, a ripgrep-backed project search), sessions, feed, and the dock of custom terminal controls defined in `.cmux/dock.json` or `~/.config/cmux/dock.json`. *(from 1 and 3)*
+- **Built-in viewers**: a diff viewer for unstaged, staged, branch or last-turn changes (`cmux diff`), and a file editor with syntax highlighting. The Markdown viewer stays in scope. *(from 2)*
+- **Agents** *(from 9)*:
+  - Feed: an approval inbox for agent permission prompts and turn-complete events.
+  - Forking agent sessions, and the `surface resume` commands in the CLI.
+  - Agent hibernation: put idle agents to sleep under memory pressure and wake them later.
+  - Multi-agent teams as panes: `claude-teams`, `codex-teams`, and oh-my-opencode (`omo`/`omx`/`omc`). Subagents become native splits.
+  - Agent-to-agent messages.
+  - Vault: search agent sessions, checkpoint them and fork them.
+  - A todo list per workspace: `todo add/list/check/...`.
+- **Sidebar metadata**: linked PR status and number, and listening ports. *(from 3)*
+- **Importing from other browsers**: cookies, history and sessions from Chrome, Firefox, Arc and others. *(from 5)*
+
+## 12. cmux Cloud and paid extras (probably out of scope)
 
 - [ ] Cloud VMs and workspaces (⌘Y, ⌘⇧Y, `cloud …`), remotes, AI accounts, CodeRouter.
 - [ ] An iOS companion app that syncs terminals, browser tunnelling and artifact folder access.
@@ -182,10 +187,11 @@ What's missing beyond the browser commands above:
 
 If the goal is daily-driver parity, a reasonable sequence is:
 
-Done so far: workspace descriptions, colors, groups, drag to reorder, sidebar settings, auto-naming and reopening the previous session; customizable shortcuts and custom palette commands, including workspace layouts and project commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload and a Settings window; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; agent status, notifications and resume for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; sidebar status, progress and log.
+Done so far: moving tabs between panes and workspaces from the CLI (`move-surface`, `split-off`, `join-pane`, `break-pane`), `zoom-pane`, `trigger-flash` and keeping a workspace open on ⌘W; workspace descriptions, colors, groups, drag to reorder, sidebar settings, auto-naming and reopening the previous session; customizable shortcuts and custom palette commands, including workspace layouts and project commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload and a Settings window; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; agent status, notifications and resume for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; sidebar status, progress and log.
 
 Next:
 
 1. **Tab-bar buttons for commands** (cmux's actions), and a JSON schema for the config file.
-2. **Hooks for the remaining agents** (Kiro, Amp, Copilot), once their hook formats settle.
-3. **Dragging tabs, multiple windows, SSH/tmux**, as the workspace model matures.
+2. **Notifications**: a hook command when one fires, `dismiss-notification` / `mark-notification-read`, ⌥⌘U and ⌃⌘U.
+3. **Browser basics**: zoom, downloads, profiles, popovers over webviews.
+4. **SSH/tmux**, as the workspace model matures.
