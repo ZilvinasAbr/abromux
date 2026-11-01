@@ -10,6 +10,7 @@ mod browser_find;
 mod browser_history;
 mod channel;
 mod cli;
+mod cmux;
 mod config;
 mod cursor;
 mod debug;
@@ -129,7 +130,8 @@ actions!(
         GroupByFolder,
         Ungroup,
         ToggleGroup,
-        ReopenSession
+        ReopenSession,
+        ImportCmuxSession
     ]
 );
 
@@ -2244,6 +2246,9 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &ReopenSession, window, cx| {
                 this.reopen_session(None, window, cx);
             }))
+            .on_action(
+                cx.listener(|this, _: &ImportCmuxSession, window, cx| this.import_cmux(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &CloseWorkspace, window, cx| {
                 this.request_close_workspace(this.active, window, cx)
             }))

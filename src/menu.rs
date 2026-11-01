@@ -5,9 +5,9 @@
 
 use crate::{
     About, CloseTab, CloseWorkspace, CommandPalette, EditDescription, FlashPane, FocusAddressBar,
-    FocusDown, FocusLeft, FocusRight, FocusUp, GroupByFolder, JumpToUnread, LastPane,
-    MoveWorkspaceDown, MoveWorkspaceUp, NewBrowser, NewGroup, NewTerminal, NewWorkspace, NextTab,
-    NextWorkspace, OpenSettings, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab,
+    FocusDown, FocusLeft, FocusRight, FocusUp, GroupByFolder, ImportCmuxSession, JumpToUnread,
+    LastPane, MoveWorkspaceDown, MoveWorkspaceUp, NewBrowser, NewGroup, NewTerminal, NewWorkspace,
+    NextTab, NextWorkspace, OpenSettings, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab,
     RenameWorkspace, ReopenSession, SplitDown, SplitRight, ToggleGroup, ToggleNotifications,
     ToggleSidebar, ToggleZoom, Ungroup, WorkspaceSwitcher, browser, channel, terminal,
 };
@@ -106,6 +106,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action("Go to Workspace…", WorkspaceSwitcher),
                 MenuItem::separator(),
                 MenuItem::action("Reopen Previous Session", ReopenSession),
+                MenuItem::action("Import cmux Session", ImportCmuxSession),
             ],
         },
         Menu {

@@ -60,6 +60,7 @@ pub const ACTIONS: &[Act] = {
         "toggleWorkspaceGroup", Some("Collapse or Expand Group"), ToggleGroup, [(None, [])];
         "reopenPreviousSession", Some("Reopen Previous Session"), ReopenSession,
             [(None, ["cmd-shift-o"])];
+        "importCmuxSession", Some("Import cmux Session"), ImportCmuxSession, [(None, [])];
         "nextWorkspace", Some("Next Workspace"), NextWorkspace, [(None, ["ctrl-cmd-]"])];
         "previousWorkspace", Some("Previous Workspace"), PrevWorkspace, [(None, ["ctrl-cmd-["])];
         "newTerminal", Some("New Terminal Tab"), NewTerminal, [(None, ["cmd-t"])];

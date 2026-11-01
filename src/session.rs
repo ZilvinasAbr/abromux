@@ -21,7 +21,7 @@ use gpui_component::WindowExt;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-const VERSION: u32 = 1;
+pub(crate) const VERSION: u32 = 1;
 /// Lines of scrollback kept per terminal.
 const SCROLLBACK_LINES: usize = 2000;
 
@@ -162,9 +162,15 @@ pub fn load() -> Option<Session> {
     }
 }
 
-/// A session file, or why it couldn't be read.
+/// A session file, or why it couldn't be read. cmux's session files are
+/// read too, converted (`crate::cmux`).
 pub fn read(path: &std::path::Path) -> Result<Session, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text)
+        && crate::cmux::is_cmux(&v)
+    {
+        return crate::cmux::convert(&v).map_err(|e| format!("{}: {e}", path.display()));
+    }
     match serde_json::from_str::<Session>(&text) {
         Ok(s) if s.version == VERSION => Ok(s),
         Ok(s) => Err(format!(
@@ -177,14 +183,22 @@ pub fn read(path: &std::path::Path) -> Result<Session, String> {
 }
 
 /// Where `restore-session --from` reads: a channel's session (`stable`,
-/// `nightly`, `nightly-<name>`), or a file.
+/// `nightly`, `nightly-<name>`), cmux's (`cmux`), or a file.
 pub fn source(from: &str) -> PathBuf {
-    if let Some(dir) = crate::channel::support_dir_named(from) {
-        return dir.join("session.json");
+    if let Some(p) = named_source(from) {
+        return p;
     }
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
     from.strip_prefix("~/")
         .map_or_else(|| from.into(), |rest| home.join(rest))
+}
+
+/// The session a `--from` name stands for, None for a file path.
+pub fn named_source(from: &str) -> Option<PathBuf> {
+    if from == "cmux" {
+        return Some(crate::cmux::session_path());
+    }
+    crate::channel::support_dir_named(from).map(|dir| dir.join("session.json"))
 }
 
 /// Write atomically (temp file + rename) so a crash mid-write can't leave a
@@ -396,6 +410,17 @@ impl AbroMux {
         }
         cx.notify();
         added
+    }
+
+    /// File › Import cmux Session: add cmux's workspaces (see `crate::cmux`)
+    /// that aren't open here already.
+    pub(crate) fn import_cmux(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match read(&crate::cmux::session_path()) {
+            Ok(session) => {
+                self.reopen_session(Some(session), window, cx);
+            }
+            Err(e) => window.push_notification(format!("Couldn't import cmux's session: {e}"), cx),
+        }
     }
 
     /// An id for each saved group: `reuse`'s, or a new group.

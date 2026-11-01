@@ -38,9 +38,9 @@ Commands:
   group remove [--workspace <ref>]
   group rename|color|collapse|expand|ungroup [--group <ref>] [<title>|<color>]   (default: the workspace's group)
   group by-folder                                            (group ungrouped workspaces that share a repo/folder)
-  restore-session [--from <stable|nightly|nightly-<name>|path>]
-                                                             (reopen the session this launch restored, or another one;
-                                                             only workspaces not already open)
+  restore-session [--from <stable|nightly|nightly-<name>|cmux|path>]
+                                                             (reopen the session this launch restored, or another one,
+                                                             cmux's included; only workspaces not already open)
   restore-session --export <path> [--force]                  (write the current session to a file)
   tree [--all] [--workspace <id|ref|index>]
   list-panes [--workspace <id|ref|index>]
@@ -332,7 +332,7 @@ fn dispatch(
             } else {
                 // A file is read by the app: make its path absolute here.
                 if let Some(Value::String(f)) = opts.get_mut("from")
-                    && crate::channel::support_dir_named(f).is_none()
+                    && crate::session::named_source(f).is_none()
                     && let Ok(abs) = std::path::absolute(&*f)
                 {
                     *f = abs.to_string_lossy().into_owned();

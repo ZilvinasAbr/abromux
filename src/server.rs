@@ -478,7 +478,9 @@ impl AbroMux {
                             .map_err(anyhow::Error::msg)?,
                     ),
                     None if self.launch_session.is_none() => {
-                        bail!("this launch restored no session; pass --from <stable|nightly|file>")
+                        bail!(
+                            "this launch restored no session; pass --from <stable|nightly|cmux|file>"
+                        )
                     }
                     None => None,
                 };
