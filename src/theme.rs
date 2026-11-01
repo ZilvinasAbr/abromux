@@ -13,6 +13,11 @@ pub const MUTED: u32 = 0x9c9a92;
 pub const ACCENT: u32 = 0xc96442;
 pub const ACCENT_BRIGHT: u32 = 0xd97757;
 pub const HOVER: u32 = 0xffffff10;
+/// Menus and popovers drawn by gpui-component (context menus, dropdowns).
+pub const MENU_BG: u32 = 0x2c2b28;
+pub const MENU_BORDER: u32 = 0x45433e;
+/// A menu row under the pointer or keyboard.
+pub const MENU_HOVER: u32 = 0x3e3d39;
 /// Fill for where a dragged tab would land.
 pub const DROP_TINT: u32 = 0xc9644233;
 

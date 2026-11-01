@@ -2659,6 +2659,14 @@ fn run_app(cwd: Option<String>) {
         theme.background = rgba(0x00000000).into();
         theme.font_family = ".AppleSystemUIFont".into();
         theme.mono_font_family = terminal::FONT_FAMILY.into();
+        // gpui-component's dark theme is cold black and grey; use our warm neutrals.
+        theme.popover = rgb(MENU_BG).into();
+        theme.popover_foreground = rgb(TEXT).into();
+        theme.foreground = rgb(TEXT).into();
+        theme.muted_foreground = rgb(MUTED).into();
+        theme.border = rgb(MENU_BORDER).into();
+        theme.accent = rgb(MENU_HOVER).into();
+        theme.accent_foreground = rgb(TEXT).into();
 
         cx.set_global(config::Config::load());
         // A broken config file starts with the defaults, and says so once the window is up.
