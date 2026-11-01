@@ -1386,14 +1386,25 @@ impl AbroMux {
                 } else {
                     rgb(ACCENT_BRIGHT)
                 };
+                // Pin the line height so the bell can be centred on the first
+                // line, however many lines the text wraps to.
+                let line = px(15. * z);
                 s.child(
                     div()
                         .mt(px(2.))
                         .flex()
                         .gap(px(4.))
                         .text_size(px(11. * z))
+                        .line_height(line)
                         .text_color(color)
-                        .child(icon("bell").mt(px(1.)).size(px(10. * z)).text_color(color))
+                        .child(
+                            div()
+                                .flex_none()
+                                .h(line)
+                                .flex()
+                                .items_center()
+                                .child(icon("bell").size(px(10. * z)).text_color(color)),
+                        )
                         .child(div().flex_1().min_w_0().line_clamp(2).child(text)),
                 )
             })
