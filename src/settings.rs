@@ -131,6 +131,9 @@ pub struct AppSettings {
     pub new_workspace_placement: Placement,
     /// Look for a new release once a day (`crate::update`).
     pub automatically_check_for_updates: bool,
+    /// Where ⇧⌘I makes workspace folders (`~` allowed); None for the
+    /// channel's own, `~/.abromux/ws`.
+    pub workspace_folders_directory: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -139,6 +142,7 @@ impl Default for AppSettings {
             workspace_inherit_working_directory: true,
             new_workspace_placement: Placement::End,
             automatically_check_for_updates: true,
+            workspace_folders_directory: None,
         }
     }
 }

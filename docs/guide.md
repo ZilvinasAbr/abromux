@@ -96,6 +96,17 @@ Each workspace's row shows its name, a description if it has one, the focused ta
 - **Groups**: a header above workspaces that belong together. Right-click a row → Group → New Group starts one (named after the repository), or ⌘⇧P → Group Workspaces by Folder groups every workspace that shares a repository or folder with another. Click a header to fold it (a folded group still shows the selected workspace, and a dot if one has an unread notification), double-click to rename it, drag it to move the whole group, and use its `+` for a new workspace in the group's folder. Right-click a header to rename, color, ungroup or close it. ⌘N from a workspace in a group puts the new one in the group.
 - **Auto-naming** (off by default): with `"automation": { "workspaceAutoNaming": true }`, the first prompt you give a coding agent in a workspace is turned into a short name by that agent's own CLI (`claude -p` on Haiku, or `codex exec`), once per workspace. That runs a request on your account. A name you give the workspace always wins, and without one the name otherwise follows the agent's terminal title.
 
+## Workspace folders
+
+⇧⌘I (File › New Workspace Folder) makes a workspace with a folder of its own, a scoped place for an agent to work in. A dialog asks for its name, showing a made-up one (like `quiet-amber-falcon`) and the folder it will make; Enter with nothing typed takes the made-up name, Esc cancels. The folder goes under `~/.abromux/ws/` (`~/.abromux/ws-nightly[-<name>]/` for a nightly), and a shell opens in it. To put them elsewhere, pick a folder in Settings › New Workspaces › Workspace folders, or set `app.workspaceFoldersDirectory` (`~` works); `$ABROMUX_WORKSPACES_DIR` overrides both. Folders made before a change stay where they are. Renaming the workspace later doesn't move the folder, since shells and worktrees point into it.
+
+The folder holds `.abromux/workspace.json` (its name and what was checked out) and an `AGENTS.md` (with a `CLAUDE.md` that imports it) telling the agent to bring projects in rather than edit them in place. Shells in the workspace get `$ABROMUX_WORKSPACE_DIR`. The workspace keeps its folder across restarts.
+
+- `abromux folder add <path> [--branch <name>]` checks a project out into the folder: for a git repo, a worktree of the whole repo on a new branch `ws/<folder>` (or `--branch`, which may already exist if no other worktree has it); anything else is copied.
+- `abromux folder` prints the folder, `folder list` its checkouts, `folder all` every workspace folder, `folder repos` the git repos right under `~/repos`, `~/src`, `~/code`, `~/projects`, `~/dev` and `~/Developer`, and `folder root` where the folders live. They work from any shell inside a workspace folder and don't need the app.
+
+Closing the workspace keeps its folder. Nothing deletes folders or worktrees yet: remove a worktree with `git worktree remove` in the original repo.
+
 ## Settings window
 
 ⌘, (or the app menu › Settings…) opens Settings: a page each for General, Sidebar, Workspace Colors, Panes, Keyboard Shortcuts and Commands, with a search field over all of them. It's a front end for the config file below, not a separate store. Each change writes just that key to `config.json` and applies at once. A setting put back to its default is removed from the file, and the rest of the file (other keys, their order, commands) stays as you wrote it. The undo arrow next to a setting resets it, and the one by a page's title resets the whole page.
@@ -155,7 +166,8 @@ These use cmux's key names. Shown with their defaults:
   "app": {
     "workspaceInheritWorkingDirectory": true,
     "newWorkspacePlacement": "end",
-    "automaticallyCheckForUpdates": true
+    "automaticallyCheckForUpdates": true,
+    "workspaceFoldersDirectory": null
   },
   "sidebar": {
     "fontSize": 12.5,
@@ -186,6 +198,7 @@ These use cmux's key names. Shown with their defaults:
 
 - `workspaceInheritWorkingDirectory`: ⌘N and the `+` start in the focused terminal's directory; `false` starts in your home folder.
 - `automaticallyCheckForUpdates`: look for a new release once a day ([Updates](#updates)).
+- `workspaceFoldersDirectory`: where ⇧⌘I makes [workspace folders](#workspace-folders); `null` is `~/.abromux/ws` (per channel for nightlies).
 - `newWorkspacePlacement`: where a new workspace goes, `top`, `afterCurrent` (after the selected one, or after its group) or `end`. `workspaceGroups.newWorkspacePlacement` is the same inside a group, where `top` means right after the group's first workspace.
 - `fontSize` sizes the workspace names (8–24); the smaller lines scale with it. `hideAllDetails` shows names only. `wrapWorkspaceTitles` lets long names wrap.
 - `showWorkspaceDescription`, `showNotificationMessage`, `showBranchDirectory`, `showProgress`, `showLog` and `showCustomMetadata` (status pills) hide those lines when `false`. `stackBranchDirectory` puts the branch and the directory on lines of their own, and `pathLastSegmentOnly` shows `…/api` instead of `~/code/api`.
@@ -312,6 +325,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | | Mouse | Keys |
 |---|---|---|
 | New workspace | `+` in sidebar header / footer | ⌘N |
+| New workspace folder | File › New Workspace Folder | ⇧⌘I |
 | Rename workspace | double-click its name (Enter saves, Esc cancels) | ⌘⇧R |
 | Workspace description | right-click → Add Description… (Return saves, ⇧↩ new line) | ⌥⌘E |
 | Workspace color, group, move, close others | right-click the row | |

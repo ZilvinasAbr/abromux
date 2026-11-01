@@ -82,6 +82,9 @@ pub struct WorkspaceState {
     /// Index into the session's `groups`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<usize>,
+    /// Its workspace folder (⇧⌘I).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -246,6 +249,7 @@ impl AbroMux {
                 auto_name: ws.auto_title.clone(),
                 description: ws.description.clone(),
                 color: ws.color,
+                home: ws.home.as_ref().map(|h| h.to_string_lossy().into_owned()),
                 group: ws
                     .group
                     .and_then(|g| self.groups.iter().position(|x| x.id == g)),
@@ -465,7 +469,12 @@ impl AbroMux {
         for state in states {
             self.next_ws += 1;
             let id = self.next_ws;
-            let Some(root) = self.build_node(state.root, id, window, cx) else {
+            // Its new shells get the folder's env before it's in the list.
+            let home = state.home.map(std::path::PathBuf::from);
+            self.building_home = home.clone();
+            let root = self.build_node(state.root, id, window, cx);
+            self.building_home = None;
+            let Some(root) = root else {
                 ids.push(None);
                 continue;
             };
@@ -479,6 +488,7 @@ impl AbroMux {
             ws.auto_title = state.auto_name;
             ws.description = state.description;
             ws.color = state.color;
+            ws.home = home;
             ws.group = state.group.and_then(|g| group_ids.get(g).copied());
             self.workspaces.push(ws);
             ids.push(Some(id));
@@ -746,6 +756,7 @@ mod tests {
                 description: Some("Ship it\n- build".into()),
                 color: Some(0x1565c0),
                 group: Some(0),
+                home: Some("/tmp/ws".into()),
                 focused: 1,
                 root: NodeState::Split {
                     vertical: false,

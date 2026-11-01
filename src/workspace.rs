@@ -377,6 +377,8 @@ pub struct Workspace {
     /// The id of the [`Group`] it's in. A group's workspaces sit together
     /// in the sidebar; [`tidy_groups`] keeps them so.
     pub group: Option<usize>,
+    /// Its workspace folder (⇧⌘I, [`crate::folder`]), if it has one.
+    pub home: Option<std::path::PathBuf>,
     pub root: Node,
     pub focused_pane: usize,
     /// The pane filling the workspace (⌘⇧↩), hiding the others. Only holds
@@ -469,6 +471,7 @@ impl Workspace {
             description: None,
             color: None,
             group: None,
+            home: None,
             root,
             focused_pane,
             zoom: None,

@@ -338,6 +338,54 @@ fn row<T: PartialEq + 'static>(
     }
 }
 
+/// A folder setting: the folder it comes to, and Choose… for the Finder's
+/// folder picker. The reset arrow goes back to the default.
+fn folder_row(title: &'static str, description: &'static str, key: Key) -> Row {
+    row(
+        title,
+        description,
+        key,
+        |s| s.app.workspace_folders_directory.clone(),
+        move |_, _, _, cx| {
+            let shown = crate::folder::root(cx.global::<Settings>());
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .min_w_0()
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.))
+                        .text_color(rgb(MUTED))
+                        .child(crate::workspace::tilde(&shown.to_string_lossy())),
+                )
+                .child(button("choose-folder", "Choose…").on_click(move |_, window, cx| {
+                    let picked = cx.prompt_for_paths(PathPromptOptions {
+                        files: false,
+                        directories: true,
+                        multiple: false,
+                        prompt: Some("Use Folder".into()),
+                    });
+                    window
+                        .spawn(cx, async move |cx| {
+                            let Ok(Ok(Some(paths))) = picked.await else {
+                                return;
+                            };
+                            let Some(dir) = paths.into_iter().next() else {
+                                return;
+                            };
+                            let dir = crate::workspace::tilde(&dir.to_string_lossy());
+                            let _ = cx.update(|window, cx| save(key, Some(json!(dir)), window, cx));
+                        })
+                        .detach();
+                }))
+                .into_any_element()
+        },
+    )
+}
+
 /// A row with no setting behind it: text, and `control` on the right.
 fn info_row(
     title: impl Into<SharedString>,
@@ -659,6 +707,11 @@ fn general_page() -> Page {
                         "Start in the focused terminal's directory instead of your home folder.",
                         &["app", "workspaceInheritWorkingDirectory"],
                         |s| s.app.workspace_inherit_working_directory,
+                    ),
+                    folder_row(
+                        "Workspace folders",
+                        "Where ⇧⌘I makes a workspace's own folder.",
+                        &["app", "workspaceFoldersDirectory"],
                     ),
                 ],
             ),

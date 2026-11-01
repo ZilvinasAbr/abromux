@@ -29,6 +29,8 @@ const MAX_ROWS_HEIGHT: f32 = 360.;
 pub enum Mode {
     Commands,
     Workspaces,
+    /// ⇧⌘I: name a new workspace folder. No rows; Enter makes it.
+    NewFolder,
 }
 
 enum Target {
@@ -56,6 +58,8 @@ pub struct Palette {
     /// Where focus goes back to, and where commands are dispatched.
     prev_focus: Option<FocusHandle>,
     scroll: ScrollHandle,
+    /// NewFolder: the made-up name an empty input stands for.
+    suggested: String,
 }
 
 /// A palette command: its title, subtitle, extra search words and action.
@@ -140,16 +144,23 @@ impl AbroMux {
         let entries = match mode {
             Mode::Commands => self.command_entries(window, cx),
             Mode::Workspaces => self.workspace_entries(cx),
+            Mode::NewFolder => vec![],
         };
+        let suggested = crate::folder::random_name();
         let placeholder = match mode {
-            Mode::Commands => "Type a command",
-            Mode::Workspaces => "Search workspaces",
+            Mode::Commands => "Type a command".to_string(),
+            Mode::Workspaces => "Search workspaces".to_string(),
+            Mode::NewFolder => suggested.clone(),
         };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         cx.subscribe_in(
             &input,
             window,
             |this, input, ev: &InputEvent, _, cx| match ev {
+                InputEvent::Change if this.palette.as_ref().is_some_and(|p| p.mode == Mode::NewFolder) => {
+                    // The folder path under the input follows the name.
+                    cx.notify()
+                }
                 InputEvent::Change => {
                     let query = input.read(cx).value().to_string();
                     if let Some(p) = &mut this.palette {
@@ -175,6 +186,7 @@ impl AbroMux {
             selected: 0,
             prev_focus,
             scroll: ScrollHandle::new(),
+            suggested,
         };
         palette.filter("");
         self.palette = Some(palette);
@@ -204,6 +216,11 @@ impl AbroMux {
         let Some(mut p) = self.palette.take() else {
             return;
         };
+        if p.mode == Mode::NewFolder {
+            let typed = crate::one_line(&p.input.read(cx).value());
+            let name = if typed.is_empty() { p.suggested } else { typed };
+            return self.new_folder_workspace(name, window, cx);
+        }
         let Some(&(ix, _)) = p.matches.get(p.selected) else {
             self.palette = Some(p);
             return;
@@ -373,9 +390,20 @@ impl AbroMux {
                     .into_any_element()
             })
             .collect();
-        let empty = match p.mode {
-            Mode::Commands => "No commands match your search.",
-            Mode::Workspaces => "No workspaces match your search.",
+        let empty: SharedString = match p.mode {
+            Mode::Commands => "No commands match your search.".into(),
+            Mode::Workspaces => "No workspaces match your search.".into(),
+            Mode::NewFolder => {
+                let typed = crate::one_line(&p.input.read(cx).value());
+                let name = if typed.is_empty() { &p.suggested } else { &typed };
+                let root = crate::folder::root(cx.global::<Settings>());
+                let dir = root.join(crate::folder::slug(name));
+                format!(
+                    "New workspace in {}  ·  Enter to create, Esc to cancel",
+                    tilde(&dir.to_string_lossy())
+                )
+                .into()
+            }
         };
         Some(
             div()

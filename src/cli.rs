@@ -38,6 +38,10 @@ Commands:
   group remove [--workspace <ref>]
   group rename|color|collapse|expand|ungroup [--group <ref>] [<title>|<color>]   (default: the workspace's group)
   group by-folder                                            (group ungrouped workspaces that share a repo/folder)
+  folder [path]                                              (the workspace folder this shell is in; ⇧⌘I makes one)
+  folder add <path> [--branch <name>]                        (check a project out into it: a git worktree on ws/<folder>, else a copy)
+  folder list | all | repos | root                           (its checkouts; every workspace folder; git repos found
+                                                             under ~/repos, ~/src, ~/code...; where the folders live)
   restore-session [--from <stable|nightly|nightly-<name>|cmux|path>]
                                                              (reopen the session this launch restored, or another one,
                                                              cmux's included; only workspaces not already open)
@@ -193,6 +197,56 @@ pub fn run(argv: Vec<String>) -> i32 {
     }
 }
 
+/// `abromux folder …`: workspace folders (⇧⌘I). Works on files and git only,
+/// so it runs without the app.
+fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), String> {
+    use crate::folder;
+    // The workspace the shell is in, else the one the current folder is in.
+    let current = || -> Result<std::path::PathBuf, String> {
+        std::env::var("ABROMUX_WORKSPACE_DIR")
+            .ok()
+            .filter(|d| !d.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::current_dir().ok().and_then(|d| folder::find(&d)))
+            .ok_or_else(|| "not in a workspace folder (make one with ⇧⌘I)".to_string())
+    };
+    let sub = if pos.is_empty() { "path".to_string() } else { pos.remove(0) };
+    match sub.as_str() {
+        "path" => println!("{}", current()?.display()),
+        "root" => println!("{}", folder::root(&settings::load().unwrap_or_default()).display()),
+        "add" => {
+            let src = pos.first().ok_or("folder add: missing <path>")?;
+            let ws = current()?;
+            let branch = opts.get("branch").and_then(Value::as_str);
+            let c = folder::add(&ws, Path::new(src), branch)?;
+            match &c.branch {
+                Some(b) => println!("OK {} (worktree of {} on {b})", ws.join(&c.path).display(), c.source),
+                None => println!("OK {} (copy of {})", ws.join(&c.path).display(), c.source),
+            }
+        }
+        "list" => {
+            let ws = current()?;
+            let meta = folder::read_meta(&ws).unwrap_or_default();
+            for c in meta.checkouts {
+                let how = c.branch.map_or("copy".to_string(), |b| format!("worktree {b}"));
+                println!("{}  {how}  from {}", c.path, c.source);
+            }
+        }
+        "all" => {
+            for (dir, meta) in folder::list(&folder::root(&settings::load().unwrap_or_default())) {
+                println!("{}  {}  ({} checked out)", dir.display(), meta.name, meta.checkouts.len());
+            }
+        }
+        "repos" => {
+            for r in folder::known_repos() {
+                println!("{}", r.display());
+            }
+        }
+        s => return Err(format!("folder: unknown subcommand {s:?} (path, root, add, list, all, repos)")),
+    }
+    Ok(())
+}
+
 fn fail(e: impl std::fmt::Display) -> i32 {
     eprintln!("abromux: {e}");
     1
@@ -220,6 +274,7 @@ fn dispatch(
             println!("abromux {}", env!("ABROMUX_VERSION"));
             return Ok(());
         }
+        "folder" => return folder_cmd(pos, &opts),
         "ping" => ("system.ping", |v| v.as_str().unwrap_or_default().into()),
         "identify" => ("system.identify", pretty),
         "list-workspaces" => ("workspace.list", |v| lines(v, workspace_line)),

@@ -12,6 +12,7 @@ mod channel;
 mod cli;
 mod cmux;
 mod config;
+mod folder;
 mod cursor;
 mod debug;
 mod ghostty;
@@ -70,6 +71,7 @@ actions!(
         OpenSettings,
         Quit,
         NewWorkspace,
+        NewFolderWorkspace,
         CloseWorkspace,
         RenameWorkspace,
         NextWorkspace,
@@ -225,6 +227,9 @@ struct AbroMux {
     active: usize,
     next_id: usize,
     next_ws: usize,
+    /// The folder of the workspace whose terminals are being made before
+    /// it's in `workspaces` (new or restored), for their env.
+    building_home: Option<std::path::PathBuf>,
     next_pane: usize,
     next_surface: usize,
     /// Stable `surface:N` numbers handed out to the control socket.
@@ -294,6 +299,7 @@ impl AbroMux {
             active: 0,
             next_id: 1,
             next_ws: 0,
+            building_home: None,
             next_pane: 0,
             next_surface: 0,
             surface_refs: Default::default(),
@@ -573,6 +579,18 @@ impl AbroMux {
         cx: &mut Context<Self>,
     ) -> Surface {
         let surface = attach.map_or(self.next_surface + 1, |(n, _)| n);
+        let home = self
+            .workspaces
+            .iter()
+            .find(|w| w.id == ws)
+            .and_then(|w| w.home.clone())
+            .or_else(|| self.building_home.clone());
+        if let Some(home) = home {
+            env.push((
+                "ABROMUX_WORKSPACE_DIR".into(),
+                home.to_string_lossy().into_owned(),
+            ));
+        }
         env.extend([
             ("ABROMUX_WORKSPACE_ID".into(), format!("workspace:{ws}")),
             ("ABROMUX_SURFACE_ID".into(), format!("surface:{surface}")),
@@ -916,6 +934,28 @@ impl AbroMux {
         }
         cx.notify();
         index
+    }
+
+    /// ⇧⌘I, once named: a workspace with its own folder under
+    /// `~/.abromux/ws` (`app.workspaceFoldersDirectory`) and a shell in it.
+    fn new_folder_workspace(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let root = folder::root(cx.global::<settings::Settings>());
+        let dir = match folder::create_in(&root, &name) {
+            Ok(d) => d,
+            Err(e) => {
+                let msg = format!("{}: {e}", root.display());
+                let note = Notification::error(msg).title("Couldn't make the workspace folder");
+                window.push_notification(note, cx);
+                return self.focus_active(window, cx);
+            }
+        };
+        self.building_home = Some(dir.clone());
+        let index = self.create_workspace(Some(dir.to_string_lossy().into_owned()), true, window, cx);
+        self.building_home = None;
+        let ws = &mut self.workspaces[index];
+        ws.home = Some(dir);
+        ws.custom_name = Some(name);
+        cx.notify();
     }
 
     /// Put `ws` at `index`, keeping the selected workspace selected.
@@ -2273,6 +2313,9 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &CloseWorkspace, window, cx| {
                 this.request_close_workspace(this.active, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &NewFolderWorkspace, window, cx| {
+                this.toggle_palette(palette::Mode::NewFolder, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &RenameWorkspace, window, cx| {
                 this.sidebar = true;
                 this.start_rename(this.active, window, cx)
@@ -2588,7 +2631,7 @@ fn surface_has_claude(s: &Surface, cx: &App) -> bool {
     matches!(s, Surface::Terminal(t) if t.read(cx).has_claude())
 }
 
-fn one_line(s: &str) -> String {
+pub(crate) fn one_line(s: &str) -> String {
     s.split(['\n', '\r'])
         .map(str::trim)
         .filter(|l| !l.is_empty())

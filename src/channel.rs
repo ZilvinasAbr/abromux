@@ -71,6 +71,20 @@ pub fn support_dir_named(channel: &str) -> Option<PathBuf> {
     }
 }
 
+/// Where workspace folders (⇧⌘I) live unless `app.workspaceFoldersDirectory`
+/// says otherwise: `~/.abromux/ws`, or `~/.abromux/ws-nightly` /
+/// `ws-nightly-<name>`, so channels keep apart. No space in it: shells and
+/// agents trip on those.
+pub fn workspaces_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let dir = match flavor() {
+        None => "ws".into(),
+        Some("") => "ws-nightly".into(),
+        Some(name) => format!("ws-nightly-{name}"),
+    };
+    PathBuf::from(home).join(".abromux").join(dir)
+}
+
 fn support_dir_of(flavor: Option<&str>) -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     let dir = match flavor {

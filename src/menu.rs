@@ -7,7 +7,7 @@ use crate::{
     About, CloseTab, CloseWorkspace, CommandPalette, EditDescription, FlashPane, FocusAddressBar,
     FocusDown, FocusLeft, FocusRight, FocusUp, GroupByFolder, ImportCmuxSession, JumpToUnread,
     LastPane, MoveWorkspaceDown, MoveWorkspaceUp, NewBrowser, NewGroup, NewTerminal, NewWorkspace,
-    NextTab, NextWorkspace, OpenSettings, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab,
+    NewFolderWorkspace, NextTab, NextWorkspace, OpenSettings, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab,
     RenameWorkspace, ReopenSession, SplitDown, SplitRight, ToggleGroup, ToggleNotifications,
     ToggleSidebar, ToggleZoom, Ungroup, WorkspaceSwitcher, browser, channel, terminal,
 };
@@ -89,6 +89,7 @@ pub fn set_menus(cx: &mut App) {
             name: "File".into(),
             items: vec![
                 MenuItem::action("New Workspace", NewWorkspace),
+                MenuItem::action("New Workspace Folder", NewFolderWorkspace),
                 MenuItem::action("New Terminal Tab", NewTerminal),
                 MenuItem::action("New Browser Tab", NewBrowser),
                 MenuItem::separator(),

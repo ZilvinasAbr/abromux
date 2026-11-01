@@ -48,6 +48,8 @@ pub const ACTIONS: &[Act] = {
     use crate::*;
     acts![
         "newWorkspace", Some("New Workspace"), NewWorkspace, [(None, ["cmd-n"])];
+        "newFolderWorkspace", Some("New Workspace Folder"), NewFolderWorkspace,
+            [(None, ["cmd-shift-i"])];
         "renameWorkspace", Some("Rename Workspace…"), RenameWorkspace, [(None, ["cmd-shift-r"])];
         "editWorkspaceDescription", Some("Edit Workspace Description…"), EditDescription,
             [(None, ["alt-cmd-e"])];

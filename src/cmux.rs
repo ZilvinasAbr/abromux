@@ -107,6 +107,7 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
         description: str_of(ws, "customDescription").map(str::to_string),
         color: str_of(ws, "customColor").and_then(hex_color),
         group: None,
+        home: None,
         focused: focused.unwrap_or(0),
         root,
     })
