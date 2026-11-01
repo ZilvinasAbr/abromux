@@ -40,6 +40,7 @@ mod terminal;
 mod terminal_browser;
 mod theme;
 mod titlebar;
+mod update;
 mod webauthn;
 mod workspace;
 
@@ -204,7 +205,12 @@ impl AssetSource for Assets {
             "sliders-horizontal",
             "palette",
             // gpui-component's menus mark checked items with it.
-            "check"
+            "check",
+            // The update pill.
+            "download",
+            "info",
+            "triangle-alert",
+            "power"
         );
         Ok(bytes.map(Cow::Borrowed))
     }
@@ -330,6 +336,8 @@ impl AbroMux {
             cx.notify();
         })
         .detach();
+        cx.observe(&update::entity(cx), |_, _, cx| cx.notify())
+            .detach();
         let mut banner_clicks = banner::init();
         cx.spawn_in(window, async move |this, cx| {
             while let Some(id) = banner_clicks.next().await {
@@ -1613,6 +1621,7 @@ impl AbroMux {
                     if let Surface::Browser(b) = s {
                         let shown = wi == self.active && ti == p.active && ws.shows(p.id) && self.renaming.is_none() && !self.notifications_open
                             && self.palette.is_none()
+                            && !update::popover_open(cx)
                             // Hidden while dragging a tab so drop targets show
                             // over them and get the mouse.
                             && !cx.has_active_drag();
@@ -2177,6 +2186,15 @@ impl Render for AbroMux {
             .notifications_open
             .then(|| self.render_notifications(cx));
         let palette = self.render_palette(cx);
+        let updates = update::popover(
+            if self.sidebar {
+                update::Anchor::SidebarFoot
+            } else {
+                update::Anchor::Titlebar(px(150.))
+            },
+            px(TITLEBAR_H),
+            cx,
+        );
         let toasts = Root::render_notification_layer(window, cx);
         let ws = self.ws();
         let multi = ws.root.panes().len() > 1;
@@ -2213,6 +2231,9 @@ impl Render for AbroMux {
             .text_color(rgb(TEXT))
             .font_family(".AppleSystemUIFont")
             .on_action(cx.listener(|_, _: &Quit, window, cx| quit::request(window, cx)))
+            // Also on the app, but the palette lists only what the focused view handles.
+            .on_action(|_: &update::CheckForUpdates, _, cx| update::check(true, cx))
+            .on_action(|_: &update::ApplyUpdate, _, cx| update::apply(cx))
             .on_action(
                 cx.listener(|this, _: &NewWorkspace, window, cx| {
                     this.new_workspace_here(window, cx)
@@ -2459,6 +2480,7 @@ impl Render for AbroMux {
                                     titlebar::drag_or_zoom(ev, window)
                                 })
                                 .children(self.titlebar_buttons(cx))
+                                .children(update::pill(cx).map(|p| div().ml_1().child(p)))
                                 .child(
                                     div()
                                         .ml_2()
@@ -2501,6 +2523,7 @@ impl Render for AbroMux {
             )
             .relative()
             .children(notifications)
+            .children(updates)
             .children(palette)
             .children(toasts)
     }
@@ -2644,6 +2667,7 @@ fn run_app(cwd: Option<String>) {
             Err(e) => (settings::Settings::default(), Some(e)),
         };
         cx.set_global(settings);
+        update::init(cx);
         cx.on_action(|_: &Quit, cx| {
             match cx.active_window().or_else(|| cx.windows().first().copied()) {
                 Some(w) => w

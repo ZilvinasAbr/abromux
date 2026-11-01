@@ -164,9 +164,9 @@ What's missing beyond the browser commands above:
 ## 10. App and platform
 
 - [ ] **Multiple windows**: ⌘⇧N.
-- [ ] **App bundle and distribution**: a `.app` with an icon, DMG, Homebrew cask, auto-update (Sparkle) and a nightly channel. *(partial: `scripts/bundle-app.sh` builds the `.app`, a notarized DMG with `--dist`, and the Nightly app; no cask or updates)*
+- [x] **App bundle and distribution**: a `.app` with an icon, DMG, Homebrew cask, auto-update (Sparkle) and a nightly channel. *(partial: `scripts/bundle-app.sh` builds the `.app`, a notarized DMG with `--dist`, and the Nightly app; updates work like cmux's (daily check, update pill, Install and Relaunch) without Sparkle; no cask)*
 - [x] **CLI installed on PATH**: abromux's CLI lives inside the binary. *(partial: the README's `ln -sf` puts it on PATH; nothing does it for you)*
-- [x] **Menu bar menus**: File, Edit, View, Window and Help. *(partial: abromux has these plus Notifications, built from its existing actions; no Settings, Check for Updates, History or "Open in…" items)*
+- [x] **Menu bar menus**: File, Edit, View, Window and Help. *(partial: abromux has these plus Notifications, built from its existing actions; no History or "Open in…" items)*
 - [ ] **Sleepy Mode**: an idle screen. Cosmetic.
 
 ## 11. cmux Cloud and paid extras (probably out of scope)

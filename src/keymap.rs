@@ -61,6 +61,9 @@ pub const ACTIONS: &[Act] = {
         "reopenPreviousSession", Some("Reopen Previous Session"), ReopenSession,
             [(None, ["cmd-shift-o"])];
         "importCmuxSession", Some("Import cmux Session"), ImportCmuxSession, [(None, [])];
+        "checkForUpdates", Some("Check for Updates"), update::CheckForUpdates, [(None, [])];
+        "applyUpdateIfAvailable", Some("Apply Update (If Available)"), update::ApplyUpdate,
+            [(None, [])];
         "nextWorkspace", Some("Next Workspace"), NextWorkspace, [(None, ["ctrl-cmd-]"])];
         "previousWorkspace", Some("Previous Workspace"), PrevWorkspace, [(None, ["ctrl-cmd-["])];
         "newTerminal", Some("New Terminal Tab"), NewTerminal, [(None, ["cmd-t"])];

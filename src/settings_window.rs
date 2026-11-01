@@ -677,6 +677,31 @@ fn general_page() -> Page {
                 )],
             ),
             group(
+                "Updates",
+                [
+                    switch(
+                        "Automatically check for updates",
+                        "Look for a new release once a day. Nothing downloads until you \
+                         choose Install and Relaunch.",
+                        &["app", "automaticallyCheckForUpdates"],
+                        |s| s.app.automatically_check_for_updates,
+                    ),
+                    info_row(
+                        "Check for updates",
+                        format!(
+                            "You have {} {}.",
+                            channel::app_name(),
+                            env!("ABROMUX_VERSION")
+                        ),
+                        |_, _| {
+                            button("check-updates", "Check Now")
+                                .on_click(|_, _, cx| crate::update::check(true, cx))
+                                .into_any_element()
+                        },
+                    ),
+                ],
+            ),
+            group(
                 "Automation",
                 [switch(
                     "Name workspaces from agent prompts",

@@ -129,6 +129,8 @@ pub struct AppSettings {
     pub workspace_inherit_working_directory: bool,
     /// Where a new workspace goes in the sidebar, outside a group.
     pub new_workspace_placement: Placement,
+    /// Look for a new release once a day (`crate::update`).
+    pub automatically_check_for_updates: bool,
 }
 
 impl Default for AppSettings {
@@ -136,6 +138,7 @@ impl Default for AppSettings {
         Self {
             workspace_inherit_working_directory: true,
             new_workspace_placement: Placement::End,
+            automatically_check_for_updates: true,
         }
     }
 }

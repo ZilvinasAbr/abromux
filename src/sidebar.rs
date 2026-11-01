@@ -833,6 +833,17 @@ impl AbroMux {
                     .pb_2()
                     .children(rows),
             )
+            // The update pill, while there's an update to tell about (update.rs).
+            .children(crate::update::pill(cx).map(|p| {
+                div()
+                    .flex_none()
+                    .flex()
+                    .px(px(8.))
+                    .py(px(8.))
+                    .border_t_1()
+                    .border_color(rgb(BORDER))
+                    .child(p)
+            }))
             .child(
                 // Drag the right edge to resize; double-click resets.
                 div()

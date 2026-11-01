@@ -71,6 +71,7 @@ pub fn set_menus(cx: &mut App) {
             name: app.into(),
             items: vec![
                 MenuItem::action(format!("About {app}"), About),
+                MenuItem::action("Check for Updates…", crate::update::CheckForUpdates),
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
                 MenuItem::action("Reload Configuration", ReloadConfig),

@@ -52,6 +52,18 @@ A named nightly (bundle id `dev.abromux.nightly.<name>`, support folder `abromux
 
 AbroMux Nightly runs next to AbroMux. It has a neon icon (`assets/app/abromux-nightly.svg`), its own name, the bundle id `dev.abromux.nightly` (so separate notification permissions and settings), and its own socket and session in `~/Library/Application Support/abromux-nightly/`. It's signed like the release but never notarized: `scripts/bundle-app.sh --nightly` is what `nightly.sh` calls, and it refuses `--dist`. The binary decides which one it is at runtime from the bundle it sits in (`src/channel.rs`); `cargo run` counts as the release. Install agent hooks from the release `abromux`, not `abromux-nightly`: hooks point at the binary you install them from, and do nothing once that app is gone.
 
+## Updates
+
+AbroMux checks for updates like cmux does (cmux uses Sparkle; AbroMux does the same steps itself). A few seconds after launch, and once a day after that, it looks at the latest GitHub release. When there's a newer version, a pill appears at the foot of the sidebar (or in the titlebar when the sidebar is hidden): **Update Available: 0.13.0**. Click it for the version, size, release date and a link to the release notes, and:
+
+- **Install and Relaunch** downloads the release's DMG (the pill shows the percentage), checks that the app in it is signed by the same Developer ID team as the one you're running, swaps it in for the current app and relaunches. Shells keep running across the relaunch, as they do across any quit.
+- **Later** hides the pill until the next check.
+- **Skip** stops offering that version. A check you start yourself still shows it.
+
+Nothing downloads until you choose Install and Relaunch. **Check for Updates…** (in the AbroMux menu, the command palette, or Settings › App › Updates) checks right away and also tells you when you're already on the latest version. The palette's **Apply Update (If Available)** installs a found update, or checks if there isn't one yet. Turn the daily check off with `"app": { "automaticallyCheckForUpdates": false }` or the switch in Settings.
+
+The check time and a skipped version are kept in `update.json` in the support folder, and each step is written to `update.log` there. An app running from the disk image or from a folder you can't write to says so and won't install; move it into Applications first. Nightly builds only check: they come from `scripts/nightly.sh`, not from releases. To try the flow from a nightly, launch it with `ABROMUX_UPDATE_FROM=0.1.0` so it thinks it's on an old version (`ABROMUX_UPDATE_FEED` points the check at another releases API URL). `cargo test update::tests::live -- --ignored` downloads, verifies and swaps the real latest release in a scratch folder.
+
 ## Passkeys
 
 Browser panes sign in with passkeys (iCloud Keychain, a phone over Bluetooth) and security keys, the way cmux does. WKWebView only allows WebAuthn for an app's own associated domains, so `src/webauthn.js` replaces `navigator.credentials.create/get` for public-key requests in the top frame and hands them to `src/webauthn.m`, which runs them through AuthenticationServices' web-browser APIs with the page's origin and challenge, and passes the credential back. Conditional (autofill) requests stay pending, since there's no autofill UI; sites show their "Sign in with a passkey" button instead. Frames and U2F `appid` requests are left to WebKit.
@@ -142,7 +154,8 @@ These use cmux's key names. Shown with their defaults:
 {
   "app": {
     "workspaceInheritWorkingDirectory": true,
-    "newWorkspacePlacement": "end"
+    "newWorkspacePlacement": "end",
+    "automaticallyCheckForUpdates": true
   },
   "sidebar": {
     "fontSize": 12.5,
@@ -172,6 +185,7 @@ These use cmux's key names. Shown with their defaults:
 ```
 
 - `workspaceInheritWorkingDirectory`: ⌘N and the `+` start in the focused terminal's directory; `false` starts in your home folder.
+- `automaticallyCheckForUpdates`: look for a new release once a day ([Updates](#updates)).
 - `newWorkspacePlacement`: where a new workspace goes, `top`, `afterCurrent` (after the selected one, or after its group) or `end`. `workspaceGroups.newWorkspacePlacement` is the same inside a group, where `top` means right after the group's first workspace.
 - `fontSize` sizes the workspace names (8–24); the smaller lines scale with it. `hideAllDetails` shows names only. `wrapWorkspaceTitles` lets long names wrap.
 - `showWorkspaceDescription`, `showNotificationMessage`, `showBranchDirectory`, `showProgress`, `showLog` and `showCustomMetadata` (status pills) hide those lines when `false`. `stackBranchDirectory` puts the branch and the directory on lines of their own, and `pathLastSegmentOnly` shows `…/api` instead of `~/code/api`.
