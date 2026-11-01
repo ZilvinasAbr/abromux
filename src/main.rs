@@ -803,13 +803,10 @@ impl AbroMux {
             pane.active -= 1;
         }
         if pane.tabs.is_empty() {
-            if !ws.root.remove(pane_id) {
+            if !ws.remove_pane(pane_id) {
                 // Last pane in the workspace: closing it closes the workspace.
                 self.close_workspace(wi, window, cx);
                 return;
-            }
-            if ws.focused_pane == pane_id {
-                ws.focused_pane = ws.root.panes()[0].id;
             }
         }
         self.focus_active(window, cx);

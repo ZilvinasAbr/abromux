@@ -670,6 +670,24 @@ impl Workspace {
         true
     }
 
+    /// Close pane `pane`, collapsing its split. If it had focus, the pane
+    /// before it (in order) takes focus, or the new first pane if it was
+    /// first. False, and no change, if it's the root leaf.
+    pub fn remove_pane(&mut self, pane: usize) -> bool {
+        let order: Vec<usize> = self.root.panes().iter().map(|p| p.id).collect();
+        if !self.root.remove(pane) {
+            return false;
+        }
+        if self.focused_pane == pane {
+            let at = order.iter().position(|&id| id == pane).unwrap_or(0);
+            self.focused_pane = match at.checked_sub(1) {
+                Some(prev) => order[prev],
+                None => self.root.panes()[0].id,
+            };
+        }
+        true
+    }
+
     /// Pane id, index and the pane's tab count for tab `id`.
     pub fn tab_position(&self, id: EntityId) -> Option<(usize, usize, usize)> {
         self.find_tab(id)
@@ -688,11 +706,8 @@ impl Workspace {
         if count > 1 {
             return Some((surface, false));
         }
-        if !self.root.remove(from) {
+        if !self.remove_pane(from) {
             return Some((surface, true));
-        }
-        if self.focused_pane == from {
-            self.focused_pane = self.root.panes()[0].id;
         }
         self.zoom = None;
         Some((surface, false))
@@ -959,6 +974,35 @@ mod tests {
         assert_eq!(ws.last_pane(), Some(2));
         assert!(ws.root.remove(2));
         assert_eq!(ws.last_pane(), None, "a closed pane isn't last");
+    }
+
+    #[test]
+    fn closing_the_focused_pane_focuses_the_one_before() {
+        let mut ws = Workspace::new(0, None, Node::Leaf(pane(1)), 1);
+        for (i, id) in [2, 3, 4].into_iter().enumerate() {
+            let last = id - 1;
+            assert!(
+                ws.root
+                    .split(last, Axis::Horizontal, false, pane(id), 100 + i)
+                    .is_ok()
+            );
+        }
+        assert_eq!(ids(&ws.root), vec![1, 2, 3, 4]);
+        ws.focused_pane = 3;
+        assert!(ws.remove_pane(3));
+        assert_eq!(ws.focused_pane, 2);
+        assert!(ws.remove_pane(2));
+        assert_eq!(ws.focused_pane, 1);
+        assert!(ws.remove_pane(1));
+        assert_eq!(
+            ws.focused_pane, 4,
+            "closing the first focuses the new first"
+        );
+        ws.root.split(4, Axis::Horizontal, false, pane(5), 200).ok();
+        ws.focused_pane = 5;
+        assert!(ws.remove_pane(4));
+        assert_eq!(ws.focused_pane, 5, "an unfocused close keeps focus");
+        assert!(!ws.remove_pane(5));
     }
 
     #[test]
