@@ -40,8 +40,13 @@ Commands:
   group by-folder                                            (group ungrouped workspaces that share a repo/folder)
   folder [path]                                              (the workspace folder this shell is in; ⇧⌘I makes one)
   folder add <path> [--branch <name>]                        (check a project out into it: a git worktree on ws/<folder>, else a copy)
-  folder list | all | repos | root                           (its checkouts; every workspace folder; git repos found
-                                                             under ~/repos, ~/src, ~/code...; where the folders live)
+  folder list | all [--closed] | repos | root                (its checkouts; every workspace folder, or those no open
+                                                             workspace has; git repos found under ~/repos, ~/src,
+                                                             ~/code...; where the folders live)
+  folder resources                                           (what it made outside the folder: recorded in
+                                                             .abromux/resources.md, and its labelled Docker resources)
+  folder remove [<path>] [--force]                           (remove its worktrees, delete the folder, close the workspace;
+                                                             refuses while there are changes or Docker leftovers)
   restore-session [--from <stable|nightly|nightly-<name>|cmux|path>]
                                                              (reopen the session this launch restored, or another one,
                                                              cmux's included; only workspaces not already open)
@@ -128,6 +133,7 @@ const SWITCHES: &[&str] = &[
     "exact",
     "dry-run",
     "force",
+    "closed",
 ];
 
 struct Args {
@@ -232,9 +238,104 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
                 println!("{}  {how}  from {}", c.path, c.source);
             }
         }
+        "resources" => {
+            let ws = current()?;
+            match std::fs::read_to_string(ws.join(folder::LEDGER)) {
+                Ok(text) if !text.trim().is_empty() => {
+                    println!("Recorded in {}:", folder::LEDGER);
+                    println!("{}", text.trim_end());
+                }
+                _ => println!("Nothing recorded in {}.", folder::LEDGER),
+            }
+            let tag = folder::tag(&ws);
+            match folder::docker_resources(&ws) {
+                Ok(found) if found.is_empty() => {
+                    println!("No Docker resources labelled abromux.workspace={tag} or in compose project {tag}.")
+                }
+                Ok(found) => {
+                    println!("Docker (labelled abromux.workspace={tag} or in compose project {tag}):");
+                    for line in found {
+                        println!("  {line}");
+                    }
+                }
+                Err(e) => println!("Docker not checked: {e}"),
+            }
+        }
+        "remove" => {
+            // A folder given by path (one whose workspace is closed), else this one.
+            let ws = match pos.first() {
+                Some(p) => {
+                    let p = Path::new(p).canonicalize().map_err(|e| format!("{p}: {e}"))?;
+                    folder::read_meta(&p)
+                        .map(|_| p.clone())
+                        .ok_or_else(|| format!("{}: not a workspace folder", p.display()))?
+                }
+                None => current()?,
+            };
+            let force = opts.get("force").is_some_and(|v| v != &Value::Bool(false));
+            if !force {
+                let mut problems = folder::blockers(&ws);
+                match folder::docker_resources(&ws) {
+                    Ok(left) if !left.is_empty() => problems.push(format!(
+                        "Docker resources are still there: {} (`abromux folder resources`)",
+                        left.join(", ")
+                    )),
+                    Ok(_) => {}
+                    Err(e) => eprintln!("abromux: Docker not checked for leftovers: {e}"),
+                }
+                if !problems.is_empty() {
+                    return Err(format!(
+                        "not removing {}; clean these up first, or --force:\n  {}",
+                        ws.display(),
+                        problems.join("\n  ")
+                    ));
+                }
+            }
+            // If the app has it open, the app closes the workspace and then
+            // deletes the folder: this shell (and an agent in it) may be
+            // one of its terminals.
+            if let Ok(r) = ipc::call(
+                "folder.remove",
+                json!({ "path": ws.to_string_lossy(), "force": force }),
+            ) && let Some(w) = r["workspace"].as_str()
+            {
+                println!(
+                    "OK closing {w} in a moment; {} then deletes {} and notifies when done",
+                    crate::channel::app_name(),
+                    ws.display()
+                );
+                return Ok(());
+            }
+            for line in folder::remove(&ws, force)? {
+                println!("{line}");
+            }
+            if std::env::current_dir().map_or(true, |d| d.starts_with(&ws)) {
+                println!("(this shell's folder is gone: cd elsewhere)");
+            }
+        }
         "all" => {
+            // Mark which ones the app has open, when it's running.
+            let open: Option<Vec<String>> = ipc::call("workspace.list", json!({})).ok().map(|v| {
+                v.as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|w| w["home"].as_str().map(String::from))
+                    .collect()
+            });
+            let closed_only = opts.contains_key("closed");
             for (dir, meta) in folder::list(&folder::root(&settings::load().unwrap_or_default())) {
-                println!("{}  {}  ({} checked out)", dir.display(), meta.name, meta.checkouts.len());
+                let is_open = open
+                    .as_ref()
+                    .map(|o| o.iter().any(|h| Path::new(h) == dir));
+                if closed_only && is_open != Some(false) {
+                    continue;
+                }
+                let mark = match is_open {
+                    Some(true) => "  open",
+                    Some(false) => "  closed",
+                    None => "",
+                };
+                println!("{}  {}  ({} checked out){mark}", dir.display(), meta.name, meta.checkouts.len());
             }
         }
         "repos" => {
@@ -242,7 +343,7 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
                 println!("{}", r.display());
             }
         }
-        s => return Err(format!("folder: unknown subcommand {s:?} (path, root, add, list, all, repos)")),
+        s => return Err(format!("folder: unknown subcommand {s:?} (path, root, add, list, all, repos, resources, remove)")),
     }
     Ok(())
 }

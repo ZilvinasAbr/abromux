@@ -72,6 +72,7 @@ actions!(
         Quit,
         NewWorkspace,
         NewFolderWorkspace,
+        CleanUpWorkspaceFolder,
         CloseWorkspace,
         RenameWorkspace,
         NextWorkspace,
@@ -590,6 +591,8 @@ impl AbroMux {
                 "ABROMUX_WORKSPACE_DIR".into(),
                 home.to_string_lossy().into_owned(),
             ));
+            // Compose stacks started here are the workspace's, for cleanup.
+            env.push(("COMPOSE_PROJECT_NAME".into(), folder::tag(&home)));
         }
         env.extend([
             ("ABROMUX_WORKSPACE_ID".into(), format!("workspace:{ws}")),
@@ -956,6 +959,79 @@ impl AbroMux {
         ws.home = Some(dir);
         ws.custom_name = Some(name);
         cx.notify();
+    }
+
+    /// Right-click › Clean Up and Delete Folder…: a tab in workspace `wi`'s
+    /// folder running the cleanup agent (`automation.workspaceCleanupAgent`,
+    /// default `claude`) on `.abromux/cleanup.md`. The agent finds what the
+    /// workspace made, asks, removes it, and ends with `abromux folder
+    /// remove`. It runs in a shell, so the shell stays if it stops early.
+    pub(crate) fn clean_up_folder(&mut self, wi: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(home) = self.workspaces.get(wi).and_then(|w| w.home.clone()) else {
+            let note = Notification::warning("Only a workspace made with ⇧⌘I has a folder to clean up.")
+                .title("Not a workspace folder");
+            return window.push_notification(note, cx);
+        };
+        let ask = match folder::write_cleanup(&home) {
+            Ok(a) => a,
+            Err(e) => {
+                let note = Notification::error(format!("{}: {e}", home.display()))
+                    .title("Couldn't start the cleanup");
+                return window.push_notification(note, cx);
+            }
+        };
+        let agent = cx
+            .global::<settings::Settings>()
+            .automation
+            .workspace_cleanup_agent
+            .clone()
+            .filter(|a| !a.trim().is_empty())
+            .unwrap_or_else(|| "claude".into());
+        let id = self.workspaces[wi].id;
+        let s = self.make_terminal(Some(home.to_string_lossy().into_owned()), id, window, cx);
+        if let Surface::Terminal(t) = &s {
+            t.update(cx, |t, _| t.send(format!("{} '{ask}'\r", agent.trim()).as_bytes()));
+        }
+        self.select_workspace(wi, window, cx);
+        let pane = self.workspaces[wi].focused_pane;
+        self.add_tab_to(wi, pane, s, true, window, cx);
+    }
+
+    /// `abromux folder remove` from (maybe) one of workspace `id`'s own
+    /// shells: give it a moment to print, close the workspace, then delete
+    /// the folder off the main thread and say how it went.
+    pub(crate) fn remove_folder_later(
+        &mut self,
+        id: usize,
+        dir: std::path::PathBuf,
+        force: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(800))
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if let Some(i) = this.ws_index(id) {
+                    this.close_workspace(i, window, cx);
+                }
+            });
+            let d = dir.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { folder::remove(&d, force) })
+                .await;
+            let _ = this.update_in(cx, |_, window, cx| {
+                let note = match result {
+                    Ok(done) => Notification::success(done.join("\n")).title("Workspace folder removed"),
+                    Err(e) => Notification::error(format!("{}: {e}", dir.display()))
+                        .title("Couldn't remove the workspace folder"),
+                };
+                window.push_notification(note, cx);
+            });
+        })
+        .detach();
     }
 
     /// Put `ws` at `index`, keeping the selected workspace selected.
@@ -2312,6 +2388,9 @@ impl Render for AbroMux {
             )
             .on_action(cx.listener(|this, _: &CloseWorkspace, window, cx| {
                 this.request_close_workspace(this.active, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CleanUpWorkspaceFolder, window, cx| {
+                this.clean_up_folder(this.active, window, cx)
             }))
             .on_action(cx.listener(|this, _: &NewFolderWorkspace, window, cx| {
                 this.toggle_palette(palette::Mode::NewFolder, window, cx)

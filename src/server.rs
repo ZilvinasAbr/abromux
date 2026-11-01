@@ -347,6 +347,23 @@ impl AbroMux {
                 self.close_workspace(wi, window, cx);
                 json!({ "closed": r })
             }
+            // `abromux folder remove`, which has checked for lost work: if a
+            // workspace has that folder, close it, then delete the folder.
+            "folder.remove" => {
+                let path = std::path::PathBuf::from(str_param(p, "path").context("missing path")?);
+                let same = |h: &std::path::Path| {
+                    h == path || h.canonicalize().is_ok_and(|h| path.canonicalize().is_ok_and(|p| h == p))
+                };
+                match self.workspaces.iter().position(|w| w.home.as_deref().is_some_and(same)) {
+                    Some(wi) => {
+                        let r = self.ws_ref(wi);
+                        let id = self.workspaces[wi].id;
+                        self.remove_folder_later(id, path, bool_param(p, "force", false), window, cx);
+                        json!({ "workspace": r })
+                    }
+                    None => json!({ "workspace": null }),
+                }
+            }
             "workspace.rename" => {
                 let wi = self.workspace_target(p)?;
                 let title = str_param(p, "title").context("missing title")?;
@@ -1543,6 +1560,7 @@ impl AbroMux {
             "description": ws.description,
             "color": ws.color.map(|c| format!("#{c:06x}")),
             "group": ws.group.map(|g| format!("group:{g}")),
+            "home": ws.home.as_ref().map(|h| h.to_string_lossy()),
             "status": ws.status.iter().map(status::status_json).collect::<Vec<_>>(),
             "progress": ws.progress.as_ref().map(|p| json!({ "value": (p.value as f64 * 1000.).round() / 1000., "label": p.label })),
         });

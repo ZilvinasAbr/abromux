@@ -105,7 +105,21 @@ The folder holds `.abromux/workspace.json` (its name and what was checked out) a
 - `abromux folder add <path> [--branch <name>]` checks a project out into the folder: for a git repo, a worktree of the whole repo on a new branch `ws/<folder>` (or `--branch`, which may already exist if no other worktree has it); anything else is copied.
 - `abromux folder` prints the folder, `folder list` its checkouts, `folder all` every workspace folder, `folder repos` the git repos right under `~/repos`, `~/src`, `~/code`, `~/projects`, `~/dev` and `~/Developer`, and `folder root` where the folders live. They work from any shell inside a workspace folder and don't need the app.
 
-Closing the workspace keeps its folder. Nothing deletes folders or worktrees yet: remove a worktree with `git worktree remove` in the original repo.
+Closing the workspace keeps its folder.
+
+### Cleaning up
+
+⇧⌘X (or right-click a workspace with a folder › Clean Up and Delete Folder…) opens a tab in the folder running a cleanup agent: `claude 'Read .abromux/cleanup.md and follow it.'`. It looks for everything the workspace made outside its folder, checks for work that would be lost, shows you what it will remove and keep, and waits for you to agree. Then it removes those things and ends with `abromux folder remove`, which closes the workspace. Claude asks before each command as usual. Set `automation.workspaceCleanupAgent` for another agent CLI; the instruction is passed as its one argument.
+
+To make that findable, each folder's `AGENTS.md` asks agents to keep track of what they make:
+
+- Shells in the workspace get `COMPOSE_PROJECT_NAME=<folder>`, so `docker compose` stacks started there are the workspace's.
+- Containers, volumes and networks made with plain `docker` get `--label abromux.workspace=<folder>`.
+- Anything else (a database on a shared server, a cloud bucket, a `brew services` entry, a long-running process) is written down in `.abromux/resources.md`, with the command that removes it.
+
+`abromux folder resources` shows that list and the Docker resources it finds by label or compose project.
+
+`abromux folder remove [<path>] [--force]` does the deleting without an agent: `git worktree remove` for each worktree in its repo, then the folder. It deletes a `ws/<folder>` branch it made if that's merged, and keeps it otherwise (a branch passed to `--branch` that already existed always stays). It refuses while a worktree has uncommitted or untracked files, or Docker resources of the workspace are still there; `--force` goes ahead anyway. If AbroMux has the workspace open, the app closes it first and then deletes the folder, so it works from the workspace's own shell, and a notification says how it went. `abromux folder all --closed` lists folders no open workspace has, to remove by path.
 
 ## Settings window
 
@@ -192,7 +206,7 @@ These use cmux's key names. Shown with their defaults:
     "colors": { "Red": "#C0392B", "Blue": "#1565C0" }
   },
   "workspaceGroups": { "newWorkspacePlacement": "afterCurrent" },
-  "automation": { "workspaceAutoNaming": false }
+  "automation": { "workspaceAutoNaming": false, "workspaceCleanupAgent": null }
 }
 ```
 
@@ -326,6 +340,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 |---|---|---|
 | New workspace | `+` in sidebar header / footer | ⌘N |
 | New workspace folder | File › New Workspace Folder | ⇧⌘I |
+| Clean up and delete workspace folder | right-click → Clean Up and Delete Folder… | ⇧⌘X |
 | Rename workspace | double-click its name (Enter saves, Esc cancels) | ⌘⇧R |
 | Workspace description | right-click → Add Description… (Return saves, ⇧↩ new line) | ⌥⌘E |
 | Workspace color, group, move, close others | right-click the row | |

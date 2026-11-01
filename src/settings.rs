@@ -405,6 +405,10 @@ pub struct Automation {
     /// Name a workspace from its agent's first prompt, summarised by that
     /// agent's own CLI (`claude -p`, `codex exec`). A name you give it wins.
     pub workspace_auto_naming: bool,
+    /// The agent CLI that cleans up a workspace folder (right-click › Clean
+    /// Up and Delete Folder…), run with the instruction as its one argument.
+    /// None is `claude`.
+    pub workspace_cleanup_agent: Option<String>,
 }
 
 /// The keys bound to an action or command.
