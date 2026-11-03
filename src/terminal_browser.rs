@@ -20,14 +20,12 @@ use std::{
 /// The shell command that opens `url` in terminal-browser, filling the
 /// terminal it runs in, or None if it isn't installed. `--no-merge` keeps it
 /// from joining a neighbouring one as a tab: each abromux tab is one browser.
-/// abromux shows kitty graphics, so terminal-browser needn't ask. Find,
-/// devtools and console take the built-in browser's keys (⌘F, ⌥⌘I, ⌥⌘C),
-/// which abromux leaves to the tab (`KEYS`).
+/// abromux shows kitty graphics, so terminal-browser needn't ask. Its keys
+/// (find, devtools, console, …) are its own, set in its `shortcuts.json`.
 pub fn command(url: &str) -> Option<String> {
     let bin = find()?;
     let mut cmd = format!(
-        "TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK=1 exec {} open --no-merge \
-         --find-key=super+f --devtools-key=super+alt+i --console-key=super+alt+c",
+        "TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK=1 exec {} open --no-merge",
         shell_quote(&bin.to_string_lossy())
     );
     if !url.is_empty() && url != "about:blank" {
@@ -161,9 +159,10 @@ pub struct Tab {
 pub const KEY_CONTEXT: &str = "TerminalBrowser";
 
 /// The ⌘-keys a terminal-browser tab keeps, as the built-in browser has them:
-/// address bar, reload, back/forward, find, devtools and console (`command`
-/// starts it with those on ⌘F, ⌥⌘I, ⌥⌘C), zoom, and editing in the page.
-/// Window-level keys (⌘T, ⌘W, ⌘P, …) stay abromux's.
+/// address bar, reload, back/forward, ⌘F, ⌥⌘I and ⌥⌘C (for find, devtools
+/// and console if its `shortcuts.json` puts them there), zoom, and editing in
+/// the page. Window-level keys (⌘T, ⌘W, ⌘P, …) stay abromux's; other unbound
+/// ⌘-keys (its default ⇧⌘F find, ⌥⌘J console) reach the tab anyway.
 pub const KEYS: &[&str] = &[
     "cmd-l",
     "cmd-r",
