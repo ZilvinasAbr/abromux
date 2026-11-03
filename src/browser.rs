@@ -51,7 +51,7 @@ const MAX_SUGGESTIONS: usize = 8;
 const ZOOM_LEVELS: [f64; 11] = [0.5, 0.75, 0.85, 1.0, 1.15, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
 /// The zoom step after `zoom` going in or out, or `zoom` at either end.
-fn zoom_step(zoom: f64, zoom_in: bool) -> f64 {
+pub(crate) fn zoom_step(zoom: f64, zoom_in: bool) -> f64 {
     const EPS: f64 = 0.001;
     if zoom_in {
         ZOOM_LEVELS.iter().copied().find(|&z| z > zoom + EPS)

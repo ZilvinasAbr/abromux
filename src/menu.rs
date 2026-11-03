@@ -5,7 +5,7 @@
 
 use crate::{
     About, CloseTab, CloseWorkspace, CommandPalette, EditDescription, FlashPane, FocusAddressBar,
-    FocusDown, FocusLeft, FocusRight, FocusUp, GroupByFolder, ImportCmuxSession, JumpToUnread,
+    FocusDown, FocusLeft, FocusRight, FocusUp, GroupByFolder, ImportCmuxSession, JumpToUnread, MarkOldestUnreadAndJumpNext, ToggleUnread,
     LastPane, MoveWorkspaceDown, MoveWorkspaceUp, NewBrowser, NewGroup, NewTerminal, NewWorkspace,
     NewFolderWorkspace, NextTab, NextWorkspace, OpenSettings, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab,
     RenameWorkspace, ReopenSession, SplitDown, SplitRight, ToggleGroup, ToggleNotifications,
@@ -164,6 +164,8 @@ pub fn set_menus(cx: &mut App) {
             items: vec![
                 MenuItem::action("Show Notifications", ToggleNotifications),
                 MenuItem::action("Jump to Latest Unread", JumpToUnread),
+                MenuItem::action("Toggle Unread", ToggleUnread),
+                MenuItem::action("Mark as Oldest Unread and Jump to Next", MarkOldestUnreadAndJumpNext),
             ],
         },
         // gpui makes the menu named "Window" AppKit's windowsMenu, so macOS

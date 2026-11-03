@@ -77,10 +77,10 @@ So the list below reads in context:
 - [x] **OSC 9 / 99 / 777 desktop notifications** from terminal programs.
 - [x] **Unread ring on the pane** and lit-up tabs.
 - [x] **Notifications panel**: ⌘I lists pending notifications.
-- [x] **Jump to the latest unread**: ⌘⇧U. Also ⌥⌘U to toggle unread, and ⌃⌘U to mark one as oldest and move to the next. *(partial: no ⌥⌘U or ⌃⌘U)*
-- [x] **Native macOS notifications**: banners, dock badge, menu-bar item, sounds, and suppression while the app is focused. *(partial: no menu-bar item; banners only from AbroMux.app)*
-- [x] **CLI**: `notify`, `list-notifications`, `dismiss-notification`, `mark-notification-read`, `open-notification`, `jump-to-unread`, `clear-notifications`. *(partial: no `dismiss-notification` or `mark-notification-read`)*
-- [ ] **Notification hooks**: run a command when a notification fires.
+- [x] **Jump to the latest unread**: ⌘⇧U. Also ⌥⌘U to toggle unread, and ⌃⌘U to mark one as oldest and move to the next.
+- [x] **Native macOS notifications**: banners, dock badge, menu-bar item, sounds, and suppression while the app is focused. *(partial: banners only from AbroMux.app; the menu-bar item (`notifications.showInMenuBar`) has the unread list and actions, not cmux's search or task manager)*
+- [x] **CLI**: `notify`, `list-notifications`, `dismiss-notification`, `mark-notification-read`, `open-notification`, `jump-to-unread`, `clear-notifications`.
+- [x] **Notification hooks**: run a command when a notification fires. *(cmux's `notifications.hooks`: JSON in and out, with `record`, `markUnread`, `desktop` and `sound` effects; only the global config's hooks, not a project's)*
 
 ## 5. Browser
 
@@ -89,7 +89,7 @@ So the list below reads in context:
 - [x] **Passkeys, WebAuthn and security keys**: a JS bridge to AuthenticationServices, as in cmux. *(partial: needs Apple's web-browser entitlement in a provisioning profile, see "Passkeys" in guide.md; no conditional/autofill UI)*
 - [ ] **Shortcuts while a webview has focus**: gpui's view gets ⌘ keys first (`performKeyEquivalent:`) even when the WKWebView is first responder, and a click into a page moves gpui focus to its `Browser` context, so ⌘ shortcuts should reach the app. Not yet confirmed with real keystrokes; keys without ⌘ still go only to the page.
 - [ ] **Popovers over webviews**: native webviews draw on top of everything, so UI can't overlap a visible browser.
-- [x] **Zoom**: ⌘= / ⌘- / ⌘0 in browser panes, in Safari's steps (50%–300%), saved with the session. *(partial: no CLI command to set a factor)*
+- [x] **Zoom**: ⌘= / ⌘- / ⌘0 in browser panes, in Safari's steps (50%–300%), saved with the session. *(also `browser zoom in|out|reset|<factor>|<n>%`)*
 - [ ] **Search-engine settings and search suggestions.**
 - [ ] **Downloads**: ask where to save, list downloads, wait for one to finish.
 - [ ] **Profiles**: separate cookie jars, with list, add, rename, clear and delete.
@@ -115,14 +115,14 @@ What's missing beyond the browser commands above:
 - [ ] **UUID handles** (`--id-format uuids|both`). abromux has only short refs and indexes.
 - [ ] **Socket auth**: control modes, socket password, and only allowing processes started inside the app.
 - [ ] **`capabilities`, `events`**: an event stream with cursors, filters and reconnect.
-- [ ] **`wait-for`**: named signals between scripts.
-- [ ] **`read-selection`**, and `read-screen --selection`.
+- [x] **`wait-for`**: named signals between scripts. *(signal files in `$TMPDIR`, as in cmux)*
+- [x] **`read-selection`**, and `read-screen --selection`. *(also in browser tabs)*
 - [x] **Starting a workspace from a JSON layout**: `new-workspace --layout <json>` and `--description`. *(partial: `--layout`, from JSON or `@file`; no `--description`)*
-- [x] **`workspace-action`, `tab-action`**: one-shot actions with title, color, description and URL. *(partial: `workspace-action`; no `tab-action`)*
+- [x] **`workspace-action`, `tab-action`**: one-shot actions with title, color, description and URL. *(partial: no pinned tabs, so no `pin`/`unpin` in either)*
 - [ ] **`top` / `memory`**: CPU, memory and process trees per workspace or surface.
 - [ ] **`surface-health`, `refresh-surfaces`, `debug-terminals`.**
 - [ ] **tmux-style buffers and hooks**: `set-buffer`, `list-buffers`, `paste-buffer`, `set-hook`, `display-message`, `find-window`.
-- [ ] **Shell completion scripts** for the CLI.
+- [x] **Shell completion scripts** for the CLI. *(`completion zsh|bash|fish`: commands and subcommands, generated from the help text)*
 - [x] **`guide` / `--skill`**: an agent-facing usage guide. *(as agent skills: `abromux skills install`, `abromux skills show`)*
 
 ## 7. Configuration
@@ -130,7 +130,7 @@ What's missing beyond the browser commands above:
 - [x] **A `cmux.json`-style config file** with a JSON schema, `config doctor`/`check`/`validate`, and `reload-config` (⌘⇧,), which reloads in place with no restart. *(partial: `~/.config/abromux/config.json` with `config check`, `config path` and `reload-config`, plus a project file (`.abromux/config.json`, or cmux's `.cmux/cmux.json` / `cmux.json`) for commands; no JSON schema)*
 - [x] **Settings window**: ⌘,. *(partial: pages for general, sidebar, workspace colors, panes, shortcuts (with a recorder) and commands, writing `config.json`; chords, `"when"` contexts, palette colors and commands are edited in the file)*
 - [x] **Customizable keyboard shortcuts**, including two-step chords and `when` conditions. *(`"shortcuts"` in config.json, listed by `abromux config shortcuts`; `when` takes a key context)*
-- [x] **Custom commands and actions**: project-specific commands and workspace layouts that you launch from the palette, tab-bar buttons or the plus-button menu. Also packs and setting presets. *(partial: `"commands"` run text in a terminal, open a URL or build a workspace layout in cmux's format, from the palette or their own shortcut, globally or per project with a trust prompt; no tab-bar buttons, packs or presets)*
+- [x] **Custom commands and actions**: project-specific commands and workspace layouts that you launch from the palette or the plus-button menu. Also packs and setting presets. *(partial: `"commands"` run text in a terminal, open a URL or build a workspace layout in cmux's format, from the palette or their own shortcut, globally or per project with a trust prompt; no packs or presets. Tab-bar buttons are descoped, below)*
 - [x] **Command palette**: ⌘⇧P for commands, ⌘P to switch workspaces. *(partial: the switcher lists workspaces, not surfaces; no custom commands or rename/description modes)*
 - [ ] **App preferences**: light/dark/system appearance, accent color, app icon, window-title template, menu-bar-only mode, minimal mode.
 - [ ] **Themes**: `themes list/set/clear`.
@@ -173,6 +173,7 @@ Left out on purpose (2026-11-01). Don't pick these up for parity work until the 
   - A todo list per workspace: `todo add/list/check/...`.
 - **Sidebar metadata**: linked PR status and number, and listening ports. *(from 3)*
 - **Importing from other browsers**: cookies, history and sessions from Chrome, Firefox, Arc and others. *(from 5)*
+- **Tab-bar buttons**: cmux's `surfaceTabBarButtons`, commands as buttons in the pane tab bar (dropped 2026-11-03; abromux's tab bar has no buttons). *(from 7)*
 
 ## 12. cmux Cloud and paid extras (probably out of scope)
 
@@ -187,11 +188,10 @@ Left out on purpose (2026-11-01). Don't pick these up for parity work until the 
 
 If the goal is daily-driver parity, a reasonable sequence is:
 
-Done so far: moving tabs between panes and workspaces from the CLI (`move-surface`, `split-off`, `join-pane`, `break-pane`), `zoom-pane`, `trigger-flash` and keeping a workspace open on ⌘W; workspace descriptions, colors, groups, drag to reorder, sidebar settings, auto-naming and reopening the previous session; customizable shortcuts and custom palette commands, including workspace layouts and project commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload and a Settings window; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; agent status, notifications and resume for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; sidebar status, progress and log.
+Done so far: notifications (hooks, a menu-bar item, `dismiss-notification` / `mark-notification-read`, ⌥⌘U and ⌃⌘U); small CLI gaps (`read-selection`, `tab-action`, `wait-for`, shell completions, `browser zoom`); browser zoom; moving tabs between panes and workspaces from the CLI (`move-surface`, `split-off`, `join-pane`, `break-pane`), `zoom-pane`, `trigger-flash` and keeping a workspace open on ⌘W; workspace descriptions, colors, groups, drag to reorder, sidebar settings, auto-naming and reopening the previous session; customizable shortcuts and custom palette commands, including workspace layouts and project commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload and a Settings window; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; agent status, notifications and resume for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; sidebar status, progress and log.
 
 Next:
 
-1. **Tab-bar buttons for commands** (cmux's actions), and a JSON schema for the config file.
-2. **Notifications**: a hook command when one fires, `dismiss-notification` / `mark-notification-read`, ⌥⌘U and ⌃⌘U.
-3. **Browser basics**: zoom, downloads, profiles, popovers over webviews.
-4. **SSH/tmux**, as the workspace model matures.
+1. **Browser basics**: downloads, profiles, popovers over webviews, and confirming ⌘ shortcuts reach the app while a webview has focus.
+2. **A JSON schema for the config file**, for editor completion and a stricter `config check`.
+3. **SSH/tmux**, as the workspace model matures.

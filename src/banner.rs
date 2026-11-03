@@ -26,7 +26,7 @@ static CLICKS: Mutex<Option<mpsc::UnboundedSender<usize>>> = Mutex::new(None);
 
 const ID_PREFIX: &str = "abromux-";
 
-fn nsstring(s: &str) -> *mut Object {
+pub(crate) fn nsstring(s: &str) -> *mut Object {
     let c = CString::new(s.replace('\0', "")).unwrap_or_default();
     unsafe { msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()] }
 }
@@ -122,14 +122,16 @@ extern "C" fn did_receive(
 }
 
 /// Show a banner; clicking it reports `id` through `init`'s receiver.
-pub fn post(id: usize, title: &str, body: &str) {
+pub fn post(id: usize, title: &str, body: &str, sound: bool) {
     let Some(center) = center() else { return };
     unsafe {
         let content: *mut Object = msg_send![class!(UNMutableNotificationContent), new];
         let _: () = msg_send![content, setTitle: nsstring(title)];
         let _: () = msg_send![content, setBody: nsstring(body)];
-        let sound: *mut Object = msg_send![class!(UNNotificationSound), defaultSound];
-        let _: () = msg_send![content, setSound: sound];
+        if sound {
+            let sound: *mut Object = msg_send![class!(UNNotificationSound), defaultSound];
+            let _: () = msg_send![content, setSound: sound];
+        }
         let ident = nsstring(&format!("{ID_PREFIX}{id}"));
         let nil: *mut Object = std::ptr::null_mut();
         let request: *mut Object = msg_send![class!(UNNotificationRequest), requestWithIdentifier: ident content: content trigger: nil];

@@ -64,6 +64,10 @@ Commands:
   close-surface [--surface <ref>] [--workspace <ref>]
   focus-surface --surface <ref>
   rename-tab [--surface <ref>] [--workspace <ref>] [<title>]  (no title: back to the program's own)
+  tab-action [--tab <ref>] [--workspace <ref>] <action> [<title>] [--url <url>] [--focus <true|false>]
+                                                             (rename, clear-name, close-left, close-right, close-others,
+                                                             new-terminal-right, new-browser-right, duplicate,
+                                                             move-to-new-workspace, reload, mark-read, mark-unread)
   respawn-pane [--surface <ref>] [--workspace <ref>] [--command <text>]   (kill the shell and start a fresh one in its cwd)
   move-surface [--surface] <ref> [--pane <ref> | --workspace <ref>] [--index <n> | --before <ref> | --after <ref>] [--focus <true|false>]
                                                              (to another pane or workspace; default: the end of the
@@ -79,12 +83,15 @@ Commands:
   trigger-flash [--surface <ref>] [--workspace <ref>]        (flash the pane holding it, like ⌘⇧H)
   send [--surface <ref>] [--workspace <ref>] <text>          (\\n presses enter; also \\t \\e \\\\)
   send-key [--surface <ref>] [--workspace <ref>] <key>       (enter, tab, escape, up, ctrl-c, alt-b, ...)
-  read-screen [--surface <ref>] [--workspace <ref>] [--scrollback] [--lines <n>]
+  read-screen [--surface <ref>] [--workspace <ref>] [--scrollback] [--lines <n>] [--selection]
+  read-selection [--surface <ref>] [--workspace <ref>]       (the selected text, in a terminal or a page)
   capture-pane                                               (alias for read-screen)
   clear-history [--surface <ref>] [--workspace <ref>]        (clear screen and scrollback, like ⌘K)
   notify [--title <text>] [--subtitle <text>] [--body <text>] [--surface <ref>]   (rings that terminal's pane)
   list-notifications
   open-notification <id>                                     (select its terminal and mark it read)
+  dismiss-notification (--id <id> | --all-read)              (remove one, or every read one)
+  mark-notification-read (--id <id> | --workspace <ref> [--surface <ref>] | --all)
   jump-to-unread                                             (the newest unread notification, like ⌘⇧U)
   clear-notifications
   set-status <key> <value> [--icon <name>] [--color <#rrggbb>] [--workspace <ref>]   (a pill under the workspace in the sidebar)
@@ -95,6 +102,8 @@ Commands:
   log [--level <info|progress|success|warning|error>] [--source <name>] [--workspace <ref>] <message>
   list-log [--limit <n>] [--workspace <ref>]
   clear-log [--workspace <ref>]
+  wait-for [-S|--signal] <name> [--timeout <seconds>]        (wait until another script signals <name>; default 30s)
+  completion <zsh|bash|fish>                                 (a shell completion script: eval \"$(abromux completion zsh)\")
   open <path-or-url>...                                      (directories open workspaces, URLs open browser splits)
   focus-window [--window <ref>]                              (bring abromux to the front; there is one window)
   sidebar <toggle|show|hide>
@@ -117,6 +126,7 @@ Commands:
   browser back|forward|reload
   browser url|get-url
   browser eval <script>
+  browser zoom [in|out|reset|<factor>|<percent>%]            (no argument: print the page zoom)
 
   Automation (<sel> is a CSS selector or a ref like e3 from the last snapshot):
   browser snapshot [--interactive] [--compact] [--selector <sel>]   (accessibility tree with refs)
@@ -146,6 +156,9 @@ const SWITCHES: &[&str] = &[
     "dry-run",
     "force",
     "closed",
+    "all-read",
+    "selection",
+    "signal",
 ];
 
 struct Args {
@@ -174,6 +187,9 @@ fn parse(args: &[String]) -> Result<Args, String> {
             }
             None if a == "-h" => {
                 opts.insert("help".into(), json!(true));
+            }
+            None if a == "-S" => {
+                opts.insert("signal".into(), json!(true));
             }
             None => pos.push(a.clone()),
         }
@@ -634,6 +650,10 @@ fn dispatch(
             first("key", &mut opts)?;
             ("surface.send_key", |_| "OK".into())
         }
+        "read-selection" => ("surface.read_selection", |v| s(v)),
+        "read-screen" | "capture-pane" if opts.remove("selection").is_some() => {
+            ("surface.read_selection", |v| s(v))
+        }
         "read-screen" | "capture-pane" => {
             if let Some(Value::String(n)) = opts.get("lines") {
                 let n: u64 = n.parse().map_err(|_| "--lines needs a number")?;
@@ -666,6 +686,40 @@ fn dispatch(
             }
         }),
         "clear-notifications" => ("notification.clear", |_| "OK".into()),
+        "dismiss-notification" => {
+            if !opts.contains_key("id") && !pos.is_empty() {
+                opts.insert("id".into(), json!(pos.remove(0)));
+            }
+            ("notification.dismiss", |v| format!("OK dismissed {}", v["dismissed"]))
+        }
+        "mark-notification-read" => {
+            if !opts.contains_key("id") && !pos.is_empty() {
+                opts.insert("id".into(), json!(pos.remove(0)));
+            }
+            ("notification.mark_read", |v| format!("OK marked {}", v["marked"]))
+        }
+        "tab-action" => {
+            surface_aliases(&mut opts);
+            if !opts.contains_key("action") {
+                first("action", &mut opts)?;
+            }
+            if opts["action"] == "rename" && !opts.contains_key("title") && !pos.is_empty() {
+                opts.insert("title".into(), json!(pos.join(" ")));
+            }
+            ("surface.action", |v| {
+                let mut out = format!("OK {}", s(&v["ref"]));
+                if let Some(n) = v["closed"].as_u64() {
+                    out += &format!(" closed {n}");
+                }
+                out
+            })
+        }
+        "wait-for" => return wait_for(&pos, &opts),
+        "completion" | "completions" => {
+            let shell = pos.first().map(String::as_str).unwrap_or("zsh");
+            print!("{}", completion(shell)?);
+            return Ok(());
+        }
         "set-status" => {
             first("key", &mut opts)?;
             if pos.is_empty() {
@@ -769,6 +823,179 @@ fn dispatch(
     Ok(())
 }
 
+/// Where `wait-for` signals land: a file per name, as cmux does, so it works
+/// across processes without the app.
+fn signal_file(name: &str) -> std::path::PathBuf {
+    let safe: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' })
+        .collect();
+    std::env::temp_dir().join(format!("abromux-wait-for-{safe}.sig"))
+}
+
+/// `wait-for <name>` blocks until `wait-for -S <name>` runs (before or
+/// after), then consumes the signal. Each signal wakes one waiter.
+fn wait_for(pos: &[String], opts: &Map<String, Value>) -> Result<(), String> {
+    let name = pos.first().ok_or("wait-for: missing <name>")?;
+    let file = signal_file(name);
+    if opts.contains_key("signal") {
+        std::fs::write(&file, b"").map_err(|e| format!("{}: {e}", file.display()))?;
+        println!("OK");
+        return Ok(());
+    }
+    let secs: f64 = match opts.get("timeout") {
+        Some(Value::String(t)) => t
+            .parse()
+            .ok()
+            .filter(|t: &f64| t.is_finite() && *t >= 0.)
+            .ok_or("--timeout needs a number of seconds")?,
+        _ => 30.,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(secs);
+    loop {
+        // Removing it is the claim: of two waiters only one succeeds.
+        if std::fs::remove_file(&file).is_ok() {
+            println!("OK");
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!("wait-for timed out waiting for {name:?}"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Every command in `HELP`, with its subcommands (`browser zoom`,
+/// `group list`, ...).
+fn command_tree() -> Vec<(String, Vec<String>)> {
+    let mut out: Vec<(String, Vec<String>)> = vec![];
+    let mut add = |cmd: &str, sub: Option<&str>| {
+        let i = match out.iter().position(|(c, _)| c == cmd) {
+            Some(i) => i,
+            None => {
+                out.push((cmd.into(), vec![]));
+                out.len() - 1
+            }
+        };
+        if let Some(sub) = sub
+            && !out[i].1.iter().any(|s| s == sub)
+        {
+            out[i].1.push(sub.into());
+        }
+    };
+    let word = |w: &str| {
+        !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    };
+    for line in HELP.lines().skip_while(|l| !l.starts_with("Commands:")).skip(1) {
+        // Commands sit two spaces in; deeper lines continue the one above.
+        let Some(rest) = line.strip_prefix("  ").filter(|r| !r.starts_with(' ')) else {
+            continue;
+        };
+        let mut words = rest.split_whitespace();
+        let Some(first) = words.next() else { continue };
+        // `ping | version | identify`
+        if words.clone().next() == Some("|") {
+            for w in rest.split('|').map(str::trim).filter(|w| word(w)) {
+                add(w, None);
+            }
+            continue;
+        }
+        if !word(first) {
+            continue;
+        }
+        let second = words.next().filter(|w| !w.starts_with('[') && !w.starts_with('-') && !w.starts_with('<') && !w.starts_with('('));
+        match second {
+            // `group rename|color|collapse ...`, `skills show [...]`
+            Some(subs) if matches!(first, "group" | "folder" | "config" | "hooks" | "skills" | "browser" | "sidebar") => {
+                for sub in subs.split('|').filter(|w| word(w)) {
+                    add(first, Some(sub));
+                }
+            }
+            _ => add(first, None),
+        }
+    }
+    out
+}
+
+/// `completion <shell>`: a completion script for commands and subcommands.
+fn completion(shell: &str) -> Result<String, String> {
+    let tree = command_tree();
+    let commands: Vec<&str> = tree.iter().map(|(c, _)| c.as_str()).collect();
+    let subs = |join: &dyn Fn(&str, &str) -> String| {
+        tree.iter()
+            .filter(|(_, s)| !s.is_empty())
+            .map(|(c, s)| join(c, &s.join(" ")))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    Ok(match shell {
+        "zsh" => format!(
+            r#"#compdef abromux
+_abromux() {{
+  local -a cmds
+  cmds=({cmds})
+  if (( CURRENT == 2 )); then
+    _describe 'command' cmds
+    return
+  fi
+  local -a subs
+  case $words[2] in
+{cases}
+    *) _files; return ;;
+  esac
+  if (( CURRENT == 3 )); then
+    _describe 'subcommand' subs
+  else
+    _files
+  fi
+}}
+if [[ $zsh_eval_context[-1] == loadautofunc ]]; then
+  _abromux "$@"
+else
+  compdef _abromux abromux
+fi
+"#,
+            cmds = commands.join(" "),
+            cases = subs(&|c, s| format!("    {c}) subs=({s}) ;;")),
+        ),
+        "bash" => format!(
+            r#"_abromux() {{
+  local cur=${{COMP_WORDS[COMP_CWORD]}}
+  if [[ $COMP_CWORD -eq 1 ]]; then
+    COMPREPLY=($(compgen -W "{cmds}" -- "$cur"))
+    return
+  fi
+  if [[ $COMP_CWORD -eq 2 ]]; then
+    case ${{COMP_WORDS[1]}} in
+{cases}
+    esac
+  fi
+  COMPREPLY=($(compgen -f -- "$cur"))
+}}
+complete -o default -F _abromux abromux
+"#,
+            cmds = commands.join(" "),
+            cases = subs(&|c, s| format!(
+                r#"      {c}) COMPREPLY=($(compgen -W "{s}" -- "$cur")); return ;;"#
+            )),
+        ),
+        "fish" => {
+            let mut out = String::from("complete -c abromux -f\n");
+            for c in &commands {
+                out += &format!("complete -c abromux -n __fish_use_subcommand -a {c}\n");
+            }
+            for (c, s) in tree.iter().filter(|(_, s)| !s.is_empty()) {
+                out += &format!(
+                    "complete -c abromux -n '__fish_seen_subcommand_from {c}' -a '{}'\n",
+                    s.join(" ")
+                );
+            }
+            out
+        }
+        s => return Err(format!("completion: unknown shell {s:?} (zsh, bash or fish)")),
+    })
+}
+
 /// `config path`, `config check [<file>]`, `config project` and `config shortcuts`, which
 /// need no running app.
 fn config(pos: &[String]) -> Result<(), String> {
@@ -849,6 +1076,15 @@ fn browser(
         "forward" => ("browser.forward", |_| "OK".into()),
         "reload" => ("browser.reload", |_| "OK".into()),
         "url" | "get-url" => ("browser.url", |v| s(&v["url"])),
+        "zoom" => {
+            if let Some(z) = pos.first() {
+                opts.insert("zoom".into(), json!(z));
+            }
+            ("browser.zoom", |v| {
+                let z = v["zoom"].as_f64().unwrap_or(1.);
+                format!("{}%", (z * 100.).round())
+            })
+        }
         "eval" => {
             if arg.is_empty() {
                 return Err("browser eval: missing <script>".into());
@@ -1250,6 +1486,51 @@ fn created(v: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_knows_commands_and_subcommands() {
+        let tree = command_tree();
+        let has = |c: &str| tree.iter().any(|(x, _)| x == c);
+        for c in [
+            "ping", "identify", "notify", "dismiss-notification", "mark-notification-read",
+            "tab-action", "read-selection", "wait-for", "completion", "browser", "rpc",
+        ] {
+            assert!(has(c), "{c} missing");
+        }
+        let subs = |c: &str| tree.iter().find(|(x, _)| x == c).unwrap().1.clone();
+        assert!(subs("browser").contains(&"zoom".to_string()));
+        assert!(subs("group").contains(&"by-folder".to_string()));
+        assert!(!has("Commands:") && !has("--surface"));
+        assert!(completion("tcsh").is_err());
+    }
+
+    #[test]
+    fn signal_files_are_safe_names() {
+        let f = signal_file("build/done ok");
+        assert_eq!(f.file_name().unwrap(), "abromux-wait-for-build_done_ok.sig");
+    }
+
+    #[test]
+    fn wait_for_takes_a_signal_once() {
+        let name = format!("test-{}", std::process::id());
+        let none = Map::new();
+        let mut quick = Map::new();
+        quick.insert("timeout".into(), json!("0.1"));
+        assert!(wait_for(std::slice::from_ref(&name), &quick).is_err());
+        let mut signal = Map::new();
+        signal.insert("signal".into(), json!(true));
+        wait_for(std::slice::from_ref(&name), &signal).unwrap();
+        wait_for(std::slice::from_ref(&name), &none).unwrap();
+        // Consumed: the next wait times out.
+        assert!(wait_for(&[name], &quick).is_err());
+    }
+
+    #[test]
+    fn short_signal_switch() {
+        let a = args(&["wait-for", "-S", "x"]);
+        assert_eq!(a.opts["signal"], json!(true));
+        assert_eq!(a.pos, ["wait-for", "x"]);
+    }
 
     fn args(a: &[&str]) -> Args {
         parse(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap()

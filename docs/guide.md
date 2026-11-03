@@ -8,7 +8,7 @@ Everything AbroMux does, in detail. For a quick start, see the [README](../READM
 - **Browser panes** are native WKWebViews (wry, via `gpui-component`). Each has an address bar with back, forward and reload. Typing in the address bar suggests pages from your browsing history, ranked as in cmux (where the text matches, plus how recently, often and directly you've visited them). ↑/↓ pick one, Return opens it, Esc closes the list, ⇧⌫ deletes the highlighted entry, and ↓ on the page's own URL lists your most typed and recent ones. History is shared by all browser panes and kept in `browser-history.json` under Application Support. ⌘-click or middle-click on a link opens it in a new tab after the current one (⇧ to switch to it). Passkeys and security keys work in them once the app is signed with Apple's web-browser entitlement (see "Passkeys").
 - **Workspaces** sit in a left sidebar, cmux style. Each entry shows the name, the focused tab's title, the git branch and the cwd, plus whatever scripts report through the CLI: status pills (`set-status`), a progress bar (`set-progress`) and the newest `log` line.
 - **Coding agents** (Claude Code, Codex, Gemini CLI, Droid, Cursor CLI, OpenCode and Pi) show up in the sidebar once you've run `abromux hooks install`: a "Running" pill while the agent works and "Needs input" when it asks for permission (Cursor's hooks can't say when it asks). When it asks, or finishes a turn, its terminal gets a notification ("Codex: Asks to run …", "Claude Code: <the start of its reply>"). Their tabs show the agent's logo (Claude Code and Codex) or a robot.
-- **Notifications** come from terminal programs (OSC 9, OSC 99 and OSC 777, as Claude Code, Codex and others send them), from the bell, and from `abromux notify`. One you aren't looking at rings its pane, puts a dot on its tab and on its workspace, shows its text under the workspace in the sidebar, counts on the dock icon, and, while AbroMux is in the background, shows a macOS banner that takes you to it when clicked (banners need AbroMux.app; a `cargo run` build has the rest). It's read once you look at that terminal. ⌘I lists them all; ⌘⇧U jumps to the newest unread one.
+- **Notifications** come from terminal programs (OSC 9, OSC 99 and OSC 777, as Claude Code, Codex and others send them), from the bell, and from `abromux notify`. One you aren't looking at rings its pane, puts a dot on its tab and on its workspace, shows its text under the workspace in the sidebar, counts on the dock icon, and, while AbroMux is in the background, shows a macOS banner that takes you to it when clicked (banners need AbroMux.app; a `cargo run` build has the rest). It's read once you look at that terminal. ⌘I lists them all; ⌘⇧U jumps to the newest unread one. ⌥⌘U marks the terminal in front of you unread (or read), and ⌃⌘U sends its notification to the back of the queue and jumps to the next one, to work through a pile one at a time. A bell in the macOS menu bar shows the unread count and lists them. [Notification hooks](#notifications) can filter or change each one.
 - **Links** in terminal output underline while you hold ⌘ over them: URLs, OSC 8 hyperlinks, and paths to files that exist (relative ones from the shell's directory, `path:line` too). ⌘-click opens web links in a browser to the right of the terminal (a new tab there if that pane already shows one) and anything else with its default app.
 - **Panes** split right or down, and each pane has a tab bar of terminal and browser tabs. Drag a divider to resize. Drag a tab to reorder it, onto another pane's tab bar or middle to move it there, onto a pane's edge to split that pane, or onto the outer edge of the pane area to split the whole workspace (full width or height), or onto a workspace in the sidebar to move it into that workspace. A highlight shows where it will land. Move Tab to New Workspace (⌘⇧P) gives the focused tab a workspace of its own.
 
@@ -277,6 +277,36 @@ Reloading the config applies new shortcuts at once, in the menus too.
 
 ⌘⇧, (or ⌘⇧P → Reload Config, or `abromux reload-config`) reads the file again without a restart. If it doesn't parse, the current settings stay and a toast shows the error with its line and column, and it does the same at launch. `abromux config check [<file>]` validates a file without the app, and `abromux config path` prints where it's read from. The Ghostty config below is separate and is still read only at launch.
 
+### Notifications
+
+```json
+{
+  "notifications": {
+    "showInMenuBar": true,
+    "hooks": [
+      { "id": "no-banner-for-codex", "command": "jq 'if .notification.title == \"Codex\" then .effects.desktop = false else . end'" },
+      { "id": "speak", "command": "say \"$(jq -r .notification.body)\"", "timeoutSeconds": 10 }
+    ]
+  }
+}
+```
+
+`showInMenuBar` (on by default, as in cmux) puts a bell in the macOS menu bar with the unread count. Its menu lists the newest unread notifications (click one to go to it) and has Show Notifications, Jump to Latest Unread, Mark All Read and Clear All.
+
+`hooks` are cmux's notification hooks: shell commands each notification (not the bell) passes through, in order. A hook gets it as JSON on stdin and prints it back, changed or not:
+
+```json
+{
+  "version": 1,
+  "notification": { "id": 7, "workspaceId": "workspace:2", "surfaceId": "surface:5",
+                    "title": "Claude Code", "subtitle": "", "body": "Needs your input" },
+  "context": { "cwd": "/path/to/project", "hookId": "speak", "appFocused": false, "focusedPanel": false },
+  "effects": { "record": true, "markUnread": true, "desktop": true, "sound": true }
+}
+```
+
+`record: false` drops the notification, `markUnread: false` records it as read, `desktop: false` skips the macOS banner and `sound: false` its sound; a changed `title`, `subtitle` or `body` is what's shown. A hook that prints nothing changes nothing, so any command can be a hook. Hooks run in the background (the banner waits for them) in the workspace's directory, with `ABROMUX_WORKSPACE_ID`, `ABROMUX_SURFACE_ID` and `ABROMUX_SOCKET_PATH` set so they can call `abromux`. If one fails, takes longer than `timeoutSeconds` (default 20) or prints something that isn't JSON, the notification goes ahead as if there were no hooks and a toast says which hook failed. `"enabled": false` turns one off. Unlike cmux, only this file's hooks run, not a project's.
+
 ## Ghostty config
 
 Terminals read your Ghostty config: `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`), then `~/Library/Application Support/com.mitchellh.ghostty/config`, plus their `config-file` includes. abromux uses `theme` (from `~/.config/ghostty/themes` or Ghostty.app), `font-family`, `font-size`, `foreground`, `background`, `palette`, `cursor-color`, `cursor-text`, `cursor-style`, `selection-background`/`-foreground`, `keybind`s whose action is `text:`, `csi:` or `esc:`, and `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` (on by default, as in Ghostty: pasting text that could run commands, such as a newline when the program hasn't turned on bracketed paste, asks first; Enter pastes, Esc cancels). `copy-on-select = clipboard` copies a selection to the clipboard when you let go of the mouse (Ghostty's default `true` uses a selection pasteboard macOS doesn't have, so it does nothing here). `mouse-scroll-multiplier` scales scrolling, as one number or `precision:<n>,discrete:<n>` for the trackpad and the mouse wheel. `scrollbar = never` hides the overlay scrollbar. `shell-integration = none` turns off abromux's shell integration (below). Other keys are ignored for now. Changes apply to new terminals.
@@ -297,7 +327,10 @@ abromux new-split right --command 'cargo watch -x test'
 abromux send --surface surface:3 'ls -la\n'
 abromux send-key --surface surface:3 ctrl-c
 abromux read-screen --surface surface:3 --scrollback --lines 50
+abromux read-selection --surface surface:3  # the selected text (also read-screen --selection; works in a browser tab too)
 abromux rename-tab --surface surface:3 'dev server'   # no title: back to the program's own
+abromux tab-action --tab surface:3 close-right   # also close-left, close-others, new-terminal-right, new-browser-right,
+                                                 # duplicate, move-to-new-workspace, reload, rename, clear-name, mark-read, mark-unread
 abromux respawn-pane --surface surface:3 --command 'npm run dev'   # kill the shell, start a fresh one
 abromux last-pane                           # back to the pane focused before
 abromux swap-pane -L                        # swap the focused pane's tabs with the pane to its left
@@ -310,9 +343,13 @@ abromux zoom-pane                           # like ⌘⇧↩; on, off or toggle
 abromux trigger-flash --surface surface:3   # flash its pane, like ⌘⇧H
 abromux browser open https://example.com
 abromux browser eval 'document.title'
+abromux browser zoom 125%                   # or in, out, reset, 1.5; no argument prints it
 abromux notify --title 'Tests' --body 'all green'   # rings the pane it runs in
 abromux list-notifications
 abromux jump-to-unread
+abromux mark-notification-read --workspace workspace:2   # or --id 4, --all
+abromux dismiss-notification --all-read     # or --id 4
+abromux wait-for build-done --timeout 600   # blocks until another script runs: abromux wait-for -S build-done
 abromux set-status build compiling --color '#e0a84f'   # a pill under the workspace
 abromux set-progress 0.4 --label 'Building'
 abromux log --level error --source build 'Build failed'
@@ -340,6 +377,10 @@ abromux browser screenshot page.png
 There are also `dblclick`, `hover`, `focus`, `check`/`uncheck`, `type`, `press`, `select`, `scroll`, `get`, `is`, `find` (by role, text, label, placeholder, alt, title or test id) and `wait` for selectors, URLs and load states. The events are synthesized in the page with JavaScript, so sites that only react to real input won't respond to them.
 
 Coding agents running in abromux can learn this CLI from two agent skills in [`skills/`](../skills): `abromux` (splits, tabs, running and reading other terminals, sidebar status and notifications) and `abromux-browser` (the browser automation above). `abromux skills install` copies them into `~/.claude/skills` (or `$CLAUDE_CONFIG_DIR`) and, if Codex is set up, `~/.codex/skills` (or `$CODEX_HOME`). They're built into the binary, so rerun it after updating abromux; `abromux skills uninstall` removes them, and `abromux skills show [name]` prints one.
+
+`abromux completion zsh` (or `bash`, `fish`) prints a completion script for the commands and their subcommands: `eval "$(abromux completion zsh)"` in `~/.zshrc`, after `compinit`.
+
+`wait-for` works without the app, through a file per name in `$TMPDIR`, as cmux does: a signal sent before anyone waits is kept, and each one wakes a single waiter.
 
 Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each shell gets `ABROMUX_SOCKET_PATH`, `ABROMUX_WORKSPACE_ID` and `ABROMUX_SURFACE_ID`, so `abromux` run inside a pane acts on that pane by default (otherwise on what's focused). The wire format is one JSON object per line (`{"id":1,"method":"workspace.list","params":{}}`); `abromux rpc <method> [json]` sends one directly.
 
@@ -375,7 +416,9 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Command palette: every command that applies to the focused terminal or browser, with its shortcut | | ⌘⇧P, type to filter, ↑/↓ or ⌃N/⌃P, Enter runs, Esc closes |
 | Switch workspace by name | | ⌘P |
 | Notifications list | bell icon in the titlebar | ⌘I (Esc closes) |
-| Jump to newest unread notification | click it in the list | ⌘⇧U |
+| Jump to newest unread notification | click it in the list or the menu-bar bell | ⌘⇧U |
+| Mark the focused terminal unread, or read | | ⌥⌘U |
+| Mark it the oldest unread and jump to the next | | ⌃⌘U |
 | Open a link in a terminal | ⌘-click | |
 | Open a page link in a new tab | ⌘-click (⇧⌘-click to switch to it) | |
 | Toggle sidebar | sidebar icon | ⌘B |

@@ -120,7 +120,9 @@ pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> 
             let method = req["method"].as_str().unwrap_or_default().to_string();
             let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
             let Ok(out) = this.update_in(cx, |this, window, cx| {
-                this.handle(&method, &params, window, cx)
+                let out = this.handle(&method, &params, window, cx);
+                this.refresh_unread(cx);
+                out
             }) else {
                 break;
             };
@@ -178,6 +180,28 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
         if writer.write_all(out.as_bytes()).is_err() {
             return;
         }
+    }
+}
+
+/// `--id` as `notification:N` or N.
+fn notification_id(p: &Value) -> anyhow::Result<Option<usize>> {
+    Ok(match p.get("id") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(
+            s.trim_start_matches("notification:")
+                .parse()
+                .with_context(|| format!("bad notification id {s:?}"))?,
+        ),
+        Some(v) => Some(v.as_u64().context("bad notification id")? as usize),
+    })
+}
+
+/// A page zoom: `1.25`, or `125%`.
+fn parse_zoom(z: &str) -> anyhow::Result<f64> {
+    let bad = || anyhow!("bad zoom {z:?}: use in, out, reset, a factor like 1.25 or a percentage like 125%");
+    match z.strip_suffix('%') {
+        Some(pct) => pct.trim().parse::<f64>().map(|p| p / 100.).map_err(|_| bad()),
+        None => z.trim().parse().map_err(|_| bad()),
     }
 }
 
@@ -856,6 +880,34 @@ impl AbroMux {
                 json!(t.update(cx, |t, _| t.read_text(scrollback, lines)))
             }
 
+            "surface.read_selection" => {
+                let (_, _, s) = self.surface_target(p)?;
+                match s {
+                    Surface::Terminal(t) => json!(t.read(cx).selection_text().unwrap_or_default()),
+                    Surface::Browser(b) => {
+                        let acx = cx.to_async();
+                        return Ok(Reply::Later(
+                            async move {
+                                let out = eval_json(
+                                    &b,
+                                    "String(window.getSelection() || '')",
+                                    &acx,
+                                    SCRIPT_TIMEOUT,
+                                )
+                                .await
+                                .context("the page didn't answer (is it still loading?)")?;
+                                Ok(match serde_json::from_str(&out) {
+                                    Ok(v @ Value::String(_)) => v,
+                                    _ => Value::String(out),
+                                })
+                            }
+                            .boxed_local(),
+                        ));
+                    }
+                }
+            }
+            "surface.action" => return self.tab_action(p, window, cx),
+
             // From `abromux hooks claude-event` (agent.rs).
             "agent.report" => {
                 let t = self.terminal_target(p)?;
@@ -925,6 +977,27 @@ impl AbroMux {
                     _ => b.reload(cx),
                 });
                 json!(null)
+            }
+            "browser.zoom" => {
+                let b = self.browser_target(p)?;
+                let now = b.read(cx).zoom();
+                let to = match p.get("zoom") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(z)) => Some(match z.as_str() {
+                        "in" => crate::browser::zoom_step(now, true),
+                        "out" => crate::browser::zoom_step(now, false),
+                        "reset" | "actual" => 1.0,
+                        z => parse_zoom(z)?,
+                    }),
+                    Some(v) => Some(v.as_f64().context("zoom must be a number")?),
+                };
+                if let Some(z) = to {
+                    if !(z.is_finite() && z > 0.) {
+                        bail!("zoom must be greater than 0");
+                    }
+                    b.update(cx, |b, cx| b.set_zoom(z, cx));
+                }
+                json!({ "zoom": b.read(cx).zoom() })
             }
             "browser.url" => {
                 let b = self.browser_target(p)?;
@@ -1035,16 +1108,74 @@ impl AbroMux {
                     .collect::<Vec<_>>())
             }
             "notification.open" => {
-                let id = match p.get("id") {
-                    Some(Value::String(s)) => s.trim_start_matches("notification:").parse().ok(),
-                    Some(v) => v.as_u64().map(|n| n as usize),
-                    None => None,
-                }
-                .context("missing notification id")?;
+                let id = notification_id(p)?.context("missing notification id")?;
                 if !self.open_notification(id, window, cx) {
                     bail!("no notification {id}");
                 }
                 json!({ "id": id })
+            }
+            "notification.dismiss" => {
+                let all_read = bool_param(p, "all_read", false);
+                match (notification_id(p)?, all_read) {
+                    (Some(id), false) => {
+                        if !self.dismiss_notification(id, cx) {
+                            bail!("no notification {id}");
+                        }
+                        json!({ "dismissed": 1 })
+                    }
+                    (None, true) => json!({ "dismissed": self.dismiss_read(cx) }),
+                    _ => bail!("dismiss-notification needs exactly one of --id or --all-read"),
+                }
+            }
+            "notification.mark_read" => {
+                let all = bool_param(p, "all", false);
+                let ws = str_param(p, "workspace").is_some();
+                let marked = match (notification_id(p)?, ws, all) {
+                    (Some(id), false, false) => {
+                        let n = self
+                            .notifications
+                            .iter_mut()
+                            .find(|n| n.id == id)
+                            .with_context(|| format!("no notification {id}"))?;
+                        n.read = true;
+                        1
+                    }
+                    (None, true, false) => {
+                        let wi = self.workspace_target(p)?;
+                        let surfaces: Vec<EntityId> = if str_param(p, "surface").is_some() {
+                            vec![self.surface_target(p)?.2.entity_id()]
+                        } else {
+                            self.workspaces[wi]
+                                .root
+                                .panes()
+                                .iter()
+                                .flat_map(|p| p.tabs.iter().map(|t| t.entity_id()))
+                                .collect()
+                        };
+                        let n = self
+                            .notifications
+                            .iter()
+                            .filter(|n| !n.read && surfaces.contains(&n.surface))
+                            .count();
+                        for s in surfaces {
+                            self.mark_surface_read(s);
+                        }
+                        n
+                    }
+                    (None, false, true) => {
+                        let n = self.notifications.iter().filter(|n| !n.read).count();
+                        for n in self.notifications.iter_mut() {
+                            n.read = true;
+                        }
+                        self.manual_unread.clear();
+                        n
+                    }
+                    _ => bail!(
+                        "mark-notification-read needs exactly one of --id, --workspace or --all"
+                    ),
+                };
+                cx.notify();
+                json!({ "marked": marked })
             }
             "notification.jump_unread" => json!({ "jumped": self.jump_to_unread(window, cx) }),
             "notification.clear" => {
@@ -1350,6 +1481,120 @@ impl AbroMux {
             .ok();
         })
         .detach();
+    }
+
+    /// `tab-action`: what the tab bar's right-click menu does, on one tab.
+    fn tab_action(
+        &mut self,
+        p: &Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Reply> {
+        let action = str_param(p, "action").context("missing <action>")?;
+        let (wi, pane, s) = self.surface_target(p)?;
+        let id = s.entity_id();
+        let tabs: Vec<EntityId> = self.workspaces[wi]
+            .root
+            .panes()
+            .into_iter()
+            .find(|x| x.id == pane)
+            .map(|x| x.tabs.iter().map(|t| t.entity_id()).collect())
+            .unwrap_or_default();
+        let at = tabs.iter().position(|&t| t == id).unwrap_or(0);
+        // cmux's defaults: new tabs take focus, a moved one doesn't.
+        let focus = bool_param(p, "focus", action != "move-to-new-workspace");
+        let v = match action {
+            "rename" => {
+                let title = str_param(p, "title").context("rename needs a title")?;
+                s.set_custom_title(Some(one_line(title)), cx);
+                self.describe_moved(id, cx)?
+            }
+            "clear-name" => {
+                s.set_custom_title(None, cx);
+                self.describe_moved(id, cx)?
+            }
+            "close-left" | "close-right" | "close-others" => {
+                let close: Vec<EntityId> = match action {
+                    "close-left" => tabs[..at].to_vec(),
+                    "close-right" => tabs[at + 1..].to_vec(),
+                    _ => tabs.iter().copied().filter(|&t| t != id).collect(),
+                };
+                for t in &close {
+                    self.close_surface(*t, window, cx);
+                }
+                let mut v = self.describe_moved(id, cx)?;
+                v["closed"] = json!(close.len());
+                v
+            }
+            "new-terminal-right" | "new-browser-right" | "duplicate" => {
+                let mut q = json!({});
+                if action == "new-browser-right" {
+                    q["type"] = json!("browser");
+                    if let Some(url) = str_param(p, "url") {
+                        q["url"] = json!(url);
+                    }
+                } else if action == "duplicate" {
+                    match &s {
+                        Surface::Browser(b) => {
+                            q["type"] = json!("browser");
+                            q["url"] = json!(b.read(cx).url);
+                        }
+                        Surface::Terminal(_) => {
+                            if let Some(cwd) = s.cwd(cx) {
+                                q["cwd"] = json!(cwd);
+                            }
+                        }
+                    }
+                }
+                let new = self.make_surface(wi, &q, window, cx)?;
+                let nid = new.entity_id();
+                let ws = &mut self.workspaces[wi];
+                let was = ws.root.pane_mut(pane).and_then(|x| x.active_surface().map(|s| s.entity_id()));
+                if ws.insert_tab(pane, at + 1, new).is_err() {
+                    bail!("pane:{pane} is gone");
+                }
+                if focus {
+                    self.focus_surface(nid, cx);
+                    self.select_workspace(wi, window, cx);
+                } else if let Some(x) = ws.root.pane_mut(pane)
+                    && let Some(i) = x.tabs.iter().position(|t| Some(t.entity_id()) == was)
+                {
+                    // insert_tab made the new tab active; keep the old one.
+                    x.active = i;
+                }
+                self.describe_moved(nid, cx)?
+            }
+            "move-to-new-workspace" => {
+                let name = str_param(p, "title").map(one_line);
+                self.tab_to_new_workspace(id, name, focus, window, cx)?;
+                self.describe_moved(id, cx)?
+            }
+            "reload" => {
+                match &s {
+                    Surface::Browser(b) => b.read(cx).reload(cx),
+                    Surface::Terminal(_) => {
+                        bail!("reload is for browser tabs (respawn-pane restarts a terminal)")
+                    }
+                }
+                self.describe_moved(id, cx)?
+            }
+            "mark-read" => {
+                self.mark_surface_read(id);
+                self.describe_moved(id, cx)?
+            }
+            "mark-unread" => {
+                self.mark_surface_unread(id);
+                self.describe_moved(id, cx)?
+            }
+            "pin" | "unpin" => bail!("abromux has no pinned tabs yet"),
+            a => bail!(
+                "unknown action {a:?}; expected rename, clear-name, close-left, close-right, \
+                 close-others, new-terminal-right, new-browser-right, duplicate, \
+                 move-to-new-workspace, reload, mark-read or mark-unread"
+            ),
+        };
+        cx.notify();
+        Ok(Reply::Now(v))
     }
 
     // ---- targets --------------------------------------------------------
@@ -1705,17 +1950,28 @@ impl AbroMux {
             }
             "mark-read" => {
                 let ws = &self.workspaces[wi];
-                for n in self.notifications.iter_mut() {
-                    if ws.contains(n.surface) {
-                        n.read = true;
-                    }
+                let ids: Vec<EntityId> = ws
+                    .root
+                    .panes()
+                    .iter()
+                    .flat_map(|p| p.tabs.iter().map(|t| t.entity_id()))
+                    .collect();
+                for id in ids {
+                    self.mark_surface_read(id);
                 }
             }
-            "pin" | "unpin" | "mark-unread" => bail!("abromux has no {action:?} yet"),
+            "mark-unread" => {
+                let id = self.workspaces[wi]
+                    .focused_surface()
+                    .map(|s| s.entity_id())
+                    .context("workspace has no tabs")?;
+                self.mark_surface_unread(id);
+            }
+            "pin" | "unpin" => bail!("abromux has no {action:?} yet"),
             a => bail!(
                 "unknown action {a:?}; expected rename, clear-name, set-description, clear-description, \
                  set-color, clear-color, move-up, move-down, move-top, close-others, close-above, \
-                 close-below or mark-read"
+                 close-below, mark-read or mark-unread"
             ),
         }
         cx.notify();
@@ -1755,6 +2011,17 @@ impl AbroMux {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zoom_and_notification_ids() {
+        assert_eq!(parse_zoom("1.25").unwrap(), 1.25);
+        assert_eq!(parse_zoom("150%").unwrap(), 1.5);
+        assert!(parse_zoom("big").is_err());
+        assert_eq!(notification_id(&json!({ "id": "notification:4" })).unwrap(), Some(4));
+        assert_eq!(notification_id(&json!({ "id": 7 })).unwrap(), Some(7));
+        assert_eq!(notification_id(&json!({})).unwrap(), None);
+        assert!(notification_id(&json!({ "id": "x" })).is_err());
+    }
 
     #[test]
     fn unescape_maps_newline_to_enter() {

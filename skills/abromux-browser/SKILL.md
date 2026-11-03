@@ -76,6 +76,7 @@ Refs come from the latest snapshot. After navigation or a big DOM change, snapsh
 | Test state | `is visible\|hidden\|enabled\|disabled\|checked\|editable\|focused <sel>` (prints true/false) |
 | Find without a snapshot | `find role button --name 'Sign in'`, `find text\|label\|placeholder\|alt\|title\|testid <value>` (`--exact`) |
 | Wait | `wait <sel>` (`--state visible\|hidden\|attached\|detached`), `wait --text`, `--url <part>`, `--load interactive\|complete`, `--js <expr>`; `--timeout <ms>` (default 10000) |
+| Zoom | `zoom 125%` (or `in`, `out`, `reset`, `1.5`; no argument prints it) |
 | Anything else | `eval '<js>'` prints the result |
 | See it | `screenshot shot.png` (no path: a file in `$TMPDIR`; prints the path). Read the PNG to look at it. |
 

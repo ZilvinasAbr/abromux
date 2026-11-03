@@ -544,6 +544,11 @@ impl TerminalView {
         self.paste_now(&format!("{} ", text.join(" ")), cx);
     }
 
+    /// The selected text, if any (`read-selection`).
+    pub fn selection_text(&self) -> Option<String> {
+        self.term.selection_text()
+    }
+
     pub fn copy(&self, cx: &mut App) -> bool {
         match self.term.selection_text() {
             Some(text) => {

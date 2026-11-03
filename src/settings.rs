@@ -74,6 +74,7 @@ pub struct Settings {
     pub workspace_groups: WorkspaceGroups,
     pub automation: Automation,
     pub browser: BrowserSettings,
+    pub notifications: NotificationSettings,
 }
 
 impl Global for Settings {}
@@ -413,6 +414,63 @@ pub struct Automation {
     /// Up and Delete Folder…), run with the instruction as its one argument.
     /// None is `claude`.
     pub workspace_cleanup_agent: Option<String>,
+}
+
+/// cmux's `notifications` keys.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct NotificationSettings {
+    /// Commands each notification passes through, in order
+    /// (`crate::notify_hook`).
+    pub hooks: Vec<NotificationHook>,
+    /// The bell in the macOS menu bar (`crate::menubar`).
+    pub show_in_menu_bar: bool,
+}
+
+impl Default for NotificationSettings {
+    fn default() -> Self {
+        NotificationSettings {
+            hooks: vec![],
+            show_in_menu_bar: true,
+        }
+    }
+}
+
+/// One `notifications.hooks` entry: a shell command that gets the
+/// notification as JSON on stdin and may print it back changed.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct NotificationHook {
+    #[serde(deserialize_with = "non_blank")]
+    pub id: String,
+    #[serde(deserialize_with = "non_blank")]
+    pub command: String,
+    /// Default 20, as in cmux.
+    #[serde(default, deserialize_with = "positive")]
+    pub timeout_seconds: Option<f64>,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn non_blank<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let s = String::deserialize(d)?.trim().to_string();
+    if s.is_empty() {
+        return Err(serde::de::Error::custom("must not be blank"));
+    }
+    Ok(s)
+}
+
+fn positive<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
+    match Option::<f64>::deserialize(d)? {
+        Some(t) if !(t.is_finite() && t > 0.) => Err(serde::de::Error::custom(
+            "timeoutSeconds must be greater than 0",
+        )),
+        t => Ok(t),
+    }
 }
 
 /// The keys bound to an action or command.
