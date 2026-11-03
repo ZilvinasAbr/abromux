@@ -24,6 +24,8 @@ mod layout;
 mod link;
 mod menu;
 mod notification;
+mod notify_hook;
+mod menubar;
 mod osc99;
 mod palette;
 mod pty;
@@ -57,7 +59,7 @@ use gpui_component::{
 use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -118,6 +120,8 @@ actions!(
         ToggleZoom,
         ToggleNotifications,
         JumpToUnread,
+        ToggleUnread,
+        MarkOldestUnreadAndJumpNext,
         CommandPalette,
         WorkspaceSwitcher,
         RenameTab,
@@ -276,8 +280,16 @@ struct AbroMux {
     next_notification: usize,
     /// The ⌘I list is showing.
     notifications_open: bool,
+    /// Surfaces marked unread with no unread notification (⌥⌘U, ⌃⌘U,
+    /// `mark-unread`), until you next look at them.
+    manual_unread: HashSet<EntityId>,
+    /// The surface you were looking at on the last render, so looking at
+    /// one marks it read once, not on every frame.
+    last_viewed: Option<EntityId>,
     /// Unread count last put on the dock icon.
     badge: usize,
+    /// What the menu-bar extra shows now, to rebuild it only on change.
+    menubar: Option<String>,
     /// The ⌘⇧P / ⌘P palette, while open.
     palette: Option<palette::Palette>,
     /// The session this launch restored (without scrollback), for ⌘⇧O,
@@ -331,7 +343,10 @@ impl AbroMux {
             notifications: vec![],
             next_notification: 0,
             notifications_open: false,
+            manual_unread: HashSet::new(),
+            last_viewed: None,
             badge: 0,
+            menubar: None,
             palette: None,
             launch_session: None,
             naming: vec![],
@@ -347,6 +362,18 @@ impl AbroMux {
         .detach();
         cx.observe(&update::entity(cx), |_, _, cx| cx.notify())
             .detach();
+        let mut menubar_picks = menubar::init();
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(pick) = menubar_picks.next().await {
+                if this
+                    .update_in(cx, |this, window, cx| this.menubar_pick(pick, window, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
         let mut banner_clicks = banner::init();
         cx.spawn_in(window, async move |this, cx| {
             while let Some(id) = banner_clicks.next().await {
@@ -1095,7 +1122,7 @@ impl AbroMux {
         for p in ws.root.panes() {
             for s in &p.tabs {
                 self.surface_refs.remove(&s.entity_id());
-                self.notifications.retain(|n| n.surface != s.entity_id());
+                self.forget_notifications(s.entity_id());
                 match s {
                     Surface::Browser(b) => b.update(cx, |b, cx| b.set_shown(false, cx)),
                     Surface::Terminal(t) => t.update(cx, |t, _| t.close()),
@@ -2296,7 +2323,7 @@ impl Render for AbroMux {
             ws.track_focus();
         }
         self.window_bounds = Some(window.window_bounds().get_bounds());
-        self.mark_viewed(window);
+        self.mark_viewed(window, cx);
         for ws in &mut self.workspaces {
             ws.zoomed();
         }
@@ -2527,6 +2554,12 @@ impl Render for AbroMux {
             .map(|d| self.palette_actions(d, cx))
             .on_action(cx.listener(|this, _: &JumpToUnread, window, cx| {
                 this.jump_to_unread(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ToggleUnread, _, cx| {
+                this.toggle_unread(cx);
+            }))
+            .on_action(cx.listener(|this, _: &MarkOldestUnreadAndJumpNext, window, cx| {
+                this.mark_oldest_and_jump_next(window, cx);
             }))
             .on_action(cx.listener(|this, _: &LastPane, window, cx| {
                 this.last_pane(window, cx);

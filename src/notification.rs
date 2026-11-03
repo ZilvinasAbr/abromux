@@ -5,12 +5,14 @@
 //! A notification is read once you look at its terminal: the window is
 //! active and it's the focused tab of the selected workspace.
 
-use crate::{AbroMux, TITLEBAR_H, banner, theme::*, workspace::Workspace};
+use crate::{AbroMux, TITLEBAR_H, banner, menubar, notify_hook, theme::*, workspace::Workspace};
 use gpui::{prelude::*, *};
 use std::time::{Duration, SystemTime};
 
 /// Oldest ones are dropped past this.
 const KEEP: usize = 200;
+/// Unread notifications listed in the menu-bar extra.
+const MENU_RECENT: usize = 10;
 
 pub struct Notification {
     pub id: usize,
@@ -90,16 +92,17 @@ impl AbroMux {
         };
         self.next_notification += 1;
         let id = self.next_notification;
-        if !bell && !window.is_window_active() {
-            banner::post(
-                id,
-                if title.is_empty() {
-                    crate::channel::app_name()
-                } else {
-                    &title
-                },
-                &body,
-            );
+        let hooks: Vec<_> = cx
+            .try_global::<crate::settings::Settings>()
+            .map(|s| s.notifications.hooks.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|h| h.enabled)
+            .collect();
+        if !bell && !hooks.is_empty() {
+            self.run_hooks(id, surface, &title, &body, viewing, hooks, window, cx);
+        } else if !bell && !window.is_window_active() {
+            banner::post(id, banner_title(&title), &body, true);
         }
         self.notifications.push(Notification {
             id,
@@ -112,8 +115,79 @@ impl AbroMux {
         });
         let excess = self.notifications.len().saturating_sub(KEEP);
         self.notifications.drain(..excess);
+        self.refresh_unread(cx);
         cx.notify();
         Some(id)
+    }
+
+    /// Pass notification `id` through `notifications.hooks` off the main
+    /// thread, then apply what they decided (`notify_hook`). It's recorded
+    /// meanwhile; its banner waits for them.
+    #[allow(clippy::too_many_arguments)]
+    fn run_hooks(
+        &self,
+        id: usize,
+        surface: EntityId,
+        title: &str,
+        body: &str,
+        viewing: bool,
+        hooks: Vec<crate::settings::NotificationHook>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let ws = self.workspaces.iter().find(|w| w.contains(surface));
+        let input = notify_hook::Input {
+            id,
+            workspace: ws.map(|w| format!("workspace:{}", w.id)),
+            surface: self.surface_refs.get(&surface).map(|r| format!("surface:{r}")),
+            title: title.into(),
+            body: body.into(),
+            cwd: ws.and_then(|w| w.cwd(cx)),
+            app_focused: window.is_window_active(),
+            focused_panel: viewing,
+            socket: self.socket.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        };
+        let task = cx.background_spawn(async move { notify_hook::run(&hooks, &input) });
+        cx.spawn_in(window, async move |this, cx| {
+            let out = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.apply_hooks(id, out, window, cx)
+            });
+        })
+        .detach();
+    }
+
+    fn apply_hooks(
+        &mut self,
+        id: usize,
+        out: notify_hook::Outcome,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(e) = out.error {
+            let note = gpui_component::notification::Notification::warning(e)
+                .title("Notification hook failed");
+            gpui_component::WindowExt::push_notification(window, note, cx);
+        }
+        let Some(i) = self.notifications.iter().position(|n| n.id == id) else {
+            return;
+        };
+        cx.notify();
+        if !out.effects.record {
+            self.notifications.remove(i);
+            self.refresh_unread(cx);
+            return;
+        }
+        let n = &mut self.notifications[i];
+        n.title = out.title;
+        n.body = out.body;
+        if !out.effects.mark_unread {
+            n.read = true;
+        }
+        if out.effects.desktop && !window.is_window_active() {
+            banner::post(id, banner_title(&n.title), &n.body, out.effects.sound);
+        }
+        self.refresh_unread(cx);
     }
 
     fn surface_title(&self, surface: EntityId, cx: &App) -> Option<String> {
@@ -136,29 +210,215 @@ impl AbroMux {
 
     /// Mark what you're looking at as read and keep the dock badge current.
     /// Runs on every render, which follows focus and window changes.
-    pub(crate) fn mark_viewed(&mut self, window: &Window) {
-        if let Some(id) = self.ws().focused_surface().map(|s| s.entity_id())
-            && window.is_window_active()
-        {
-            for n in self.notifications.iter_mut().filter(|n| n.surface == id) {
-                n.read = true;
+    ///
+    /// Only a change of what you look at counts, so ⌥⌘U can mark the
+    /// terminal in front of you unread and it stays so until you look away
+    /// and back.
+    pub(crate) fn mark_viewed(&mut self, window: &Window, cx: &App) {
+        let viewing = self
+            .ws()
+            .focused_surface()
+            .map(|s| s.entity_id())
+            .filter(|_| window.is_window_active());
+        if viewing != self.last_viewed {
+            self.last_viewed = viewing;
+            if let Some(id) = viewing {
+                self.mark_surface_read(id);
             }
         }
+        self.refresh_unread(cx);
+    }
+
+    /// Bring the dock badge and the menu-bar extra up to date. Runs on
+    /// render and after every socket request and hook, so they follow
+    /// along while the window isn't drawing (hidden, screen locked).
+    pub(crate) fn refresh_unread(&mut self, cx: &App) {
         let unread = self.notifications.iter().filter(|n| !n.read).count();
         if unread != self.badge {
             self.badge = unread;
             banner::set_badge(unread);
         }
+        self.update_menubar(unread, cx);
+    }
+
+    /// Rebuild the menu-bar extra if what it shows changed.
+    fn update_menubar(&mut self, unread: usize, cx: &App) {
+        let show = cx
+            .try_global::<crate::settings::Settings>()
+            .is_none_or(|s| s.notifications.show_in_menu_bar);
+        let recent: Vec<menubar::Entry> = self
+            .notifications
+            .iter()
+            .rev()
+            .filter(|n| !n.read)
+            .take(MENU_RECENT)
+            .map(|n| menubar::Entry { id: n.id, text: n.text() })
+            .collect();
+        let mut key = format!("{show} {unread}");
+        for e in &recent {
+            key += &format!("\n{} {}", e.id, e.text);
+        }
+        if self.menubar.as_ref() != Some(&key) {
+            self.menubar = Some(key);
+            menubar::update(show, unread, &recent);
+        }
+    }
+
+    /// Something chosen in the menu-bar extra.
+    pub(crate) fn menubar_pick(
+        &mut self,
+        pick: menubar::Pick,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use menubar::Pick;
+        if !matches!(pick, Pick::MarkAllRead | Pick::ClearAll | Pick::Quit) {
+            cx.activate(true);
+            window.activate_window();
+        }
+        match pick {
+            Pick::ShowApp => {}
+            Pick::ShowNotifications => {
+                self.notifications_open = true;
+                cx.notify();
+            }
+            Pick::JumpToUnread => {
+                self.jump_to_unread(window, cx);
+            }
+            Pick::MarkAllRead => {
+                for n in self.notifications.iter_mut() {
+                    n.read = true;
+                }
+                self.manual_unread.clear();
+                cx.notify();
+            }
+            Pick::ClearAll => self.clear_notifications(cx),
+            Pick::Settings => window.dispatch_action(Box::new(crate::OpenSettings), cx),
+            Pick::Quit => window.dispatch_action(Box::new(crate::Quit), cx),
+            Pick::Open(id) => {
+                self.open_notification(id, window, cx);
+            }
+        }
+        self.refresh_unread(cx);
     }
 
     pub(crate) fn surface_unread(&self, surface: EntityId) -> bool {
-        self.notifications
-            .iter()
-            .any(|n| n.surface == surface && !n.read)
+        self.manual_unread.contains(&surface)
+            || self
+                .notifications
+                .iter()
+                .any(|n| n.surface == surface && !n.read)
     }
 
     pub(crate) fn ws_unread(&self, ws: &Workspace) -> bool {
-        self.latest_unread(ws).is_some()
+        self.latest_unread(ws).is_some() || self.manual_unread.iter().any(|&s| ws.contains(s))
+    }
+
+    /// Mark everything from `surface` read, a manual mark included.
+    pub(crate) fn mark_surface_read(&mut self, surface: EntityId) {
+        self.manual_unread.remove(&surface);
+        for n in self.notifications.iter_mut().filter(|n| n.surface == surface) {
+            n.read = true;
+        }
+    }
+
+    /// Mark `surface` unread: its newest notification, or the surface itself
+    /// if it has none.
+    pub(crate) fn mark_surface_unread(&mut self, surface: EntityId) {
+        match self.notifications.iter_mut().rev().find(|n| n.surface == surface) {
+            Some(n) => n.read = false,
+            None => {
+                self.manual_unread.insert(surface);
+            }
+        }
+    }
+
+    /// ⌥⌘U: the focused terminal unread if it's read, read if it's unread.
+    pub(crate) fn toggle_unread(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(id) = self.ws().focused_surface().map(|s| s.entity_id()) else {
+            return false;
+        };
+        if self.surface_unread(id) {
+            self.mark_surface_read(id);
+        } else {
+            self.mark_surface_unread(id);
+        }
+        cx.notify();
+        true
+    }
+
+    /// ⌃⌘U: put the focused terminal's newest notification at the back of
+    /// the unread queue (unread, but oldest), then jump to the newest unread
+    /// elsewhere. Works through a pile of them one at a time, coming back to
+    /// this one last. False if there was nowhere else to go.
+    pub(crate) fn mark_oldest_and_jump_next(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(id) = self.ws().focused_surface().map(|s| s.entity_id()) else {
+            return false;
+        };
+        match self.notifications.iter().rposition(|n| n.surface == id) {
+            Some(i) => {
+                let mut n = self.notifications.remove(i);
+                n.read = false;
+                self.notifications.insert(0, n);
+            }
+            None => {
+                self.manual_unread.insert(id);
+            }
+        }
+        cx.notify();
+        match self.next_unread(Some(id)) {
+            Some(Unread::Notification(n)) => self.open_notification(n, window, cx),
+            Some(Unread::Surface(s)) => self.open_surface(s, window, cx),
+            None => false,
+        }
+    }
+
+    /// The newest unread notification not from `skip`, else a surface
+    /// marked unread by hand.
+    fn next_unread(&self, skip: Option<EntityId>) -> Option<Unread> {
+        self.notifications
+            .iter()
+            .rev()
+            .find(|n| !n.read && Some(n.surface) != skip)
+            .map(|n| Unread::Notification(n.id))
+            .or_else(|| {
+                self.manual_unread
+                    .iter()
+                    .find(|&&s| Some(s) != skip && self.workspaces.iter().any(|w| w.contains(s)))
+                    .map(|&s| Unread::Surface(s))
+            })
+    }
+
+    /// Select `surface`'s workspace and tab, and mark it read.
+    fn open_surface(&mut self, surface: EntityId, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(wi) = self.workspaces.iter().position(|w| w.contains(surface)) else {
+            return false;
+        };
+        self.mark_surface_read(surface);
+        self.notifications_open = false;
+        self.focus_surface(surface, cx);
+        self.select_workspace(wi, window, cx);
+        true
+    }
+
+    /// Remove notification `id`. False if there's none.
+    pub(crate) fn dismiss_notification(&mut self, id: usize, cx: &mut Context<Self>) -> bool {
+        let before = self.notifications.len();
+        self.notifications.retain(|n| n.id != id);
+        cx.notify();
+        self.notifications.len() < before
+    }
+
+    /// Remove every read notification; how many went.
+    pub(crate) fn dismiss_read(&mut self, cx: &mut Context<Self>) -> usize {
+        let before = self.notifications.len();
+        self.notifications.retain(|n| !n.read);
+        cx.notify();
+        before - self.notifications.len()
     }
 
     pub(crate) fn latest_unread(&self, ws: &Workspace) -> Option<&Notification> {
@@ -171,6 +431,7 @@ impl AbroMux {
     /// A closed surface takes its notifications with it.
     pub(crate) fn forget_notifications(&mut self, surface: EntityId) {
         self.notifications.retain(|n| n.surface != surface);
+        self.manual_unread.remove(&surface);
     }
 
     /// Select the notification's terminal and mark it read.
@@ -185,6 +446,7 @@ impl AbroMux {
         };
         n.read = true;
         let surface = n.surface;
+        self.manual_unread.remove(&surface);
         let Some(wi) = self.workspaces.iter().position(|w| w.contains(surface)) else {
             return false;
         };
@@ -195,21 +457,18 @@ impl AbroMux {
     }
 
     /// ⌘⇧U: the newest unread notification. False if there's none.
+    /// A terminal marked unread by hand counts when no notification is.
     pub(crate) fn jump_to_unread(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        match self
-            .notifications
-            .iter()
-            .rev()
-            .find(|n| !n.read)
-            .map(|n| n.id)
-        {
-            Some(id) => self.open_notification(id, window, cx),
+        match self.next_unread(None) {
+            Some(Unread::Notification(id)) => self.open_notification(id, window, cx),
+            Some(Unread::Surface(s)) => self.open_surface(s, window, cx),
             None => false,
         }
     }
 
     pub(crate) fn clear_notifications(&mut self, cx: &mut Context<Self>) {
         self.notifications.clear();
+        self.manual_unread.clear();
         cx.notify();
     }
 
@@ -373,6 +632,19 @@ impl AbroMux {
                     ),
             )
             .into_any_element()
+    }
+}
+
+enum Unread {
+    Notification(usize),
+    Surface(EntityId),
+}
+
+fn banner_title(title: &str) -> &str {
+    if title.is_empty() {
+        crate::channel::app_name()
+    } else {
+        title
     }
 }
 

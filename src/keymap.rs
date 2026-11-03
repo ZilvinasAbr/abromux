@@ -100,6 +100,9 @@ pub const ACTIONS: &[Act] = {
         "toggleSidebar", Some("Toggle Sidebar"), ToggleSidebar, [(None, ["cmd-b"])];
         "showNotifications", Some("Show Notifications"), ToggleNotifications, [(None, ["cmd-i"])];
         "jumpToUnread", Some("Jump to Latest Unread"), JumpToUnread, [(None, ["cmd-shift-u"])];
+        "toggleUnread", Some("Toggle Unread"), ToggleUnread, [(None, ["alt-cmd-u"])];
+        "markOldestUnreadAndJumpNext", Some("Mark as Oldest Unread and Jump to Next"),
+            MarkOldestUnreadAndJumpNext, [(None, ["ctrl-cmd-u"])];
         "commandPalette", None, CommandPalette, [(None, ["cmd-shift-p"])];
         "workspaceSwitcher", None, WorkspaceSwitcher, [(None, ["cmd-p"])];
         // ⌘⇧, arrives as cmd-<.

@@ -60,7 +60,14 @@ abromux read-screen --surface surface:7              # what's visible now
 abromux read-screen --surface surface:7 --scrollback --lines 200   # include scrollback, last 200 lines
 ```
 
-`send` without a trailing `\n` types text but doesn't run it. There is no wait-for-output command: poll `read-screen` with a short `sleep` between reads until the prompt or the line you expect appears, and give up after a reasonable time.
+`send` without a trailing `\n` types text but doesn't run it. There is no wait-for-output command: poll `read-screen` with a short `sleep` between reads until the prompt or the line you expect appears, and give up after a reasonable time. To know exactly when a command you sent finishes, chain a signal onto it and wait for that:
+
+```bash
+abromux send --surface surface:7 'cargo build; abromux wait-for -S build-7\n'
+abromux wait-for build-7 --timeout 600      # returns once the build is done (exit 1 on timeout)
+```
+
+`abromux read-selection --surface surface:7` prints what the user selected there (a terminal or a browser tab).
 
 Don't type into a terminal the user is working in, or one running another agent, unless the user asked you to. Check its title in `tree` first.
 
@@ -96,6 +103,8 @@ abromux move-surface surface:7 --workspace workspace:2   # move a tab; or --pane
 abromux split-off --surface surface:7 right  # a tab into its own pane beside; focus stays put
 abromux move-tab-to-new-workspace --surface surface:7 --title 'dev server'
 abromux list-notifications
+abromux mark-notification-read --workspace workspace:2   # or --id N, --all; dismiss-notification --id N | --all-read
+abromux tab-action --tab surface:7 close-others   # close-left/right, new-terminal-right, duplicate, rename <title>, mark-unread...
 abromux clear-history --surface surface:7    # like ⌘K
 abromux rpc <method> '<json>'            # raw socket call
 ```
