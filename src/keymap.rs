@@ -129,6 +129,9 @@ pub const ACTIONS: &[Act] = {
         "reloadPage", Some("Reload Page"), browser::Reload, [(B, ["cmd-r"])];
         "toggleDevTools", Some("Toggle Developer Tools"), browser::ToggleDevTools, [(B, ["alt-cmd-i"])];
         "showConsole", Some("Show JavaScript Console"), browser::ShowConsole, [(B, ["alt-cmd-c"])];
+        "zoomIn", Some("Zoom In"), browser::ZoomIn, [(B, ["cmd-=", "cmd-+"]), (BI, ["cmd-=", "cmd-+"])];
+        "zoomOut", Some("Zoom Out"), browser::ZoomOut, [(B, ["cmd--"]), (BI, ["cmd--"])];
+        "actualSize", Some("Actual Size"), browser::ActualSize, [(B, ["cmd-0"]), (BI, ["cmd-0"])];
         "quit", Some("Quit"), Quit, [(None, ["cmd-q"])];
         "workspace1", None, Ws1, [(None, ["cmd-1"])];
         "workspace2", None, Ws2, [(None, ["cmd-2"])];

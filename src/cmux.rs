@@ -202,6 +202,7 @@ fn tab(p: &Value, dir: &str) -> Option<TabState> {
                 url: str_of(b, "urlString").unwrap_or_default().to_string(),
                 history: str_of(b, "interactionState").map(str::to_string),
                 name,
+                zoom: None,
             })
         }
         _ => None,
@@ -411,6 +412,7 @@ mod tests {
                     url: "https://example.com".into(),
                     name: Some("Docs site".into()),
                     history: Some("AAAA".into()),
+                    zoom: None,
                 }]
             }
         );
