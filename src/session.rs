@@ -133,6 +133,9 @@ pub enum TabState {
         /// The back/forward list (`BrowserView::history_state`), saved on quit.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         history: Option<String>,
+        /// Page zoom (⌘= / ⌘-), when not actual size.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        zoom: Option<f64>,
     },
 }
 
@@ -583,22 +586,33 @@ impl AbroMux {
             TabState::Browser { url, name, .. } if crate::settings::terminal_browser(cx) => {
                 (self.make_browser(&url, window, cx), name)
             }
-            TabState::Browser { url, name, history } => match history {
-                Some(h) => {
-                    let s = self.make_browser("", window, cx);
-                    if let Surface::Browser(b) = &s {
-                        b.update(cx, |b, cx| {
-                            if b.restore_history(&h, cx) {
-                                b.url = url;
-                            } else if !url.is_empty() {
-                                b.navigate(&url, cx);
-                            }
-                        });
+            TabState::Browser {
+                url,
+                name,
+                history,
+                zoom,
+            } => {
+                let s = match history {
+                    Some(h) => {
+                        let s = self.make_browser("", window, cx);
+                        if let Surface::Browser(b) = &s {
+                            b.update(cx, |b, cx| {
+                                if b.restore_history(&h, cx) {
+                                    b.url = url;
+                                } else if !url.is_empty() {
+                                    b.navigate(&url, cx);
+                                }
+                            });
+                        }
+                        s
                     }
-                    (s, name)
+                    None => self.make_browser(&url, window, cx),
+                };
+                if let (Some(zoom), Surface::Browser(b)) = (zoom, &s) {
+                    b.update(cx, |b, cx| b.set_zoom(zoom, cx));
                 }
-                None => (self.make_browser(&url, window, cx), name),
-            },
+                (s, name)
+            }
         };
         if name.is_some() {
             s.set_custom_title(name, cx);
@@ -710,6 +724,7 @@ fn tab_state(s: &Surface, scrollback: bool, refs: &Refs, cx: &App) -> TabState {
                     url: url.into(),
                     name: t.custom_title.clone(),
                     history: None,
+                    zoom: None,
                 };
             }
             let held = t.held_id().map(str::to_string);
@@ -729,6 +744,7 @@ fn tab_state(s: &Surface, scrollback: bool, refs: &Refs, cx: &App) -> TabState {
             url: b.read(cx).url.clone(),
             name: b.read(cx).custom_title.clone(),
             history: scrollback.then(|| b.read(cx).history_state(cx)).flatten(),
+            zoom: Some(b.read(cx).zoom()).filter(|&z| z != 1.0),
         },
     }
 }
@@ -786,6 +802,7 @@ mod tests {
                                 url: "https://example.com".into(),
                                 name: None,
                                 history: Some("YnBsaXN0".into()),
+                                zoom: Some(1.25),
                             }],
                         },
                     ]),

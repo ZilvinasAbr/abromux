@@ -89,7 +89,7 @@ So the list below reads in context:
 - [x] **Passkeys, WebAuthn and security keys**: a JS bridge to AuthenticationServices, as in cmux. *(partial: needs Apple's web-browser entitlement in a provisioning profile, see "Passkeys" in guide.md; no conditional/autofill UI)*
 - [ ] **Shortcuts while a webview has focus**: gpui's view gets ⌘ keys first (`performKeyEquivalent:`) even when the WKWebView is first responder, and a click into a page moves gpui focus to its `Browser` context, so ⌘ shortcuts should reach the app. Not yet confirmed with real keystrokes; keys without ⌘ still go only to the page.
 - [ ] **Popovers over webviews**: native webviews draw on top of everything, so UI can't overlap a visible browser.
-- [ ] **Zoom**: in, out, reset, or a set factor.
+- [x] **Zoom**: ⌘= / ⌘- / ⌘0 in browser panes, in Safari's steps (50%–300%), saved with the session. *(partial: no CLI command to set a factor)*
 - [ ] **Search-engine settings and search suggestions.**
 - [ ] **Downloads**: ask where to save, list downloads, wait for one to finish.
 - [ ] **Profiles**: separate cookie jars, with list, add, rename, clear and delete.
