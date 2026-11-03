@@ -2197,40 +2197,6 @@ impl AbroMux {
                                     })),
                             )
                         })
-                        .child(icon_button(("pane-term", pane_id), "terminal").on_click(
-                            cx.listener(move |this, _, window, cx| {
-                                focus_pane(this, cx);
-                                let cwd = this.focused_cwd(cx);
-                                let ws = this.ws().id;
-                                let s = this.make_terminal(cwd, ws, window, cx);
-                                this.add_tab(s, window, cx);
-                            }),
-                        ))
-                        .child(
-                            icon_button(("pane-web", pane_id), "globe").on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    focus_pane(this, cx);
-                                    let s = this.make_browser(DEFAULT_URL, window, cx);
-                                    this.add_tab(s, window, cx);
-                                },
-                            )),
-                        )
-                        .child(
-                            icon_button(("pane-split-r", pane_id), "split-right").on_click(
-                                cx.listener(move |this, _, window, cx| {
-                                    focus_pane(this, cx);
-                                    this.split(Axis::Horizontal, false, window, cx);
-                                }),
-                            ),
-                        )
-                        .child(
-                            icon_button(("pane-split-d", pane_id), "split-down").on_click(
-                                cx.listener(move |this, _, window, cx| {
-                                    focus_pane(this, cx);
-                                    this.split(Axis::Vertical, false, window, cx);
-                                }),
-                            ),
-                        ),
                 );
 
         let content = match pane.active_surface() {
