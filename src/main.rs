@@ -683,7 +683,9 @@ impl AbroMux {
 
     /// ⌘-click on a terminal link: web URLs open in a browser to the right
     /// of the terminal (a new tab there if that pane already shows one),
-    /// anything else with its default app.
+    /// local files and folders with their default app, and anything that
+    /// could run code only in Finder (see `link::local`). Other schemes do
+    /// nothing.
     fn open_link(
         &mut self,
         from: EntityId,
@@ -693,12 +695,14 @@ impl AbroMux {
     ) {
         let url = match target {
             link::Target::Url(u) if u.starts_with("http://") || u.starts_with("https://") => u,
-            link::Target::Url(u) => {
-                let _ = std::process::Command::new("/usr/bin/open").arg(u).spawn();
-                return;
-            }
-            link::Target::Path(p, _) => {
-                let _ = std::process::Command::new("/usr/bin/open").arg(p).spawn();
+            other => {
+                let mut open = std::process::Command::new("/usr/bin/open");
+                match link::local(&other) {
+                    Some(link::Local::Open(p)) => open.arg(p),
+                    Some(link::Local::Reveal(p)) => open.arg("-R").arg(p),
+                    None => return,
+                };
+                let _ = open.spawn();
                 return;
             }
         };
