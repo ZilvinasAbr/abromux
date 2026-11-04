@@ -278,15 +278,20 @@ unsafe extern "C" fn decode_png(
     true
 }
 
-unsafe fn ghostty_str(s: &GhosttyString) -> String {
+/// The bytes of a borrowed GhosttyString, valid while it is.
+unsafe fn ghostty_bytes(s: &GhosttyString) -> &[u8] {
     if s.ptr.is_null() {
-        String::new()
+        &[]
     } else {
-        String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(s.ptr, s.len) }).into_owned()
+        unsafe { std::slice::from_raw_parts(s.ptr, s.len) }
     }
 }
-/// A program writing the clipboard. Its text goes to `Effects::clipboard`;
-/// the other clipboards (X11 selection, primary) don't exist on macOS.
+unsafe fn ghostty_str(s: &GhosttyString) -> String {
+    String::from_utf8_lossy(unsafe { ghostty_bytes(s) }).into_owned()
+}
+/// A program writing the clipboard. Its text goes to `Effects::clipboard`.
+/// macOS has one clipboard, so writes to the X11 selection and primary go
+/// there too: Neovim's OSC 52 sends its `*` register as the selection.
 unsafe extern "C" fn on_clipboard_write(
     _: GhosttyTerminal,
     ud: *mut c_void,
@@ -299,40 +304,34 @@ unsafe extern "C" fn on_clipboard_write(
     }
     let result = if !ud.clipboard_write {
         GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED
-    } else if w.location != GHOSTTY_CLIPBOARD_LOCATION_STANDARD {
+    } else if w.contents_len == 0 {
+        // A request to clear it: gpui can't empty the clipboard, and an
+        // empty string isn't the same thing.
         GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED
     } else {
-        let contents: &[GhosttyClipboardContent] = if w.contents_len == 0 {
-            &[]
-        } else {
-            unsafe { std::slice::from_raw_parts(w.contents, w.contents_len) }
+        let contents = unsafe { std::slice::from_raw_parts(w.contents, w.contents_len) };
+        // The first plain text the program offers in UTF-8
+        // (`text/plain;charset=utf-8` counts).
+        let plain = |c: &&GhosttyClipboardContent| {
+            let mime = unsafe { ghostty_bytes(&c.mime) };
+            let prefix = b"text/plain";
+            mime.len() >= prefix.len()
+                && mime[..prefix.len()].eq_ignore_ascii_case(prefix)
+                && matches!(mime.get(prefix.len()), None | Some(b';'))
         };
-        let bytes = |s: &GhosttyString| -> &[u8] {
-            if s.ptr.is_null() {
-                &[]
-            } else {
-                unsafe { std::slice::from_raw_parts(s.ptr, s.len) }
-            }
-        };
-        // Plain text, out of the representations the program offers
-        // (`text/plain;charset=utf-8` counts). None at all clears it.
-        let text = contents.iter().find(|c| {
-            let mime = bytes(&c.mime);
-            mime == b"text/plain" || mime.starts_with(b"text/plain;")
-        });
-        match (contents.is_empty(), text) {
-            (true, _) => {
-                ud.fx.clipboard = Some(String::new());
+        let text = contents
+            .iter()
+            .filter(plain)
+            .find_map(|c| std::str::from_utf8(unsafe { ghostty_bytes(&c.data) }).ok());
+        match text {
+            Some(t) => {
+                ud.fx.clipboard = Some(t.to_owned());
                 GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS
             }
-            (false, None) => GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED,
-            (false, Some(c)) => match std::str::from_utf8(bytes(&c.data)) {
-                Ok(t) => {
-                    ud.fx.clipboard = Some(t.to_owned());
-                    GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS
-                }
-                Err(_) => GHOSTTY_CLIPBOARD_WRITE_RESULT_INVALID_DATA,
-            },
+            None if contents.iter().any(|c| plain(&c)) => {
+                GHOSTTY_CLIPBOARD_WRITE_RESULT_INVALID_DATA
+            }
+            None => GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED,
         }
     };
     let mut reply = sized!(GhosttyClipboardWriteReply);
@@ -1771,8 +1770,11 @@ mod tests {
         // OSC 52, "hello" in base64, as terminal-browser and Neovim send it.
         t.write(b"\x1b]52;c;aGVsbG8=\x07");
         assert_eq!(t.take_effects().clipboard.as_deref(), Some("hello"));
-        // The primary selection isn't macOS's clipboard.
-        t.write(b"\x1b]52;p;aGVsbG8=\x07");
+        // Neovim's `*` register: macOS has only the one clipboard.
+        t.write(b"\x1b]52;s;d29ybGQ=\x07");
+        assert_eq!(t.take_effects().clipboard.as_deref(), Some("world"));
+        // Clearing isn't writing an empty string.
+        t.write(b"\x1b]52;c;\x07");
         assert_eq!(t.take_effects().clipboard, None);
         // A read isn't a write.
         t.write(b"\x1b]52;c;?\x07");

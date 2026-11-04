@@ -688,6 +688,9 @@ impl TerminalView {
         if let Some(vt) = scrollback {
             self.term.write(vt.as_bytes());
             self.term.write(b"\x1b[0m\r\n");
+            // Old output: nothing it asks for (a reply, a clipboard write)
+            // is for now.
+            let _ = self.term.take_effects();
             self.dirty = true;
         }
         if let Some(size) = font_size {

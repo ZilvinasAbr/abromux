@@ -48,8 +48,8 @@ pub struct Config {
     /// Newlines are safe when the program has bracketed paste on.
     pub paste_bracketed_safe: bool,
     /// Programs may copy to the clipboard (OSC 52), as with Ghostty's
-    /// `clipboard-write`. Only `deny` turns it off: there's no prompt, so
-    /// `ask` allows, like the default `allow`.
+    /// `clipboard-write = allow` (the default). There's no prompt, so `ask`
+    /// refuses, like `deny`.
     pub clipboard_write: bool,
     /// Load abromux's shell integration (`crate::shell`); off with
     /// `shell-integration = none`.
@@ -175,7 +175,7 @@ impl Config {
                 "clipboard-paste-bracketed-safe" => {
                     c.paste_bracketed_safe = parse_bool(v).unwrap_or(c.paste_bracketed_safe)
                 }
-                "clipboard-write" => c.clipboard_write = unquote(v) != "deny",
+                "clipboard-write" => c.clipboard_write = unquote(v) == "allow",
                 "shell-integration" => c.shell_integration = v != "none",
                 "copy-on-select" => c.copy_on_select = unquote(v) == "clipboard",
                 "mouse-scroll-multiplier" => {
@@ -450,7 +450,7 @@ mod tests {
 
         assert!(Config::default().clipboard_write);
         assert!(!Config::from_entries(&entries("clipboard-write = deny")).clipboard_write);
-        assert!(Config::from_entries(&entries("clipboard-write = ask")).clipboard_write);
+        assert!(!Config::from_entries(&entries("clipboard-write = ask")).clipboard_write);
 
         assert!(Config::default().shell_integration);
         let c = Config::from_entries(&entries("shell-integration = none"));
