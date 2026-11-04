@@ -1,7 +1,7 @@
 //! Reads the user's Ghostty config so terminals look and type like their
 //! Ghostty: font, colors, palette, theme, cursor style and `text:`/`csi:`/
 //! `esc:` keybinds, paste protection (`clipboard-paste-protection`,
-//! `clipboard-paste-bracketed-safe`), `copy-on-select = clipboard`,
+//! `clipboard-paste-bracketed-safe`), `clipboard-write`, `copy-on-select = clipboard`,
 //! `mouse-scroll-multiplier`, `scrollbar` and `shell-integration = none`.
 //! Everything else in the file is ignored.
 //!
@@ -47,6 +47,10 @@ pub struct Config {
     pub paste_protection: bool,
     /// Newlines are safe when the program has bracketed paste on.
     pub paste_bracketed_safe: bool,
+    /// Programs may copy to the clipboard (OSC 52), as with Ghostty's
+    /// `clipboard-write = allow` (the default). There's no prompt, so `ask`
+    /// refuses, like `deny`.
+    pub clipboard_write: bool,
     /// Load abromux's shell integration (`crate::shell`); off with
     /// `shell-integration = none`.
     pub shell_integration: bool,
@@ -90,6 +94,7 @@ impl Default for Config {
                 .collect(),
             paste_protection: true,
             paste_bracketed_safe: true,
+            clipboard_write: true,
             shell_integration: true,
             copy_on_select: false,
             scroll_precision: 1.,
@@ -170,6 +175,7 @@ impl Config {
                 "clipboard-paste-bracketed-safe" => {
                     c.paste_bracketed_safe = parse_bool(v).unwrap_or(c.paste_bracketed_safe)
                 }
+                "clipboard-write" => c.clipboard_write = unquote(v) == "allow",
                 "shell-integration" => c.shell_integration = v != "none",
                 "copy-on-select" => c.copy_on_select = unquote(v) == "clipboard",
                 "mouse-scroll-multiplier" => {
@@ -441,6 +447,10 @@ mod tests {
             "clipboard-paste-protection = false\nclipboard-paste-bracketed-safe = nope",
         ));
         assert!(!c.paste_protection && c.paste_bracketed_safe);
+
+        assert!(Config::default().clipboard_write);
+        assert!(!Config::from_entries(&entries("clipboard-write = deny")).clipboard_write);
+        assert!(!Config::from_entries(&entries("clipboard-write = ask")).clipboard_write);
 
         assert!(Config::default().shell_integration);
         let c = Config::from_entries(&entries("shell-integration = none"));
