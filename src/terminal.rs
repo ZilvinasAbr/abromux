@@ -411,6 +411,9 @@ impl TerminalView {
         for (title, body) in fx.notifications.into_iter().chain(kitty) {
             cx.emit(TerminalEvent::Notification { title, body });
         }
+        if let Some(text) = fx.clipboard {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
         self.run_search(cx);
         self.watch_hold(cx);
         self.dirty = true;
@@ -2366,6 +2369,7 @@ fn new_term(cols: u16, rows: u16, config: &Config) -> ghostty::Terminal {
 
 /// The config's colors and cursor on a new or restored terminal.
 fn configure(mut term: ghostty::Terminal, config: &Config) -> ghostty::Terminal {
+    term.set_clipboard_write(config.clipboard_write);
     term.set_colors(
         config.foreground,
         config.background,

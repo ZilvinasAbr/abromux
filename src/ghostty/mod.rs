@@ -140,6 +140,10 @@ pub struct Effects {
     /// Desktop notifications (OSC 9 / 777) as (title, body).
     /// OSC 99 is parsed but not passed on by libghostty-vt; see osc99.rs.
     pub notifications: Vec<(String, String)>,
+    /// Text the program put on the clipboard (OSC 52, OSC 1337 Copy or
+    /// OSC 5522), for the owner to copy: how TUIs such as terminal-browser,
+    /// Neovim and tmux copy.
+    pub clipboard: Option<String>,
 }
 
 /// What the terminal's callbacks write to (its userdata).
@@ -153,6 +157,8 @@ struct Userdata {
     /// size queries (CSI 14/16/18 t), which image programs such as
     /// terminal-browser wait on.
     size: GhosttySizeReportSize,
+    /// Programs may write the clipboard (Ghostty's `clipboard-write`).
+    clipboard_write: bool,
 }
 
 /// How long a program may hold the screen before it's drawn anyway, in
@@ -279,6 +285,62 @@ unsafe fn ghostty_str(s: &GhosttyString) -> String {
         String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(s.ptr, s.len) }).into_owned()
     }
 }
+/// A program writing the clipboard. Its text goes to `Effects::clipboard`;
+/// the other clipboards (X11 selection, primary) don't exist on macOS.
+unsafe extern "C" fn on_clipboard_write(
+    _: GhosttyTerminal,
+    ud: *mut c_void,
+    w: *const GhosttyClipboardWrite,
+) {
+    let ud = unsafe { &mut *(ud as *mut Userdata) };
+    let w = unsafe { &*w };
+    if w.size < mem::size_of::<GhosttyClipboardWrite>() {
+        return; // an older layout: returning without a reply denies it
+    }
+    let result = if !ud.clipboard_write {
+        GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED
+    } else if w.location != GHOSTTY_CLIPBOARD_LOCATION_STANDARD {
+        GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED
+    } else {
+        let contents: &[GhosttyClipboardContent] = if w.contents_len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(w.contents, w.contents_len) }
+        };
+        let bytes = |s: &GhosttyString| -> &[u8] {
+            if s.ptr.is_null() {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(s.ptr, s.len) }
+            }
+        };
+        // Plain text, out of the representations the program offers
+        // (`text/plain;charset=utf-8` counts). None at all clears it.
+        let text = contents.iter().find(|c| {
+            let mime = bytes(&c.mime);
+            mime == b"text/plain" || mime.starts_with(b"text/plain;")
+        });
+        match (contents.is_empty(), text) {
+            (true, _) => {
+                ud.fx.clipboard = Some(String::new());
+                GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS
+            }
+            (false, None) => GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED,
+            (false, Some(c)) => match std::str::from_utf8(bytes(&c.data)) {
+                Ok(t) => {
+                    ud.fx.clipboard = Some(t.to_owned());
+                    GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS
+                }
+                Err(_) => GHOSTTY_CLIPBOARD_WRITE_RESULT_INVALID_DATA,
+            },
+        }
+    };
+    let mut reply = sized!(GhosttyClipboardWriteReply);
+    reply.result = result;
+    if let Some(answer) = w.reply {
+        unsafe { answer(w, &reply) };
+    }
+}
 unsafe extern "C" fn on_notification(
     _: GhosttyTerminal,
     ud: *mut c_void,
@@ -388,6 +450,7 @@ impl Terminal {
                     cell_width: 0,
                     cell_height: 0,
                 },
+                clipboard_write: true,
             });
             let ud_ptr: *mut Userdata = &mut *ud;
             ghostty_terminal_set(raw, GHOSTTY_TERMINAL_OPT_USERDATA, ud_ptr as *const c_void);
@@ -406,6 +469,10 @@ impl Terminal {
             set_cb(
                 GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
                 on_notification as *const c_void,
+            );
+            set_cb(
+                GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
+                on_clipboard_write as *const c_void,
             );
             set_cb(
                 GHOSTTY_TERMINAL_OPT_RENDER_HOLD,
@@ -751,6 +818,11 @@ impl Terminal {
     /// Feed PTY output into the parser.
     pub fn write(&mut self, bytes: &[u8]) {
         unsafe { ghostty_terminal_vt_write(self.raw, bytes.as_ptr(), bytes.len()) }
+    }
+
+    /// Let the program write the clipboard, or refuse it.
+    pub fn set_clipboard_write(&mut self, allow: bool) {
+        self.ud.clipboard_write = allow;
     }
 
     pub fn take_effects(&mut self) -> Effects {
@@ -1691,6 +1763,23 @@ mod tests {
         assert_eq!(t.scrollbar().offset, 10);
         t.scroll_to_row(0);
         assert_eq!(t.scrollbar().offset, 0);
+    }
+
+    #[test]
+    fn programs_write_the_clipboard() {
+        let mut t = Terminal::new(20, 3).unwrap();
+        // OSC 52, "hello" in base64, as terminal-browser and Neovim send it.
+        t.write(b"\x1b]52;c;aGVsbG8=\x07");
+        assert_eq!(t.take_effects().clipboard.as_deref(), Some("hello"));
+        // The primary selection isn't macOS's clipboard.
+        t.write(b"\x1b]52;p;aGVsbG8=\x07");
+        assert_eq!(t.take_effects().clipboard, None);
+        // A read isn't a write.
+        t.write(b"\x1b]52;c;?\x07");
+        assert_eq!(t.take_effects().clipboard, None);
+        t.set_clipboard_write(false);
+        t.write(b"\x1b]52;c;aGVsbG8=\x07");
+        assert_eq!(t.take_effects().clipboard, None, "clipboard-write = deny");
     }
 
     #[test]
