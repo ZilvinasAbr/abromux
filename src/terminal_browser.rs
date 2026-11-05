@@ -182,6 +182,89 @@ pub const KEYS: &[&str] = &[
     "cmd-shift-z",
 ];
 
+/// abromux's keys for find, devtools and console, as the built-in browser
+/// has them, with terminal-browser's command for each and its default keys.
+const COMMANDS: &[(&str, &str, &[&str])] = &[
+    ("cmd-f", "find", &["cmd+shift+f"]),
+    ("alt-cmd-i", "devtools.toggle", &["cmd+shift+i", "f12"]),
+    ("alt-cmd-c", "devtools.console", &["cmd+alt+j"]),
+];
+
+/// terminal-browser's `shortcuts.json`: `$TERMINAL_BROWSER_CONFIG_DIR`, else
+/// `$XDG_CONFIG_HOME/terminal-browser`, else `~/.config/terminal-browser`.
+fn shortcuts_file() -> PathBuf {
+    let abs = |v: &str| std::env::var_os(v).map(PathBuf::from).filter(|p| p.is_absolute());
+    abs("TERMINAL_BROWSER_CONFIG_DIR")
+        .or_else(|| abs("XDG_CONFIG_HOME").map(|d| d.join("terminal-browser")))
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/terminal-browser")
+        })
+        .join("shortcuts.json")
+}
+
+/// The keys `shortcuts` (shortcuts.json's contents) gives `command`: a
+/// chord, a list of them, or null for none; `default` if it isn't there.
+fn chords(shortcuts: &serde_json::Value, command: &str, default: &[&str]) -> Vec<String> {
+    match shortcuts.get(command) {
+        Some(serde_json::Value::String(s)) => vec![s.clone()],
+        Some(serde_json::Value::Array(a)) => {
+            a.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+        }
+        Some(serde_json::Value::Null) => vec![],
+        _ => default.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+/// A terminal-browser chord (`cmd+shift+f`) as a keystroke.
+fn parse_chord(spec: &str) -> Option<gpui::Keystroke> {
+    let spec = spec.trim().to_lowercase();
+    let key = if spec == "+" || spec.ends_with("++") {
+        "+".to_string()
+    } else {
+        spec.rsplit('+').next()?.to_string()
+    };
+    let mut m = gpui::Modifiers::default();
+    let mods = spec.strip_suffix(&key)?.trim_end_matches('+');
+    for part in mods.split('+').filter(|p| !p.is_empty()) {
+        match part {
+            "cmd" | "command" | "super" | "meta" => m.platform = true,
+            "ctrl" | "control" => m.control = true,
+            "alt" | "option" | "opt" => m.alt = true,
+            "shift" => m.shift = true,
+            _ => return None,
+        }
+    }
+    let key = match key.as_str() {
+        "esc" => "escape".to_string(),
+        "return" => "enter".to_string(),
+        "del" => "delete".to_string(),
+        "" => return None,
+        _ => key,
+    };
+    Some(gpui::Keystroke {
+        modifiers: m,
+        key,
+        key_char: None,
+    })
+}
+
+/// The key to send terminal-browser for `ks`, given its `shortcuts`: one of
+/// abromux's browser keys becomes the first key terminal-browser binds to
+/// the same command, unless it binds `ks` itself. None to send `ks` as is.
+fn translate(ks: &gpui::Keystroke, shortcuts: &serde_json::Value) -> Option<gpui::Keystroke> {
+    let (_, command, default) = COMMANDS.iter().find(|(k, _, _)| {
+        gpui::Keystroke::parse(k).is_ok_and(|k| k.modifiers == ks.modifiers && k.key == ks.key)
+    })?;
+    let bound: Vec<_> = chords(shortcuts, command, default)
+        .iter()
+        .filter_map(|c| parse_chord(c))
+        .collect();
+    if bound.iter().any(|b| b.modifiers == ks.modifiers && b.key == ks.key) {
+        return None;
+    }
+    bound.into_iter().next()
+}
+
 impl Tab {
     /// Take in a reported page; true if the tab should redraw.
     fn update(&mut self, page: Page) -> bool {
@@ -222,6 +305,18 @@ impl crate::terminal::TerminalApp for Tab {
 
     fn page_url(&self) -> Option<&str> {
         Some(&self.url)
+    }
+
+    fn translate_key(&self, ks: &gpui::Keystroke) -> Option<gpui::Keystroke> {
+        // Only for the few keys in COMMANDS; read each time so edits apply.
+        if !COMMANDS.iter().any(|(k, _, _)| k.rsplit('-').next() == Some(&*ks.key)) {
+            return None;
+        }
+        let shortcuts = std::fs::read_to_string(shortcuts_file())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or(serde_json::Value::Null);
+        translate(ks, &shortcuts)
     }
 }
 
@@ -276,6 +371,25 @@ mod tests {
         assert!(ctx.split(' ').any(|c| c == KEY_CONTEXT), "{ctx}");
         assert!(ctx.split(' ').any(|c| c == "Terminal"), "{ctx}");
         assert!(tab.takes_cmd_keys());
+    }
+
+    #[test]
+    fn browser_keys_become_terminal_browsers() {
+        let ks = |k: &str| gpui::Keystroke::parse(k).unwrap();
+        let sent = |k: &str, json: &str| {
+            translate(&ks(k), &serde_json::from_str(json).unwrap()).map(|t| t.unparse())
+        };
+        // Defaults: find is ⇧⌘F, devtools ⇧⌘I, console ⌥⌘J.
+        assert_eq!(sent("cmd-f", "{}").as_deref(), Some("cmd-shift-f"));
+        assert_eq!(sent("alt-cmd-i", "null").as_deref(), Some("cmd-shift-i"));
+        assert_eq!(sent("alt-cmd-c", "{}").as_deref(), Some("alt-cmd-j"));
+        // Its shortcuts.json wins; a key it binds itself goes as is.
+        assert_eq!(sent("cmd-f", r#"{"find":"ctrl+f"}"#).as_deref(), Some("ctrl-f"));
+        assert_eq!(sent("cmd-f", r#"{"find":["ctrl+f","cmd+f"]}"#), None);
+        assert_eq!(sent("cmd-f", r#"{"find":null}"#), None);
+        // Other keys are left alone.
+        assert_eq!(sent("cmd-l", "{}"), None);
+        assert_eq!(sent("cmd-shift-f", "{}"), None);
     }
 
     #[test]
