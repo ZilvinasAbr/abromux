@@ -1188,10 +1188,7 @@ impl AbroMux {
             },
         )
         .detach();
-        input.update(cx, |i, cx| i.focus(window, cx));
-        // Select the old name so typing replaces it; the input has to be
-        // rendered before it can take the action.
-        window.on_next_frame(|window, cx| window.dispatch_action(Box::new(SelectAll), cx));
+        focus_selected(&input, window, cx);
         self.renaming = Some((id, input));
         cx.notify();
     }
@@ -1227,8 +1224,7 @@ impl AbroMux {
             },
         )
         .detach();
-        input.update(cx, |i, cx| i.focus(window, cx));
-        window.on_next_frame(|window, cx| window.dispatch_action(Box::new(SelectAll), cx));
+        focus_selected(&input, window, cx);
         self.renaming_tab = Some((id, input));
         cx.notify();
     }
@@ -2781,6 +2777,22 @@ pub(crate) fn one_line(s: &str) -> String {
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Focus a new rename field with its text selected, so typing replaces the
+/// old name. The selection waits for the field's focus event: that comes
+/// once it has been drawn, and before then an action sent to it goes
+/// nowhere (an `on_next_frame` runs before that frame is drawn).
+pub(crate) fn focus_selected(input: &Entity<InputState>, window: &mut Window, cx: &mut App) {
+    let done = std::rc::Rc::new(std::cell::Cell::new(false));
+    window
+        .subscribe(input, cx, move |_, ev: &InputEvent, window, cx| {
+            if matches!(ev, InputEvent::Focus) && !done.replace(true) {
+                window.dispatch_action(Box::new(SelectAll), cx);
+            }
+        })
+        .detach();
+    input.update(cx, |i, cx| i.focus(window, cx));
 }
 
 /// The ⌘/⌃ digit that selects item `index` of `count`: 1–8 for the first
