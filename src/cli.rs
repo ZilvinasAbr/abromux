@@ -61,6 +61,7 @@ Commands:
   new-split <left|right|up|down> [--surface <ref>] [--workspace <ref>] [--type <terminal|browser>] [--url <url>] [--command <text>] [--focus <true|false>]
   list-pane-surfaces [--workspace <ref>] [--pane <ref>]
   new-surface [--type <terminal|browser>] [--pane <ref>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>]
+  gitlab [<merge request URL>] [--pane <ref>] [--focus <true|false>]   (a GitLab review tab; no URL: the list)
   close-surface [--surface <ref>] [--workspace <ref>]
   focus-surface --surface <ref>
   rename-tab [--surface <ref>] [--workspace <ref>] [<title>]  (no title: back to the program's own)
@@ -575,6 +576,14 @@ fn dispatch(
         }
         "list-pane-surfaces" => ("surface.list", |v| lines(v, surface_line)),
         "new-surface" => ("surface.create", |v| format!("OK {}", s(&v["ref"]))),
+        // A GitLab tab (the gitlab plugin), on a merge request's web URL or the list.
+        "gitlab" => {
+            if let Some(url) = pos.first() {
+                opts.insert("url".into(), json!(url));
+            }
+            opts.insert("type".into(), json!("gitlab"));
+            ("surface.create", |v| format!("OK {} {}", s(&v["ref"]), s(&v["title"])))
+        }
         "close-surface" => ("surface.close", |v| format!("OK {}", s(&v["closed"]))),
         "focus-surface" => ("surface.focus", |v| format!("OK {}", s(&v["ref"]))),
         "rename-tab" => {

@@ -26,7 +26,12 @@ python3 dev/gitlab/seed.py  # recreate the fixtures project from scratch
   - **!3** one line, no comments;
   - **!4** a changed PNG;
   - **!5** merged and **!6** closed;
-  - **!7** real code: abromux's own 0.18.0 → 0.18.3, with a thread.
+  - **!7** real code: abromux's own 0.18.0 → 0.18.3, with a thread;
+  - **!8** 40 small files (the file tree);
+  - **!9** past GitLab's diff limits: 1,203 files and ~70,000 lines, a
+    40,000-line file and a 300 KB one-line one (`tests/big.rs`).
+- Labels `backend`, `bug`, `priority::high`, `docs` and open milestones `v1.0`,
+  `v1.1`, for the sidebar's pickers.
 - Every push runs a pipeline. There's no runner, so they stay pending and
   GitLab fails them as stuck after an hour: both states get shown.
 

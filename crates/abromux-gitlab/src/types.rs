@@ -30,6 +30,7 @@ pub struct TaskCompletion {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Milestone {
+    pub id: u64,
     pub title: String,
 }
 
@@ -44,6 +45,8 @@ pub struct DiffRefs {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct MergeRequest {
+    /// Files changed, as text: "1000+" once past what one diff holds.
+    pub changes_count: Option<String>,
     pub id: u64,
     pub iid: u64,
     pub project_id: u64,
@@ -87,6 +90,58 @@ pub struct MergeRequest {
     pub diff_refs: Option<DiffRefs>,
     /// The latest pipeline for the source branch's head; single-MR endpoint only.
     pub head_pipeline: Option<Pipeline>,
+    /// Commits on the target branch the source branch doesn't have, when
+    /// asked for (`include_diverged_commits_count`).
+    pub diverged_commits_count: Option<u32>,
+    pub time_stats: TimeStats,
+}
+
+/// A comment of your review not yet submitted (GitLab's "Pending").
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct DraftNote {
+    pub id: u64,
+    pub note: String,
+}
+
+/// An issue the merge request closes when merged ("Closes #12").
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Issue {
+    pub iid: u64,
+    pub title: String,
+    pub state: String,
+    pub web_url: String,
+}
+
+/// A reviewer and where their review stands: unreviewed, review_started,
+/// reviewed, requested_changes, approved, unapproved.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Reviewer {
+    pub user: User,
+    pub state: String,
+}
+
+/// An emoji reaction on the merge request: one person's one emoji.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AwardEmoji {
+    pub id: u64,
+    /// The shortcode without colons: thumbsup, tada.
+    pub name: String,
+    pub user: User,
+}
+
+/// Time tracking: an estimate and time spent, in seconds and as GitLab
+/// writes them ("1h 30m").
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TimeStats {
+    pub time_estimate: u64,
+    pub total_time_spent: u64,
+    pub human_time_estimate: Option<String>,
+    pub human_total_time_spent: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -101,6 +156,9 @@ pub struct Pipeline {
     #[serde(rename = "ref")]
     pub git_ref: String,
     pub web_url: String,
+    pub created_at: String,
+    /// What started it: push, merge_request_event, web, schedule…
+    pub source: String,
 }
 
 impl Pipeline {
@@ -283,6 +341,30 @@ pub struct StateEvent {
     pub state: String,
 }
 
+/// A label added or removed: `resource_label_events`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct LabelEvent {
+    pub id: u64,
+    pub user: Option<User>,
+    pub created_at: String,
+    pub label: Option<Label>,
+    /// add, remove
+    pub action: String,
+}
+
+/// A milestone set or taken off: `resource_milestone_events`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct MilestoneEvent {
+    pub id: u64,
+    pub user: Option<User>,
+    pub created_at: String,
+    pub milestone: Option<Milestone>,
+    /// add, remove
+    pub action: String,
+}
+
 /// One push to a merge request: what the version picker lists.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
@@ -306,9 +388,18 @@ pub struct Diffs {
 pub struct Member {
     pub id: u64,
     pub access_level: u32,
+    pub username: String,
+    pub name: String,
+    pub avatar_url: Option<String>,
+    /// "active", or "blocked" and the like: those can't be picked.
+    pub state: String,
 }
 
 impl Member {
+    pub fn user(&self) -> User {
+        User { id: self.id, username: self.username.clone(), name: self.name.clone(), avatar_url: self.avatar_url.clone() }
+    }
+
     /// The role badge GitLab shows on this member's notes.
     pub fn role(&self) -> Option<&'static str> {
         Some(match self.access_level {

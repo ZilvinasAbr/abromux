@@ -19,6 +19,10 @@ threshold and 3x the baseline's spread (MAD), so normal noise doesn't flag.
 Runs made while the machine is busy (load > cores/2) are recorded but kept
 out of baselines.
 
+With a GitLab running (dev/gitlab/up.sh, or $ABROMUX_PERF_GITLAB set to a merge
+request's /diffs URL), it also times the GitLab tab: opening a big diff until
+it's drawn, and frames while scrolling it. Otherwise those are skipped.
+
 The app part launches abromux in its own socket/session/config, keeps it in
 front (macOS throttles covered windows) and quits it. Then it relaunches it
 with a bare zsh to time UI actions over the socket. Leave the Mac alone
@@ -86,6 +90,9 @@ METRICS = {
     "kitty_frame_p99_ms":   ("ms",   "lower",  0.30, 5,    "p99 frame draw while streaming kitty frames"),
     "kitty_footprint_mb":   ("MB",   "lower",  0.25, 10,   "footprint growth after shared-memory kitty frames"),
     "browser_open_ms":      ("ms",   "lower",  0.25, 30,   "browser split -> local page loaded"),
+    # Only with a GitLab to measure against (dev/gitlab/up.sh, or $ABROMUX_PERF_GITLAB).
+    "gitlab_open_ms":       ("ms",   "lower",  0.30, 50,   "GitLab tab on a 3000-line diff -> changes drawn"),
+    "gitlab_scroll_draw_ms": ("ms",  "lower",  0.30, 1,    "p90 frame draw scrolling that diff"),
     # What `abromux hold` adds on top of the app (not with --persistence cmux-like).
     "holder_idle_mb":       ("MB",   "lower",  0.10, 2,    "holder footprint, idle, 1 terminal"),
     "holder_per_terminal_mb": ("MB", "lower",  0.25, 0.3,  "holder footprint per extra terminal"),
@@ -99,6 +106,11 @@ MODES = {
     "quick": dict(startup_runs=3, settle=5, idle=10, passes=3, reps=10),
     "full": dict(startup_runs=5, settle=15, idle=30, passes=3, reps=25),
 }
+
+# The dev GitLab's big merge request (dev/gitlab/seed.py's !2) and the token the
+# app uses there, for the GitLab timings.
+GITLAB_DEV_MR = "http://localhost:8929/alice/review-fixtures/-/merge_requests/2/diffs"
+GITLAB_DEV_TOKEN = "glpat-abromux-dev-bob-token"
 
 # Bare zsh for the action timings: no user rc files, a fixed prompt to wait for.
 BARE_PROMPT = "abromux-perf> "
@@ -589,6 +601,10 @@ clear
         zdot.mkdir()
         (zdot / ".zshrc").write_text(f"PROMPT='{BARE_PROMPT}'\nunsetopt PROMPT_SP\n")
         self.env = {**self.env, "SHELL": "/bin/zsh", "ZDOTDIR": str(zdot)}
+        # The GitLab timings sign in to the dev GitLab as its reviewer; a
+        # GitLab of your own uses your Keychain's token.
+        if "ABROMUX_PERF_GITLAB" not in os.environ:
+            self.env |= {"ABROMUX_GITLAB_TOKEN": GITLAB_DEV_TOKEN, "ABROMUX_GITLAB_NO_KEYCHAIN": "1"}
         prompt = re.escape(BARE_PROMPT.strip()) + r" *$"
         self.holder_reset()
         self.launch()
@@ -686,6 +702,7 @@ clear
 
         self._kitty(rpc, base, prompt)
         self._browser(rpc, base, min(reps, 5))
+        self._gitlab(rpc, min(reps, 5))
 
     def _kitty(self, rpc, base, prompt):
         """Stream full-pane kitty frames into a pane, first through shared
@@ -772,6 +789,62 @@ clear
         finally:
             server.shutdown()
         self.put("browser_open_ms", median(times), times)
+
+
+    def _gitlab(self, rpc, reps):
+        """The GitLab tab on a big diff: open the merge request until its
+        changes are drawn, then scroll it. Only with a GitLab to talk to:
+        the dev one (dev/gitlab/up.sh) unless $ABROMUX_PERF_GITLAB names a
+        merge request's /diffs URL (and the app has a token for its host)."""
+        import urllib.request
+        url = os.environ.get("ABROMUX_PERF_GITLAB", GITLAB_DEV_MR)
+        host = url.split("/", 3)
+        host = "/".join(host[:3])
+        try:
+            urllib.request.urlopen(host + "/users/sign_in", timeout=1).close()
+        except OSError:
+            log(f"  GitLab timing skipped: no GitLab at {host}")
+            return
+
+        def ready(ref):
+            s = rpc.call("surface.plugin", surface=ref, command="state")
+            if s["review"]["error"]:
+                raise RuntimeError(s["review"]["error"])
+            return s["review"]["load"] == "ready" and s["changes"]["rows"] > 0
+
+        opens, draws = [], []
+        ref = None
+        try:
+            for _ in range(reps):
+                t0 = time.perf_counter()
+                ref = rpc.call("surface.create", type="gitlab", url=url)["ref"]
+                while not ready(ref):
+                    if time.perf_counter() > t0 + 30:
+                        raise RuntimeError("merge request didn't load in 30 s")
+                    time.sleep(0.005)
+                rpc.frame()
+                opens.append((time.perf_counter() - t0) * 1000)
+                rpc.call("surface.close", surface=ref)
+                ref = None
+            # Scrolling the diff: each step's frame, as the reader sees it.
+            ref = rpc.call("surface.create", type="gitlab", url=url)["ref"]
+            while not ready(ref):
+                time.sleep(0.01)
+            rpc.frame()
+            for i in range(40):
+                rpc.call("debug.input", steps=f"ui:scroll,900,500,{-400 if i < 30 else 600}")
+                draws.append(rpc.frame())
+        except (RuntimeError, OSError, KeyError) as e:
+            log(f"  GitLab timing skipped: {e}")
+            return
+        finally:
+            if ref:
+                try:
+                    rpc.call("surface.close", surface=ref)
+                except (RuntimeError, OSError):
+                    pass
+        self.put("gitlab_open_ms", median(opens), opens)
+        self.put("gitlab_scroll_draw_ms", percentile(draws, 90), draws)
 
 
 # ---- comparison ----------------------------------------------------------------------

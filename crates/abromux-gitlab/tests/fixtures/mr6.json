@@ -34,7 +34,7 @@
   },
   "blocking_discussions_resolved": true,
   "changes_count": "1",
-  "closed_at": "2026-11-06T05:25:07.664Z",
+  "closed_at": "2026-11-06T08:41:52.196Z",
   "closed_by": {
     "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
     "id": 2,
@@ -45,15 +45,16 @@
     "username": "alice",
     "web_url": "http://localhost:8929/alice"
   },
-  "created_at": "2026-11-06T05:25:00.561Z",
+  "created_at": "2026-11-06T08:41:46.227Z",
   "description": "",
   "detailed_merge_status": "not_open",
   "diff_refs": {
-    "base_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc",
-    "head_sha": "abc83289188ae0c5bc49212eabf30b92ccd0a497",
-    "start_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc"
+    "base_sha": "6cfe85e3f0eb99e9eee1912d16998c13c9427b2b",
+    "head_sha": "05e6304db4b1b759b5a30004ac8f58b1423ac423",
+    "start_sha": "6cfe85e3f0eb99e9eee1912d16998c13c9427b2b"
   },
   "discussion_locked": null,
+  "diverged_commits_count": 2,
   "downvotes": 0,
   "draft": false,
   "first_contribution": false,
@@ -65,9 +66,9 @@
     "before_sha": "0000000000000000000000000000000000000000",
     "committed_at": null,
     "coverage": null,
-    "created_at": "2026-11-06T05:24:49.240Z",
+    "created_at": "2026-11-06T08:41:31.361Z",
     "detailed_status": {
-      "details_path": "/alice/review-fixtures/-/pipelines/71",
+      "details_path": "/alice/review-fixtures/-/pipelines/117",
       "favicon": "/assets/ci_favicons/favicon_status_pending-5bdf338420e5221ca24353b6bff1c9367189588750632e9a871b7af09ff6a2ae.png",
       "group": "pending",
       "has_details": true,
@@ -79,17 +80,17 @@
     },
     "duration": null,
     "finished_at": null,
-    "id": 71,
+    "id": 117,
     "iid": 5,
-    "project_id": 14,
+    "project_id": 19,
     "queued_duration": null,
     "ref": "abandoned",
-    "sha": "abc83289188ae0c5bc49212eabf30b92ccd0a497",
+    "sha": "05e6304db4b1b759b5a30004ac8f58b1423ac423",
     "source": "push",
     "started_at": null,
     "status": "pending",
     "tag": false,
-    "updated_at": "2026-11-06T05:24:49.448Z",
+    "updated_at": "2026-11-06T08:41:31.569Z",
     "user": {
       "avatar_url": "https://www.gravatar.com/avatar/22c77d0ccea2a47f2940d3e87e4fce8cdbcf63a37e3042ff48d6724b00a9c2ab?s=80&d=identicon",
       "id": 1,
@@ -100,10 +101,10 @@
       "username": "root",
       "web_url": "http://localhost:8929/root"
     },
-    "web_url": "http://localhost:8929/alice/review-fixtures/-/pipelines/71",
+    "web_url": "http://localhost:8929/alice/review-fixtures/-/pipelines/117",
     "yaml_errors": null
   },
-  "id": 76,
+  "id": 117,
   "iid": 6,
   "imported": false,
   "imported_from": "none",
@@ -120,8 +121,8 @@
   "merged_by": null,
   "milestone": null,
   "pipeline": null,
-  "prepared_at": "2026-11-06T05:25:05.326Z",
-  "project_id": 14,
+  "prepared_at": "2026-11-06T08:41:50.831Z",
+  "project_id": 19,
   "reference": "!6",
   "references": {
     "full": "alice/review-fixtures!6",
@@ -140,17 +141,17 @@
       "web_url": "http://localhost:8929/bob"
     }
   ],
-  "sha": "abc83289188ae0c5bc49212eabf30b92ccd0a497",
+  "sha": "05e6304db4b1b759b5a30004ac8f58b1423ac423",
   "should_remove_source_branch": null,
   "source_branch": "abandoned",
-  "source_project_id": 14,
+  "source_project_id": 19,
   "squash": false,
   "squash_commit_sha": null,
   "squash_on_merge": false,
   "state": "closed",
   "subscribed": false,
   "target_branch": "main",
-  "target_project_id": 14,
+  "target_project_id": 19,
   "task_completion_status": {
     "completed_count": 0,
     "count": 0
@@ -162,7 +163,7 @@
     "total_time_spent": 0
   },
   "title": "An idea we dropped",
-  "updated_at": "2026-11-06T05:25:07.711Z",
+  "updated_at": "2026-11-06T08:41:52.239Z",
   "upvotes": 0,
   "user": {
     "can_merge": false

@@ -7,6 +7,16 @@ use crate::{
 };
 use serde_json::{Value, json};
 
+/// A name as one word of a system note (spaces as no-break spaces), so
+/// `~my label` stays one label; `untoken` turns it back.
+pub fn token(name: &str) -> String {
+    name.replace(' ', "\u{a0}")
+}
+
+pub fn untoken(word: &str) -> String {
+    word.replace('\u{a0}', " ")
+}
+
 #[derive(Clone, Debug)]
 pub struct Review {
     pub mr: MergeRequest,
@@ -23,12 +33,47 @@ pub struct Review {
     pub roles: std::collections::HashMap<u64, &'static str>,
     /// The merge request's versions, newest first.
     pub versions: Vec<MrVersion>,
+    /// Who can be picked as an assignee or reviewer, by name.
+    pub members: Vec<User>,
+    /// The project's labels and open milestones, for the sidebar's pickers.
+    pub labels: Vec<Label>,
+    pub milestones: Vec<Milestone>,
+    /// Emoji reactions on the merge request.
+    pub awards: Vec<AwardEmoji>,
+    /// The merge request's pipelines, newest first, for each commit's status.
+    pub pipelines: Vec<Pipeline>,
+    /// Merged: the pipeline on the merge (or squash) commit.
+    pub merge_pipeline: Option<Pipeline>,
+    /// Each reviewer's review state by user id, when GitLab says.
+    pub review_states: std::collections::HashMap<u64, String>,
+    /// GitLab's "Work items": the issues it closes.
+    pub closes: Vec<Issue>,
+    /// Your review's pending comments.
+    pub drafts: Vec<DraftNote>,
+    /// Several assignees, several reviewers (GitLab's paid tiers), or one.
+    pub multiple: (bool, bool),
+}
+
+/// A file fetched after GitLab left it out: its diff, and whether it was
+/// added or deleted (only the fetch tells, for a file GitLab didn't list).
+#[derive(Clone, Debug)]
+pub struct Late {
+    pub body: Body,
+    pub status: Option<&'static str>,
 }
 
 #[derive(Clone, Debug)]
 pub struct File {
     pub meta: FileDiff,
+    /// What GitLab sent; `body()` is what to show.
     pub body: Body,
+    /// A `Pending` file's body once fetched, shared by the review's copies.
+    pub late: std::sync::Arc<std::sync::OnceLock<Late>>,
+    /// Lines added and removed, from GitLab's stats, for a file not yet fetched.
+    pub stats: Option<(usize, usize)>,
+    /// `counts()` once the body is final: the toolbar sums every file's
+    /// each frame, and a big file has tens of thousands of lines.
+    counted: std::sync::Arc<std::sync::OnceLock<(usize, usize)>>,
     /// Threads on a line: (hunk index, line index in it, thread).
     pub threads: Vec<(usize, usize, Discussion)>,
     /// On this file, but on a line no longer in the diff.
@@ -36,6 +81,24 @@ pub struct File {
 }
 
 impl File {
+    pub fn new(meta: FileDiff, body: Body) -> File {
+        File { meta, body, late: Default::default(), stats: None, counted: Default::default(), threads: vec![], outdated: vec![] }
+    }
+
+    /// The diff to show: fetched late, or as GitLab sent it.
+    pub fn body(&self) -> &Body {
+        self.late.get().map_or(&self.body, |l| &l.body)
+    }
+
+    /// Fetched or not, lines added and removed.
+    pub fn counts(&self) -> (usize, usize) {
+        match (self.body(), self.stats) {
+            (Body::Pending, Some(s)) => s,
+            (Body::Pending, None) => (0, 0),
+            (b, _) => *self.counted.get_or_init(|| b.counts()),
+        }
+    }
+
     pub fn path(&self) -> &str {
         if self.meta.deleted_file {
             &self.meta.old_path
@@ -46,6 +109,9 @@ impl File {
 
     /// added, deleted, renamed or modified
     pub fn status(&self) -> &'static str {
+        if let Some(s) = self.late.get().and_then(|l| l.status) {
+            return s;
+        }
         match &self.meta {
             m if m.new_file => "added",
             m if m.deleted_file => "deleted",
@@ -63,7 +129,7 @@ impl File {
     /// both numbers, an added line only its new one, a removed line only
     /// its old one.
     fn find(&self, p: &Position) -> Option<(usize, usize)> {
-        for (hi, h) in self.body.hunks().iter().enumerate() {
+        for (hi, h) in self.body().hunks().iter().enumerate() {
             for (li, l) in h.lines.iter().enumerate() {
                 let hit = match (p.old_line, p.new_line) {
                     (Some(o), Some(n)) => l.old == Some(o) && l.new == Some(n),
@@ -90,11 +156,9 @@ impl Review {
     ) -> Review {
         let mut files: Vec<File> = diffs
             .into_iter()
-            .map(|meta| File {
-                body: Body::of(&meta),
-                meta,
-                threads: vec![],
-                outdated: vec![],
+            .map(|meta| {
+                let body = Body::of(&meta);
+                File::new(meta, body)
             })
             .collect();
         let (mut general, mut outdated, mut system) = (vec![], vec![], vec![]);
@@ -128,6 +192,16 @@ impl Review {
             commits,
             roles: Default::default(),
             versions: vec![],
+            members: vec![],
+            labels: vec![],
+            milestones: vec![],
+            awards: vec![],
+            pipelines: vec![],
+            merge_pipeline: None,
+            review_states: Default::default(),
+            closes: vec![],
+            drafts: vec![],
+            multiple: (true, true),
         }
     }
 
@@ -141,6 +215,13 @@ impl Review {
             .chain(&self.outdated)
             .filter(|d| d.resolvable() && !d.resolved())
             .count()
+    }
+
+    /// Whether any thread can be resolved: GitLab shows its threads counter
+    /// only then.
+    pub fn has_resolvable(&self) -> bool {
+        let on_lines = self.files.iter().flat_map(|f| f.threads.iter().map(|(_, _, d)| d).chain(&f.outdated));
+        on_lines.chain(&self.general).chain(&self.outdated).any(|d| d.resolvable())
     }
 
     /// A summary for `abromux --json tree` and tests: what a reviewer would
@@ -168,7 +249,7 @@ impl Review {
             "general": self.general.iter().map(thread).collect::<Vec<_>>(),
             "outdated": self.outdated.iter().map(thread).collect::<Vec<_>>(),
             "files": self.files.iter().map(|f| {
-                let (added, removed) = f.body.counts();
+                let (added, removed) = f.counts();
                 json!({
                     "path": f.path(),
                     "old_path": (f.meta.old_path != f.meta.new_path).then_some(&f.meta.old_path),
@@ -179,6 +260,7 @@ impl Review {
                         Body::Unchanged => "unchanged",
                         Body::TooLarge => "too_large",
                         Body::Collapsed => "collapsed",
+                        Body::Pending => "pending",
                     },
                     "added": added,
                     "removed": removed,

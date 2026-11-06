@@ -47,8 +47,27 @@ fn comment_reply_resolve_approve() {
     c.approve(p, iid, false).unwrap();
     assert!(!c.approvals(p, iid).unwrap().approved_by.iter().any(|a| a.user.username == "bob"));
 
+    // A review: a pending comment, seen as pending, then submitted as a thread.
+    let r = load_review(&c, p, iid).unwrap();
+    let refs = r.mr.diff_refs.clone().unwrap();
+    c.draft_line_comment(p, iid, &refs, "TYPO.md", "TYPO.md", None, Some(1), "Held for the review.").unwrap();
+    assert_eq!(load_review(&c, p, iid).unwrap().drafts.len(), 1, "pending");
+    c.publish_drafts(p, iid).unwrap();
+    let r = load_review(&c, p, iid).unwrap();
+    assert!(r.drafts.is_empty(), "submitted");
+    let f = r.files.iter().find(|f| f.path() == "TYPO.md").unwrap();
+    let (_, _, held) = f.threads.iter().find(|(_, _, t)| t.notes[0].body == "Held for the review.").expect("a thread now");
+    let held_note = held.notes[0].id;
+
+    // React, see it in the review, take it back.
+    c.award(p, iid, "tada").unwrap();
+    let r = load_review(&c, p, iid).unwrap();
+    let tada = r.awards.iter().find(|a| a.name == "tada" && a.user.username == "bob").expect("bob's 🎉");
+    c.unaward(p, iid, tada.id).unwrap();
+    assert!(c.awards(p, iid).unwrap().is_empty());
+
     // Leave !3 as it was.
-    for id in [reply.id, d.notes[0].id, note.id] {
+    for id in [reply.id, d.notes[0].id, note.id, held_note] {
         let url = format!("http://localhost:8929/api/v4/projects/{p}/merge_requests/{iid}/notes/{id}");
         let ok = std::process::Command::new("/usr/bin/curl")
             .args(["-sf", "-X", "DELETE", "-H", "PRIVATE-TOKEN: glpat-abromux-dev-bob-token", &url])

@@ -17,6 +17,9 @@ pub struct Response {
     pub status: u16,
     /// `X-Next-Page`, for paginated lists.
     pub next_page: Option<u32>,
+    /// `X-Total`: how many items the whole list has (GitLab leaves it out
+    /// past 10,000).
+    pub total: Option<u64>,
     pub body: Vec<u8>,
 }
 
@@ -96,13 +99,16 @@ fn parse_response(raw: &[u8]) -> anyhow::Result<Response> {
         if (status == 100 || status == 200 && head.contains("Connection established")) && another {
             continue;
         }
-        let next_page = head.lines().find_map(|l| {
-            let (k, v) = l.split_once(':')?;
-            k.eq_ignore_ascii_case("x-next-page").then(|| v.trim().parse().ok())?
-        });
+        let header = |name: &str| {
+            head.lines().find_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                k.trim().eq_ignore_ascii_case(name).then(|| v.trim().to_string())
+            })
+        };
         return Ok(Response {
             status,
-            next_page,
+            next_page: header("x-next-page").and_then(|v| v.parse().ok()),
+            total: header("x-total").and_then(|v| v.parse().ok()),
             body: rest.to_vec(),
         });
     }
@@ -215,6 +221,17 @@ impl Client {
         self.get_all(&format!("merge_requests?state={state}&order_by=created_at&with_labels_details=true&{q}"))
     }
 
+    /// How many merge requests `merge_requests_in` would list, from one
+    /// short page's `X-Total`; None when GitLab doesn't say.
+    pub fn count_merge_requests(&self, scope: &Scope, state: &str) -> anyhow::Result<Option<u64>> {
+        let q = match scope {
+            Scope::ToReview(me) => format!("reviewer_username={me}&scope=all"),
+            Scope::Mine => "scope=created_by_me".into(),
+            Scope::All => "scope=all".into(),
+        };
+        Ok(self.fetch(&format!("merge_requests?state={state}&per_page=1&{q}"))?.total)
+    }
+
     /// The id of the project at `path` (`group/project`).
     pub fn project_id(&self, path: &str) -> anyhow::Result<u64> {
         #[derive(serde::Deserialize)]
@@ -226,7 +243,7 @@ impl Client {
     }
 
     pub fn merge_request(&self, project: u64, iid: u64) -> anyhow::Result<MergeRequest> {
-        self.get(&format!("projects/{project}/merge_requests/{iid}"))
+        self.get(&format!("projects/{project}/merge_requests/{iid}?include_diverged_commits_count=true"))
     }
 
     pub fn diffs(&self, project: u64, iid: u64) -> anyhow::Result<Vec<FileDiff>> {
@@ -238,6 +255,14 @@ impl Client {
     }
 
     /// When it was closed, reopened or merged, and by whom.
+    pub fn label_events(&self, project: u64, iid: u64) -> anyhow::Result<Vec<LabelEvent>> {
+        self.get_all(&format!("projects/{project}/merge_requests/{iid}/resource_label_events"))
+    }
+
+    pub fn milestone_events(&self, project: u64, iid: u64) -> anyhow::Result<Vec<MilestoneEvent>> {
+        self.get_all(&format!("projects/{project}/merge_requests/{iid}/resource_milestone_events"))
+    }
+
     pub fn state_events(&self, project: u64, iid: u64) -> anyhow::Result<Vec<StateEvent>> {
         self.get_all(&format!("projects/{project}/merge_requests/{iid}/resource_state_events"))
     }
@@ -284,6 +309,50 @@ impl Client {
     /// A new thread on a line of the diff at `refs`: `new_line` for an added
     /// or unchanged line, `old_line` for a removed (or unchanged) one.
     #[allow(clippy::too_many_arguments)]
+    /// A thread on a line, as `line_comment` starts, but held in your
+    /// review until it's submitted (GitLab's "Start a review").
+    #[allow(clippy::too_many_arguments)]
+    pub fn draft_line_comment(
+        &self,
+        project: u64,
+        iid: u64,
+        refs: &DiffRefs,
+        old_path: &str,
+        new_path: &str,
+        old_line: Option<u32>,
+        new_line: Option<u32>,
+        body: &str,
+    ) -> anyhow::Result<DraftNote> {
+        let mut position = serde_json::json!({
+            "position_type": "text",
+            "base_sha": refs.base_sha,
+            "start_sha": refs.start_sha,
+            "head_sha": refs.head_sha,
+            "old_path": old_path,
+            "new_path": new_path,
+        });
+        if let Some(o) = old_line {
+            position["old_line"] = o.into();
+        }
+        if let Some(n) = new_line {
+            position["new_line"] = n.into();
+        }
+        let path = format!("projects/{project}/merge_requests/{iid}/draft_notes");
+        self.write("POST", &path, serde_json::json!({ "note": body, "position": position }))
+    }
+
+    /// Your review's comments not yet submitted.
+    pub fn draft_notes(&self, project: u64, iid: u64) -> anyhow::Result<Vec<DraftNote>> {
+        self.get_all(&format!("projects/{project}/merge_requests/{iid}/draft_notes"))
+    }
+
+    /// Submit your review: every pending comment at once.
+    pub fn publish_drafts(&self, project: u64, iid: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value =
+            self.write("POST", &format!("projects/{project}/merge_requests/{iid}/draft_notes/bulk_publish"), serde_json::json!({}))?;
+        Ok(())
+    }
+
     pub fn line_comment(
         &self,
         project: u64,
@@ -320,6 +389,53 @@ impl Client {
         Ok(())
     }
 
+    /// The issues merging it closes.
+    pub fn closes_issues(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Issue>> {
+        self.get_all(&format!("projects/{project}/merge_requests/{iid}/closes_issues"))
+    }
+
+    /// Each reviewer's review state.
+    pub fn reviewers(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Reviewer>> {
+        self.get_all(&format!("projects/{project}/merge_requests/{iid}/reviewers"))
+    }
+
+    /// The emoji reactions on the merge request.
+    pub fn awards(&self, project: u64, iid: u64) -> anyhow::Result<Vec<AwardEmoji>> {
+        self.get_all(&format!("projects/{project}/merge_requests/{iid}/award_emoji"))
+    }
+
+    /// React with `name` (thumbsup, tada).
+    pub fn award(&self, project: u64, iid: u64, name: &str) -> anyhow::Result<()> {
+        let _: serde_json::Value =
+            self.write("POST", &format!("projects/{project}/merge_requests/{iid}/award_emoji"), serde_json::json!({ "name": name }))?;
+        Ok(())
+    }
+
+    /// Take back reaction `id`.
+    pub fn unaward(&self, project: u64, iid: u64, id: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value =
+            self.write("DELETE", &format!("projects/{project}/merge_requests/{iid}/award_emoji/{id}"), serde_json::json!({}))?;
+        Ok(())
+    }
+
+    /// Rebase the source branch onto the target, as GitLab's "Rebase source
+    /// branch" does. GitLab answers at once and rebases in the background.
+    pub fn rebase(&self, project: u64, iid: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write("PUT", &format!("projects/{project}/merge_requests/{iid}/rebase"), serde_json::json!({}))?;
+        Ok(())
+    }
+
+    /// The merge request's pipelines, newest first: each commit's status.
+    pub fn pipelines(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Pipeline>> {
+        self.get_all(&format!("projects/{project}/merge_requests/{iid}/pipelines"))
+    }
+
+    /// The latest pipeline that ran on commit `sha`, if any.
+    pub fn pipeline_for_sha(&self, project: u64, sha: &str) -> anyhow::Result<Option<Pipeline>> {
+        let all: Vec<Pipeline> = self.get(&format!("projects/{project}/pipelines?sha={sha}&per_page=1"))?;
+        Ok(all.into_iter().next())
+    }
+
     /// The merge request's latest pipeline, if it has one.
     pub fn latest_pipeline(&self, project: u64, iid: u64) -> anyhow::Result<Option<Pipeline>> {
         let all: Vec<Pipeline> = self.get(&format!("projects/{project}/merge_requests/{iid}/pipelines?per_page=1"))?;
@@ -339,6 +455,60 @@ impl Client {
     /// The project's labels, with their colors.
     pub fn labels(&self, project: u64) -> anyhow::Result<Vec<Label>> {
         self.get_all(&format!("projects/{project}/labels"))
+    }
+
+    /// Whether the merge request takes several assignees and several
+    /// reviewers: GitLab's paid tiers do, the free one takes one of each
+    /// (and its REST API quietly keeps the first). Only GraphQL says.
+    pub fn allows_multiple(&self, full_path: &str, iid: u64) -> anyhow::Result<(bool, bool)> {
+        let q = format!(
+            "{{ project(fullPath: {full_path:?}) {{ mergeRequest(iid: \"{iid}\") {{ allowsMultipleAssignees allowsMultipleReviewers }} }} }}"
+        );
+        let url = format!("{}/api/graphql", self.host);
+        let r = self.transport.send("POST", &url, &self.token, serde_json::json!({ "query": q }).to_string().as_bytes())?;
+        let v: serde_json::Value = decode(&r.body, &url)?;
+        let mr = &v["data"]["project"]["mergeRequest"];
+        let flag = |k: &str| mr[k].as_bool().with_context(|| format!("no {k} in GitLab's answer"));
+        Ok((flag("allowsMultipleAssignees")?, flag("allowsMultipleReviewers")?))
+    }
+
+    /// Every changed file's path with lines added and removed, past the
+    /// 1000 files the REST diff stops at. Only GraphQL lists them all.
+    pub fn diff_stats(&self, full_path: &str, iid: u64) -> anyhow::Result<Vec<(String, usize, usize)>> {
+        let q = format!(
+            "{{ project(fullPath: {full_path:?}) {{ mergeRequest(iid: \"{iid}\") {{ diffStats {{ path additions deletions }} }} }} }}"
+        );
+        let url = format!("{}/api/graphql", self.host);
+        let r = self.transport.send("POST", &url, &self.token, serde_json::json!({ "query": q }).to_string().as_bytes())?;
+        let v: serde_json::Value = decode(&r.body, &url)?;
+        let stats = v["data"]["project"]["mergeRequest"]["diffStats"].as_array().context("no diffStats in GitLab's answer")?;
+        Ok(stats
+            .iter()
+            .filter_map(|s| {
+                let n = |k: &str| s[k].as_u64().unwrap_or(0) as usize;
+                Some((s["path"].as_str()?.to_string(), n("additions"), n("deletions")))
+            })
+            .collect())
+    }
+
+    /// A file's bytes at `sha`, or `None` when it isn't there (added or deleted).
+    pub fn raw_maybe(&self, project: u64, path: &str, sha: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        match self.raw_bytes(project, path, sha) {
+            Ok(b) => Ok(Some(b)),
+            Err(e) if format!("{e:#}").contains("(404)") => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The project's open milestones.
+    pub fn milestones(&self, project: u64) -> anyhow::Result<Vec<Milestone>> {
+        self.get_all(&format!("projects/{project}/milestones?state=active"))
+    }
+
+    /// Change the merge request's fields: `reviewer_ids`, `assignee_ids`,
+    /// `labels` ("a,b"), `milestone_id` (0 for none). GitLab's sidebar.
+    pub fn update(&self, project: u64, iid: u64, fields: serde_json::Value) -> anyhow::Result<MergeRequest> {
+        self.write("PUT", &format!("projects/{project}/merge_requests/{iid}"), fields)
     }
 
     /// Everyone with access to the project, inherited too, with their role.
@@ -433,15 +603,16 @@ mod tests {
         Response {
             status: 200,
             next_page: next,
+            total: None,
             body: body.as_bytes().to_vec(),
         }
     }
 
     #[test]
     fn parses_curl_output_with_a_continue_block() {
-        let raw = b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nX-Next-Page: 3\r\nContent-Type: application/json\r\n\r\n[1]";
+        let raw = b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nX-Next-Page: 3\r\nX-Total: 9\r\nContent-Type: application/json\r\n\r\n[1]";
         let r = parse_response(raw).unwrap();
-        assert_eq!((r.status, r.next_page, r.body.as_slice()), (200, Some(3), &b"[1]"[..]));
+        assert_eq!((r.status, r.next_page, r.total, r.body.as_slice()), (200, Some(3), Some(9), &b"[1]"[..]));
         let r = parse_response(b"HTTP/2 404 \r\nx-next-page: \r\n\r\n{}").unwrap();
         assert_eq!((r.status, r.next_page), (404, None));
     }

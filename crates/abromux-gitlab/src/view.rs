@@ -69,7 +69,7 @@ enum Target {
 
 pub struct GitLabView {
     pub(crate) loc: Location,
-    focus: FocusHandle,
+    pub(crate) focus: FocusHandle,
     pub(crate) client: Option<Client>,
     pub(crate) me: Option<User>,
     list: Load<Vec<MergeRequest>>,
@@ -77,6 +77,8 @@ pub struct GitLabView {
     approved: HashSet<u64>,
     /// Listed merge requests' (resolved, resolvable) threads, by id.
     list_threads: HashMap<u64, (usize, usize)>,
+    /// How many merge requests each state tab has, in the list's scope.
+    list_counts: Vec<(MrState, u64)>,
     /// Listed merge requests' latest pipelines, by id.
     list_pipelines: HashMap<u64, Pipeline>,
     /// Listed projects' default branches, by project id.
@@ -96,7 +98,7 @@ pub struct GitLabView {
     /// Folders folded in the file tree, by path.
     pub(crate) folded_dirs: HashSet<String>,
     /// The file tree's scroll, and the file it last scrolled to.
-    pub(crate) tree_scroll: ScrollHandle,
+    pub(crate) tree_scroll: UniformListScrollHandle,
     pub(crate) tree_active: std::cell::Cell<Option<usize>>,
     /// The line whose number was clicked: (file, old line, new line).
     pub(crate) selected_line: Option<(usize, Option<u32>, Option<u32>)>,
@@ -129,14 +131,32 @@ pub struct GitLabView {
     compared: Load<Rc<Review>>,
     /// Which of the picker's menus is open: the base (left) or the head.
     pub(crate) menu: Option<bool>,
+    /// The sidebar's open Edit dropdown, and what it has ticked.
+    pub(crate) side_menu: Option<crate::side::SideMenu>,
+    /// Files GitLab left out, being fetched (None) or failed (the error), by path.
+    pub(crate) late: std::collections::HashMap<String, Option<String>>,
+    /// The file just jumped to, and when: rows arriving keep it in view.
+    pub(crate) jump: Option<(usize, std::time::Instant)>,
+    /// Code selected with the mouse (select.rs), and the lines of the code
+    /// blocks drawn, for copying a block's selection.
+    pub(crate) sel: Option<crate::select::Selection>,
+    pub(crate) sel_lines: std::cell::RefCell<HashMap<(crate::select::Group, usize), String>>,
+    pub(crate) sel_drawn: std::cell::RefCell<Vec<crate::select::Drawn>>,
+    /// This mouse down started a code selection (the root then keeps it).
+    pub(crate) sel_started: bool,
+    pub(crate) pick: crate::side::Pick,
     /// The overview's activity: which entries, which order, the menu open.
     pub(crate) activity: crate::mr::ActivityFilter,
     pub(crate) newest_first: bool,
     pub(crate) activity_menu: bool,
+    /// The list's sort dropdown is open.
+    sort_menu: bool,
     /// Writing (edit.rs): the text fields, a write under way, the last
     /// one's error, the thread being replied to, the line being commented on.
     pub(crate) boxes: crate::edit::Boxes,
     pub(crate) busy: bool,
+    /// The Overview's "Add reaction" picker is open.
+    pub(crate) emoji_picker: bool,
     pub(crate) write_error: Option<String>,
     pub(crate) replying: Option<String>,
     pub(crate) commenting: Option<crate::edit::LineKey>,
@@ -164,7 +184,7 @@ impl GitLabView {
         let tree_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search (e.g. *.rs)"));
         cx.subscribe(&tree_search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
         let boxes = crate::edit::Boxes::new(window, cx);
-        for b in [&boxes.comment, &boxes.reply, &boxes.line] {
+        for b in [&boxes.comment, &boxes.reply, &boxes.line, &boxes.search] {
             cx.subscribe(b, |_, _, _: &InputEvent, cx| cx.notify()).detach();
         }
         let list_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search or filter results…"));
@@ -172,6 +192,7 @@ impl GitLabView {
         let mut v = Self {
             boxes,
             busy: false,
+            emoji_picker: false,
             write_error: None,
             replying: None,
             commenting: None,
@@ -183,9 +204,18 @@ impl GitLabView {
             compare: Compare::default(),
             compared: Load::Idle,
             menu: None,
+            side_menu: None,
+            late: Default::default(),
+            jump: None,
+            sel: None,
+            sel_lines: Default::default(),
+            sel_drawn: Default::default(),
+            sel_started: false,
+            pick: Default::default(),
             activity: Default::default(),
             newest_first: false,
             activity_menu: false,
+            sort_menu: false,
             loc,
             focus: cx.focus_handle(),
             client: None,
@@ -194,6 +224,7 @@ impl GitLabView {
             approved: HashSet::new(),
             default_branches: HashMap::new(),
             list_threads: HashMap::new(),
+            list_counts: vec![],
             list_pipelines: HashMap::new(),
             review: Load::Idle,
             avatars: Avatars::default(),
@@ -203,7 +234,7 @@ impl GitLabView {
             show_tree: None,
             tree_flat: false,
             folded_dirs: HashSet::new(),
-            tree_scroll: ScrollHandle::new(),
+            tree_scroll: UniformListScrollHandle::new(),
             tree_active: Default::default(),
             selected_line: None,
             single_file: None,
@@ -227,7 +258,7 @@ impl GitLabView {
         v
     }
 
-    fn host(&self) -> String {
+    pub(crate) fn host(&self) -> String {
         self.loc.host().to_string()
     }
 
@@ -325,7 +356,15 @@ impl GitLabView {
                         ListScope::Mine => Scope::Mine,
                         ListScope::All => Scope::All,
                     };
-                    let mrs = c.merge_requests_in(scope, state.api())?;
+                    let mrs = c.merge_requests_in(scope.clone(), state.api())?;
+                    // GitLab's counts on the state tabs: this one's is the list.
+                    let counts: Vec<(MrState, u64)> = [MrState::Opened, MrState::Merged, MrState::Closed, MrState::All]
+                        .into_iter()
+                        .filter_map(|st| {
+                            let n = if st == state { Some(mrs.len() as u64) } else { c.count_merge_requests(&scope, st.api()).ok()? };
+                            Some((st, n?))
+                        })
+                        .collect();
                     // The list's "Approved" badges: one request each, so only the first rows.
                     let approved: HashSet<u64> = mrs
                         .iter()
@@ -357,12 +396,13 @@ impl GitLabView {
                         .take(50)
                         .filter_map(|m| Some((m.id, c.latest_pipeline(m.project_id, m.iid).ok()??)))
                         .collect();
-                    anyhow::Ok((me, mrs, approved, defaults, threads, pipelines))
+                    anyhow::Ok((me, mrs, approved, defaults, threads, pipelines, counts))
                 })
                 .await;
             this.update(cx, |v, cx| {
                 v.list = match got {
-                    Ok((me, mrs, approved, defaults, threads, pipelines)) => {
+                    Ok((me, mrs, approved, defaults, threads, pipelines, counts)) => {
+                        v.list_counts = counts;
                         v.list_pipelines = pipelines;
                         v.list_threads = threads;
                         v.me = Some(me);
@@ -483,7 +523,7 @@ impl GitLabView {
             bail!("no token for {}: sign in first", self.host());
         }
         self.loc.iid = Some(iid);
-        self.loc.section = if url.contains("/diffs") { Section::Changes } else { Section::Overview };
+        self.loc.section = Section::of_url(url);
         self.pending_path = Some(path.clone());
         self.load_review(Target::Path(path, iid), cx);
         Ok(())
@@ -508,6 +548,92 @@ impl GitLabView {
         self.load_list(cx);
     }
 
+    /// GitLab's "Created date ▾" and the button that turns the order around.
+    fn sort_control(&self, cx: &mut Context<Self>) -> Div {
+        let button = |id: &'static str| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap_1()
+                .h(px(32.))
+                .px_3()
+                .bg(ca(0x89888d66))
+                .cursor_pointer()
+                .hover(|s| s.bg(ca(0x89888d99)))
+                .text_color(c(TEXT))
+        };
+        let menu = self.sort_menu.then(|| {
+            let option = |s: crate::ListSort, cx: &mut Context<Self>| {
+                div()
+                    .id(s.label())
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_1()
+                    .cursor_pointer()
+                    .hover(|st| st.bg(c(RAISED)))
+                    .child(div().w(px(14.)).when(self.loc.sort == s, |d| d.child(app_icon("check", 14., c(TEXT)))))
+                    .child(div().text_color(c(TEXT)).child(s.label()))
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        v.loc.sort = s;
+                        v.sort_menu = false;
+                        cx.notify();
+                    }))
+            };
+            let options: Vec<_> = crate::ListSort::ALL.into_iter().map(|s| option(s, cx)).collect();
+            deferred(
+                div()
+                    .id("gl-sort-menu")
+                    .absolute()
+                    .top(px(36.))
+                    .right_0()
+                    .min_w(px(200.))
+                    .py_1()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(c(BORDER))
+                    .bg(c(CARD))
+                    .shadow_lg()
+                    .occlude()
+                    .on_mouse_down_out(cx.listener(|v, _, _, cx| {
+                        v.sort_menu = false;
+                        cx.notify();
+                    }))
+                    .children(options),
+            )
+            .with_priority(1)
+        });
+        let asc = self.loc.ascending;
+        div()
+            .relative()
+            .flex()
+            .gap(px(1.))
+            .rounded(px(8.))
+            .child(
+                button("gl-sort")
+                    .rounded_l(px(8.))
+                    .child(self.loc.sort.label())
+                    .child(app_icon("chevron-down", 14., c(TEXT)))
+                    .on_click(cx.listener(|v, _, _, cx| {
+                        v.sort_menu = !v.sort_menu;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                button("gl-sort-direction")
+                    .rounded_r(px(8.))
+                    .child(icon(if asc { "sort-asc" } else { "sort-desc" }, 16., c(TEXT)))
+                    .tooltip(hint(if asc { "Sort direction: Ascending" } else { "Sort direction: Descending" }))
+                    .on_click(cx.listener(|v, _, _, cx| {
+                        v.loc.ascending = !v.loc.ascending;
+                        cx.notify();
+                    })),
+            )
+            .children(menu)
+    }
+
     fn set_state(&mut self, state: MrState, cx: &mut Context<Self>) {
         self.loc.state = state;
         self.load_list(cx);
@@ -530,12 +656,21 @@ impl GitLabView {
         let k = &ev.keystroke;
         // Typing in a comment: the keys are the text's.
         if self.boxes.typing(window, cx) {
+            if k.key == "escape" && self.side_menu.is_some() {
+                self.close_side_menu(window, cx);
+                return;
+            }
             if k.key == "escape" {
                 self.replying = None;
                 self.commenting = None;
                 window.focus(&self.focus);
                 self.rebuild_rows(cx);
             }
+            return;
+        }
+        // ⌘C copies selected code (selected markdown copies itself).
+        if k.key == "c" && k.modifiers.platform && !k.modifiers.shift && self.copy_selection(cx) {
+            cx.stop_propagation();
             return;
         }
         // Escape closes an open menu first, as in GitLab.
@@ -607,6 +742,7 @@ impl GitLabView {
             (Some(r), true) if !r.mr.web_url.is_empty() => match self.loc.section {
                 Section::Overview => r.mr.web_url.clone(),
                 Section::Commits => format!("{}/commits", r.mr.web_url),
+                Section::Pipelines => format!("{}/pipelines", r.mr.web_url),
                 Section::Changes => format!("{}/diffs", r.mr.web_url),
             },
             _ => format!("{}/dashboard/merge_requests", self.host()),
@@ -767,6 +903,8 @@ impl Tab for GitLabView {
                 "error": self.write_error,
                 "replying": self.replying,
                 "commenting": self.commenting,
+                "side_menu": self.side_menu.map(|m| format!("{m:?}")),
+                "selection": self.sel.map(|s| format!("{s:?}")),
             },
         })
     }
@@ -932,9 +1070,16 @@ impl Tab for GitLabView {
                 let resolved = args.get("resolved").and_then(Value::as_bool) != Some(false);
                 self.set_resolved(&id, resolved, window, cx);
             }
+            "submit_review" => self.submit_review(window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);
                 self.set_approved(approve, window, cx);
+            }
+            // React with {name} (thumbsup, tada), or take yours back.
+            "award" => self.toggle_award(str_arg("name").context("missing name")?, window, cx),
+            "emoji_picker" => {
+                self.emoji_picker = args.get("open").and_then(Value::as_bool) != Some(false);
+                cx.notify();
             }
             // A new thread on a line: {path, new} or {path, old} (a removed line).
             "line_comment" => {
@@ -942,7 +1087,7 @@ impl Tab for GitLabView {
                 let r = self.shown().context("no merge request loaded")?;
                 let (new, old) = (num_arg("new").map(|n| n as u32), num_arg("old").map(|n| n as u32));
                 let line = r.files[fi]
-                    .body
+                    .body()
                     .hunks()
                     .iter()
                     .flat_map(|h| &h.lines)
@@ -956,8 +1101,44 @@ impl Tab for GitLabView {
                 if let Some(body) = str_arg("body") {
                     self.boxes.line.update(cx, |b, cx| b.set_value(body.to_string(), window, cx));
                     if args.get("send").and_then(Value::as_bool) != Some(false) {
-                        self.send_line_comment(window, cx);
+                        let draft = args.get("review").and_then(Value::as_bool) == Some(true);
+                        self.send_line_comment(draft, window, cx);
                     }
+                }
+            }
+            // The sidebar: {"open":"reviewers"} opens a dropdown, {"search":"al"}
+            // filters it, {"pick":"alice"} ticks a username, label or milestone,
+            // {"close":true} closes it (saving).
+            "side" => {
+                if let Some(m) = str_arg("open") {
+                    let m = crate::side::SideMenu::parse(m).context("open is assignees, reviewers, labels or milestone")?;
+                    if self.side_menu != Some(m) {
+                        self.toggle_side_menu(m, window, cx);
+                    }
+                }
+                if let Some(q) = str_arg("search") {
+                    self.boxes.search.update(cx, |b, cx| b.set_value(q.to_string(), window, cx));
+                }
+                if let Some(name) = str_arg("pick") {
+                    let r = self.review.ready().context("no merge request loaded")?.clone();
+                    match self.side_menu.context("no dropdown open")? {
+                        crate::side::SideMenu::Labels => self.pick_label(name, cx),
+                        crate::side::SideMenu::Milestone => {
+                            let id = if name.is_empty() {
+                                0
+                            } else {
+                                r.milestones.iter().find(|m| m.title == name).context("no such milestone")?.id
+                            };
+                            self.pick_milestone(id, window, cx)
+                        }
+                        _ => {
+                            let id = r.members.iter().find(|u| u.username == name).context("no such member")?.id;
+                            self.pick_person(id, window, cx)
+                        }
+                    }
+                }
+                if args.get("close").and_then(Value::as_bool) == Some(true) {
+                    self.close_side_menu(window, cx);
                 }
             }
             "cancel" => {
@@ -970,7 +1151,7 @@ impl Tab for GitLabView {
                 cx,
             ),
             other => bail!(
-                "unknown command {other:?} (state, refresh, back, list, open, section, file, fold, viewed, tree, parallel, next_thread, prev_thread, expand, thread, comment, reply, resolve, approve, line_comment, cancel, sign_in)"
+                "unknown command {other:?} (state, refresh, back, list, open, section, file, fold, viewed, tree, parallel, next_thread, prev_thread, expand, thread, comment, reply, resolve, approve, line_comment, cancel, side, sign_in)"
             ),
         }
         cx.notify();
@@ -1185,10 +1366,12 @@ impl GitLabView {
         let states = [MrState::Opened, MrState::Merged, MrState::Closed, MrState::All];
         let state_switch = div().flex().gap(px(1.)).rounded(px(8.)).overflow_hidden().children(states.map(|st| {
             let on = self.loc.state == st;
+            let n = self.list_counts.iter().find(|(s, _)| *s == st).map(|(_, n)| *n);
             div()
                 .id(st.label())
                 .flex()
                 .items_center()
+                .gap_2()
                 .h(px(32.))
                 .px_3()
                 .cursor_pointer()
@@ -1197,6 +1380,7 @@ impl GitLabView {
                 .when(on, |d| d.font_weight(FontWeight::SEMIBOLD))
                 .hover(|s| s.bg(ca(0x89888d99)))
                 .child(st.label())
+                .when_some(n, |d, n| d.child(count_badge(n as usize)))
                 .on_click(cx.listener(move |v, _, _, cx| v.set_state(st, cx)))
         }));
         let tabs = div().flex().items_center().border_b_1().border_color(c(RAISED)).children(scopes.map(|(s, label)| {
@@ -1231,7 +1415,7 @@ impl GitLabView {
                 return vec![div().py_6().flex().justify_center().text_color(c(MUTED)).child(empty).into_any_element()];
             }
             // The filter: words that must all be in the title, reference, author or branches.
-            let shown: Vec<&MergeRequest> = mrs
+            let mut shown: Vec<&MergeRequest> = mrs
                 .iter()
                 .filter(|m| {
                     let hay = format!(
@@ -1245,6 +1429,7 @@ impl GitLabView {
             if shown.is_empty() {
                 return vec![div().py_6().flex().justify_center().text_color(c(MUTED)).child("No results found.").into_any_element()];
             }
+            self.loc.sort.apply(&mut shown, self.loc.ascending);
             shown
                 .into_iter()
                 .map(|m| {
@@ -1335,6 +1520,11 @@ impl GitLabView {
                                         .gap_2()
                                         .when_some(self.list_pipelines.get(&m.id), |d, p| d.child(pipeline_icon(p, 16.)))
                                         .child(div().flex().gap_1().children(people.iter().map(|u| self.avatars.of(u, 16.))))
+                                        .when(m.state == "merged", |d| d.child(badge("Merged", c(0x64a7e9), c(0x1d2153))))
+                                        .when(m.state == "closed", |d| d.child(badge("Closed", c(0xfc7988), c(0x5a0e17))))
+                                        .when(self.approved.contains(&m.id) && m.state == "opened", |d| {
+                                            d.child(badge("Approved", c(GREEN), c(0x002c26)).child(icon("check-circle", 12., c(0x002c26))).flex_row_reverse())
+                                        })
                                         .map(|d| match self.list_threads.get(&m.id) {
                                             // GitLab's grey "1 of 4" pill of resolved threads.
                                             Some(&(done, all)) if all > 0 => d.child(
@@ -1360,11 +1550,6 @@ impl GitLabView {
                                                     .child(m.user_notes_count.to_string()),
                                             ),
                                             _ => d,
-                                        })
-                                        .when(m.state == "merged", |d| d.child(badge("Merged", c(0x64a7e9), c(0x1d2153))))
-                                        .when(m.state == "closed", |d| d.child(badge("Closed", c(0xfc7988), c(0x5a0e17))))
-                                        .when(self.approved.contains(&m.id) && m.state == "opened", |d| {
-                                            d.child(badge("Approved", c(GREEN), c(0x002c26)).child(icon("check-circle", 12., c(0x002c26))).flex_row_reverse())
                                         }),
                                 )
                                 .child(div().flex().gap_1().child("updated").child(when(&m.updated_at))),
@@ -1389,9 +1574,20 @@ impl GitLabView {
             )
             .child(div().px_4().pt_2().child(tabs))
             .child(
-                div().px_4().py_3().border_b_1().border_color(c(RAISED)).child(
-                    Input::new(&self.list_search).prefix(app_icon("search", 14., c(MUTED))).cleanable(true),
-                ),
+                div()
+                    .px_4()
+                    .py_3()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(c(RAISED))
+                    .child(
+                        div().flex_1().child(
+                            Input::new(&self.list_search).prefix(app_icon("search", 14., c(MUTED))).cleanable(true),
+                        ),
+                    )
+                    .child(self.sort_control(cx)),
             )
             .child(
                 div()
@@ -1417,6 +1613,7 @@ impl GitLabView {
             Section::Overview => self.overview_page(&r, window, cx),
             Section::Changes => self.changes_page(&r, cx),
             Section::Commits => self.commits_page(&r, cx),
+            Section::Pipelines => self.pipelines_page(&r, cx),
         };
         div()
             .size_full()
@@ -1430,6 +1627,8 @@ impl GitLabView {
 
 impl Render for GitLabView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The selectable lines this frame draws register themselves anew.
+        self.sel_drawn.borrow_mut().clear();
         let page = if self.sign_in.is_some() {
             self.sign_in_page(cx)
         } else if self.in_mr() {
@@ -1457,8 +1656,56 @@ impl Render for GitLabView {
             .child(measure)
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|v, ev: &KeyDownEvent, window, cx| v.key(ev, window, cx)))
-            // A click anywhere in the tab gives it the keys.
-            .on_mouse_down(MouseButton::Left, cx.listener(|v, _, window, _| window.focus(&v.focus)))
+            // The tab takes the keys on a click, unless what was clicked took
+            // them (a text box, or text being selected, which then copies).
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|v, _, window, cx| {
+                    if !window.default_prevented() {
+                        window.focus(&v.focus);
+                    }
+                    // A click anywhere but code drops the code's selection
+                    // (into a comment's text too: ⌘C is then that text's).
+                    if !std::mem::take(&mut v.sel_started) {
+                        v.sel = None;
+                    }
+                    // Text being selected follows the pointer from the next
+                    // frame on: draw it now (and while dragging, below).
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(|_, ev: &MouseMoveEvent, _, cx| {
+                if ev.pressed_button == Some(MouseButton::Left) {
+                    cx.notify();
+                }
+            }))
+            // A drag selecting code follows the pointer anywhere in the
+            // window, and ends wherever the button comes up.
+            .child({
+                let this = cx.entity().downgrade();
+                canvas(
+                    |_, _, _| {},
+                    move |_, _, window, _| {
+                        let moved = this.clone();
+                        window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
+                            // While a selection's dragging (from its mouse down
+                            // to the next up, which macOS sends here even off
+                            // the window), as gpui-component's text does.
+                            if phase == DispatchPhase::Bubble {
+                                moved.update(cx, |v, cx| v.follow(ev.position, cx)).ok();
+                            }
+                        });
+                        let up = this.clone();
+                        window.on_mouse_event(move |ev: &MouseUpEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Bubble && ev.button == MouseButton::Left {
+                                up.update(cx, |v, cx| v.end_selection(cx)).ok();
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_0()
+            })
             .size_full()
             .flex()
             .flex_col()

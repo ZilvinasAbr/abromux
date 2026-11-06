@@ -13,5 +13,7 @@ gpui-component = "=0.5.1"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Diffs of files GitLab leaves out of a big merge request's diff.
+similar = "2"
 # image previews' width and height (already a gpui dependency)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }

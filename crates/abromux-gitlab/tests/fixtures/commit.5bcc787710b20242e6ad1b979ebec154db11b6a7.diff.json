@@ -1,0 +1,15 @@
+[
+  {
+    "a_mode": "100644",
+    "b_mode": "100644",
+    "collapsed": false,
+    "deleted_file": false,
+    "diff": "@@ -1,3 +1,5 @@\n # review-fixtures\n \n A tiny project for testing review UIs.\n+\n+Set `LIMIT` to change the limit.\n",
+    "generated_file": null,
+    "new_file": false,
+    "new_path": "README.md",
+    "old_path": "README.md",
+    "renamed_file": false,
+    "too_large": false
+  }
+]
