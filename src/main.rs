@@ -161,6 +161,8 @@ const SIDEBAR_MAX: f32 = 480.;
 /// Height of the titlebar row the traffic lights sit in.
 const TITLEBAR_H: f32 = 38.;
 const TABBAR_H: f32 = 30.;
+/// How wide the area is that grabs a pane divider (drawn 1px wide).
+const DIVIDER_GRAB: f32 = 9.;
 /// The macOS window's corner radius (`-[NSWindow _cornerRadius]` on macOS 26).
 const WINDOW_RADIUS: f32 = 16.;
 /// How close to the pane area's outer edge a dragged tab splits the whole
@@ -1991,26 +1993,44 @@ impl AbroMux {
                 let (id, axis) = (*id, *axis);
                 let horizontal = axis == Axis::Horizontal;
                 let bounds = self.split_bounds.clone();
+                // The 1px line, and a wider invisible grab area centered on
+                // it. That's drawn last (deferred), so the panes on both
+                // sides don't cover it, and it takes the clicks and cursor.
+                let grab = DIVIDER_GRAB;
                 let divider = div()
-                    .id(("divider", id))
                     .flex_none()
                     .bg(cx.global::<settings::Settings>().panes.divider_color)
-                    .when(horizontal, |s| s.w(px(1.)).h_full().cursor_col_resize())
-                    .when(!horizontal, |s| s.h(px(1.)).w_full().cursor_row_resize())
-                    .child(
-                        // Wider invisible grab area centered on the 1px line.
-                        div()
-                            .absolute()
-                            .when(horizontal, |s| s.left(px(-3.)).w(px(7.)).h_full())
-                            .when(!horizontal, |s| s.top(px(-3.)).h(px(7.)).w_full()),
-                    )
+                    .when(horizontal, |s| s.w(px(1.)).h_full())
+                    .when(!horizontal, |s| s.h(px(1.)).w_full())
                     .relative()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            this.dragging = Some((id, axis));
-                            cx.stop_propagation();
-                        }),
+                    .child(
+                        deferred(
+                            div()
+                                .id(("divider", id))
+                                .absolute()
+                                .when(horizontal, |s| {
+                                    s.top_0()
+                                        .left(px(-(grab - 1.) / 2.))
+                                        .w(px(grab))
+                                        .h_full()
+                                        .cursor_col_resize()
+                                })
+                                .when(!horizontal, |s| {
+                                    s.left_0()
+                                        .top(px(-(grab - 1.) / 2.))
+                                        .h(px(grab))
+                                        .w_full()
+                                        .cursor_row_resize()
+                                })
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.dragging = Some((id, axis));
+                                        cx.stop_propagation();
+                                    }),
+                                ),
+                        )
+                        .with_priority(1),
                     );
                 let (ca, cb) = if horizontal {
                     (
