@@ -322,6 +322,7 @@ fn card(d: Div) -> Div {
 
 impl GitLabView {
     pub(crate) fn changes_page(&self, main: &std::rc::Rc<Review>, cx: &mut Context<Self>) -> AnyElement {
+        self.current_drawn.set(self.current_file());
         // The picked versions' diffs, or the latest while those load.
         let r = &self.shown().unwrap_or_else(|| main.clone());
         let (added, removed) = r.files.iter().fold((0, 0), |(a, d), f| {
@@ -373,8 +374,14 @@ impl GitLabView {
             .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(RED)).child(format!("−{removed}")));
         let diff = div()
             .size_full()
-            // Scrolling yourself ends a jump's hold on the view.
-            .on_scroll_wheel(cx.listener(|v, _, _, _| v.jump = None))
+            // Scrolling yourself ends a jump's hold on the view, and the
+            // file being read is again the one at the top.
+            .on_scroll_wheel(cx.listener(|v, _, _, cx| {
+                v.jump = None;
+                if v.current.take().is_some() {
+                    cx.notify();
+                }
+            }))
             .child(list(self.diff_list.clone(), cx.processor(|v, ix: usize, window, cx| v.row(ix, window, cx))).size_full());
         // GitLab keeps the header of the file being read at the top.
         let top = self.diff_list.logical_scroll_top();
@@ -846,7 +853,7 @@ impl GitLabView {
     }
 
     fn file_tree(&self, r: &Review, cx: &mut Context<Self>) -> Div {
-        let active = self.active_file();
+        let active = self.current_file();
         let query = self.tree_search.read(cx).value().to_string();
         // List mode: every file at the top level, by path.
         let items = if self.tree_flat {
@@ -910,7 +917,7 @@ impl GitLabView {
                             items.len(),
                             cx.processor(move |v, range: std::ops::Range<usize>, _, cx| {
                                 let Some(r) = review.clone() else { return vec![] };
-                                let active = v.active_file();
+                                let active = v.current_file();
                                 range.map(|i| v.tree_row(&items[i], &r, active, cx)).collect::<Vec<_>>()
                             }),
                         )
@@ -1020,6 +1027,12 @@ impl GitLabView {
         }
     }
 
+    /// The file being read: the one gone to, else the one at the top.
+    pub(crate) fn current_file(&self) -> Option<usize> {
+        let n = self.shown().map_or(0, |r| r.files.len());
+        self.current.filter(|&f| f < n).or(self.single_file).or_else(|| self.active_file())
+    }
+
     /// The file whose card is at the top of the diff.
     pub(crate) fn active_file(&self) -> Option<usize> {
         if self.rows.is_empty() {
@@ -1093,7 +1106,7 @@ impl GitLabView {
         if n == 0 {
             return;
         }
-        let at = self.active_file().unwrap_or(0);
+        let at = self.current_file().unwrap_or(0);
         if self.single_file.is_some() {
             let next = if forward { (at + 1).min(n - 1) } else { at.saturating_sub(1) };
             self.scroll_to_file(next, cx);
@@ -1101,7 +1114,7 @@ impl GitLabView {
         }
         // At a header already: step from it; mid-file going back: to its own header.
         let top = self.diff_list.logical_scroll_top();
-        let at_header = self.rows.get(top.item_ix) == Some(&Row::File(at)) && top.offset_in_item <= px(1.);
+        let at_header = self.current.is_some() || self.rows.get(top.item_ix) == Some(&Row::File(at)) && top.offset_in_item <= px(1.);
         let next = match forward {
             true => (at + 1).min(n - 1),
             false if at_header => at.saturating_sub(1),
@@ -1198,6 +1211,7 @@ impl GitLabView {
         // Near the end the list can't put the file at the top yet: a file still
         // loading is short. Aim at it again as rows come in, for a moment.
         self.jump = Some((file, std::time::Instant::now()));
+        self.current = Some(file);
         cx.notify();
     }
 
@@ -1603,6 +1617,7 @@ impl GitLabView {
         let (a, d) = f.counts();
         let folded = self.is_folded(f);
         let viewed = self.loc.viewed.iter().any(|p| p == f.path());
+        let current = self.current_drawn.get() == Some(fi);
         let path = f.path().to_string();
         let mode = (f.meta.a_mode != f.meta.b_mode && !f.meta.a_mode.is_empty())
             .then(|| format!("{} → {}", f.meta.a_mode, f.meta.b_mode));
@@ -1637,7 +1652,7 @@ impl GitLabView {
             .py_2()
             .bg(c(CARD))
             .border_1()
-            .border_color(c(BORDER))
+            .border_color(c(if current { FOCUS } else { BORDER }))
             .rounded_t(px(8.))
             .when(folded, |d| d.rounded_b(px(8.)))
             .text_color(c(TEXT))
@@ -1680,6 +1695,11 @@ impl GitLabView {
                     .items_center()
                     .gap_2()
                     .ml_2()
+                    .px_1()
+                    .rounded(px(4.))
+                    .border_2()
+                    // `v` marks the file being read: its Viewed is ringed.
+                    .border_color(if current { c(FOCUS) } else { gpui::transparent_black() })
                     .cursor_pointer()
                     .child(checkbox(viewed))
                     .child("Viewed")
@@ -1944,20 +1964,20 @@ impl GitLabView {
         }
     }
 
-    /// `v`: Viewed on the file being read. Marked, it folds, its header
-    /// staying where it was with the next file under it; one file at a
-    /// time, the next one comes up.
-    pub(crate) fn toggle_viewed_here(&mut self, cx: &mut Context<Self>) {
+    /// `v`: the file being read is Viewed (it folds), and the next file not
+    /// viewed yet comes to the top, highlighted with its Viewed ringed.
+    /// Unmarking is the checkbox's.
+    pub(crate) fn mark_viewed_here(&mut self, cx: &mut Context<Self>) {
         let Some(r) = self.shown() else { return };
-        let Some(fi) = self.single_file.or_else(|| self.active_file()) else { return };
+        let Some(fi) = self.current_file() else { return };
         let Some(path) = r.files.get(fi).map(|f| f.path().to_string()) else { return };
-        let marking = !self.loc.viewed.contains(&path);
-        self.toggle_viewed(&path, cx);
-        if marking && self.single_file.is_some() && fi + 1 < r.files.len() {
-            self.step_file(true, cx);
-        } else {
-            self.scroll_to_file(fi, cx);
+        if !self.loc.viewed.contains(&path) {
+            self.toggle_viewed(&path, cx);
         }
+        let n = r.files.len();
+        let next = (1..n).map(|d| (fi + d) % n).find(|&i| !self.loc.viewed.iter().any(|p| p == r.files[i].path()));
+        // All viewed: stay on this one.
+        self.scroll_to_file(next.unwrap_or(fi), cx);
     }
 
     pub(crate) fn toggle_viewed(&mut self, path: &str, cx: &mut Context<Self>) {
