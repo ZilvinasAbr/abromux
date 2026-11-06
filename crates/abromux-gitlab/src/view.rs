@@ -72,7 +72,7 @@ pub struct GitLabView {
     pub(crate) focus: FocusHandle,
     pub(crate) client: Option<Client>,
     pub(crate) me: Option<User>,
-    list: Load<Vec<MergeRequest>>,
+    pub(crate) list: Load<Vec<MergeRequest>>,
     /// Listed merge requests that are approved, by id.
     approved: HashSet<u64>,
     /// Listed merge requests' (resolved, resolvable) threads, by id.
@@ -145,6 +145,9 @@ pub struct GitLabView {
     /// This mouse down started a code selection (the root then keeps it).
     pub(crate) sel_started: bool,
     pub(crate) pick: crate::side::Pick,
+    /// What GitLab found for the people picker's search: (query, people).
+    pub(crate) people_found: Option<(String, Vec<User>)>,
+    pub(crate) _people_task: Option<Task<()>>,
     /// The overview's activity: which entries, which order, the menu open.
     pub(crate) activity: crate::mr::ActivityFilter,
     pub(crate) newest_first: bool,
@@ -165,7 +168,19 @@ pub struct GitLabView {
     /// The file browser's search field.
     pub(crate) tree_search: Entity<InputState>,
     /// The merge request list's filter field.
-    list_search: Entity<InputState>,
+    pub(crate) list_search: Entity<InputState>,
+    /// GitLab's "Search or go to…" over the tab (`/`), while open.
+    pub(crate) search: Option<crate::search::Search>,
+    /// The Projects tab: your projects, and each one's open merge requests.
+    pub(crate) projects: Load<std::rc::Rc<Vec<crate::types::Project>>>,
+    pub(crate) project_counts: HashMap<u64, u64>,
+    pub(crate) _projects_task: Option<Task<()>>,
+    _list_extras_task: Option<Task<()>>,
+    /// The merge requests opened lately, newest last: one opened again shows
+    /// at once and refreshes quietly. And each list as last loaded, by what
+    /// it lists, shown while it loads again.
+    recent: Vec<Rc<Review>>,
+    lists: HashMap<String, Vec<MergeRequest>>,
     /// No token for the host: the sign-in form's host and token fields.
     sign_in: Option<(Entity<InputState>, Entity<InputState>)>,
     sign_in_error: Option<String>,
@@ -184,11 +199,32 @@ impl GitLabView {
         let tree_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search (e.g. *.rs)"));
         cx.subscribe(&tree_search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
         let boxes = crate::edit::Boxes::new(window, cx);
-        for b in [&boxes.comment, &boxes.reply, &boxes.line, &boxes.search] {
+        for b in [&boxes.comment, &boxes.reply, &boxes.line] {
             cx.subscribe(b, |_, _, _: &InputEvent, cx| cx.notify()).detach();
         }
+        // A people picker on a big project asks GitLab as you type.
+        cx.subscribe(&boxes.search, |v, _, ev: &InputEvent, cx| {
+            if matches!(ev, InputEvent::Change) {
+                v.search_people(cx);
+            }
+            cx.notify();
+        })
+        .detach();
         let list_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search or filter results…"));
-        cx.subscribe(&list_search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
+        // A merge request's link pasted into it opens it; on the Projects
+        // tab, what's typed searches GitLab's projects.
+        cx.subscribe_in(&list_search, window, |v, s, ev: &InputEvent, window, cx| {
+            if matches!(ev, InputEvent::Change) {
+                let text = s.read(cx).value().trim().to_string();
+                if v.open_link(&text, window, cx) {
+                    s.update(cx, |s, cx| s.set_value("", window, cx));
+                } else if v.showing_projects() {
+                    v.load_projects(cx);
+                }
+            }
+            cx.notify();
+        })
+        .detach();
         let mut v = Self {
             boxes,
             busy: false,
@@ -198,6 +234,13 @@ impl GitLabView {
             commenting: None,
             hovered_line: None,
             list_search,
+            search: None,
+            projects: Load::Idle,
+            project_counts: HashMap::new(),
+            _projects_task: None,
+            _list_extras_task: None,
+            recent: vec![],
+            lists: HashMap::new(),
             pending_path: None,
             width: Rc::new(std::cell::Cell::new(px(1600.))),
             tree_search,
@@ -212,6 +255,8 @@ impl GitLabView {
             sel_drawn: Default::default(),
             sel_started: false,
             pick: Default::default(),
+            people_found: None,
+            _people_task: None,
             activity: Default::default(),
             newest_first: false,
             activity_menu: false,
@@ -340,22 +385,61 @@ impl GitLabView {
         cx.notify();
     }
 
-    fn load_list(&mut self, cx: &mut Context<Self>) {
+    /// The Projects tab is up (not a project's merge requests).
+    pub(crate) fn showing_projects(&self) -> bool {
+        self.loc.scope == ListScope::Projects && self.loc.browse.is_none() && !self.in_mr()
+    }
+
+    /// A GitLab link, typed or pasted: a merge request opens here, a
+    /// project's merge requests list. False if it's neither.
+    pub(crate) fn open_link(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if api::parse_mr_url(text).is_some() {
+            return self.open_url(text, window, cx).is_ok();
+        }
+        if let Some((host, path)) = api::parse_project_mrs_url(text) {
+            if host != self.host() {
+                self.loc.host = Some(host);
+                self.me = None;
+                self.connect(window, cx);
+            }
+            self.back(cx);
+            self.browse(crate::Browse { id: 0, path }, window, cx);
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn load_list(&mut self, cx: &mut Context<Self>) {
+        if self.showing_projects() {
+            self.load_projects(cx);
+            return;
+        }
         let Some(c) = self.client.clone() else { return };
-        let (scope, me, state) = (self.loc.scope, self.me.clone(), self.loc.state);
-        self.list = Load::Loading;
+        let (scope, me, state, browse) = (self.loc.scope, self.me.clone(), self.loc.state, self.loc.browse.clone());
+        let key = format!("{scope:?} {state:?} {browse:?}");
+        self.list = match self.lists.get(&key) {
+            Some(mrs) => Load::Ready(mrs.clone()),
+            None => Load::Loading,
+        };
+        self._list_extras_task = None;
+        let c2 = c.clone();
         self._list_task = Some(cx.spawn(async move |this, cx| {
             let got = cx
                 .background_spawn(async move {
+                    let c = c2;
                     let me = match me {
                         Some(me) => me,
                         None => c.current_user()?,
                     };
-                    let scope = match scope {
-                        ListScope::ToReview => Scope::ToReview(me.username.clone()),
-                        ListScope::Mine => Scope::Mine,
-                        ListScope::All => Scope::All,
+                    let scope = match (&browse, scope) {
+                        (Some(b), _) => Scope::Project(if b.id != 0 { b.id } else { c.project_id(&b.path)? }),
+                        (None, ListScope::ToReview) => Scope::ToReview(me.username.clone()),
+                        (None, ListScope::Mine) => Scope::Mine,
+                        (None, _) => Scope::All,
                     };
+                    // The list and the other states' counts, together.
+                    let others = [MrState::Opened, MrState::Merged, MrState::Closed, MrState::All].into_iter().filter(|st| *st != state);
+                    c.prefetch(std::iter::once(api::first_page(&api::list_path(&scope, state.api()))).chain(others.map(|st| api::count_path(&scope, st.api()))));
                     let mrs = c.merge_requests_in(scope.clone(), state.api())?;
                     // GitLab's counts on the state tabs: this one's is the list.
                     let counts: Vec<(MrState, u64)> = [MrState::Opened, MrState::Merged, MrState::Closed, MrState::All]
@@ -365,56 +449,92 @@ impl GitLabView {
                             Some((st, n?))
                         })
                         .collect();
-                    // The list's "Approved" badges: one request each, so only the first rows.
-                    let approved: HashSet<u64> = mrs
+                    let project = match scope {
+                        Scope::Project(id) => Some(id),
+                        _ => None,
+                    };
+                    anyhow::Ok((me, mrs, counts, project))
+                })
+                .await;
+            // What the rows show besides themselves, in a second batch: the
+            // list is up meanwhile.
+            let wanted: Vec<(u64, u64, u64, bool)> = got
+                .as_ref()
+                .map(|(_, mrs, _, _)| mrs.iter().take(50).map(|m| (m.id, m.project_id, m.iid, m.user_notes_count > 0)).collect())
+                .unwrap_or_default();
+            let ok = this
+                .update(cx, |v, cx| {
+                    v.list = match got {
+                        // A failed reload keeps the last copy.
+                        Err(_) if v.lists.contains_key(&key) => return,
+                        Ok((me, mrs, counts, project)) => {
+                            v.lists.insert(key.clone(), mrs.clone());
+                            v.list_counts = counts;
+                            v.me = Some(me);
+                            if let (Some(id), Some(b)) = (project, v.loc.browse.as_mut()) {
+                                b.id = id;
+                            }
+                            let people = mrs.iter().flat_map(|m| m.assignees.iter().chain(&m.reviewers));
+                            v.avatars.want(people.collect::<Vec<_>>(), cx, |v| &mut v.avatars);
+                            v.avatars.want(mrs.iter().map(|m| &m.author), cx, |v| &mut v.avatars);
+                            Load::Ready(mrs)
+                        }
+                        Err(e) => Load::Failed(format!("{e:#}")),
+                    };
+                    cx.notify();
+                })
+                .is_ok();
+            if !ok || wanted.is_empty() {
+                return;
+            }
+            let extras = cx
+                .background_spawn(async move {
+                    let mut projects: Vec<u64> = wanted.iter().map(|w| w.1).collect();
+                    projects.sort_unstable();
+                    projects.dedup();
+                    c.prefetch(
+                        wanted
+                            .iter()
+                            .flat_map(|&(_, p, iid, notes)| {
+                                let mut paths = vec![api::approvals_path(p, iid), api::latest_pipeline_path(p, iid)];
+                                if notes {
+                                    paths.push(api::first_page(&api::discussions_path(p, iid)));
+                                }
+                                paths
+                            })
+                            .chain(projects.iter().map(|p| api::project_path(*p))),
+                    );
+                    // The list's "Approved" badges.
+                    let approved: HashSet<u64> = wanted
                         .iter()
-                        .take(50)
-                        .filter(|m| c.approvals(m.project_id, m.iid).is_ok_and(|a| a.approved && !a.approved_by.is_empty()))
-                        .map(|m| m.id)
+                        .filter(|&&(_, p, iid, _)| c.approvals(p, iid).is_ok_and(|a| a.approved && !a.approved_by.is_empty()))
+                        .map(|w| w.0)
                         .collect();
                     // Each project's default branch, to name other targets as GitLab does.
-                    let mut defaults: HashMap<u64, String> = HashMap::new();
-                    for m in mrs.iter().take(50) {
-                        defaults
-                            .entry(m.project_id)
-                            .or_insert_with(|| c.default_branch(m.project_id).unwrap_or_default());
-                    }
+                    let defaults: HashMap<u64, String> = projects.iter().map(|p| (*p, c.default_branch(*p).unwrap_or_default())).collect();
                     // Resolved threads ("1 of 4"), as GitLab's list shows them.
-                    let threads: HashMap<u64, (usize, usize)> = mrs
+                    let threads: HashMap<u64, (usize, usize)> = wanted
                         .iter()
-                        .take(50)
-                        .filter(|m| m.user_notes_count > 0)
-                        .filter_map(|m| {
-                            let ds = c.discussions(m.project_id, m.iid).ok()?;
+                        .filter(|w| w.3)
+                        .filter_map(|&(id, p, iid, _)| {
+                            let ds = c.discussions(p, iid).ok()?;
                             let resolvable: Vec<_> = ds.iter().filter(|d| d.resolvable()).collect();
                             let resolved = resolvable.iter().filter(|d| d.resolved()).count();
-                            Some((m.id, (resolved, resolvable.len())))
+                            Some((id, (resolved, resolvable.len())))
                         })
                         .collect();
-                    let pipelines: HashMap<u64, Pipeline> = mrs
-                        .iter()
-                        .take(50)
-                        .filter_map(|m| Some((m.id, c.latest_pipeline(m.project_id, m.iid).ok()??)))
-                        .collect();
-                    anyhow::Ok((me, mrs, approved, defaults, threads, pipelines, counts))
+                    let pipelines: HashMap<u64, Pipeline> =
+                        wanted.iter().filter_map(|&(id, p, iid, _)| Some((id, c.latest_pipeline(p, iid).ok()??))).collect();
+                    c.forget_prefetched();
+                    (approved, defaults, threads, pipelines)
                 })
                 .await;
             this.update(cx, |v, cx| {
-                v.list = match got {
-                    Ok((me, mrs, approved, defaults, threads, pipelines, counts)) => {
-                        v.list_counts = counts;
-                        v.list_pipelines = pipelines;
-                        v.list_threads = threads;
-                        v.me = Some(me);
-                        v.approved = approved;
-                        v.default_branches = defaults;
-                        let people = mrs.iter().flat_map(|m| m.assignees.iter().chain(&m.reviewers));
-                        v.avatars.want(people.collect::<Vec<_>>(), cx, |v| &mut v.avatars);
-                        v.avatars.want(mrs.iter().map(|m| &m.author), cx, |v| &mut v.avatars);
-                        Load::Ready(mrs)
-                    }
-                    Err(e) => Load::Failed(format!("{e:#}")),
-                };
+                let (approved, defaults, threads, pipelines) = extras;
+                v.approved = approved;
+                v.default_branches = defaults;
+                v.list_threads = threads;
+                v.list_pipelines = pipelines;
                 cx.notify();
             })
             .ok();
@@ -431,6 +551,22 @@ impl GitLabView {
     /// are in it is kept, as GitLab updates its page while you read.
     fn fetch_review(&mut self, target: Target, quiet: bool, cx: &mut Context<Self>) {
         let Some(c) = self.client.clone() else { return };
+        // Seen lately: that, now, while the fresh one loads.
+        if !quiet {
+            let seen = self.recent.iter().rev().find(|r| match &target {
+                Target::Id(p, iid) => r.mr.project_id == *p && r.mr.iid == *iid,
+                Target::Path(path, iid) => r.mr.iid == *iid && r.mr.references.full.rsplit_once('!').is_some_and(|(p, _)| p == path),
+            });
+            if let Some(r) = seen.cloned() {
+                self.loc.project = Some(r.mr.project_id);
+                self.review = Load::Ready(r);
+                self.rebuild_rows(cx);
+            }
+        }
+        let quiet = quiet || self.review.ready().is_some_and(|r| match &target {
+            Target::Id(p, iid) => r.mr.project_id == *p && r.mr.iid == *iid,
+            Target::Path(_, iid) => r.mr.iid == *iid,
+        });
         let quiet = quiet && self.review.ready().is_some();
         if !quiet {
             self.review = Load::Loading;
@@ -465,7 +601,13 @@ impl GitLabView {
                             v.above.clear();
                             v.below.clear();
                         }
-                        v.review = Load::Ready(Rc::new(r));
+                        let r = Rc::new(r);
+                        v.recent.retain(|o| (o.mr.project_id, o.mr.iid) != (r.mr.project_id, r.mr.iid));
+                        v.recent.push(r.clone());
+                        if v.recent.len() > 8 {
+                            v.recent.remove(0);
+                        }
+                        v.review = Load::Ready(r);
                     }
                     // A quiet refresh that fails keeps what's showing.
                     Err(_) if quiet => return,
@@ -490,7 +632,7 @@ impl GitLabView {
         self.avatars.want(users, cx, |v| &mut v.avatars);
     }
 
-    fn open_mr(&mut self, project: u64, iid: u64, cx: &mut Context<Self>) {
+    pub(crate) fn open_mr(&mut self, project: u64, iid: u64, cx: &mut Context<Self>) {
         if self.loc.iid != Some(iid) || self.loc.project != Some(project) {
             self.loc.viewed.clear();
             self.folded.clear();
@@ -545,6 +687,7 @@ impl GitLabView {
 
     fn set_scope(&mut self, scope: ListScope, cx: &mut Context<Self>) {
         self.loc.scope = scope;
+        self.loc.browse = None;
         self.load_list(cx);
     }
 
@@ -668,6 +811,27 @@ impl GitLabView {
             }
             return;
         }
+        // The search has the keys while it's open.
+        if self.search.is_some() {
+            return;
+        }
+        // `/` or `s`: search merge requests, as on GitLab's pages (not
+        // while typing in the list's or the file tree's search).
+        let in_field = [&self.list_search, &self.tree_search].iter().any(|f| f.read(cx).focus_handle(cx).is_focused(window));
+        if (k.key == "/" || k.key == "s") && !k.modifiers.modified() && !in_field && self.sign_in.is_none() {
+            self.open_search(window, cx);
+            cx.stop_propagation();
+            return;
+        }
+        // ⌘V with a GitLab link on the clipboard opens it, as GitLab's own
+        // search box takes a pasted link.
+        if k.key == "v" && k.modifiers.platform && !k.modifiers.shift {
+            let text = cx.read_from_clipboard().and_then(|c| c.text()).unwrap_or_default();
+            if self.open_link(text.trim(), window, cx) {
+                cx.stop_propagation();
+                return;
+            }
+        }
         // ⌘C copies selected code (selected markdown copies itself).
         if k.key == "c" && k.modifiers.platform && !k.modifiers.shift && self.copy_selection(cx) {
             cx.stop_propagation();
@@ -695,6 +859,8 @@ impl GitLabView {
             }
             "n" => self.jump_thread(true, cx),
             "p" => self.jump_thread(false, cx),
+            // The file being read: Viewed, or not any more.
+            "v" if self.loc.section == Section::Changes => self.toggle_viewed_here(cx),
             _ => return,
         }
         cx.stop_propagation();
@@ -905,6 +1071,11 @@ impl Tab for GitLabView {
                 "commenting": self.commenting,
                 "side_menu": self.side_menu.map(|m| format!("{m:?}")),
                 "selection": self.sel.map(|s| format!("{s:?}")),
+            },
+            "projects": {
+                "load": self.projects.name(),
+                "error": self.projects.error(),
+                "items": self.projects.ready().map(|ps| ps.iter().map(|p| json!({ "path": p.path_with_namespace, "open": self.project_counts.get(&p.id) })).collect::<Vec<_>>()),
             },
         })
     }
@@ -1132,13 +1303,32 @@ impl Tab for GitLabView {
                             self.pick_milestone(id, window, cx)
                         }
                         _ => {
-                            let id = r.members.iter().find(|u| u.username == name).context("no such member")?.id;
+                            let found = self.people_found.iter().flat_map(|(_, f)| f);
+                            let id = r.members.iter().chain(found).find(|u| u.username == name).context("no such member")?.id;
                             self.pick_person(id, window, cx)
                         }
                     }
                 }
                 if args.get("close").and_then(Value::as_bool) == Some(true) {
                     self.close_side_menu(window, cx);
+                }
+            }
+            // A project's merge requests, by path or id; `{}`: back to the projects.
+            "browse" => match (str_arg("path"), num_arg("id")) {
+                (None, None) => self.all_projects(cx),
+                (path, id) => {
+                    let b = crate::Browse { id: id.unwrap_or(0), path: path.unwrap_or_default().to_string() };
+                    self.back(cx);
+                    self.browse(b, window, cx);
+                }
+            },
+            // Paste a GitLab link into the list's search, as a person would.
+            "paste" => {
+                let text = str_arg("text").context("missing text")?.to_string();
+                self.list_search.update(cx, |s, cx| s.set_value(text, window, cx));
+                let value = self.list_search.read(cx).value().trim().to_string();
+                if self.open_link(&value, window, cx) {
+                    self.list_search.update(cx, |s, cx| s.set_value("", window, cx));
                 }
             }
             "cancel" => {
@@ -1203,6 +1393,8 @@ impl GitLabView {
             let full = &r.mr.references.full;
             let project = full.rsplit_once('!').map_or(full.as_str(), |(p, _)| p);
             parts.extend(project.split('/').map(str::to_string));
+        } else if let Some(b) = &self.loc.browse {
+            parts.extend(b.path.split('/').map(str::to_string));
         }
         for (i, part) in parts.into_iter().enumerate() {
             if i > 0 {
@@ -1215,7 +1407,7 @@ impl GitLabView {
                 .id("gl-crumb-mrs")
                 .cursor_pointer()
                 .hover(|s| s.underline())
-                .child("Merge requests")
+                .child(if self.showing_projects() { "Projects" } else { "Merge requests" })
                 .on_click(cx.listener(|v, _, _, cx| v.back(cx))),
         );
         if let Some(iid) = self.loc.iid {
@@ -1361,8 +1553,10 @@ impl GitLabView {
             (ListScope::ToReview, "Reviews"),
             (ListScope::Mine, "Created by me"),
             (ListScope::All, "All"),
+            (ListScope::Projects, "Projects"),
         ];
-        let count = self.list.ready().map(Vec::len);
+        let projects = self.showing_projects();
+        let count = if projects { self.projects.ready().map(|p| p.len()) } else { self.list.ready().map(Vec::len) };
         let states = [MrState::Opened, MrState::Merged, MrState::Closed, MrState::All];
         let state_switch = div().flex().gap(px(1.)).rounded(px(8.)).overflow_hidden().children(states.map(|st| {
             let on = self.loc.state == st;
@@ -1400,8 +1594,18 @@ impl GitLabView {
                 .when_some(count.filter(|_| on), |d, n| d.child(count_badge(n)))
                 .on_click(cx.listener(move |v, _, _, cx| v.set_scope(s, cx)))
         }));
-        let tabs = tabs.child(div().flex_1()).child(state_switch);
-        let status = self.status_line(self.list.name(), self.list.error(), cx);
+        // A project's list: its name over the states, and the way back.
+        let browsing = self.loc.browse.clone();
+        let tabs = match &browsing {
+            Some(_) => div().flex().items_center().border_b_1().border_color(c(RAISED)).py_2().child(div().flex_1()).child(state_switch),
+            None if projects => tabs,
+            None => tabs.child(div().flex_1()).child(state_switch),
+        };
+        let status = if projects {
+            self.status_line(self.projects.name(), self.projects.error(), cx)
+        } else {
+            self.status_line(self.list.name(), self.list.error(), cx)
+        };
         let now = time::now();
         let query = self.list_search.read(cx).value().trim().to_lowercase();
         let empty = match self.loc.state {
@@ -1410,7 +1614,8 @@ impl GitLabView {
             MrState::Closed => "No closed merge requests here.",
             MrState::All => "No merge requests here.",
         };
-        let rows = self.list.ready().map(|mrs| {
+        let rows = if projects { Some(self.project_rows(cx)) } else { None };
+        let rows = rows.or_else(|| self.list.ready().map(|mrs| {
             if mrs.is_empty() {
                 return vec![div().py_6().flex().justify_center().text_color(c(MUTED)).child(empty).into_any_element()];
             }
@@ -1557,21 +1762,38 @@ impl GitLabView {
                         .into_any_element()
                 })
                 .collect()
-        });
+        }));
+        let heading = |t: String| {
+            div().text_size(px(25.)).line_height(px(31.25)).font_weight(FontWeight::SEMIBOLD).text_color(c(HEADING)).child(t)
+        };
+        let title = match &browsing {
+            Some(b) => div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .id("gl-all-projects")
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .text_size(px(13.))
+                        .text_color(c(LINK))
+                        .cursor_pointer()
+                        .hover(|s| s.underline())
+                        .child(app_icon("chevron-left", 14., c(LINK)))
+                        .child("All projects")
+                        .on_click(cx.listener(|v, _, _, cx| v.all_projects(cx))),
+                )
+                .child(heading(b.path.clone()))
+                .child(div().text_color(c(MUTED)).child("Merge requests")),
+            None => div().child(heading(if projects { "Projects".into() } else { "Merge requests".into() })),
+        };
         div()
             .size_full()
             .flex()
             .flex_col()
-            .child(
-                div()
-                    .px_4()
-                    .pt_2()
-                    .text_size(px(25.))
-                    .line_height(px(31.25))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(c(HEADING))
-                    .child("Merge requests"),
-            )
+            .child(div().px_4().pt_2().child(title))
             .child(div().px_4().pt_2().child(tabs))
             .child(
                 div()
@@ -1587,7 +1809,7 @@ impl GitLabView {
                             Input::new(&self.list_search).prefix(app_icon("search", 14., c(MUTED))).cleanable(true),
                         ),
                     )
-                    .child(self.sort_control(cx)),
+                    .when(!projects, |d| d.child(self.sort_control(cx))),
             )
             .child(
                 div()
@@ -1715,5 +1937,6 @@ impl Render for GitLabView {
             .text_color(c(TEXT))
             .when(self.sign_in.is_none(), |d| d.child(self.breadcrumb(cx)))
             .child(div().flex_1().min_h(px(0.)).child(page))
+            .children(self.search_overlay(cx))
     }
 }

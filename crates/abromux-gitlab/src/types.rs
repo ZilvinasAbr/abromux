@@ -27,6 +27,22 @@ pub struct TaskCompletion {
     pub completed_count: u32,
 }
 
+/// A project, as the projects list shows it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Project {
+    pub id: u64,
+    pub name: String,
+    /// `Group / Project`
+    pub name_with_namespace: String,
+    /// `group/project`
+    pub path_with_namespace: String,
+    pub description: Option<String>,
+    pub last_activity_at: String,
+    pub star_count: u32,
+    pub web_url: String,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Milestone {

@@ -36,3 +36,33 @@ fn every_file_of_a_huge_merge_request() {
     let body = Body::local(old.as_deref(), new.as_deref(), f.path());
     assert_eq!(body.counts(), (40000, 0));
 }
+
+/// curl's batch (one process, parallel transfers over reused connections)
+/// answers as one request at a time does, statuses and headers included.
+#[test]
+fn a_batch_answers_as_single_requests_do() {
+    if std::env::var("ABROMUX_GITLAB_LIVE").is_err() {
+        return;
+    }
+    use abromux_gitlab::api::Transport;
+    let base = "http://localhost:8929/api/v4";
+    let token = "glpat-abromux-dev-bob-token";
+    let urls: Vec<String> = [
+        "version",
+        "user",
+        "projects/alice%2Freview-fixtures/merge_requests?state=all&per_page=2",
+        "projects/alice%2Freview-fixtures/merge_requests/1/discussions?per_page=100&page=1",
+        "projects/no%2Fsuch-project",
+    ]
+    .iter()
+    .map(|p| format!("{base}/{p}"))
+    .collect();
+    let batch = Curl.get_many(&urls, token);
+    assert_eq!(batch.len(), urls.len());
+    for (url, got) in urls.iter().zip(batch) {
+        let got = got.unwrap();
+        let one = Curl.get(url, token).unwrap();
+        assert_eq!((got.status, got.next_page, got.total), (one.status, one.next_page, one.total), "{url}");
+        assert_eq!(got.body, one.body, "{url}");
+    }
+}

@@ -168,6 +168,14 @@ pub struct OpenPlugin {
     pub id: String,
 }
 
+/// Asks for a link plugin `id` opens (its `open_link` palette entry) and
+/// opens it in a new tab.
+#[derive(Clone, PartialEq, serde::Deserialize, gpui::Action)]
+#[action(namespace = abromux, no_json)]
+pub struct OpenPluginLink {
+    pub id: String,
+}
+
 /// Runs `"commands"[index]` of the config file, or of the project file
 /// `project` (`settings::find_project`).
 #[derive(Clone, PartialEq, serde::Deserialize, gpui::Action)]

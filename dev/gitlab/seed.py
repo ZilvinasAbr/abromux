@@ -18,6 +18,9 @@ with a repo, and merge requests that cover what the review UI must handle:
   !9  "Vendor everything"       past GitLab's diff limits: 1,203 files, ~70,000 lines,
                                 a 40,000-line file and a 300 KB one-line file
 
+Also alice/api-gateway (one open merge request) and alice/website (none),
+for the Projects tab: made once and kept.
+
 Stdlib only. Rerunning deletes and recreates the project.
 """
 import argparse, json, os, shutil, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request
@@ -262,8 +265,31 @@ def thread(pid, iid, refs, who, body, path, new_line=None, old_line=None, old_pa
                 {"body": body, "position": pos}, sudo=who)
 
 
+def more_projects(alice, bob):
+    """Two more of alice's projects bob is in, for the Projects tab: one with
+    an open merge request, one without. Kept between runs."""
+    for name, mr in (("api-gateway", True), ("website", False)):
+        if call("GET", f"/projects/alice%2F{name}", ok404=True):
+            continue
+        p = call("POST", "/projects", {"name": name, "path": name, "visibility": "private",
+                                       "initialize_with_readme": True,
+                                       "description": f"The {name.replace('-', ' ')}."}, sudo="alice")
+        call("POST", f"/projects/{p['id']}/members", {"user_id": bob["id"], "access_level": 30})
+        if mr:
+            base = p.get("default_branch") or "main"
+            call("POST", f"/projects/{p['id']}/repository/commits", {
+                "branch": "timeouts", "start_branch": base,
+                "commit_message": "Time out slow upstreams",
+                "actions": [{"action": "create", "file_path": "timeouts.md",
+                             "content": "Upstreams get 30 seconds.\n"}]}, sudo="alice")
+            call("POST", f"/projects/{p['id']}/merge_requests", {
+                "source_branch": "timeouts", "target_branch": base,
+                "title": "Time out slow upstreams", "reviewer_ids": [bob["id"]]}, sudo="alice")
+
+
 def main():
     alice, bob = user("alice", "Alice Author"), user("bob", "Bob Reviewer")
+    more_projects(alice, bob)
     # GitLab only marks a deleted project for deletion; a second DELETE with
     # permanently_remove removes it, so old copies don't linger in "All open".
     # That includes copies earlier runs left marked.

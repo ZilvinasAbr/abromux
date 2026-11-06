@@ -19,6 +19,8 @@ mod edit;
 mod emoji;
 pub mod highlight;
 mod mr;
+mod search;
+mod projects;
 mod select;
 mod side;
 mod style;
@@ -37,7 +39,15 @@ pub const PLUGIN: Plugin = Plugin {
     title: "New GitLab Tab",
     open,
     assets: &ASSETS,
+    claims,
+    open_link: Some("Open GitLab Merge Request…"),
 };
+
+/// A merge request's page on any GitLab (`…/-/merge_requests/12`), or a
+/// project's merge requests (`…/group/project/-/merge_requests`).
+fn claims(url: &str) -> bool {
+    api::parse_mr_url(url).is_some() || api::parse_project_mrs_url(url).is_some()
+}
 
 macro_rules! icons {
     ($($name:literal),*) => {
@@ -90,6 +100,18 @@ pub enum ListScope {
     ToReview,
     Mine,
     All,
+    /// Your projects, to browse one's merge requests.
+    Projects,
+}
+
+/// The project whose merge requests the list shows (picked from Projects,
+/// or a project's merge requests link). `id` 0: found by `path` on load.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Browse {
+    pub id: u64,
+    /// `group/project`
+    pub path: String,
 }
 
 /// Which state of merge requests the list shows, as GitLab's state tabs.
@@ -191,6 +213,9 @@ impl ListSort {
 pub struct Location {
     pub host: Option<String>,
     pub scope: ListScope,
+    /// A project's merge requests instead of the scope's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browse: Option<Browse>,
     pub state: MrState,
     /// The list's order, and which way.
     pub sort: ListSort,
@@ -221,13 +246,18 @@ impl Location {
 fn open(params: &Value, window: &mut Window, cx: &mut App) -> anyhow::Result<TabHandle> {
     let url = params.get("url").and_then(Value::as_str).map(str::to_string);
     let mut loc: Location = serde_json::from_value(params.clone()).unwrap_or_default();
-    if let Some(u) = &url {
+    // A project's merge requests link: the list of those.
+    let project_list = url.as_deref().and_then(api::parse_project_mrs_url);
+    if let Some((host, path)) = &project_list {
+        loc.host = Some(host.clone());
+        loc.browse = Some(Browse { id: 0, path: path.clone() });
+    } else if let Some(u) = &url {
         let (host, _, _) = api::parse_mr_url(u).ok_or_else(|| anyhow::anyhow!("not a merge request URL: {u}"))?;
         loc.host = Some(host);
     }
     let view = cx.new(|cx| {
         let mut v = view::GitLabView::new(loc, window, cx);
-        if let Some(u) = &url {
+        if let Some(u) = url.as_ref().filter(|_| project_list.is_none()) {
             let _ = abromux_plugin::Tab::command(&mut v, "open", &serde_json::json!({ "url": u }), window, cx);
         }
         v
@@ -237,6 +267,55 @@ fn open(params: &Value, window: &mut Window, cx: &mut App) -> anyhow::Result<Tab
 
 /// Everything the review of merge request `iid` in `project` needs. Blocks.
 pub fn load_review(c: &api::Client, project: u64, iid: u64) -> anyhow::Result<review::Review> {
+    use api::first_page;
+    let t0 = std::time::Instant::now();
+    let lap = |what: &str| {
+        if std::env::var_os("ABROMUX_GITLAB_TIMING").is_some() {
+            eprintln!("gitlab timing {what}: {:?}", t0.elapsed());
+        }
+    };
+    // Everything that doesn't depend on something else, in one go: against
+    // a far-away GitLab that's one round trip instead of twenty. GitLab's
+    // GraphQL (several reviewers?) beside it.
+    let mrp = |s: &str| format!("projects/{project}/merge_requests/{iid}{s}");
+    let pp = |s: &str| format!("projects/{project}/{s}");
+    let multiple = std::thread::scope(|s| {
+        let multiple = s.spawn(|| c.allows_multiple(project, iid));
+        c.prefetch([
+        mrp("?include_diverged_commits_count=true"),
+        first_page(&mrp("/diffs")),
+        first_page(&mrp("/discussions")),
+        mrp("/approvals"),
+        first_page(&mrp("/commits")),
+        first_page(&pp("members/all")),
+        first_page(&mrp("/versions")),
+        first_page(&pp("labels")),
+        first_page(&pp("milestones?state=active")),
+        first_page(&mrp("/award_emoji")),
+        first_page(&mrp("/closes_issues")),
+        first_page(&mrp("/draft_notes")),
+        first_page(&mrp("/reviewers")),
+        first_page(&mrp("/pipelines")),
+        first_page(&mrp("/resource_state_events")),
+        first_page(&mrp("/resource_label_events")),
+        first_page(&mrp("/resource_milestone_events")),
+        ]);
+        multiple.join().ok().and_then(Result::ok)
+    });
+    lap("batch");
+    let r = load_prefetched(c, project, iid, multiple, &lap);
+    lap("done");
+    c.forget_prefetched();
+    r
+}
+
+fn load_prefetched(
+    c: &api::Client,
+    project: u64,
+    iid: u64,
+    multiple: Option<(bool, bool)>,
+    lap: &dyn Fn(&str),
+) -> anyhow::Result<review::Review> {
     let mr = c.merge_request(project, iid)?;
     let diffs = c.diffs(project, iid)?;
     let mut r = review::Review::build(
@@ -247,7 +326,7 @@ pub fn load_review(c: &api::Client, project: u64, iid: u64) -> anyhow::Result<re
         c.commits(project, iid)?,
     );
     // Role badges are a nicety: a token that can't list members still reviews.
-    if let Ok(members) = c.members(project) {
+    if let Ok((members, more)) = c.members_first(project) {
         r.roles = members.iter().filter_map(|m| Some((m.id, m.role()?))).collect();
         // members/all lists someone once per group they're in.
         let mut people: Vec<types::User> = vec![];
@@ -258,6 +337,7 @@ pub fn load_review(c: &api::Client, project: u64, iid: u64) -> anyhow::Result<re
         }
         people.sort_by_key(|u| u.name.to_lowercase());
         r.members = people;
+        r.members_more = more;
     }
     r.versions = c.versions(project, iid).unwrap_or_default();
     // The single merge request has label names only: colors from the project's.
@@ -278,10 +358,26 @@ pub fn load_review(c: &api::Client, project: u64, iid: u64) -> anyhow::Result<re
     if let Some(sha) = r.mr.merge_commit_sha.clone().or_else(|| r.mr.squash_commit_sha.clone()).filter(|_| r.mr.state == "merged") {
         r.merge_pipeline = c.pipeline_for_sha(project, &sha).ok().flatten();
     }
-    // Unknown (an old GitLab): let it pick several and show what GitLab kept.
+    // The roles of whoever commented that the first hundred members don't
+    // cover: one short request each, together.
     let path = r.mr.references.full.split('!').next().unwrap_or_default().to_string();
-    r.multiple = c.allows_multiple(&path, iid).unwrap_or((true, true));
+    let authors: Vec<u64> = {
+        let threads = r.general.iter().chain(&r.outdated).chain(r.files.iter().flat_map(|f| f.threads.iter().map(|(_, _, d)| d)));
+        let mut ids: Vec<u64> = threads.flat_map(|d| d.notes.iter().map(|n| n.author.id)).chain([r.mr.author.id]).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids.retain(|id| *id != 0 && !r.roles.contains_key(id));
+        if r.members_more { ids } else { vec![] }
+    };
+    lap("built");
+    c.prefetch(authors.iter().map(|id| api::member_path(project, *id)));
+    let roles: Vec<(u64, &'static str)> = authors.iter().filter_map(|id| Some((*id, c.member(project, *id).ok()?.role()?))).collect();
+    // Unknown (an old GitLab): let it pick several and show what GitLab kept.
+    r.multiple = multiple.unwrap_or((true, true));
+    r.roles.extend(roles);
+    lap("roles");
     fill_in(c, &mut r, &path);
+    lap("fill in");
     // "closed", "merged", "reopened": in the activity as GitLab's own notes.
     for e in c.state_events(project, iid).unwrap_or_default() {
         r.system.push(types::Note {
@@ -506,6 +602,7 @@ mod tests {
         let loc = Location {
             host: Some("http://gl.test".into()),
             scope: ListScope::All,
+            browse: Some(super::Browse { id: 7, path: "g/p".into() }),
             state: MrState::Merged,
             sort: ListSort::Title,
             ascending: true,

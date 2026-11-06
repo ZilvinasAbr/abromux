@@ -31,6 +31,9 @@ pub enum Mode {
     Workspaces,
     /// ⇧⌘I: name a new workspace folder. No rows; Enter makes it.
     NewFolder,
+    /// A plugin's "Open … link": paste a link it opens. No rows; Enter
+    /// opens it in a new tab.
+    OpenLink(&'static str),
 }
 
 enum Target {
@@ -73,9 +76,14 @@ fn commands(project: Option<&Path>, cx: &App) -> Vec<Cmd> {
     let builtin = keymap::ACTIONS
         .iter()
         .filter_map(|a| a.title.map(|t| (t.to_string(), None, vec![], (a.action)())));
-    let plugins = crate::plugins::all().iter().map(|p| -> Cmd {
+    let plugins = crate::plugins::all().iter().flat_map(|p| -> Vec<Cmd> {
         let action = Box::new(keymap::OpenPlugin { id: p.id.into() });
-        (p.title.into(), None, vec![p.id.into()], action)
+        let mut cmds: Vec<Cmd> = vec![(p.title.into(), None, vec![p.id.into()], action)];
+        if let Some(title) = p.open_link {
+            let action = Box::new(keymap::OpenPluginLink { id: p.id.into() });
+            cmds.push((title.into(), None, vec![p.id.into(), "url".into(), "link".into(), "paste".into()], action));
+        }
+        cmds
     });
     let builtin = builtin.chain(plugins);
     // A project file that doesn't parse shows its error as a command.
@@ -149,21 +157,37 @@ impl AbroMux {
         let entries = match mode {
             Mode::Commands => self.command_entries(window, cx),
             Mode::Workspaces => self.workspace_entries(cx),
-            Mode::NewFolder => vec![],
+            Mode::NewFolder | Mode::OpenLink(_) => vec![],
         };
         let suggested = crate::folder::random_name();
         let placeholder = match mode {
             Mode::Commands => "Type a command".to_string(),
             Mode::Workspaces => "Search workspaces".to_string(),
             Mode::NewFolder => suggested.clone(),
+            Mode::OpenLink(_) => "Paste a link".to_string(),
         };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        // A link of that kind on the clipboard is there to start with,
+        // selected: Enter opens it, a paste replaces it.
+        let clipboard_link = match mode {
+            Mode::OpenLink(id) => cx
+                .read_from_clipboard()
+                .and_then(|c| c.text())
+                .map(|t| t.trim().to_string())
+                .filter(|t| crate::plugins::find(id).is_some_and(|p| (p.claims)(t))),
+            _ => None,
+        };
+        if let Some(link) = &clipboard_link {
+            input.update(cx, |i, cx| i.set_value(link.clone(), window, cx));
+        }
         cx.subscribe_in(
             &input,
             window,
             |this, input, ev: &InputEvent, _, cx| match ev {
-                InputEvent::Change if this.palette.as_ref().is_some_and(|p| p.mode == Mode::NewFolder) => {
-                    // The folder path under the input follows the name.
+                InputEvent::Change
+                    if this.palette.as_ref().is_some_and(|p| matches!(p.mode, Mode::NewFolder | Mode::OpenLink(_))) =>
+                {
+                    // The line under the input follows what's typed.
                     cx.notify()
                 }
                 InputEvent::Change => {
@@ -182,7 +206,11 @@ impl AbroMux {
             },
         )
         .detach();
-        input.update(cx, |i, cx| i.focus(window, cx));
+        if clipboard_link.is_some() {
+            crate::focus_selected(&input, window, cx);
+        } else {
+            input.update(cx, |i, cx| i.focus(window, cx));
+        }
         let mut palette = Palette {
             mode,
             input,
@@ -225,6 +253,16 @@ impl AbroMux {
             let typed = crate::one_line(&p.input.read(cx).value());
             let name = if typed.is_empty() { p.suggested } else { typed };
             return self.new_folder_workspace(name, window, cx);
+        }
+        if let Mode::OpenLink(id) = p.mode {
+            let url = p.input.read(cx).value().trim().to_string();
+            // Not one it opens: the palette stays, saying so.
+            if !crate::plugins::find(id).is_some_and(|pl| (pl.claims)(&url)) {
+                self.palette = Some(p);
+                return cx.notify();
+            }
+            self.restore_focus(p.prev_focus, window, cx);
+            return self.open_plugin_link(id, &url, window, cx);
         }
         let Some(&(ix, _)) = p.matches.get(p.selected) else {
             self.palette = Some(p);
@@ -408,6 +446,16 @@ impl AbroMux {
                     tilde(&dir.to_string_lossy())
                 )
                 .into()
+            }
+            Mode::OpenLink(id) => {
+                let url = p.input.read(cx).value().trim().to_string();
+                let plugin = crate::plugins::find(id);
+                let what = plugin.and_then(|pl| pl.open_link).unwrap_or("Open link").trim_end_matches('…');
+                match plugin {
+                    _ if url.is_empty() => format!("{what}: paste its link  ·  Esc to cancel").into(),
+                    Some(pl) if (pl.claims)(&url) => "Enter to open it in a new tab  ·  Esc to cancel".into(),
+                    _ => format!("Not a link this opens ({what})  ·  Esc to cancel").into(),
+                }
             }
         };
         Some(

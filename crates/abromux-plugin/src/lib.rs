@@ -68,6 +68,12 @@ pub struct Plugin {
     /// Files abromux serves to gpui's asset loading, e.g. icons for
     /// `svg().path(…)`: (path, bytes). Paths start with `plugins/<id>/`.
     pub assets: &'static [(&'static str, &'static [u8])],
+    /// Web links it shows itself: a ⌘-clicked or opened link it claims
+    /// opens as its tab (`open` with `{"url": …}`) instead of a browser.
+    pub claims: fn(&str) -> bool,
+    /// A command palette entry that asks for one of those links and opens
+    /// it, e.g. "Open GitLab Merge Request…" (None: no such entry).
+    pub open_link: Option<&'static str>,
 }
 
 /// A plugin tab, as abromux holds it.

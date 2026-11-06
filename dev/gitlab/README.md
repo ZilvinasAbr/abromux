@@ -43,6 +43,24 @@ ABROMUX_GITLAB_LIVE=1 cargo test -p abromux-gitlab   # also against the live Git
 dev/gitlab/record-fixtures.sh                        # re-record tests/fixtures after reseeding
 ```
 
+## A GitLab far away
+
+The Docker GitLab answers in milliseconds, so it hides what a remote one
+costs. `slow-proxy.py` puts it behind what a server across the internet
+charges: each new connection waits for its handshakes (150 ms), each request
+for its round trip (120 ms), and connections stay open between requests.
+`load-time.sh` times the list and some reviews through it, over the socket:
+
+```bash
+dev/gitlab/slow-proxy.py &                    # http://localhost:8930
+dev/gitlab/load-time.sh                       # list, then !7, !1 and !9
+ABROMUX_GITLAB_TIMING=1 dev/gitlab/load-time.sh   # and the review's phases in the app's log
+```
+
+Mind that this GitLab runs its web server in one process (`compose.yml`), so
+it answers one request at a time; a real one runs several and takes a
+batch's requests together.
+
 ## The app
 
 `build.sh` builds abromux on a copy of gpui that can render its own window
@@ -66,7 +84,8 @@ The tab's commands (`surface.plugin`) do what clicks do and answer with what
 it shows: `state`, `open {url | iid}`, `section {name}`, `file {path}`,
 `fold {path}`, `viewed {path}`, `tree`, `parallel {on}`, `expand {path, hunk, lines}`,
 `compare {base, head}`, `next_thread`, `prev_thread`, `thread {body}`, `search {query}`,
-`list {scope}`, `back`, `refresh`. Real input goes through `debug.input`
+`list {scope, state}`, `browse {path | id}` (a project's merge requests; `{}`: the projects),
+`paste {text}` (into the list's search), `back`, `refresh`. Real input goes through `debug.input`
 (`key:n`, `ui:down,X,Y;ui:up,X,Y`, `ui:scroll,X,Y,DY`).
 
 The loop in one command, tests + build + a screenshot in `target/shots/`:
