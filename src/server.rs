@@ -1314,6 +1314,88 @@ impl AbroMux {
                 cx.notify();
                 json!({ "visible": self.sidebar })
             }
+            "mr.list" => {
+                let st = crate::gitlab::store(cx).read(cx);
+                let ws_id = self.workspaces[self.active].id;
+                let here: Vec<_> = st.pinned.get(&ws_id).cloned().unwrap_or_default();
+                let group = str_param(p, "group");
+                let list: Vec<Value> = st
+                    .mrs
+                    .values()
+                    .filter_map(|m| {
+                        let mut groups = vec![];
+                        if here.contains(&m.key) {
+                            groups.push("workspace");
+                        }
+                        if m.roles.any() {
+                            groups.push("mine");
+                        }
+                        if m.inspected_at.is_some() {
+                            groups.push("recent");
+                        }
+                        if st.open.contains(&m.key) {
+                            groups.push("open");
+                        }
+                        if let Some(g) = group
+                            && !groups.contains(&g)
+                        {
+                            return None;
+                        }
+                        let l = m.light.as_ref();
+                        Some(json!({
+                            "ref": m.key.reference(),
+                            "title": m.title(),
+                            "url": l.map(|l| l.web_url.clone()),
+                            "state": l.map(|l| l.state.clone()),
+                            "draft": l.map(|l| l.draft),
+                            "author": l.map(|l| l.author.clone()),
+                            "source_branch": l.map(|l| l.source_branch.clone()),
+                            "target_branch": l.map(|l| l.target_branch.clone()),
+                            "pipeline": l.and_then(|l| l.pipeline.clone()),
+                            "merge_status": l.and_then(|l| l.merge_status.clone()),
+                            "updated_at": l.map(|l| l.updated_at.clone()),
+                            "fetched_age_seconds": (m.fetched_at > 0)
+                                .then(|| crate::gitlab::now_secs().saturating_sub(m.fetched_at)),
+                            "review_cached": m.review.as_ref().map(|r| json!({
+                                "bytes": r.bytes, "current": !m.review_stale(),
+                            })),
+                            "loading": st.refreshing(&m.key),
+                            "groups": groups,
+                        }))
+                    })
+                    .collect();
+                json!(list)
+            }
+            "mr.open" => {
+                let r = str_param(p, "ref").context("missing ref")?;
+                let key = self.open_mr_ref(r, window, cx)?;
+                let surface = self.ws().focused_surface().map(|s| self.sref(s));
+                json!({ "ref": key.reference(), "surface": surface })
+            }
+            "mr.refresh" => {
+                let store = crate::gitlab::store(cx);
+                match str_param(p, "ref") {
+                    Some(r) => {
+                        let key = crate::gitlab::model::MrKey::parse(r)
+                            .context("not a merge request: give its URL or group/project!iid")?;
+                        store.update(cx, |s, cx| {
+                            s.refetch(&key);
+                            cx.notify();
+                        });
+                    }
+                    None => store.update(cx, |s, cx| s.refresh_all(cx)),
+                }
+                json!(null)
+            }
+            "mr.panel" => {
+                self.mr_panel = match str_param(p, "state").unwrap_or("toggle") {
+                    "show" => true,
+                    "hide" => false,
+                    _ => !self.mr_panel,
+                };
+                cx.notify();
+                json!({ "visible": self.mr_panel })
+            }
             "window.focus" => {
                 cx.activate(true);
                 window.activate_window();

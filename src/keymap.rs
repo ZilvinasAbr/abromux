@@ -98,6 +98,12 @@ pub const ACTIONS: &[Act] = {
         "flashPane", Some("Flash Focused Pane"), FlashPane, [(None, ["cmd-shift-h"])];
         "toggleZoom", Some("Toggle Pane Zoom"), ToggleZoom, [(None, ["cmd-shift-enter"])];
         "toggleSidebar", Some("Toggle Sidebar"), ToggleSidebar, [(None, ["cmd-b"])];
+        "toggleMergeRequests", Some("Toggle Merge Requests Panel"), ToggleMergeRequests,
+            [(None, ["alt-cmd-b"])];
+        "goToMergeRequest", Some("Go to Merge Request…"), GoToMergeRequest,
+            [(None, ["cmd-shift-m"])];
+        "refreshMergeRequests", Some("Refresh Merge Requests"), RefreshMergeRequests,
+            [(None, [])];
         "showNotifications", Some("Show Notifications"), ToggleNotifications, [(None, ["cmd-i"])];
         "jumpToUnread", Some("Jump to Latest Unread"), JumpToUnread, [(None, ["cmd-shift-u"])];
         "toggleUnread", Some("Toggle Unread"), ToggleUnread, [(None, ["alt-cmd-u"])];

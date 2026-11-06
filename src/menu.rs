@@ -106,6 +106,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Command Palette…", CommandPalette),
                 MenuItem::action("Go to Workspace…", WorkspaceSwitcher),
+                MenuItem::action("Go to Merge Request…", crate::GoToMergeRequest),
                 MenuItem::separator(),
                 MenuItem::action("Reopen Previous Session", ReopenSession),
                 MenuItem::action("Import cmux Session", ImportCmuxSession),
@@ -140,6 +141,7 @@ pub fn set_menus(cx: &mut App) {
             name: "View".into(),
             items: vec![
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
+                MenuItem::action("Toggle Merge Requests Panel", crate::ToggleMergeRequests),
                 MenuItem::action("Toggle Pane Zoom", ToggleZoom),
                 MenuItem::action("Flash Focused Pane", FlashPane),
                 MenuItem::separator(),

@@ -75,9 +75,67 @@ pub struct Settings {
     pub automation: Automation,
     pub browser: BrowserSettings,
     pub notifications: NotificationSettings,
+    pub gitlab: GitlabSettings,
 }
 
 impl Global for Settings {}
+
+/// The GitLab merge requests panel and cache (`crate::gitlab`).
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct GitlabSettings {
+    /// The GitLab the panel and cache use, e.g. `gitlab.example.com`. None:
+    /// the one signed in to in a GitLab tab. Its token is the tab's (the
+    /// Keychain). Workspace checkouts whose remote is elsewhere are left out.
+    pub host: Option<String>,
+    /// "Mine" also holds merge requests you're asked to review.
+    pub include_review_requests: bool,
+    /// "Mine" also holds merge requests assigned to you.
+    pub include_assigned: bool,
+    /// Merge requests you opened that stay cached, newest first.
+    pub recent_limit: u32,
+    /// Disk space for cached merge requests, in MB. Past it, the
+    /// longest-unopened ones' go first; they stay listed.
+    pub cache_size_mb: u32,
+    /// A file whose diff is bigger (KB) is fetched when it's shown.
+    pub max_file_diff_kb: u32,
+    /// Past this much of a merge request's diff (MB), files are fetched
+    /// when they're shown.
+    pub max_mr_diff_mb: u32,
+    /// …or after this many files.
+    pub max_mr_diff_files: u32,
+    /// How many of the most recently opened merge requests poll as often
+    /// as your own.
+    pub frequent_recent: u32,
+    /// Seconds between checks of a merge request on screen.
+    pub on_screen_seconds: u32,
+    /// …of one whose pipeline is running.
+    pub running_pipeline_seconds: u32,
+    /// …of yours, the workspaces' and the frequent recent ones.
+    pub mine_seconds: u32,
+    /// …of the other recent ones.
+    pub recent_seconds: u32,
+}
+
+impl Default for GitlabSettings {
+    fn default() -> Self {
+        Self {
+            host: None,
+            include_review_requests: true,
+            include_assigned: false,
+            recent_limit: 50,
+            cache_size_mb: 500,
+            max_file_diff_kb: 1024,
+            max_mr_diff_mb: 20,
+            max_mr_diff_files: 3000,
+            frequent_recent: 10,
+            on_screen_seconds: 20,
+            running_pipeline_seconds: 30,
+            mine_seconds: 60,
+            recent_seconds: 300,
+        }
+    }
+}
 
 /// How terminals come back after abromux quits. Applies to terminals opened
 /// after it's set; ones already running in the holder are taken back
