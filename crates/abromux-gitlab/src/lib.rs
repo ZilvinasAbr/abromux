@@ -11,6 +11,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod cache;
 mod avatars;
 mod changes;
 pub mod diff;

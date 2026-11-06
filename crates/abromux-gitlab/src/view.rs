@@ -12,7 +12,6 @@ use crate::{
     auth,
     avatars::Avatars,
     changes::{FileText, Picture, Row},
-    load_review,
     review::Review,
     style::*,
     time,
@@ -194,6 +193,10 @@ pub struct GitLabView {
     sign_in_error: Option<String>,
     _list_task: Option<Task<()>>,
     _review_task: Option<Task<()>>,
+    _replay_task: Option<Task<()>>,
+    /// The `cache::Shared` generation of the review showing (0: its own).
+    review_serial: u64,
+    refreshing: bool,
     _sign_in_task: Option<Task<()>>,
     _poll: Task<()>,
 }
@@ -307,9 +310,14 @@ impl GitLabView {
             sign_in_error: None,
             _list_task: None,
             _review_task: None,
+            _replay_task: None,
+            review_serial: 0,
+            refreshing: false,
             _sign_in_task: None,
             _poll: Self::poll(cx),
         };
+        // A newer load of what's showing, from another tab or abromux's poller.
+        cx.observe_global::<crate::cache::Shared>(|v, cx| v.adopt_shared(cx)).detach();
         v.connect(window, cx);
         v
     }
@@ -560,18 +568,47 @@ impl GitLabView {
     /// Load a merge request. `quiet`: the one showing, again; it stays on
     /// screen until the new one is in (and if that fails), and where you
     /// are in it is kept, as GitLab updates its page while you read.
+    ///
+    /// One loaded before (this tab's, another's, abromux's background
+    /// poller's, or from disk: `cache`) shows at once while it loads.
     fn fetch_review(&mut self, target: Target, quiet: bool, cx: &mut Context<Self>) {
         let Some(c) = self.client.clone() else { return };
+        let host = self.host();
+        // The project's id, when a link gave only its path: known if any
+        // merge request of it was loaded, or abromux checked it.
+        let target = match target {
+            Target::Path(path, iid) => match crate::cache::shared(cx).and_then(|s| s.project_id(&host, &path)) {
+                Some(p) => Target::Id(p, iid),
+                None => Target::Path(path, iid),
+            },
+            t => t,
+        };
         // Seen lately: that, now, while the fresh one loads.
         if !quiet {
             let seen = self.recent.iter().rev().find(|r| match &target {
                 Target::Id(p, iid) => r.mr.project_id == *p && r.mr.iid == *iid,
                 Target::Path(path, iid) => r.mr.iid == *iid && r.mr.references.full.rsplit_once('!').is_some_and(|(p, _)| p == path),
             });
-            if let Some(r) = seen.cloned() {
+            let shared = match &target {
+                Target::Id(p, iid) => crate::cache::shared(cx).and_then(|s| s.get(&host, *p, *iid)),
+                Target::Path(..) => None,
+            };
+            // The newer of the two.
+            let seen = match (seen, shared) {
+                (Some(a), Some(b)) if crate::time::parse(&b.review.mr.updated_at) > crate::time::parse(&a.mr.updated_at) => {
+                    Some((b.review.clone(), b.serial))
+                }
+                (Some(a), _) => Some((a.clone(), 0)),
+                (None, Some(b)) => Some((b.review.clone(), b.serial)),
+                (None, None) => None,
+            };
+            if let Some((r, serial)) = seen {
                 self.loc.project = Some(r.mr.project_id);
+                self.review_serial = serial;
                 self.review = Load::Ready(r);
                 self.rebuild_rows(cx);
+            } else if let Target::Id(p, iid) = target {
+                self.replay(host.clone(), p, iid, cx);
             }
         }
         let quiet = quiet || self.review.ready().is_some_and(|r| match &target {
@@ -582,54 +619,121 @@ impl GitLabView {
         if !quiet {
             self.review = Load::Loading;
         }
+        self.refreshing = true;
         self._review_task = Some(cx.spawn(async move |this, cx| {
+            let started = std::time::Instant::now();
             let got = cx
                 .background_spawn(async move {
                     let (p, iid) = match target {
                         Target::Id(p, iid) => (p, iid),
                         Target::Path(path, iid) => (c.project_id(&path)?, iid),
                     };
-                    load_review(&c, p, iid)
+                    crate::cache::fetch(&c, p, iid)
                 })
                 .await;
             this.update(cx, |v, cx| {
+                v.refreshing = false;
                 match got {
-                    Ok(r) => {
-                        v.loc.project = Some(r.mr.project_id);
-                        v.loc.iid = Some(r.mr.iid);
-                        v.pending_path = None;
-                        v.want_avatars(&r, cx);
-                        // Fetched texts, images and expansions are by file
-                        // index: only good while the files are the same.
-                        let same_files = v.review.ready().is_some_and(|old| {
-                            old.files.iter().map(|f| f.path()).eq(r.files.iter().map(|f| f.path()))
-                                && old.mr.diff_refs == r.mr.diff_refs
-                        });
-                        if !same_files {
-                            v.contents.clear();
-                            v.selected_line = None;
-                            v.pictures.clear();
-                            v.above.clear();
-                            v.below.clear();
-                        }
+                    Ok((r, bytes)) => {
                         let r = Rc::new(r);
-                        v.recent.retain(|o| (o.mr.project_id, o.mr.iid) != (r.mr.project_id, r.mr.iid));
-                        v.recent.push(r.clone());
-                        if v.recent.len() > 8 {
-                            v.recent.remove(0);
-                        }
-                        v.review = Load::Ready(r);
+                        crate::cache::put(cx, &v.host(), r.clone(), started, bytes, false);
+                        let serial = crate::cache::shared(cx).map_or(0, |s| s.serial());
+                        v.show_review(r, serial, cx);
                     }
                     // A quiet refresh that fails keeps what's showing.
-                    Err(_) if quiet => return,
-                    Err(e) => v.review = Load::Failed(format!("{e:#}")),
+                    Err(_) if quiet => cx.notify(),
+                    Err(e) => {
+                        v.review = Load::Failed(format!("{e:#}"));
+                        v.rebuild_rows(cx);
+                    }
                 }
-                v.rebuild_rows(cx);
-                v.fetch_pictures(cx);
             })
             .ok();
         }));
         cx.notify();
+    }
+
+    /// The merge request from disk, shown if nothing newer is by then.
+    fn replay(&mut self, host: String, project: u64, iid: u64, cx: &mut Context<Self>) {
+        self._replay_task = Some(cx.spawn(async move |this, cx| {
+            let h = host.clone();
+            let Some((r, bytes)) = cx.background_spawn(async move { crate::cache::replay(&h, project, iid) }).await else { return };
+            this.update(cx, |v, cx| {
+                let age = crate::cache::saved_at(&host, project, iid).map_or(0, |t| (crate::time::now() - t).max(0) as u64);
+                let fetched = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(age)).unwrap_or_else(std::time::Instant::now);
+                let r = Rc::new(r);
+                crate::cache::put(cx, &host, r.clone(), fetched, bytes, true);
+                let still = matches!(v.review, Load::Loading) && v.loc.iid == Some(iid) && v.loc.project.is_none_or(|p| p == project);
+                if still {
+                    let serial = crate::cache::shared(cx).map_or(0, |s| s.serial());
+                    v.loc.project = Some(project);
+                    v.review_serial = serial;
+                    v.review = Load::Ready(r);
+                    v.rebuild_rows(cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// A newer load of the merge request showing, from `cache::Shared`
+    /// (another tab's, or abromux's poller's): in place, as a quiet refresh.
+    fn adopt_shared(&mut self, cx: &mut Context<Self>) {
+        let Some(shown) = self.review.ready() else { return };
+        let Some(e) = crate::cache::shared(cx).and_then(|s| s.get(self.loc.host(), shown.mr.project_id, shown.mr.iid)) else {
+            return;
+        };
+        if e.serial <= self.review_serial || Rc::ptr_eq(&e.review, shown) || e.replayed {
+            return;
+        }
+        let (r, serial) = (e.review.clone(), e.serial);
+        self.show_review(r, serial, cx);
+    }
+
+    /// `r`, newly loaded, in place of what's showing.
+    fn show_review(&mut self, r: Rc<Review>, serial: u64, cx: &mut Context<Self>) {
+        self.loc.project = Some(r.mr.project_id);
+        self.loc.iid = Some(r.mr.iid);
+        self.pending_path = None;
+        self.review_serial = serial;
+        self.want_avatars(&r, cx);
+        // Fetched texts, images and expansions are by file
+        // index: only good while the files are the same.
+        let same_files = self.review.ready().is_some_and(|old| {
+            old.files.iter().map(|f| f.path()).eq(r.files.iter().map(|f| f.path())) && old.mr.diff_refs == r.mr.diff_refs
+        });
+        if !same_files {
+            self.contents.clear();
+            self.selected_line = None;
+            self.pictures.clear();
+            self.above.clear();
+            self.below.clear();
+        }
+        self.recent.retain(|o| (o.mr.project_id, o.mr.iid) != (r.mr.project_id, r.mr.iid));
+        self.recent.push(r.clone());
+        if self.recent.len() > 8 {
+            self.recent.remove(0);
+        }
+        self.review = Load::Ready(r);
+        self.rebuild_rows(cx);
+        self.fetch_pictures(cx);
+    }
+
+    /// What it shows, for abromux's cache: (host, project id, path, iid).
+    /// The id and path are known once it's loaded (a link gives the path).
+    pub fn showing(&self) -> Option<(String, Option<u64>, Option<String>, u64)> {
+        let iid = self.loc.iid?;
+        let path = match self.review.ready() {
+            Some(r) if r.mr.iid == iid => Some(crate::cache::review_path(r)),
+            _ => self.pending_path.clone(),
+        };
+        Some((self.host(), self.loc.project, path, iid))
+    }
+
+    /// Something for the merge request showing is being fetched.
+    pub fn refreshing(&self) -> bool {
+        self.refreshing
     }
 
     fn want_avatars(&mut self, r: &Review, cx: &mut Context<Self>) {
@@ -901,7 +1005,14 @@ impl GitLabView {
                 cx.background_executor().timer(std::time::Duration::from_secs(120)).await;
                 let alive = this.update(cx, |v, cx| {
                     if let (Some(p), Some(iid), Some(_)) = (v.loc.project, v.loc.iid, v.review.ready()) {
-                        v.fetch_review(Target::Id(p, iid), true, cx);
+                        // abromux's poller fetched it lately (it checks what's
+                        // on screen often, and fetches only what changed).
+                        let fresh = crate::cache::shared(cx)
+                            .and_then(|s| s.get(&v.host(), p, iid))
+                            .is_some_and(|e| !e.replayed && e.fetched.elapsed() < std::time::Duration::from_secs(110));
+                        if !fresh {
+                            v.fetch_review(Target::Id(p, iid), true, cx);
+                        }
                     }
                 });
                 if alive.is_err() {

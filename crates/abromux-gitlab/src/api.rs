@@ -20,6 +20,11 @@ pub struct Response {
     /// `X-Total`: how many items the whole list has (GitLab leaves it out
     /// past 10,000).
     pub total: Option<u64>,
+    /// `Retry-After` (seconds) on a 429, and `RateLimit-Remaining` /
+    /// `RateLimit-Limit`: for whoever paces requests (abromux's cache).
+    pub retry_after: Option<u64>,
+    pub rate_remaining: Option<u64>,
+    pub rate_limit: Option<u64>,
     pub body: Vec<u8>,
 }
 
@@ -70,7 +75,7 @@ impl Transport for Curl {
                 .args(["--parallel", "--parallel-max", PARALLEL])
                 .args(["-A", "abromux-gitlab", "-H", "@-"])
                 // One line a transfer: which file it went to, and what we use of its headers.
-                .args(["-w", "%{filename_effective}\t%{http_code}\t%header{x-next-page}\t%header{x-total}\t%{errormsg}\n"]);
+                .args(["-w", "%{filename_effective}\t%{http_code}\t%header{x-next-page}\t%header{x-total}\t%{errormsg}\t%header{retry-after}\t%header{ratelimit-remaining}\t%header{ratelimit-limit}\n"]);
             for (i, url) in urls.iter().enumerate() {
                 cmd.arg("-o").arg(dir.join(i.to_string())).arg("--url").arg(url);
             }
@@ -98,6 +103,9 @@ impl Transport for Curl {
                         status,
                         next_page: f.get(2).and_then(|v| v.trim().parse().ok()),
                         total: f.get(3).and_then(|v| v.trim().parse().ok()),
+                        retry_after: f.get(5).and_then(|v| v.trim().parse().ok()),
+                        rate_remaining: f.get(6).and_then(|v| v.trim().parse().ok()),
+                        rate_limit: f.get(7).and_then(|v| v.trim().parse().ok()),
                         body: std::fs::read(dir.join(i.to_string())).unwrap_or_default(),
                     })
                 });
@@ -190,6 +198,9 @@ fn parse_response(raw: &[u8]) -> anyhow::Result<Response> {
             status,
             next_page: header("x-next-page").and_then(|v| v.parse().ok()),
             total: header("x-total").and_then(|v| v.parse().ok()),
+            retry_after: header("retry-after").and_then(|v| v.parse().ok()),
+            rate_remaining: header("ratelimit-remaining").and_then(|v| v.parse().ok()),
+            rate_limit: header("ratelimit-limit").and_then(|v| v.parse().ok()),
             body: rest.to_vec(),
         });
     }
@@ -237,6 +248,19 @@ impl Client {
                 ahead.insert(url, r);
             }
         }
+    }
+
+    /// The same host and token over another transport (nothing fetched ahead).
+    pub fn with_transport(&self, transport: Arc<dyn Transport>) -> Self {
+        Self::new(&self.host, &self.token, transport)
+    }
+
+    pub fn transport(&self) -> Arc<dyn Transport> {
+        self.transport.clone()
+    }
+
+    pub fn token(&self) -> &str {
+        &self.token
     }
 
     /// Drop what was fetched ahead and not asked for.
@@ -870,6 +894,7 @@ mod tests {
             next_page: next,
             total: None,
             body: body.as_bytes().to_vec(),
+            ..Default::default()
         }
     }
 
@@ -959,7 +984,7 @@ mod tests {
 
     #[test]
     fn the_rest_of_a_list_comes_in_one_batch() {
-        let page = |n: u32| Response { status: 200, next_page: (n < 3).then_some(n + 1), total: Some(250), body: format!("[{n}]").into_bytes() };
+        let page = |n: u32| Response { status: 200, next_page: (n < 3).then_some(n + 1), total: Some(250), body: format!("[{n}]").into_bytes(), ..Default::default() };
         let canned = Arc::new(Canned {
             answers: (1..=3).map(|n| (format!("&page={n}"), page(n))).collect(),
             ..Default::default()

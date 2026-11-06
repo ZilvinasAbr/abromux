@@ -39,6 +39,7 @@ impl Transport for Fixtures {
             next_page: None,
             total: None,
             body: std::fs::read(&file)?,
+            ..Default::default()
         })
     }
 }

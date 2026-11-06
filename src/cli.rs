@@ -108,6 +108,10 @@ Commands:
   open <path-or-url>...                                      (directories open workspaces, URLs open browser splits)
   focus-window [--window <ref>]                              (bring abromux to the front; there is one window)
   sidebar <toggle|show|hide>
+  mr list [mine|recent|workspace]                            (cached GitLab merge requests: the panel's, or one group)
+  mr open <url|group/project!iid>                            (in a tab of this workspace, from the cache, then refetched)
+  mr refresh [<url|group/project!iid>]                       (check now: everything, or refetch one)
+  mr panel [toggle|show|hide]                                (the merge requests panel on the right, ⌥⌘B)
   reload-config                                              (read the config file again, like ⌘⇧,)
   config path                                                (where abromux's config.json lives)
   config check [<file>]                                      (validate the config file; needs no running app)
@@ -406,6 +410,21 @@ fn dispatch(
     mut opts: Map<String, Value>,
     as_json: bool,
 ) -> Result<(), String> {
+    // `mr <sub> [arg]`: the argument goes in by the subcommand's name.
+    let mut mr_sub = String::new();
+    if cmd == "mr" {
+        mr_sub = if pos.is_empty() { "list".into() } else { pos.remove(0) };
+        let name = match mr_sub.as_str() {
+            "list" | "ls" => "group",
+            "panel" => "state",
+            _ => "ref",
+        };
+        if let Some(arg) = pos.first() {
+            opts.insert(name.into(), json!(arg));
+        } else if name == "state" {
+            opts.insert(name.into(), json!("toggle"));
+        }
+    }
     let mut first = |name: &str, opts: &mut Map<String, Value>| -> Result<(), String> {
         if pos.is_empty() {
             return Err(format!("{cmd}: missing <{name}>"));
@@ -790,6 +809,38 @@ fn dispatch(
             );
             ("app.sidebar", |v| format!("OK visible={}", v["visible"]))
         }
+        "mr" => match mr_sub.as_str() {
+            "list" | "ls" => ("mr.list", |v| {
+                lines(v, |m| {
+                    let pipeline = m["pipeline"]
+                        .as_str()
+                        .map(|p| format!("  [{p}]"))
+                        .unwrap_or_default();
+                    format!(
+                        "{:<40} {}{pipeline}  ({})",
+                        s(&m["ref"]),
+                        s(&m["title"]),
+                        m["groups"]
+                            .as_array()
+                            .map(|g| g.iter().map(s).collect::<Vec<_>>().join(","))
+                            .unwrap_or_default()
+                    )
+                })
+            }),
+            "open" | "show" => {
+                if !opts.contains_key("ref") {
+                    return Err("mr open: missing <url|group/project!iid>".into());
+                }
+                ("mr.open", |v| format!("OK {} {}", s(&v["ref"]), s(&v["surface"])))
+            }
+            "refresh" => ("mr.refresh", |_| "OK".into()),
+            "panel" => ("mr.panel", |v| format!("OK visible={}", v["visible"])),
+            s => {
+                return Err(format!(
+                    "mr: unknown subcommand {s:?} (list, open, refresh, panel)"
+                ));
+            }
+        },
         "quit" => ("app.quit", |_| "OK".into()),
         "reload-config" => ("app.reload_config", |v| format!("OK {}", s(&v["path"]))),
         "config" => return config(&pos),

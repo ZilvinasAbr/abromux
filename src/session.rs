@@ -35,6 +35,9 @@ pub struct Session {
     pub sidebar: bool,
     #[serde(default = "sidebar_width")]
     pub sidebar_width: f32,
+    /// The merge requests panel is showing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mr_panel: bool,
     pub workspaces: Vec<WorkspaceState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<GroupState>,
@@ -279,6 +282,7 @@ impl AbroMux {
             active: self.active,
             sidebar: self.sidebar,
             sidebar_width: self.sidebar_width,
+            mr_panel: self.mr_panel,
             workspaces,
             groups: self
                 .groups
@@ -315,6 +319,7 @@ impl AbroMux {
         }
         self.launch_session = Some((kept, ids));
         self.sidebar = session.sidebar;
+        self.mr_panel = session.mr_panel;
         self.sidebar_width = session
             .sidebar_width
             .clamp(crate::SIDEBAR_MIN, crate::SIDEBAR_MAX);
@@ -813,6 +818,7 @@ mod tests {
             active: 1,
             sidebar: false,
             sidebar_width: 300.,
+            mr_panel: true,
             workspaces: vec![WorkspaceState {
                 name: Some("api".into()),
                 auto_name: None,

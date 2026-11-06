@@ -13,6 +13,7 @@ mod cli;
 mod cmux;
 mod config;
 mod folder;
+mod gitlab;
 mod cursor;
 mod debug;
 mod ghostty;
@@ -142,7 +143,10 @@ actions!(
         Ungroup,
         ToggleGroup,
         ReopenSession,
-        ImportCmuxSession
+        ImportCmuxSession,
+        ToggleMergeRequests,
+        GoToMergeRequest,
+        RefreshMergeRequests
     ]
 );
 
@@ -157,6 +161,8 @@ const SIDEBAR_MAX: f32 = 480.;
 /// Height of the titlebar row the traffic lights sit in.
 const TITLEBAR_H: f32 = 38.;
 const TABBAR_H: f32 = 30.;
+/// How wide the area is that grabs a pane divider (drawn 1px wide).
+const DIVIDER_GRAB: f32 = 9.;
 /// The macOS window's corner radius (`-[NSWindow _cornerRadius]` on macOS 26).
 const WINDOW_RADIUS: f32 = 16.;
 /// How close to the pane area's outer edge a dragged tab splits the whole
@@ -261,6 +267,8 @@ struct AbroMux {
     sidebar: bool,
     sidebar_width: f32,
     resizing_sidebar: bool,
+    /// The merge requests panel on the right (⌥⌘B, `crate::gitlab`).
+    mr_panel: bool,
     split_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     dragging: Option<(usize, Axis)>,
     /// Where a dragged tab would land: the pane under the cursor, the
@@ -332,6 +340,7 @@ impl AbroMux {
             sidebar: true,
             sidebar_width: SIDEBAR_WIDTH,
             resizing_sidebar: false,
+            mr_panel: false,
             split_bounds: Default::default(),
             dragging: None,
             tab_drop: None,
@@ -376,6 +385,9 @@ impl AbroMux {
             }
         })
         .detach();
+        // The merge requests panel follows the cache.
+        cx.observe(&gitlab::store(cx), |_, _, cx| cx.notify())
+            .detach();
         let mut banner_clicks = banner::init();
         cx.spawn_in(window, async move |this, cx| {
             while let Some(id) = banner_clicks.next().await {
@@ -399,6 +411,22 @@ impl AbroMux {
                 {
                     break;
                 }
+            }
+        })
+        .detach();
+        // Which projects and branches the workspaces have, for their merge
+        // requests, and which GitLab tabs show which (also while the window
+        // isn't drawing); cheap until something changed.
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                let synced = this.update_in(cx, |this, window, cx| {
+                    this.sync_mr_views(window, cx);
+                    this.sync_mr_workspaces(cx);
+                });
+                if synced.is_err() {
+                    break;
+                }
+                Timer::after(Duration::from_secs(10)).await;
             }
         })
         .detach();
@@ -714,7 +742,7 @@ impl AbroMux {
         }
     }
 
-    fn open_plugin(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_plugin(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         match self.make_plugin(id, &serde_json::json!({}), window, cx) {
             Ok(s) => self.add_tab(s, window, cx),
             Err(e) => window.push_notification(Notification::error(format!("{e:#}")), cx),
@@ -1965,26 +1993,44 @@ impl AbroMux {
                 let (id, axis) = (*id, *axis);
                 let horizontal = axis == Axis::Horizontal;
                 let bounds = self.split_bounds.clone();
+                // The 1px line, and a wider invisible grab area centered on
+                // it. That's drawn last (deferred), so the panes on both
+                // sides don't cover it, and it takes the clicks and cursor.
+                let grab = DIVIDER_GRAB;
                 let divider = div()
-                    .id(("divider", id))
                     .flex_none()
                     .bg(cx.global::<settings::Settings>().panes.divider_color)
-                    .when(horizontal, |s| s.w(px(1.)).h_full().cursor_col_resize())
-                    .when(!horizontal, |s| s.h(px(1.)).w_full().cursor_row_resize())
-                    .child(
-                        // Wider invisible grab area centered on the 1px line.
-                        div()
-                            .absolute()
-                            .when(horizontal, |s| s.left(px(-3.)).w(px(7.)).h_full())
-                            .when(!horizontal, |s| s.top(px(-3.)).h(px(7.)).w_full()),
-                    )
+                    .when(horizontal, |s| s.w(px(1.)).h_full())
+                    .when(!horizontal, |s| s.h(px(1.)).w_full())
                     .relative()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            this.dragging = Some((id, axis));
-                            cx.stop_propagation();
-                        }),
+                    .child(
+                        deferred(
+                            div()
+                                .id(("divider", id))
+                                .absolute()
+                                .when(horizontal, |s| {
+                                    s.top_0()
+                                        .left(px(-(grab - 1.) / 2.))
+                                        .w(px(grab))
+                                        .h_full()
+                                        .cursor_col_resize()
+                                })
+                                .when(!horizontal, |s| {
+                                    s.left_0()
+                                        .top(px(-(grab - 1.) / 2.))
+                                        .h(px(grab))
+                                        .w_full()
+                                        .cursor_row_resize()
+                                })
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.dragging = Some((id, axis));
+                                        cx.stop_propagation();
+                                    }),
+                                ),
+                        )
+                        .with_priority(1),
                     );
                 let (ca, cb) = if horizontal {
                     (
@@ -2380,6 +2426,7 @@ impl Render for AbroMux {
             self.ws_drop = None;
         }
         self.sync_webviews(cx);
+        self.sync_mr_views(window, cx);
         self.tick_spinner(cx);
         let notifications = self
             .notifications_open
@@ -2403,8 +2450,8 @@ impl Render for AbroMux {
         let rounded = !window.is_fullscreen();
         let corners = Corners {
             top_left: false,
-            top_right: rounded && self.sidebar,
-            bottom_right: rounded,
+            top_right: rounded && self.sidebar && !self.mr_panel,
+            bottom_right: rounded && !self.mr_panel,
             bottom_left: rounded && !self.sidebar,
         };
         let main = match ws
@@ -2420,6 +2467,7 @@ impl Render for AbroMux {
             None
         };
         let title = self.ws().name(cx);
+        let mr_panel = self.mr_panel.then(|| self.render_mr_panel(cx));
 
         div()
             .id("abromux")
@@ -2526,6 +2574,16 @@ impl Render for AbroMux {
                 this.sidebar = !this.sidebar;
                 cx.notify()
             }))
+            .on_action(cx.listener(|this, _: &ToggleMergeRequests, _, cx| {
+                this.mr_panel = !this.mr_panel;
+                cx.notify()
+            }))
+            .on_action(cx.listener(|this, _: &GoToMergeRequest, window, cx| {
+                this.toggle_palette(palette::Mode::MergeRequests, window, cx)
+            }))
+            .on_action(|_: &RefreshMergeRequests, _, cx| {
+                gitlab::store(cx).update(cx, |s, cx| s.refresh_all(cx))
+            })
             .on_action(cx.listener(|this, _: &FocusAddressBar, window, cx| {
                 if let Some(Surface::Browser(b)) = this.ws().focused_surface() {
                     BrowserView::focus_address(b, window, cx);
@@ -2764,6 +2822,7 @@ impl Render for AbroMux {
                             })
                     }),
             )
+            .children(mr_panel)
             .relative()
             .children(notifications)
             .children(updates)
@@ -2935,6 +2994,7 @@ fn run_app(cwd: Option<String>) {
         };
         cx.set_global(settings);
         update::init(cx);
+        gitlab::init(cx);
         cx.on_action(|_: &Quit, cx| {
             match cx.active_window().or_else(|| cx.windows().first().copied()) {
                 Some(w) => w

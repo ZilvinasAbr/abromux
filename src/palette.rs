@@ -34,11 +34,15 @@ pub enum Mode {
     /// A plugin's "Open … link": paste a link it opens. No rows; Enter
     /// opens it in a new tab.
     OpenLink(&'static str),
+    /// ⇧⌘M: the cached GitLab merge requests. A pasted link or
+    /// `group/project!12` that isn't cached opens too.
+    MergeRequests,
 }
 
 enum Target {
     Action(Box<dyn Action>),
     Workspace(usize),
+    Mr(crate::gitlab::model::MrKey),
 }
 
 struct Entry {
@@ -129,6 +133,38 @@ fn commands(project: Option<&Path>, cx: &App) -> Vec<Cmd> {
     builtin.chain(global).chain(local).collect()
 }
 
+/// Every cached merge request, recently opened and yours first.
+fn mr_entries(cx: &App) -> Vec<Entry> {
+    let st = crate::gitlab::store(cx).read(cx);
+    let mut mrs: Vec<_> = st.mrs.values().collect();
+    mrs.sort_by(|a, b| {
+        (b.inspected_at, b.roles.any(), &b.key).cmp(&(a.inspected_at, a.roles.any(), &a.key))
+    });
+    mrs.into_iter()
+        .map(|m| {
+            let l = m.light.as_ref();
+            let title = l
+                .map(|l| l.title.clone())
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| m.key.reference());
+            let mut sub = vec![m.key.reference()];
+            if let Some(l) = l {
+                sub.push(l.source_branch.clone());
+                if !l.author.is_empty() {
+                    sub.push(l.author.clone());
+                }
+            }
+            Entry {
+                title: title.into(),
+                keywords: sub.clone(),
+                subtitle: Some(sub.join(" · ").into()),
+                keys: None,
+                target: Target::Mr(m.key.clone()),
+            }
+        })
+        .collect()
+}
+
 impl AbroMux {
     /// ⌘⇧P / ⌘P: open the palette in `mode`, switch an open one to it, or
     /// close it if it's already showing `mode`.
@@ -158,6 +194,7 @@ impl AbroMux {
             Mode::Commands => self.command_entries(window, cx),
             Mode::Workspaces => self.workspace_entries(cx),
             Mode::NewFolder | Mode::OpenLink(_) => vec![],
+            Mode::MergeRequests => mr_entries(cx),
         };
         let suggested = crate::folder::random_name();
         let placeholder = match mode {
@@ -165,6 +202,7 @@ impl AbroMux {
             Mode::Workspaces => "Search workspaces".to_string(),
             Mode::NewFolder => suggested.clone(),
             Mode::OpenLink(_) => "Paste a link".to_string(),
+            Mode::MergeRequests => "Search merge requests, or paste a link".to_string(),
         };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         // A link of that kind on the clipboard is there to start with,
@@ -265,6 +303,15 @@ impl AbroMux {
             return self.open_plugin_link(id, &url, window, cx);
         }
         let Some(&(ix, _)) = p.matches.get(p.selected) else {
+            let typed = p.input.read(cx).value().to_string();
+            if p.mode == Mode::MergeRequests && crate::gitlab::model::MrKey::parse(&typed).is_some() {
+                cx.notify();
+                return {
+                    if let Err(e) = self.open_mr_ref(&typed, window, cx) {
+                        gpui_component::WindowExt::push_notification(window, gpui_component::notification::Notification::error(format!("{e:#}")), cx);
+                    }
+                };
+            }
             self.palette = Some(p);
             return;
         };
@@ -281,6 +328,7 @@ impl AbroMux {
                 Some(i) => self.select_workspace(i, window, cx),
                 None => self.restore_focus(p.prev_focus, window, cx),
             },
+            Target::Mr(k) => self.open_mr(k, window, cx),
         }
     }
 
@@ -436,6 +484,13 @@ impl AbroMux {
         let empty: SharedString = match p.mode {
             Mode::Commands => "No commands match your search.".into(),
             Mode::Workspaces => "No workspaces match your search.".into(),
+            Mode::MergeRequests => {
+                if crate::gitlab::model::MrKey::parse(&p.input.read(cx).value()).is_some() {
+                    "Enter to open this merge request".into()
+                } else {
+                    "No cached merge requests match. Paste a link to open any.".into()
+                }
+            }
             Mode::NewFolder => {
                 let typed = crate::one_line(&p.input.read(cx).value());
                 let name = if typed.is_empty() { &p.suggested } else { &typed };

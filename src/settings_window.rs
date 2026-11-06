@@ -96,6 +96,8 @@ struct SettingsView {
     recording: Option<&'static str>,
     /// The recorder got a key that can't be a shortcut.
     needs_modifier: bool,
+    /// The GitLab page's text fields, saved on Enter or leaving them.
+    text_fields: Vec<(Key, Entity<InputState>)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -104,7 +106,46 @@ impl SettingsView {
         let focus = cx.focus_handle();
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         window.focus(&search.focus_handle(cx));
-        let _subscriptions = vec![
+        let text_fields: Vec<(Key, Entity<InputState>)> = TEXT_FIELDS
+            .iter()
+            .map(|(key, placeholder, masked, get)| {
+                let value = get(cx.global::<Settings>()).unwrap_or_default();
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder(*placeholder)
+                        .masked(*masked)
+                        .default_value(value)
+                });
+                (*key, input)
+            })
+            .collect();
+        let mut _subscriptions: Vec<Subscription> = text_fields
+            .iter()
+            .map(|(key, input)| {
+                let key: Key = key;
+                cx.subscribe_in(input, window, move |_, input, ev: &InputEvent, window, cx| {
+                    if matches!(ev, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                        save_text(key, input.read(cx).value().trim(), window, cx);
+                    }
+                })
+            })
+            .collect();
+        _subscriptions.extend([
+            // A reload (⌘⇧,) or hand edit shows in fields not being typed in.
+            cx.observe_global_in::<Settings>(window, |this: &mut Self, window, cx| {
+                for (key, input) in &this.text_fields {
+                    let Some((.., get)) = TEXT_FIELDS.iter().find(|f| f.0 == *key) else {
+                        continue;
+                    };
+                    let value = get(cx.global::<Settings>()).unwrap_or_default();
+                    let focused = input.focus_handle(cx).is_focused(window);
+                    if !focused && input.read(cx).value().trim() != value {
+                        input.update(cx, |i, cx| i.set_value(value, window, cx));
+                    }
+                }
+            }),
+        ]);
+        _subscriptions.extend([
             cx.subscribe_in(&search, window, |this, _, ev: &InputEvent, _, cx| {
                 if let InputEvent::Change = ev {
                     this.scroll.set_offset(point(px(0.), px(0.)));
@@ -130,7 +171,7 @@ impl SettingsView {
                     restore_keymap(cx);
                 }
             }),
-        ];
+        ]);
         Self {
             focus,
             search,
@@ -139,6 +180,7 @@ impl SettingsView {
             error: settings::load().err(),
             recording: None,
             needs_modifier: false,
+            text_fields,
             _subscriptions,
         }
     }
@@ -498,7 +540,12 @@ fn stepper(
                             // Whole steps, so 0.1 + 0.05 stays 0.15 in the file.
                             let v = ((value + delta) / step).round() * step;
                             let v = (v.clamp(min, max) * 1000.).round() / 1000.;
-                            let json = serde_json::Number::from_f64(v as f64).map(Value::Number);
+                            // Whole numbers as integers, for the settings that are.
+                            let json = if v.fract() == 0. {
+                                Some(json!(v as i64))
+                            } else {
+                                serde_json::Number::from_f64(v as f64).map(Value::Number)
+                            };
                             save(key, json.filter(|_| v != default), window, cx)
                         },
                     )
@@ -659,6 +706,7 @@ fn pages(
     view: &WeakEntity<SettingsView>,
     recording: Option<&'static str>,
     needs_modifier: bool,
+    text_fields: &[(Key, Entity<InputState>)],
     cx: &App,
 ) -> Vec<Page> {
     vec![
@@ -668,6 +716,7 @@ fn pages(
         panes_page(),
         shortcuts_page(view, recording, needs_modifier),
         commands_page(cx),
+        gitlab_page(text_fields),
     ]
 }
 
@@ -984,6 +1033,200 @@ fn workspace_colors_page(cx: &App) -> Page {
             .description(
                 "Offered when coloring a workspace. Change them under \
                  workspaceColors › colors in config.json.",
+            ),
+        ],
+    }
+}
+
+/// The GitLab page's text settings: key, placeholder, masked, value.
+type TextField = (Key, &'static str, bool, fn(&Settings) -> Option<String>);
+const TEXT_FIELDS: &[TextField] = &[
+    (&["gitlab", "host"], "the GitLab tab's", false, |s| s.gitlab.host.clone()),
+];
+
+/// Save a text field: empty, or the default, removes the key.
+fn save_text(key: Key, value: &str, window: &mut Window, cx: &mut App) {
+    let Some((.., get)) = TEXT_FIELDS.iter().find(|f| f.0 == key) else {
+        return;
+    };
+    let current = get(cx.global::<Settings>()).unwrap_or_default();
+    if value == current {
+        return;
+    }
+    let default = get(&Settings::default()).unwrap_or_default();
+    let json = (!value.is_empty() && value != default).then(|| json!(value));
+    save(key, json, window, cx);
+}
+
+/// A text setting's row. The view's own fields are passed in: this runs
+/// while it renders, so it can't be read.
+fn text_row(
+    title: &'static str,
+    description: &'static str,
+    key: Key,
+    fields: &[(Key, Entity<InputState>)],
+) -> Option<Row> {
+    let input = fields.iter().find(|(k, _)| *k == key)?.1.clone();
+    let get = TEXT_FIELDS.iter().find(|f| f.0 == key)?.3;
+    Some(row(title, description, key, get, move |_, _, _, _| {
+        div()
+            .w(px(260.))
+            .h(px(26.))
+            .px(px(8.))
+            .flex()
+            .items_center()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(INPUT_BG))
+            .child(
+                Input::new(&input)
+                    .appearance(false)
+                    .text_size(px(12.))
+                    .h_full()
+                    .px_0()
+                    .py_0(),
+            )
+            .into_any_element()
+    }))
+}
+
+fn gitlab_page(fields: &[(Key, Entity<InputState>)]) -> Page {
+    let n = |v: f32| format!("{v}");
+    Page {
+        title: "GitLab",
+        icon: "icons/git-pull-request.svg",
+        description: Some(
+            "Merge requests in the panel on the right (⌥⌘B), kept cached and checked \
+             in the background, so they open at once in a GitLab tab (⇧⌘M finds one).",
+        ),
+        groups: vec![
+            group(
+                "Connection",
+                [
+                    text_row(
+                        "Host",
+                        "Your GitLab, e.g. gitlab.example.com. Empty: the one you signed in \
+                         to in a GitLab tab, with its token. Workspace checkouts whose \
+                         remote is elsewhere are left out.",
+                        &["gitlab", "host"],
+                        fields,
+                    ),
+                ]
+                .into_iter()
+                .flatten()
+                .chain([
+                    switch(
+                        "Review requests",
+                        "\"Mine\" also lists merge requests you're asked to review.",
+                        &["gitlab", "includeReviewRequests"],
+                        |s| s.gitlab.include_review_requests,
+                    ),
+                    switch(
+                        "Assigned to me",
+                        "\"Mine\" also lists merge requests assigned to you.",
+                        &["gitlab", "includeAssigned"],
+                        |s| s.gitlab.include_assigned,
+                    ),
+                ]),
+            ),
+            group(
+                "Cache",
+                [
+                    stepper(
+                        "Recently opened",
+                        "How many merge requests you opened stay cached. Merged and \
+                         closed ones are dropped at once.",
+                        &["gitlab", "recentLimit"],
+                        |s| s.gitlab.recent_limit as f32,
+                        (5., 500., 5.),
+                        n,
+                    ),
+                    stepper(
+                        "Disk space",
+                        "For cached merge requests. Past it, the longest-unopened ones' \
+                         go first; they stay listed.",
+                        &["gitlab", "cacheSizeMb"],
+                        |s| s.gitlab.cache_size_mb as f32,
+                        (50., 20000., 50.),
+                        |v| format!("{v} MB"),
+                    ),
+                    stepper(
+                        "Largest file diff",
+                        "Bigger files' diffs are fetched when they're shown.",
+                        &["gitlab", "maxFileDiffKb"],
+                        |s| s.gitlab.max_file_diff_kb as f32,
+                        (64., 65536., 64.),
+                        |v| format!("{v} KB"),
+                    ),
+                    stepper(
+                        "Largest merge request diff",
+                        "Past it, files' diffs are fetched when they're shown.",
+                        &["gitlab", "maxMrDiffMb"],
+                        |s| s.gitlab.max_mr_diff_mb as f32,
+                        (1., 500., 1.),
+                        |v| format!("{v} MB"),
+                    ),
+                    stepper(
+                        "Most files per diff",
+                        "…or after this many files.",
+                        &["gitlab", "maxMrDiffFiles"],
+                        |s| s.gitlab.max_mr_diff_files as f32,
+                        (100., 50000., 100.),
+                        n,
+                    ),
+                ],
+            ),
+            group(
+                "Checking for Changes",
+                [
+                    stepper(
+                        "On screen",
+                        "A merge request shown in a tab.",
+                        &["gitlab", "onScreenSeconds"],
+                        |s| s.gitlab.on_screen_seconds as f32,
+                        (5., 600., 5.),
+                        |v| format!("{v} s"),
+                    ),
+                    stepper(
+                        "Pipeline running",
+                        "One whose pipeline is still going.",
+                        &["gitlab", "runningPipelineSeconds"],
+                        |s| s.gitlab.running_pipeline_seconds as f32,
+                        (5., 600., 5.),
+                        |v| format!("{v} s"),
+                    ),
+                    stepper(
+                        "Mine and workspaces'",
+                        "Yours, the workspaces', and the most recently opened ones below.",
+                        &["gitlab", "mineSeconds"],
+                        |s| s.gitlab.mine_seconds as f32,
+                        (15., 3600., 15.),
+                        |v| format!("{v} s"),
+                    ),
+                    stepper(
+                        "Checked as often as mine",
+                        "How many of the most recently opened ones.",
+                        &["gitlab", "frequentRecent"],
+                        |s| s.gitlab.frequent_recent as f32,
+                        (0., 100., 1.),
+                        n,
+                    ),
+                    stepper(
+                        "Other recent ones",
+                        "The rest of the recently opened.",
+                        &["gitlab", "recentSeconds"],
+                        |s| s.gitlab.recent_seconds as f32,
+                        (30., 3600., 30.),
+                        |v| format!("{v} s"),
+                    ),
+                ],
+            )
+            .description(
+                "A cheap check of many merge requests at once; details and diffs are \
+                 fetched only when it shows a change. When GitLab rate-limits, these \
+                 stretch on their own and recover slowly. All are three times longer \
+                 while the app is in the background.",
             ),
         ],
     }
@@ -1336,7 +1579,7 @@ fn render_group(g: &Group, ix: usize, window: &mut Window, cx: &mut App) -> AnyE
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().downgrade();
-        let pages = pages(&view, self.recording, self.needs_modifier, cx);
+        let pages = pages(&view, self.recording, self.needs_modifier, &self.text_fields, cx);
         self.page = self.page.min(pages.len() - 1);
         let query = self.search.read(cx).value().trim().to_lowercase();
         let searching = !query.is_empty();

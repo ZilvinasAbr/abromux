@@ -70,6 +70,7 @@ pub fn convert(v: &Value) -> Result<Session, String> {
         sidebar_width: sidebar
             .and_then(|s| s["width"].as_f64())
             .map_or(crate::SIDEBAR_WIDTH, |w| w as f32),
+        mr_panel: false,
         workspaces,
         groups: vec![],
     })
