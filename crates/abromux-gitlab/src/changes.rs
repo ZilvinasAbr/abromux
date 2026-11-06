@@ -1944,6 +1944,22 @@ impl GitLabView {
         }
     }
 
+    /// `v`: Viewed on the file being read. Marked, it folds, its header
+    /// staying where it was with the next file under it; one file at a
+    /// time, the next one comes up.
+    pub(crate) fn toggle_viewed_here(&mut self, cx: &mut Context<Self>) {
+        let Some(r) = self.shown() else { return };
+        let Some(fi) = self.single_file.or_else(|| self.active_file()) else { return };
+        let Some(path) = r.files.get(fi).map(|f| f.path().to_string()) else { return };
+        let marking = !self.loc.viewed.contains(&path);
+        self.toggle_viewed(&path, cx);
+        if marking && self.single_file.is_some() && fi + 1 < r.files.len() {
+            self.step_file(true, cx);
+        } else {
+            self.scroll_to_file(fi, cx);
+        }
+    }
+
     pub(crate) fn toggle_viewed(&mut self, path: &str, cx: &mut Context<Self>) {
         if let Some(i) = self.loc.viewed.iter().position(|p| p == path) {
             self.loc.viewed.remove(i);
@@ -2029,6 +2045,12 @@ impl GitLabView {
         }
         cx.notify();
     }
+}
+
+/// GitLab's thin lines down the tree, one under each enclosing folder's
+/// chevron.
+fn tree_guides(depth: usize) -> impl Iterator<Item = Div> {
+    (0..depth).map(|k| div().absolute().top_0().bottom_0().left(px(11. + k as f32 * 16.)).w(px(1.)).bg(c(RAISED)))
 }
 
 #[cfg(test)]
@@ -2175,10 +2197,4 @@ mod tests {
             .collect();
         assert_eq!(folded, ["a", "README.md", "src+", "z.txt"]);
     }
-}
-
-/// GitLab's thin lines down the tree, one under each enclosing folder's
-/// chevron.
-fn tree_guides(depth: usize) -> impl Iterator<Item = Div> {
-    (0..depth).map(|k| div().absolute().top_0().bottom_0().left(px(11. + k as f32 * 16.)).w(px(1.)).bg(c(RAISED)))
 }

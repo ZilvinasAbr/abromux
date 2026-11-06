@@ -146,6 +146,37 @@ impl GitLabView {
         self.save_side(json!({ "milestone_id": id }), window, cx);
     }
 
+    /// The people picker's search, on a project with more members than were
+    /// loaded: asked of GitLab, the latest query's answer kept.
+    pub(crate) fn search_people(&mut self, cx: &mut Context<Self>) {
+        let people = matches!(self.side_menu, Some(SideMenu::Assignees | SideMenu::Reviewers));
+        let (Some(r), Some(c)) = (self.review.ready().cloned(), self.client.clone()) else { return };
+        let query = self.boxes.search.read(cx).value().trim().to_lowercase();
+        if !people || !r.members_more || query.is_empty() {
+            self.people_found = None;
+            return;
+        }
+        let project = r.mr.project_id;
+        self._people_task = Some(cx.spawn(async move |this, cx| {
+            let q = query.clone();
+            let got = cx.background_spawn(async move { c.search_members(project, &q) }).await;
+            this.update(cx, |v, cx| {
+                if let Ok(found) = got {
+                    let mut people: Vec<User> = vec![];
+                    for m in found.iter().filter(|m| m.state.is_empty() || m.state == "active") {
+                        if !people.iter().any(|p| p.id == m.id) {
+                            people.push(m.user());
+                        }
+                    }
+                    v.avatars.want(people.iter().collect::<Vec<_>>(), cx, |v| &mut v.avatars);
+                    v.people_found = Some((query, people));
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
     // ---- what it looks like ---------------------------------------------
 
     pub(crate) fn sidebar(&self, r: &Review, cx: &mut Context<Self>) -> Div {
@@ -339,7 +370,10 @@ impl GitLabView {
                 // Who's on it first, as GitLab lists them, then everyone else.
                 let current = if m == SideMenu::Assignees { &r.mr.assignees } else { &r.mr.reviewers };
                 let mut people: Vec<&User> = current.iter().collect();
-                people.extend(r.members.iter().filter(|u| !current.iter().any(|c| c.id == u.id)));
+                // A big project's search is GitLab's (`search_people`); else the loaded members'.
+                let found = self.people_found.as_ref().filter(|(q, _)| *q == query).map(|(_, f)| f);
+                let pool = found.unwrap_or(&r.members);
+                people.extend(pool.iter().filter(|u| !current.iter().any(|c| c.id == u.id)));
                 let people: Vec<&User> = people.into_iter().filter(|u| hits(&u.name) || hits(&u.username)).collect();
                 let first = people.iter().take_while(|u| current.iter().any(|c| c.id == u.id)).count();
                 let person = |u: &User, cx: &mut Context<Self>| {

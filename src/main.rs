@@ -706,6 +706,14 @@ impl AbroMux {
         Ok(Surface::Plugin(tab))
     }
 
+    /// A link plugin `id` opens, as its new tab in the focused pane.
+    pub(crate) fn open_plugin_link(&mut self, id: &str, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match self.make_plugin(id, &serde_json::json!({ "url": url }), window, cx) {
+            Ok(s) => self.add_tab(s, window, cx),
+            Err(e) => window.push_notification(Notification::error(format!("{e:#}")), cx),
+        }
+    }
+
     fn open_plugin(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         match self.make_plugin(id, &serde_json::json!({}), window, cx) {
             Ok(s) => self.add_tab(s, window, cx),
@@ -770,15 +778,25 @@ impl AbroMux {
         else {
             return;
         };
+        // A link a plugin shows itself (a GitLab merge request) opens as its
+        // tab, where a browser would: in a pane of those to the right.
+        let claimed = plugins::claiming(&url);
         let right = ws.root.neighbor(pane, Dir::Right).filter(|&r| {
             ws.root
                 .panes()
                 .into_iter()
                 .find(|p| p.id == r)
                 .and_then(|p| p.active_surface())
-                .is_some_and(|s| s.is_browser(cx))
+                .is_some_and(|s| match claimed {
+                    Some(p) => s.is_plugin(p.id),
+                    None => s.is_browser(cx),
+                })
         });
-        let surface = self.make_browser(&url, window, cx);
+        let surface = match claimed.map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx)) {
+            Some(Ok(s)) => s,
+            // It couldn't: the page, as before.
+            _ => self.make_browser(&url, window, cx),
+        };
         match right {
             Some(r) => self.add_tab_to(wi, r, surface, true, window, cx),
             None => {
@@ -805,7 +823,11 @@ impl AbroMux {
         }) else {
             return;
         };
-        let surface = self.make_browser(url, window, cx);
+        let claimed = plugins::claiming(url).map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx));
+        let surface = match claimed {
+            Some(Ok(s)) => s,
+            _ => self.make_browser(url, window, cx),
+        };
         self.add_tab_to(wi, pane, surface, focus, window, cx);
         cx.notify();
     }
@@ -2596,6 +2618,15 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &SwapDown, w, cx| this.swap_dir(Dir::Down, w, cx)))
             .on_action(cx.listener(|this, a: &keymap::OpenPlugin, window, cx| {
                 this.open_plugin(&a.id, window, cx)
+            }))
+            .on_action(cx.listener(|_, a: &keymap::OpenPluginLink, window, cx| {
+                // Chosen from the palette, focus is going back to the pane
+                // just now: ask once that's done, or the pane keeps the keys.
+                if let Some(p) = plugins::find(&a.id) {
+                    cx.defer_in(window, move |this, window, cx| {
+                        this.toggle_palette(palette::Mode::OpenLink(p.id), window, cx)
+                    });
+                }
             }))
             .on_action(cx.listener(|this, a: &keymap::RunCommand, window, cx| {
                 this.run_command(a.index, a.project.clone(), window, cx)

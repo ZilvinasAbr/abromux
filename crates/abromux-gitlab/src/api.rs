@@ -27,6 +27,12 @@ pub trait Transport: Send + Sync {
     /// GET `url` with the `PRIVATE-TOKEN` header set to `token`.
     fn get(&self, url: &str, token: &str) -> anyhow::Result<Response>;
 
+    /// GET each of `urls`, as many at once as the transport can: the
+    /// answers in the same order. One at a time unless it knows better.
+    fn get_many(&self, urls: &[String], token: &str) -> Vec<anyhow::Result<Response>> {
+        urls.iter().map(|u| self.get(u, token)).collect()
+    }
+
     /// `method` (POST, PUT, DELETE) `url` with a JSON `body`.
     fn send(&self, method: &str, url: &str, token: &str, body: &[u8]) -> anyhow::Result<Response> {
         let _ = (url, token, body);
@@ -40,6 +46,71 @@ pub struct Curl;
 impl Transport for Curl {
     fn get(&self, url: &str, token: &str) -> anyhow::Result<Response> {
         curl(&[], url, token)
+    }
+
+    /// One curl for all of them: up to `PARALLEL` at once, over connections
+    /// it keeps open and reuses (one multiplexed connection over HTTP/2), so
+    /// a far-away GitLab costs a round trip or two, not one handshake and
+    /// round trip per request.
+    fn get_many(&self, urls: &[String], token: &str) -> Vec<anyhow::Result<Response>> {
+        // A review's first batch at once (HTTP/2 takes them all on one
+        // connection anyway; HTTP/1.1 opens this many at most).
+        const PARALLEL: &str = "20";
+        if urls.len() < 2 {
+            return urls.iter().map(|u| self.get(u, token)).collect();
+        }
+        let fail = |e: &anyhow::Error| urls.iter().map(|_| Err(anyhow::anyhow!("{e:#}"))).collect();
+        let dir = match batch_dir() {
+            Ok(d) => d,
+            Err(e) => return fail(&e),
+        };
+        let run = || -> anyhow::Result<Vec<anyhow::Result<Response>>> {
+            let mut cmd = Command::new("/usr/bin/curl");
+            cmd.args(["-sS", "--compressed", "--connect-timeout", "10", "--max-time", "60"])
+                .args(["--parallel", "--parallel-max", PARALLEL])
+                .args(["-A", "abromux-gitlab", "-H", "@-"])
+                // One line a transfer: which file it went to, and what we use of its headers.
+                .args(["-w", "%{filename_effective}\t%{http_code}\t%header{x-next-page}\t%header{x-total}\t%{errormsg}\n"]);
+            for (i, url) in urls.iter().enumerate() {
+                cmd.arg("-o").arg(dir.join(i.to_string())).arg("--url").arg(url);
+            }
+            let mut child = cmd
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .context("running curl")?;
+            {
+                let mut stdin = child.stdin.take().context("curl stdin")?;
+                writeln!(stdin, "PRIVATE-TOKEN: {token}")?;
+            }
+            let out = child.wait_with_output()?;
+            let mut got: Vec<Option<anyhow::Result<Response>>> = urls.iter().map(|_| None).collect();
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                let f: Vec<&str> = line.split('\t').collect();
+                let Some(i) = f.first().and_then(|p| p.rsplit('/').next()).and_then(|n| n.parse::<usize>().ok()) else { continue };
+                let Some(slot) = got.get_mut(i) else { continue };
+                let status: u16 = f.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                *slot = Some(if status == 0 {
+                    Err(anyhow::anyhow!("{}", f.get(4).copied().filter(|e| !e.is_empty()).unwrap_or("no answer")))
+                } else {
+                    Ok(Response {
+                        status,
+                        next_page: f.get(2).and_then(|v| v.trim().parse().ok()),
+                        total: f.get(3).and_then(|v| v.trim().parse().ok()),
+                        body: std::fs::read(dir.join(i.to_string())).unwrap_or_default(),
+                    })
+                });
+            }
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().trim_start_matches("curl: ").to_string();
+            Ok(got
+                .into_iter()
+                .map(|g| g.unwrap_or_else(|| Err(anyhow::anyhow!("{}", if stderr.is_empty() { "no answer" } else { &stderr }))))
+                .collect())
+        };
+        let got = run();
+        let _ = std::fs::remove_dir_all(&dir);
+        got.unwrap_or_else(|e| fail(&e))
     }
 
     fn send(&self, method: &str, url: &str, token: &str, body: &[u8]) -> anyhow::Result<Response> {
@@ -57,6 +128,16 @@ impl Transport for Curl {
         let _ = std::fs::remove_file(&path);
         out
     }
+}
+
+/// A fresh directory only we can read, for one batch's answers.
+fn batch_dir() -> anyhow::Result<std::path::PathBuf> {
+    use std::os::unix::fs::DirBuilderExt;
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("abromux-gitlab-{}-batch-{n}", std::process::id()));
+    std::fs::DirBuilder::new().mode(0o700).create(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    Ok(dir)
 }
 
 fn curl(extra: &[&str], url: &str, token: &str) -> anyhow::Result<Response> {
@@ -124,6 +205,9 @@ pub struct Client {
     host: String,
     token: String,
     transport: Arc<dyn Transport>,
+    /// Answers fetched ahead in one batch (`prefetch`), by URL, each taken
+    /// by the first call that asks for it.
+    ahead: Arc<std::sync::Mutex<std::collections::HashMap<String, Response>>>,
 }
 
 impl Client {
@@ -132,7 +216,36 @@ impl Client {
             host: host.trim_end_matches('/').to_string(),
             token: token.to_string(),
             transport,
+            ahead: Default::default(),
         }
+    }
+
+    /// Fetch `paths` (after `/api/v4/`) together, for the calls that ask
+    /// for them next. A list's first page is [`first_page`] of its path.
+    /// Failures aren't kept: the call that wants it tries again and says why.
+    pub fn prefetch(&self, paths: impl IntoIterator<Item = String>) {
+        let urls: Vec<String> = {
+            let ahead = self.ahead.lock().unwrap_or_else(|e| e.into_inner());
+            let mut urls: Vec<String> = paths.into_iter().map(|p| self.url(&p)).filter(|u| !ahead.contains_key(u)).collect();
+            urls.dedup();
+            urls
+        };
+        let got = self.transport.get_many(&urls, &self.token);
+        let mut ahead = self.ahead.lock().unwrap_or_else(|e| e.into_inner());
+        for (url, r) in urls.into_iter().zip(got) {
+            if let Ok(r) = r {
+                ahead.insert(url, r);
+            }
+        }
+    }
+
+    /// Drop what was fetched ahead and not asked for.
+    pub fn forget_prefetched(&self) {
+        self.ahead.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}/api/v4/{path}", self.host)
     }
 
     pub fn host(&self) -> &str {
@@ -145,15 +258,23 @@ impl Client {
         decode(&r.body, path)
     }
 
-    /// Every page of the list at `path`.
+    /// Every page of the list at `path`. Once the first says how many there
+    /// are, the rest come in one batch.
     pub fn get_all<T: DeserializeOwned>(&self, path: &str) -> anyhow::Result<Vec<T>> {
-        let sep = if path.contains('?') { '&' } else { '?' };
         let mut all = vec![];
         let mut page = 1;
         loop {
-            let paged = format!("{path}{sep}per_page=100&page={page}");
-            let r = self.fetch(&paged)?;
-            all.extend(decode::<Vec<T>>(&r.body, &paged)?);
+            let this_page = paged(path, page);
+            let r = self.fetch(&this_page)?;
+            if page == 1
+                && let Some(total) = r.total
+            {
+                let pages = total.div_ceil(100).min(100) as u32;
+                if pages > 1 {
+                    self.prefetch((2..=pages).map(|p| paged(path, p)));
+                }
+            }
+            all.extend(decode::<Vec<T>>(&r.body, &this_page)?);
             match r.next_page {
                 // A broken server repeating a page would loop forever.
                 Some(n) if n > page && page < 100 => page = n,
@@ -163,7 +284,10 @@ impl Client {
     }
 
     fn fetch(&self, path: &str) -> anyhow::Result<Response> {
-        let url = format!("{}/api/v4/{path}", self.host);
+        let url = self.url(path);
+        if let Some(r) = self.ahead.lock().unwrap_or_else(|e| e.into_inner()).remove(&url) {
+            return self.check(r, &url);
+        }
         let r = self
             .transport
             .get(&url, &self.token)
@@ -211,25 +335,52 @@ impl Client {
         self.merge_requests_in(scope, "opened")
     }
 
+    /// What GitLab's "Search or go to…" finds for `query`: `group/project!12`
+    /// that merge request; `!12` those numbered 12 in `projects` (a number
+    /// only means something within a project); else merge requests anywhere
+    /// you can see with it in their title or description.
+    pub fn search_merge_requests(&self, query: &str, projects: &[u64]) -> anyhow::Result<Vec<MergeRequest>> {
+        let q = query.trim();
+        let enc = |s: &str| -> String {
+            s.bytes()
+                .map(|b| match b {
+                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+                    _ => format!("%{b:02X}"),
+                })
+                .collect()
+        };
+        if let Some((path, n)) = q.rsplit_once('!')
+            && let Ok(iid) = n.parse::<u64>()
+        {
+            if !path.is_empty() {
+                return Ok(vec![self.get(&format!("projects/{}/merge_requests/{iid}", enc(path)))?]);
+            }
+            let paths: Vec<String> = projects.iter().map(|p| format!("projects/{p}/merge_requests/{iid}")).collect();
+            self.prefetch(paths.clone());
+            let found = paths.iter().filter_map(|p| self.get(p).ok()).collect();
+            return Ok(found);
+        }
+        self.get(&format!(
+            "merge_requests?scope=all&state=all&order_by=updated_at&per_page=20&with_labels_details=true&search={}",
+            enc(q)
+        ))
+    }
+
     /// The same, in `state`: opened, merged, closed or all.
     pub fn merge_requests_in(&self, scope: Scope, state: &str) -> anyhow::Result<Vec<MergeRequest>> {
-        let q = match scope {
-            Scope::ToReview(me) => format!("reviewer_username={me}&scope=all"),
-            Scope::Mine => "scope=created_by_me".into(),
-            Scope::All => "scope=all".into(),
-        };
-        self.get_all(&format!("merge_requests?state={state}&order_by=created_at&with_labels_details=true&{q}"))
+        self.get_all(&list_path(&scope, state))
     }
 
     /// How many merge requests `merge_requests_in` would list, from one
     /// short page's `X-Total`; None when GitLab doesn't say.
     pub fn count_merge_requests(&self, scope: &Scope, state: &str) -> anyhow::Result<Option<u64>> {
-        let q = match scope {
-            Scope::ToReview(me) => format!("reviewer_username={me}&scope=all"),
-            Scope::Mine => "scope=created_by_me".into(),
-            Scope::All => "scope=all".into(),
-        };
-        Ok(self.fetch(&format!("merge_requests?state={state}&per_page=1&{q}"))?.total)
+        Ok(self.fetch(&count_path(scope, state))?.total)
+    }
+
+    /// The projects you're a member of, most recently active first (the
+    /// first hundred), or those matching `search`.
+    pub fn projects(&self, search: &str) -> anyhow::Result<Vec<Project>> {
+        self.get(&projects_path(search))
     }
 
     /// The id of the project at `path` (`group/project`).
@@ -251,7 +402,7 @@ impl Client {
     }
 
     pub fn discussions(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Discussion>> {
-        self.get_all(&format!("projects/{project}/merge_requests/{iid}/discussions"))
+        self.get_all(&discussions_path(project, iid))
     }
 
     /// When it was closed, reopened or merged, and by whom.
@@ -353,6 +504,7 @@ impl Client {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn line_comment(
         &self,
         project: u64,
@@ -438,7 +590,7 @@ impl Client {
 
     /// The merge request's latest pipeline, if it has one.
     pub fn latest_pipeline(&self, project: u64, iid: u64) -> anyhow::Result<Option<Pipeline>> {
-        let all: Vec<Pipeline> = self.get(&format!("projects/{project}/merge_requests/{iid}/pipelines?per_page=1"))?;
+        let all: Vec<Pipeline> = self.get(&latest_pipeline_path(project, iid))?;
         Ok(all.into_iter().next())
     }
 
@@ -449,7 +601,7 @@ impl Client {
             #[serde(default)]
             default_branch: String,
         }
-        Ok(self.get::<Project>(&format!("projects/{project}"))?.default_branch)
+        Ok(self.get::<Project>(&project_path(project))?.default_branch)
     }
 
     /// The project's labels, with their colors.
@@ -460,14 +612,16 @@ impl Client {
     /// Whether the merge request takes several assignees and several
     /// reviewers: GitLab's paid tiers do, the free one takes one of each
     /// (and its REST API quietly keeps the first). Only GraphQL says.
-    pub fn allows_multiple(&self, full_path: &str, iid: u64) -> anyhow::Result<(bool, bool)> {
+    /// By the project's id, so it can be asked before the merge request
+    /// (and its project's path) has come.
+    pub fn allows_multiple(&self, project: u64, iid: u64) -> anyhow::Result<(bool, bool)> {
         let q = format!(
-            "{{ project(fullPath: {full_path:?}) {{ mergeRequest(iid: \"{iid}\") {{ allowsMultipleAssignees allowsMultipleReviewers }} }} }}"
+            "{{ projects(ids: [\"gid://gitlab/Project/{project}\"]) {{ nodes {{ mergeRequest(iid: \"{iid}\") {{ allowsMultipleAssignees allowsMultipleReviewers }} }} }} }}"
         );
         let url = format!("{}/api/graphql", self.host);
         let r = self.transport.send("POST", &url, &self.token, serde_json::json!({ "query": q }).to_string().as_bytes())?;
         let v: serde_json::Value = decode(&r.body, &url)?;
-        let mr = &v["data"]["project"]["mergeRequest"];
+        let mr = &v["data"]["projects"]["nodes"][0]["mergeRequest"];
         let flag = |k: &str| mr[k].as_bool().with_context(|| format!("no {k} in GitLab's answer"));
         Ok((flag("allowsMultipleAssignees")?, flag("allowsMultipleReviewers")?))
     }
@@ -516,6 +670,32 @@ impl Client {
         self.get_all(&format!("projects/{project}/members/all"))
     }
 
+    /// The first hundred of them, and whether there are more: a big group
+    /// has thousands, which the pickers search for instead.
+    pub fn members_first(&self, project: u64) -> anyhow::Result<(Vec<Member>, bool)> {
+        let path = first_page(&format!("projects/{project}/members/all"));
+        let r = self.fetch(&path)?;
+        let more = r.next_page.is_some() || r.total.is_some_and(|t| t > 100);
+        Ok((decode(&r.body, &path)?, more))
+    }
+
+    /// One member's role, inherited too (404: not a member).
+    pub fn member(&self, project: u64, user: u64) -> anyhow::Result<Member> {
+        self.get(&member_path(project, user))
+    }
+
+    /// Members whose name or username has `query`, as a picker types it.
+    pub fn search_members(&self, project: u64, query: &str) -> anyhow::Result<Vec<Member>> {
+        let q: String = query
+            .bytes()
+            .map(|b| match b {
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+                _ => format!("%{b:02X}"),
+            })
+            .collect();
+        self.get(&format!("projects/{project}/members/all?query={q}&per_page=20"))
+    }
+
     /// A file's text at commit `sha`.
     pub fn raw_file(&self, project: u64, path: &str, sha: &str) -> anyhow::Result<String> {
         Ok(String::from_utf8_lossy(&self.raw_bytes(project, path, sha)?).into_owned())
@@ -534,7 +714,7 @@ impl Client {
     }
 
     pub fn approvals(&self, project: u64, iid: u64) -> anyhow::Result<Approvals> {
-        self.get(&format!("projects/{project}/merge_requests/{iid}/approvals"))
+        self.get(&approvals_path(project, iid))
     }
 
     pub fn commits(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Commit>> {
@@ -548,6 +728,91 @@ pub enum Scope {
     ToReview(String),
     Mine,
     All,
+    /// One project's, by id.
+    Project(u64),
+}
+
+fn scope_query(scope: &Scope) -> String {
+    match scope {
+        Scope::ToReview(me) => format!("reviewer_username={me}&scope=all"),
+        Scope::Mine => "scope=created_by_me".into(),
+        Scope::All => "scope=all".into(),
+        Scope::Project(id) => format!("project_id={id}"),
+    }
+}
+
+/// The merge requests list in `scope` and `state` (all its pages: `get_all`).
+pub fn list_path(scope: &Scope, state: &str) -> String {
+    match scope {
+        // A project's own list is under it.
+        Scope::Project(id) => format!("projects/{id}/merge_requests?state={state}&order_by=created_at&with_labels_details=true"),
+        s => format!("merge_requests?state={state}&order_by=created_at&with_labels_details=true&{}", scope_query(s)),
+    }
+}
+
+/// One short page of that list: its `X-Total` counts it.
+pub fn count_path(scope: &Scope, state: &str) -> String {
+    match scope {
+        Scope::Project(id) => format!("projects/{id}/merge_requests?state={state}&per_page=1"),
+        s => format!("merge_requests?state={state}&per_page=1&{}", scope_query(s)),
+    }
+}
+
+pub fn projects_path(search: &str) -> String {
+    let mut p = "projects?membership=true&archived=false&order_by=last_activity_at&simple=true&per_page=100".to_string();
+    if !search.trim().is_empty() {
+        let q: String = search
+            .trim()
+            .bytes()
+            .map(|b| match b {
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+                _ => format!("%{b:02X}"),
+            })
+            .collect();
+        p.push_str(&format!("&search={q}&search_namespaces=true"));
+    }
+    p
+}
+
+pub fn approvals_path(project: u64, iid: u64) -> String {
+    format!("projects/{project}/merge_requests/{iid}/approvals")
+}
+
+pub fn discussions_path(project: u64, iid: u64) -> String {
+    format!("projects/{project}/merge_requests/{iid}/discussions")
+}
+
+pub fn latest_pipeline_path(project: u64, iid: u64) -> String {
+    format!("projects/{project}/merge_requests/{iid}/pipelines?per_page=1")
+}
+
+pub fn project_path(project: u64) -> String {
+    format!("projects/{project}")
+}
+
+pub fn member_path(project: u64, user: u64) -> String {
+    format!("projects/{project}/members/all/{user}")
+}
+
+/// Page `page` of the list at `path`, as `get_all` asks for it.
+pub fn paged(path: &str, page: u32) -> String {
+    let sep = if path.contains('?') { '&' } else { '?' };
+    format!("{path}{sep}per_page=100&page={page}")
+}
+
+/// The first page of a list, as `get_all` asks for it: to `prefetch` it.
+pub fn first_page(path: &str) -> String {
+    paged(path, 1)
+}
+
+/// A project's merge requests page, `https://host/group/project/-/merge_requests[?…]`,
+/// as (host URL, project path).
+pub fn parse_project_mrs_url(url: &str) -> Option<(String, String)> {
+    let (scheme, rest) = url.trim().split_once("://")?;
+    let (authority, path) = rest.split_once('/')?;
+    let (project, after) = path.split_once("/-/merge_requests")?;
+    let after = after.split(['?', '#']).next()?;
+    (!project.is_empty() && after.trim_end_matches('/').is_empty()).then(|| (format!("{scheme}://{authority}"), project.to_string()))
 }
 
 /// A merge request's web URL, `https://host[:port]/group/project/-/merge_requests/12[/diffs…]`,
@@ -629,6 +894,83 @@ mod tests {
         );
         assert_eq!(parse_mr_url("https://gl.example.com/a/b/-/issues/42"), None);
         assert_eq!(parse_mr_url("not a url"), None);
+    }
+
+    #[test]
+    fn parses_project_merge_request_lists() {
+        assert_eq!(
+            parse_project_mrs_url("https://gl.example.com/a/b/-/merge_requests?state=merged"),
+            Some(("https://gl.example.com".into(), "a/b".into()))
+        );
+        assert_eq!(parse_project_mrs_url("https://gl.example.com/a/b/-/merge_requests/"), Some(("https://gl.example.com".into(), "a/b".into())));
+        // One merge request isn't the list.
+        assert_eq!(parse_project_mrs_url("https://gl.example.com/a/b/-/merge_requests/3"), None);
+        assert_eq!(parse_project_mrs_url("https://gl.example.com/a/b"), None);
+    }
+
+    #[test]
+    fn search_reads_merge_request_references() {
+        let mr = |p: u64| ok(&format!(r#"{{"iid":12,"project_id":{p},"title":"t"}}"#), None);
+        let canned = Arc::new(Canned {
+            answers: vec![
+                ("projects/a%2Fb/merge_requests/12".into(), mr(9)),
+                ("projects/3/merge_requests/12".into(), mr(3)),
+                // Project 4 has no !12.
+                ("projects/4/merge_requests/12".into(), Response { status: 404, ..Default::default() }),
+                ("&search=rate%20limit".into(), ok("[]", None)),
+            ],
+            ..Default::default()
+        });
+        let c = Client::new("http://gl.test", "t", canned.clone());
+        // group/project!12: that one.
+        assert_eq!(c.search_merge_requests("a/b!12", &[]).unwrap()[0].project_id, 9);
+        // !12: in each project at hand that has one.
+        let found = c.search_merge_requests("!12", &[3, 4]).unwrap();
+        assert_eq!(found.iter().map(|m| m.project_id).collect::<Vec<_>>(), [3]);
+        // Words: GitLab's search, everywhere.
+        assert!(c.search_merge_requests(" rate limit ", &[3]).unwrap().is_empty());
+        assert!(canned.asked.lock().unwrap().last().unwrap().contains("merge_requests?scope=all&state=all"));
+    }
+
+    #[test]
+    fn list_paths_by_scope() {
+        assert_eq!(count_path(&Scope::Project(7), "opened"), "projects/7/merge_requests?state=opened&per_page=1");
+        assert!(list_path(&Scope::ToReview("bob".into()), "merged").ends_with("&reviewer_username=bob&scope=all"));
+        assert_eq!(first_page("x?a=1"), "x?a=1&per_page=100&page=1");
+        assert_eq!(first_page("x"), "x?per_page=100&page=1");
+    }
+
+    #[test]
+    fn prefetched_answers_are_used_once() {
+        let canned = Arc::new(Canned {
+            answers: vec![("version".into(), ok(r#"{"version":"19.5.3"}"#, None))],
+            ..Default::default()
+        });
+        let c = Client::new("http://gl.test", "t", canned.clone());
+        c.prefetch(["version".to_string()]);
+        assert_eq!(canned.asked.lock().unwrap().len(), 1);
+        // From what was fetched ahead: no second request.
+        assert_eq!(c.version().unwrap().version, "19.5.3");
+        assert_eq!(canned.asked.lock().unwrap().len(), 1);
+        // Taken once: asked again, it's fetched again.
+        c.version().unwrap();
+        assert_eq!(canned.asked.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn the_rest_of_a_list_comes_in_one_batch() {
+        let page = |n: u32| Response { status: 200, next_page: (n < 3).then_some(n + 1), total: Some(250), body: format!("[{n}]").into_bytes() };
+        let canned = Arc::new(Canned {
+            answers: (1..=3).map(|n| (format!("&page={n}"), page(n))).collect(),
+            ..Default::default()
+        });
+        let c = Client::new("http://gl.test", "t", canned.clone());
+        let all: Vec<u32> = c.get_all("things?x=1").unwrap();
+        assert_eq!(all, [1, 2, 3]);
+        // Pages 2 and 3 were asked for together, after page 1, each once.
+        let asked = canned.asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 3);
+        assert!(asked[0].ends_with("page=1") && asked[1].ends_with("page=2") && asked[2].ends_with("page=3"));
     }
 
     #[test]

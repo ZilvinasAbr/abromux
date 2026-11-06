@@ -114,6 +114,11 @@ impl Surface {
         }
     }
 
+    /// A tab of plugin `id`.
+    pub fn is_plugin(&self, id: &str) -> bool {
+        matches!(self, Surface::Plugin(t) if t.plugin() == id)
+    }
+
     pub fn cwd(&self, cx: &App) -> Option<String> {
         match self {
             Surface::Terminal(t) => Some(t.read(cx).cwd.clone()),

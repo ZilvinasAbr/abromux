@@ -33,8 +33,10 @@ pub struct Review {
     pub roles: std::collections::HashMap<u64, &'static str>,
     /// The merge request's versions, newest first.
     pub versions: Vec<MrVersion>,
-    /// Who can be picked as an assignee or reviewer, by name.
+    /// Who can be picked as an assignee or reviewer, by name: the first
+    /// hundred, `members_more` when there are more (the picker searches).
     pub members: Vec<User>,
+    pub members_more: bool,
     /// The project's labels and open milestones, for the sidebar's pickers.
     pub labels: Vec<Label>,
     pub milestones: Vec<Milestone>,
@@ -193,6 +195,7 @@ impl Review {
             roles: Default::default(),
             versions: vec![],
             members: vec![],
+            members_more: false,
             labels: vec![],
             milestones: vec![],
             awards: vec![],

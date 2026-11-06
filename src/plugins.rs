@@ -15,6 +15,11 @@ pub fn set_host(view: WeakEntity<crate::AbroMux>, cx: &mut App) {
     cx.set_global(abromux_plugin::Host { open_url });
 }
 
+/// The plugin that shows `url` itself, if one does.
+pub fn claiming(url: &str) -> Option<&'static Plugin> {
+    all().iter().find(|p| (p.claims)(url))
+}
+
 /// A plugin's link: in a browser beside the focused tab, as a terminal's
 /// ⌘-click does.
 fn open_url(url: &str, window: &mut Window, cx: &mut App) {
