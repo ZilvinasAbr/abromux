@@ -1,0 +1,14 @@
+[
+  {
+    "created_at": "2026-11-06T08:41:29.699Z",
+    "id": 116,
+    "iid": 4,
+    "project_id": 19,
+    "ref": "changelog",
+    "sha": "53612e9f48b68a597afb67c94efc318947f1d017",
+    "source": "push",
+    "status": "pending",
+    "updated_at": "2026-11-06T08:41:29.903Z",
+    "web_url": "http://localhost:8929/alice/review-fixtures/-/pipelines/116"
+  }
+]

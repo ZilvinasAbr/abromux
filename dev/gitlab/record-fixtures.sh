@@ -34,9 +34,17 @@ for sha in $(jq -r '.[].id' "$OUT/mr1.commits.json"); do
 done
 for iid in 1 2 3 4 5 6; do
   get "projects/$P/merge_requests/$iid/resource_state_events?per_page=100" "mr$iid.resource_state_events.json"
-  get "projects/$P/merge_requests/$iid" "mr$iid.json"
+  get "projects/$P/merge_requests/$iid?include_diverged_commits_count=true" "mr$iid.json"
+  if [ "$(jq -r .state "$OUT/mr$iid.json")" = merged ]; then
+    get "projects/$P/pipelines?sha=$(jq -r .merge_commit_sha "$OUT/mr$iid.json")&per_page=1" "merge_pipelines.json"
+  fi
   get "projects/$P/merge_requests/$iid/diffs?per_page=100" "mr$iid.diffs.json"
   get "projects/$P/merge_requests/$iid/discussions?per_page=100" "mr$iid.discussions.json"
   get "projects/$P/merge_requests/$iid/approvals" "mr$iid.approvals.json"
+  get "projects/$P/merge_requests/$iid/award_emoji?per_page=100" "mr$iid.award_emoji.json"
+  get "projects/$P/merge_requests/$iid/reviewers?per_page=100" "mr$iid.reviewers.json"
+  get "projects/$P/merge_requests/$iid/closes_issues?per_page=100" "mr$iid.closes_issues.json"
+  get "projects/$P/merge_requests/$iid/draft_notes?per_page=100" "mr$iid.draft_notes.json"
+  get "projects/$P/merge_requests/$iid/pipelines?per_page=100" "mr$iid.pipelines.json"
   get "projects/$P/merge_requests/$iid/commits?per_page=100" "mr$iid.commits.json"
 done

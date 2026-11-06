@@ -44,6 +44,16 @@ const CODES: &[(&str, &str)] = &[
     ("coffee", "☕"),
 ];
 
+/// The emoji for shortcode `name` (`tada` → 🎉), if it's one we know.
+pub fn of(name: &str) -> Option<&'static str> {
+    CODES.iter().find(|(k, _)| *k == name).map(|(_, v)| *v)
+}
+
+/// What the reaction picker offers: each emoji once, by its main name.
+pub fn picks() -> impl Iterator<Item = (&'static str, &'static str)> {
+    CODES.iter().copied().filter(|(k, _)| !matches!(*k, "+1" | "-1" | "smiley"))
+}
+
 /// `text` with each known `:code:` replaced by its emoji.
 pub fn expand(text: &str) -> String {
     let mut out = String::with_capacity(text.len());

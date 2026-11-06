@@ -7,7 +7,8 @@
 
 use crate::{
     diff::{Body, changed_ranges},
-    discussion::{code_line, code_line_sel, half},
+    discussion::{code_line_with, half_with, line_highlights},
+    select::Group,
     review::{File, Review},
     style::*,
     view::{GitLabView, Load},
@@ -143,7 +144,7 @@ pub fn rows(r: &Review, s: &Shape) -> Vec<Row> {
     for (fi, f) in r.files.iter().enumerate() {
         out.push(Row::File(fi));
         if !(s.folded)(f) {
-            match &f.body {
+            match f.body() {
                 Body::Text(hunks) => {
                     // Unchanged lines can only come from the new file's text.
                     let expandable = !f.meta.deleted_file && !f.meta.new_file;
@@ -265,6 +266,7 @@ pub fn matches(path: &str, query: &str) -> bool {
 
 /// The folders and files of the tree, in GitLab's order: folders first,
 /// each sorted by name.
+#[derive(Clone)]
 pub enum TreeItem {
     /// `path`: the folder's full path, which folding goes by.
     Folder { name: String, depth: usize, path: String, folded: bool },
@@ -323,7 +325,7 @@ impl GitLabView {
         // The picked versions' diffs, or the latest while those load.
         let r = &self.shown().unwrap_or_else(|| main.clone());
         let (added, removed) = r.files.iter().fold((0, 0), |(a, d), f| {
-            let (x, y) = f.body.counts();
+            let (x, y) = f.counts();
             (a + x, d + y)
         });
         // Wraps onto a second line in a narrow pane instead of squeezing.
@@ -369,17 +371,31 @@ impl GitLabView {
             .child(div().text_color(c(TEXT)).child(format!("{} file{}", r.files.len(), if r.files.len() == 1 { "" } else { "s" })))
             .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(GREEN)).child(format!("+{added}")))
             .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(RED)).child(format!("−{removed}")));
-        let diff = list(self.diff_list.clone(), cx.processor(|v, ix: usize, window, cx| v.row(ix, window, cx)))
-            .size_full();
+        let diff = div()
+            .size_full()
+            // Scrolling yourself ends a jump's hold on the view.
+            .on_scroll_wheel(cx.listener(|v, _, _, _| v.jump = None))
+            .child(list(self.diff_list.clone(), cx.processor(|v, ix: usize, window, cx| v.row(ix, window, cx))).size_full());
         // GitLab keeps the header of the file being read at the top.
         let top = self.diff_list.logical_scroll_top();
         let sticky = self.active_file().filter(|f| {
             self.rows.get(top.item_ix) != Some(&Row::File(*f)) || top.offset_in_item > px(0.)
         });
+        // The next file's header pushes it up and out, as in GitLab, rather
+        // than sliding under it.
+        let push = (top.item_ix + 1..self.rows.len())
+            .take(64)
+            .find(|&i| matches!(self.rows[i], Row::File(_)))
+            .and_then(|i| self.diff_list.bounds_for_item(i))
+            .map(|b| {
+                let below = b.top() - self.diff_list.viewport_bounds().top();
+                (below - b.size.height).min(px(0.))
+            })
+            .unwrap_or(px(0.));
         let sticky = sticky.map(|f| {
             div()
                 .absolute()
-                .top_0()
+                .top(push)
                 .left_0()
                 .right_0()
                 .bg(c(BG))
@@ -388,7 +404,7 @@ impl GitLabView {
         let diff = match self.compare_loading() {
             Some(Some(e)) => div().p_4().text_color(c(RED)).child(e.to_string()),
             Some(None) => spinner("gl-compare-loading"),
-            None => div().relative().size_full().child(diff).children(sticky),
+            None => div().relative().size_full().overflow_hidden().child(diff).children(sticky),
         };
         div()
             .size_full()
@@ -411,6 +427,7 @@ impl GitLabView {
                             .pt_3()
                             .pr_4()
                             .pl(px(if self.tree_shown() { 0. } else { 16. }))
+                            .children(self.compare.commit.and_then(|i| self.commit_card(r, i, cx)))
                             .child(div().flex_1().min_h(px(0.)).child(diff))
                             .children(self.file_pager(r, cx)),
                     ),
@@ -425,17 +442,23 @@ impl GitLabView {
         let mono = self.mono(cx);
         // GitLab lists commits newest first: "previous" is the next one down.
         let (older, newer) = ((i + 1 < r.commits.len()).then_some(i + 1), i.checked_sub(1));
-        let step = |id: &'static str, label: &'static str, to: Option<usize>, cx: &mut Context<Self>| {
+        let step = |id: &'static str, label: &'static str, back: bool, to: Option<usize>, cx: &mut Context<Self>| {
+            let color = c(if to.is_some() { TEXT } else { MUTED });
+            let chevron = app_icon(if back { "chevron-left" } else { "chevron-right" }, 14., color);
             div()
                 .id(id)
                 .flex()
                 .items_center()
+                .gap_1()
                 .h(px(32.))
                 .px_3()
                 .bg(ca(if to.is_some() { 0x89888d66 } else { 0x89888d26 }))
-                .text_color(c(if to.is_some() { TEXT } else { MUTED }))
+                .text_color(color)
                 .when(to.is_some(), |d| d.cursor_pointer().hover(|s| s.bg(ca(0x89888d99))))
+                // The chevron leads "Previous" and trails "Next".
                 .child(label)
+                .child(chevron)
+                .when(back, |d| d.flex_row_reverse())
                 .when_some(to, |d, to| d.on_click(cx.listener(move |v, _, _, cx| v.open_commit(to, cx))))
         };
         div()
@@ -445,26 +468,111 @@ impl GitLabView {
             .gap_2()
             .text_color(c(TEXT))
             .child("Viewing commit")
-            .child(div().font_family(mono).font_weight(FontWeight::SEMIBOLD).child(commit.short_id.clone()))
-            .child(div().text_color(c(MUTED)).truncate().max_w(px(360.)).child(commit.title.clone()))
+            .child(div().font_family(mono).text_color(c(LINK)).child(commit.short_id.clone()))
             .child(
                 div()
                     .flex()
                     .gap(px(1.))
                     .rounded(px(8.))
                     .overflow_hidden()
-                    .child(step("gl-commit-prev", "Prev", older, cx))
-                    .child(step("gl-commit-next", "Next", newer, cx)),
+                    .child(step("gl-commit-prev", "Previous", true, older, cx))
+                    .child(step("gl-commit-next", "Next", false, newer, cx)),
             )
             .child(
-                div()
-                    .id("gl-all-changes")
-                    .text_color(c(LINK))
-                    .cursor_pointer()
-                    .hover(|s| s.underline())
-                    .child("Show all changes")
+                crate::edit::secondary("gl-all-changes", "Show latest version")
                     .on_click(cx.listener(|v, _, _, cx| v.set_compare(crate::Compare::default(), cx))),
             )
+    }
+
+    /// Above a commit's changes, as GitLab has it: who wrote it, when, its
+    /// sha to copy, and the rest of its message.
+    fn commit_card(&self, r: &Review, i: usize, cx: &mut Context<Self>) -> Option<Div> {
+        let cm = r.commits.get(i)?;
+        let mono = self.mono(cx);
+        let author = crate::mr::commit_author(r, cm);
+        let when = if cm.authored_date.is_empty() { &cm.created_at } else { &cm.authored_date };
+        let sha = cm.id.clone();
+        Some(
+            div()
+                .mb_3()
+                .p_4()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .rounded(px(8.))
+                .bg(c(RAISED))
+                .child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap_2()
+                        .child(self.avatars.of(&author, 32.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .flex()
+                                .flex_col()
+                                .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(TEXT)).child(cm.title.clone()))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_1()
+                                        .text_size(px(12.))
+                                        .line_height(px(18.))
+                                        .child(div().text_color(c(TEXT)).child(author.name.clone()))
+                                        .child(div().text_color(c(MUTED)).child("authored"))
+                                        .child(crate::style::when(when).text_color(c(MUTED))),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap(px(1.))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .h(px(32.))
+                                        .px_3()
+                                        .rounded_l(px(8.))
+                                        .bg(ca(0x89888d66))
+                                        .font_family(mono.clone())
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(c(TEXT))
+                                        .child(cm.short_id.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .id("gl-commit-card-copy")
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .size(px(32.))
+                                        .rounded_r(px(8.))
+                                        .bg(ca(0x89888d66))
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(ca(0x89888d99)))
+                                        .child(icon("copy", 14., c(TEXT)))
+                                        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(sha.clone()))),
+                                ),
+                        ),
+                )
+                .when_some(cm.body(), |d, body| {
+                    d.child(
+                        div()
+                            .ml(px(40.))
+                            .pl_3()
+                            .border_l_2()
+                            .border_color(c(BORDER))
+                            .font_family(mono)
+                            .text_size(px(13.))
+                            .line_height(px(20.))
+                            .text_color(c(TEXT))
+                            .children(body.lines().map(|l| div().child(if l.is_empty() { " ".to_string() } else { l.to_string() }))),
+                    )
+                }),
+        )
     }
 
     pub(crate) fn open_commit(&mut self, i: usize, cx: &mut Context<Self>) {
@@ -754,101 +862,15 @@ impl GitLabView {
             let folded = |p: &str| query.trim().is_empty() && self.folded_dirs.contains(p);
             tree_folded(r, &query, &folded)
         };
-        let flat = self.tree_flat;
         let none = items.is_empty();
         // Keep the file being read in view in the tree, as GitLab does: when
         // it changes, scroll the tree to its row.
         if active != self.tree_active.get() {
             self.tree_active.set(active);
             if let Some(ix) = items.iter().position(|it| matches!(it, TreeItem::File { index, .. } if Some(*index) == active)) {
-                self.tree_scroll.scroll_to_item(ix);
+                self.tree_scroll.scroll_to_item(ix, ScrollStrategy::Center);
             }
         }
-        let rows = items.into_iter().map(|it| match it {
-            TreeItem::Folder { name, depth, path, folded } => div()
-                .id(SharedString::from(format!("dir-{path}")))
-                .flex()
-                .items_center()
-                .gap_1()
-                .h(px(32.))
-                .pl(px(4. + depth as f32 * 16.))
-                .rounded(px(4.))
-                .cursor_pointer()
-                .hover(|s| s.bg(c(RAISED)))
-                .text_color(c(TEXT))
-                .child(app_icon(if folded { "chevron-right" } else { "chevron-down" }, 14., c(MUTED)))
-                .child(app_icon("folder", 16., c(MUTED)))
-                .child(div().ml_1().child(name))
-                .on_click(cx.listener(move |v, _, _, cx| {
-                    if !v.folded_dirs.remove(&path) {
-                        v.folded_dirs.insert(path.clone());
-                    }
-                    cx.notify();
-                }))
-                .into_any_element(),
-            TreeItem::File { index, name, depth } => {
-                let f = &r.files[index];
-                let (a, d) = f.body.counts();
-                let (status_icon, status_color) = match f.status() {
-                    "added" => ("square-plus", GREEN),
-                    "deleted" => ("square-minus", RED),
-                    _ => ("square-dot", ORANGE),
-                };
-                let viewed = self.loc.viewed.iter().any(|p| p == f.path());
-                // List mode: the folder under the name.
-                let dir = flat.then(|| f.path().rsplit_once('/').map(|(d, _)| d.to_string())).flatten();
-                let name = div()
-                    .flex()
-                    .flex_col()
-                    .child(name)
-                    .when_some(dir, |d, dir| {
-                        d.child(
-                            div()
-                                .truncate()
-                                .text_size(px(12.))
-                                .line_height(px(16.))
-                                .font_weight(FontWeight::NORMAL)
-                                .text_color(c(MUTED))
-                                .child(dir),
-                        )
-                    });
-                div()
-                    .id(SharedString::from(format!("tree-{index}")))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .min_h(px(32.))
-                    .py(px(if flat { 4. } else { 0. }))
-                    .pl(px(8. + depth as f32 * 16.))
-                    .pr_2()
-                    .rounded(px(4.))
-                    .cursor_pointer()
-                    .when(active == Some(index), |d| d.bg(c(RAISED)))
-                    .hover(|s| s.bg(c(RAISED)))
-                    .child(icon("file", 14., file_color(f.path())))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .truncate()
-                            .font_weight(if viewed { FontWeight::NORMAL } else { FontWeight::SEMIBOLD })
-                            .text_color(c(if viewed { MUTED } else { TEXT }))
-                            .child(name),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap_1()
-                            .text_size(px(12.))
-                            .child(div().text_color(c(GREEN)).child(format!("+{a}")))
-                            .child(div().text_color(c(RED)).child(format!("-{d}"))),
-                    )
-                    .child(icon(status_icon, 14., c(status_color)))
-                    .on_click(cx.listener(move |v, _, _, cx| v.scroll_to_file(index, cx)))
-                    .into_any_element()
-            }
-        });
-        let rows: Vec<AnyElement> = rows.collect();
         div()
             .w(px(320.))
             .flex_none()
@@ -874,16 +896,128 @@ impl GitLabView {
                     .cleanable(true),
             )
             .child(div().h(px(8.)))
-            .child(
+            .child({
+                // Only the rows in view are built: a thousand files would
+                // otherwise lay out every frame.
+                let items = std::rc::Rc::new(items);
+                let review = self.shown();
                 div()
-                    .id("gl-tree")
                     .flex_1()
                     .min_h(px(0.))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.tree_scroll)
-                    .children(rows)
-                    .when(none, |d| d.child(div().py_2().text_color(c(MUTED)).child("No files found."))),
-            )
+                    .child(
+                        uniform_list(
+                            "gl-tree",
+                            items.len(),
+                            cx.processor(move |v, range: std::ops::Range<usize>, _, cx| {
+                                let Some(r) = review.clone() else { return vec![] };
+                                let active = v.active_file();
+                                range.map(|i| v.tree_row(&items[i], &r, active, cx)).collect::<Vec<_>>()
+                            }),
+                        )
+                        .size_full()
+                        .track_scroll(self.tree_scroll.clone()),
+                    )
+                    .when(none, |d| d.child(div().py_2().text_color(c(MUTED)).child("No files found.")))
+            })
+    }
+
+    /// One row of the file tree: a folder, or a file with its counts.
+    fn tree_row(&self, it: &TreeItem, r: &Review, active: Option<usize>, cx: &mut Context<Self>) -> AnyElement {
+        let flat = self.tree_flat;
+        match it {
+            TreeItem::Folder { name, depth, path, folded } => {
+                let (name, depth, path, folded) = (name.clone(), *depth, path.clone(), *folded);
+                div()
+                .id(SharedString::from(format!("dir-{path}")))
+                .w_full()
+                .flex()
+                .items_center()
+                .gap_1()
+                .h(px(32.))
+                .pl(px(4. + depth as f32 * 16.))
+                .relative()
+                .children(tree_guides(depth))
+                .rounded(px(4.))
+                .cursor_pointer()
+                .hover(|s| s.bg(c(RAISED)))
+                .text_color(c(TEXT))
+                .child(app_icon(if folded { "chevron-right" } else { "chevron-down" }, 14., c(MUTED)))
+                .child(app_icon("folder", 16., c(MUTED)))
+                .child(div().ml_1().child(name))
+                .on_click(cx.listener(move |v, _, _, cx| {
+                    if !v.folded_dirs.remove(&path) {
+                        v.folded_dirs.insert(path.clone());
+                    }
+                    cx.notify();
+                }))
+                .into_any_element()
+            }
+            TreeItem::File { index, name, depth } => {
+                let (index, name, depth) = (*index, name.clone(), *depth);
+                let f = &r.files[index];
+                let (a, d) = f.counts();
+                let (status_icon, status_color) = match f.status() {
+                    "added" => ("square-plus", GREEN),
+                    "deleted" => ("square-minus", RED),
+                    _ => ("square-dot", ORANGE),
+                };
+                let viewed = self.loc.viewed.iter().any(|p| p == f.path());
+                // List mode: the folder under the name.
+                let dir = flat.then(|| f.path().rsplit_once('/').map(|(d, _)| d.to_string())).flatten();
+                let name = div()
+                    .flex()
+                    .flex_col()
+                    .child(name)
+                    .when_some(dir, |d, dir| {
+                        d.child(
+                            div()
+                                .truncate()
+                                .text_size(px(12.))
+                                .line_height(px(16.))
+                                .font_weight(FontWeight::NORMAL)
+                                .text_color(c(MUTED))
+                                .child(dir),
+                        )
+                    });
+                div()
+                    .id(SharedString::from(format!("tree-{index}")))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    // One height a mode: the tree is a uniform list.
+                    .h(px(if flat { 48. } else { 32. }))
+                    .pl(px(8. + depth as f32 * 16.))
+                    .relative()
+                    .children(tree_guides(depth))
+                    .pr_2()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .when(active == Some(index), |d| d.bg(c(RAISED)))
+                    .hover(|s| s.bg(c(RAISED)))
+                    .child(file_icon(f.path(), 14.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .truncate()
+                            .font_weight(if viewed { FontWeight::NORMAL } else { FontWeight::SEMIBOLD })
+                            .text_color(c(if viewed { MUTED } else { TEXT }))
+                            .child(name),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_1()
+                            .text_size(px(12.))
+                            .child(div().text_color(c(GREEN)).child(format!("+{a}")))
+                            .child(div().text_color(c(RED)).child(format!("-{d}"))),
+                    )
+                    .child(icon(status_icon, 14., c(status_color)))
+                    .on_click(cx.listener(move |v, _, _, cx| v.scroll_to_file(index, cx)))
+                    .into_any_element()
+            }
+        }
     }
 
     /// The file whose card is at the top of the diff.
@@ -1061,6 +1195,9 @@ impl GitLabView {
         if let Some(ix) = self.rows.iter().position(|r| *r == Row::File(file)) {
             self.diff_list.scroll_to(ListOffset { item_ix: ix, offset_in_item: px(0.) });
         }
+        // Near the end the list can't put the file at the top yet: a file still
+        // loading is short. Aim at it again as rows come in, for a moment.
+        self.jump = Some((file, std::time::Instant::now()));
         cx.notify();
     }
 
@@ -1074,7 +1211,7 @@ impl GitLabView {
         let mono = self.mono(cx);
         match row {
             Row::File(fi) => self.file_header(&r.files[fi], fi, cx).into_any_element(),
-            Row::Message(fi) if matches!(r.files[fi].body, Body::Binary) && is_image(r.files[fi].path()) => {
+            Row::Message(fi) if matches!(r.files[fi].body(), Body::Binary) && is_image(r.files[fi].path()) => {
                 // GitLab's "2-up": old on the left in red, new on the right in green.
                 let side = |s: &Shot, border: Option<u32>| {
                     let picture = match &s.image {
@@ -1130,18 +1267,55 @@ impl GitLabView {
                 };
                 card(div().flex().justify_center().px_4().py_4().bg(c(CARD)).child(body)).into_any_element()
             }
+            Row::Message(fi) if matches!(r.files[fi].body(), Body::Pending) => {
+                let path = r.files[fi].path().to_string();
+                let failed = match self.late.get(&path) {
+                    None => {
+                        self.fetch_late(fi, cx);
+                        None
+                    }
+                    Some(e) => e.clone(),
+                };
+                let body = match failed {
+                    Some(e) => div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().text_color(c(RED)).child(format!("Couldn't load the changes: {e}")))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("late-retry-{fi}")))
+                                .text_color(c(LINK))
+                                .cursor_pointer()
+                                .hover(|s| s.underline())
+                                .child("Retry")
+                                .on_click(cx.listener(move |v, _, _, cx| {
+                                    v.late.remove(&path);
+                                    v.fetch_late(fi, cx);
+                                })),
+                        ),
+                    None => div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_color(c(MUTED))
+                        .child(spinner("gl-late").py_0())
+                        .child("Loading…"),
+                };
+                card(div().px_4().py_3().bg(c(CARD)).child(body)).into_any_element()
+            }
             Row::Message(fi) => {
                 let f = &r.files[fi];
-                let text = match f.body {
+                let text = match f.body() {
                     Body::Binary => "Binary file not shown.",
                     Body::Unchanged if f.meta.renamed_file => "File moved.",
                     Body::Unchanged => "File mode changed.",
                     Body::TooLarge => "Changes are too large to be shown.",
                     Body::Collapsed => "This file is collapsed because it's large.",
-                    Body::Text(_) => "",
+                    Body::Text(_) | Body::Pending => "",
                 };
                 // Where GitLab can't show it here, its file page can.
-                let blob = matches!(f.body, Body::TooLarge | Body::Collapsed | Body::Unchanged)
+                let blob = matches!(f.body(), Body::TooLarge | Body::Collapsed | Body::Unchanged)
                     .then(|| {
                         let project = r.mr.web_url.split("/-/").next()?;
                         let sha = r.mr.diff_refs.as_ref()?.head_sha.clone();
@@ -1180,7 +1354,7 @@ impl GitLabView {
                 .into_any_element()
             }
             Row::Hunk(fi, hi, hidden) => {
-                let h = &r.files[fi].body.hunks()[hi];
+                let h = &r.files[fi].body().hunks()[hi];
                 let expandable = !r.files[fi].meta.new_file && !r.files[fi].meta.deleted_file;
                 card(
                     code(div(), mono)
@@ -1209,15 +1383,22 @@ impl GitLabView {
                     spans: text.as_ref().and_then(|t| t.spans.get(i).cloned()).unwrap_or_default(),
                     changed: vec![],
                 };
+                let (t, h) = line_highlights(&line);
                 if self.loc.parallel {
-                    let row = code(div(), mono).flex().w_full().child(half(Some(&line), false)).child(half(Some(&line), true));
+                    let (left, right) = (self.sel_text(t.clone(), h.clone(), Group::Diff(0), ix, cx), self.sel_text(t, h, Group::Diff(1), ix, cx));
+                    let row = code(div(), mono)
+                        .flex()
+                        .w_full()
+                        .child(half_with(Some(&line), false, Some(left)))
+                        .child(half_with(Some(&line), true, Some(right)));
                     return card(row).into_any_element();
                 }
-                card(code_line(&line, &mono, None)).into_any_element()
+                let text = self.sel_text(t, h, Group::Diff(0), ix, cx);
+                card(code_line_with(&line, &mono, None, false, text)).into_any_element()
             }
             Row::Pair(fi, hi, l, rt) => {
                 let f = &r.files[fi];
-                let lines = &f.body.hunks()[hi].lines;
+                let lines = &f.body().hunks()[hi].lines;
                 // Folded resolved threads on either line: an avatar to open them.
                 let folded: Vec<_> = f
                     .threads
@@ -1240,12 +1421,18 @@ impl GitLabView {
                             v.rebuild_rows(cx);
                         }))
                 });
+                // Each side selects on its own, as in GitLab.
+                let mut side = |i: Option<usize>, s: u8| {
+                    let (t, h) = line_highlights(&lines[i?]);
+                    Some(self.sel_text(t, h, Group::Diff(s), ix, cx))
+                };
+                let (left, right) = (side(l, 0), side(rt, 1));
                 let row = code(div(), mono)
                     .relative()
                     .flex()
                     .w_full()
-                    .child(half(l.map(|i| &lines[i]), false))
-                    .child(half(rt.map(|i| &lines[i]), true))
+                    .child(half_with(l.map(|i| &lines[i]), false, left))
+                    .child(half_with(rt.map(|i| &lines[i]), true, right))
                     .children(gutter);
                 // The bubble goes over the new side's number, else the old side's.
                 let Some(t) = rt.or(l).map(|i| &lines[i]) else {
@@ -1271,7 +1458,7 @@ impl GitLabView {
             }
             Row::Line(fi, hi, li) => {
                 let f = &r.files[fi];
-                let l = &f.body.hunks()[hi].lines[li];
+                let l = &f.body().hunks()[hi].lines[li];
                 // Folded resolved threads on this line: their avatars in the gutter.
                 let folded: Vec<_> = f
                     .threads
@@ -1319,7 +1506,9 @@ impl GitLabView {
                     .children([Some(pick), gutter].into_iter().flatten())
                     .children(self.comment_button(key, cx).map(|b| b.left(px(NUM_W - 22.))))
                     .into_any_element();
-                let row = code_line_sel(l, &mono, Some(gutter), selected);
+                let (t, h) = line_highlights(l);
+                let text = self.sel_text(t, h, Group::Diff(0), ix, cx);
+                let row = code_line_with(l, &mono, Some(gutter), selected, text);
                 card(div().child(self.hover_line(key, row, cx))).into_any_element()
             }
             Row::Thread(fi, ti) => {
@@ -1339,8 +1528,23 @@ impl GitLabView {
                     .flex_col()
                     .when(parallel, |d| d.border_l_1().border_r_1().border_color(c(BORDER)))
                     .children(self.thread_notes(d, Some(&path), true, true, window, cx))
-                    .child(self.reply_bar(&d.id, d.resolvable(), d.resolved(), cx));
-                let empty = || div().flex_1().bg(c(EMPTY_BG));
+                    .child(self.reply_bar(&d.id, d.resolvable(), d.resolved(), cx))
+                    // GitLab's "Start another thread" on the same line, while
+                    // none is being written there.
+                    .when_some(
+                        d.position()
+                            .map(|p| (fi, p.old_line, p.new_line))
+                            .filter(|k| self.me.is_some() && self.commenting != Some(*k)),
+                        |el, key| {
+                            el.child(
+                                div().flex().px_4().py_3().border_t_1().border_color(c(RAISED)).bg(c(CARD)).child(
+                                    crate::edit::secondary(SharedString::from(format!("another-{}", d.id)), "Start another thread")
+                                        .on_click(cx.listener(move |v, _, window, cx| v.open_line_comment(key, window, cx))),
+                                ),
+                            )
+                        },
+                    );
+                let empty =|| div().flex_1().bg(c(EMPTY_BG));
                 let row = if parallel {
                     if old_side { div().flex().child(thread).child(empty()) } else { div().flex().child(empty()).child(thread) }
                 } else {
@@ -1396,7 +1600,7 @@ impl GitLabView {
     }
 
     fn file_header(&self, f: &File, fi: usize, cx: &mut Context<Self>) -> Div {
-        let (a, d) = f.body.counts();
+        let (a, d) = f.counts();
         let folded = self.is_folded(f);
         let viewed = self.loc.viewed.iter().any(|p| p == f.path());
         let path = f.path().to_string();
@@ -1619,7 +1823,7 @@ impl GitLabView {
         let (Some(r), Some(c)) = (self.shown(), self.client.clone()) else { return };
         let Some(refs) = r.mr.diff_refs.clone() else { return };
         for (fi, f) in r.files.iter().enumerate() {
-            if !matches!(f.body, Body::Binary) || !is_image(f.path()) || self.pictures.contains_key(&fi) {
+            if !matches!(f.body(), Body::Binary) || !is_image(f.path()) || self.pictures.contains_key(&fi) {
                 continue;
             }
             // The old version from the base, the new one from the head.
@@ -1645,6 +1849,57 @@ impl GitLabView {
             })
             .detach();
         }
+    }
+
+    /// A file GitLab left out: both sides from the repository, diffed here,
+    /// in the background. A few at a time, so scrolling through a thousand
+    /// of them doesn't fire a thousand requests at once.
+    pub(crate) fn fetch_late(&mut self, fi: usize, cx: &mut Context<Self>) {
+        const AT_ONCE: usize = 6;
+        let (Some(r), Some(c)) = (self.review.ready().cloned(), self.client.clone()) else { return };
+        let Some(f) = r.files.get(fi) else { return };
+        let path = f.path().to_string();
+        if self.late.contains_key(&path) || f.late.get().is_some() {
+            return;
+        }
+        if self.late.values().filter(|e| e.is_none()).count() >= AT_ONCE {
+            // Asked again when it's drawn after one of these lands.
+            return;
+        }
+        let Some(refs) = r.mr.diff_refs.clone() else { return };
+        self.late.insert(path.clone(), None);
+        let (project, old_path, new_path) = (r.mr.project_id, f.meta.old_path.clone(), f.meta.new_path.clone());
+        let (new_file, deleted) = (f.meta.new_file, f.meta.deleted_file);
+        let slot = f.late.clone();
+        cx.spawn(async move |this, cx| {
+            let got = cx
+                .background_spawn(async move {
+                    let old = if new_file { None } else { c.raw_maybe(project, &old_path, &refs.base_sha)? };
+                    let new = if deleted { None } else { c.raw_maybe(project, &new_path, &refs.head_sha)? };
+                    let status = match (&old, &new) {
+                        (None, Some(_)) => Some("added"),
+                        (Some(_), None) => Some("deleted"),
+                        _ => None,
+                    };
+                    let body = crate::diff::Body::local(old.as_deref(), new.as_deref(), &new_path);
+                    let _ = slot.set(crate::review::Late { body, status });
+                    anyhow::Ok(())
+                })
+                .await;
+            this.update(cx, |v, cx| {
+                match got {
+                    Ok(()) => {
+                        v.late.remove(&path);
+                    }
+                    Err(e) => {
+                        v.late.insert(path, Some(format!("{e:#}")));
+                    }
+                }
+                v.rebuild_rows(cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn fetch_text(&mut self, fi: usize, cx: &mut Context<Self>) {
@@ -1758,6 +2013,15 @@ impl GitLabView {
         });
         self.rows = rows;
         self.diff_list.reset(self.rows.len());
+        let jump = self.jump.filter(|(_, at)| at.elapsed() < std::time::Duration::from_secs(5)).map(|(f, _)| f);
+        let new_top = match jump.and_then(|f| self.rows.iter().position(|r| *r == Row::File(f))) {
+            Some(ix) => {
+                self.diff_list.scroll_to(ListOffset { item_ix: ix, offset_in_item: px(0.) });
+                cx.notify();
+                return;
+            }
+            None => new_top,
+        };
         if let Some(ix) = new_top {
             let kept = anchor.is_some_and(|a| same(&self.rows[ix], &a));
             let offset = if kept { top.offset_in_item } else { px(0.) };
@@ -1911,4 +2175,10 @@ mod tests {
             .collect();
         assert_eq!(folded, ["a", "README.md", "src+", "z.txt"]);
     }
+}
+
+/// GitLab's thin lines down the tree, one under each enclosing folder's
+/// chevron.
+fn tree_guides(depth: usize) -> impl Iterator<Item = Div> {
+    (0..depth).map(|k| div().absolute().top_0().bottom_0().left(px(11. + k as f32 * 16.)).w(px(1.)).bg(c(RAISED)))
 }

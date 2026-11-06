@@ -25,6 +25,7 @@ impl Transport for Fixtures {
             ["projects", _, "members", "all"] => "members.json".into(),
             ["projects", _, "labels"] => "labels.json".into(),
             ["projects", _, "repository", "compare"] => "compare.json".into(),
+            ["projects", _, "pipelines"] => "merge_pipelines.json".into(),
             ["projects", _, "repository", "commits", sha, "diff"] => format!("commit.{sha}.diff.json"),
             ["projects", _, "merge_requests", iid, "versions", v] => format!("mr{iid}.versions.{v}.json"),
             ["projects", _, "merge_requests", iid] => format!("mr{iid}.json"),
@@ -36,6 +37,7 @@ impl Transport for Fixtures {
         Ok(Response {
             status: 200,
             next_page: None,
+            total: None,
             body: std::fs::read(&file)?,
         })
     }
@@ -80,6 +82,12 @@ fn rate_limiter_mr() {
         let pipeline = review.mr.head_pipeline.as_ref().expect("a pipeline");
         assert_eq!(pipeline.git_ref, "rate-limiter", "{name}");
         assert!(["pending", "failed"].contains(&pipeline.label().0), "{name}: {}", pipeline.status);
+        // main moved on after the branch was cut (seed.py's "Document LIMIT"…),
+        // so the merge widget offers a rebase.
+        assert_eq!(review.mr.diverged_commits_count, Some(2), "{name}");
+        // bob approved: the sidebar's green check comes from GitLab's reviewer state.
+        let bob = review.mr.reviewers.iter().find(|u| u.username == "bob").expect("bob reviews").id;
+        assert_eq!(review.review_states.get(&bob).map(String::as_str), Some("approved"), "{name}");
         let s = review.summary();
         eprintln!("{name}: {s:#}");
         assert_eq!(s["ref"], "alice/review-fixtures!1", "{name}");
@@ -152,6 +160,9 @@ fn merged_and_closed() {
         assert_eq!(merged.mr.state, "merged", "{name}");
         assert_eq!(merged.mr.merged_by.as_ref().map(|u| u.username.as_str()), Some("alice"), "{name}");
         assert!(merged.mr.merge_commit_sha.is_some(), "{name}");
+        // CI ran on main for the merge commit, as the merged widget shows.
+        let mp = merged.merge_pipeline.as_ref().expect("the merge commit's pipeline");
+        assert_eq!((mp.git_ref.as_str(), Some(&mp.sha)), ("main", merged.mr.merge_commit_sha.as_ref()), "{name}");
         assert!(merged.system.iter().any(|n| n.body == "merged"), "{name}: a merged event");
         let closed = load_review(&c, p, 6).unwrap();
         assert_eq!(closed.mr.state, "closed", "{name}");

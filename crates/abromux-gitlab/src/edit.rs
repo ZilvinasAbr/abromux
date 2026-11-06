@@ -22,6 +22,8 @@ pub struct Boxes {
     pub reply: Entity<InputState>,
     /// The open new thread on a line.
     pub line: Entity<InputState>,
+    /// The search in a sidebar dropdown (side.rs).
+    pub search: Entity<InputState>,
 }
 
 impl Boxes {
@@ -33,12 +35,13 @@ impl Boxes {
             comment: field("Write a comment…", window, cx),
             reply: field("Reply…", window, cx),
             line: field("Write a comment on this line…", window, cx),
+            search: cx.new(|cx| InputState::new(window, cx).placeholder("Search")),
         }
     }
 
     /// One of them has the keys: the tab's shortcuts stand aside.
     pub fn typing(&self, window: &Window, cx: &App) -> bool {
-        [&self.comment, &self.reply, &self.line]
+        [&self.comment, &self.reply, &self.line, &self.search]
             .iter()
             .any(|b| b.read(cx).focus_handle(cx).is_focused(window))
     }
@@ -182,6 +185,28 @@ impl GitLabView {
         self.write(move |c, p, iid| c.approve(p, iid, approve), |_, _, _| {}, window, cx);
     }
 
+    /// GitLab's reaction toggle: take back mine of `name`, or add it.
+    pub(crate) fn toggle_award(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(r) = self.review.ready() else { return };
+        let me = self.me.as_ref().map(|u| u.id);
+        let mine = r.awards.iter().find(|a| a.name == name && Some(a.user.id) == me).map(|a| a.id);
+        let name = name.to_string();
+        self.emoji_picker = false;
+        self.write(
+            move |c, p, iid| match mine {
+                Some(id) => c.unaward(p, iid, id),
+                None => c.award(p, iid, &name),
+            },
+            |_, _, _| {},
+            window,
+            cx,
+        );
+    }
+
+    pub(crate) fn rebase(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.write(|c, p, iid| c.rebase(p, iid), |_, _, _| {}, window, cx);
+    }
+
     /// Open the new-thread box under a line of the diff.
     pub(crate) fn open_line_comment(&mut self, key: LineKey, window: &mut Window, cx: &mut Context<Self>) {
         if self.commenting != Some(key) {
@@ -199,7 +224,8 @@ impl GitLabView {
 
     /// Start the thread on the line: on the latest version, as GitLab
     /// starts new threads (comparing older versions is for reading).
-    pub(crate) fn send_line_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// `draft`: add it to your review instead ("Start a review").
+    pub(crate) fn send_line_comment(&mut self, draft: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some((fi, old, new)) = self.commenting else { return };
         let body = self.boxes.line.read(cx).value().trim().to_string();
         let Some(r) = self.review.ready().cloned() else { return };
@@ -211,7 +237,11 @@ impl GitLabView {
         self.write(
             move |c, p, iid| {
                 let refs: DiffRefs = refs;
-                c.line_comment(p, iid, &refs, &old_path, &new_path, old, new, &body).map(|_| ())
+                if draft {
+                    c.draft_line_comment(p, iid, &refs, &old_path, &new_path, old, new, &body).map(|_| ())
+                } else {
+                    c.line_comment(p, iid, &refs, &old_path, &new_path, old, new, &body).map(|_| ())
+                }
             },
             |v, window, cx| {
                 v.boxes.line.update(cx, |b, cx| b.set_value("", window, cx));
@@ -220,6 +250,44 @@ impl GitLabView {
             window,
             cx,
         );
+    }
+
+    /// Submit your review: its pending comments become threads.
+    pub(crate) fn submit_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.write(
+            |c, p, iid| {
+                let pending: Vec<String> = c.draft_notes(p, iid)?.into_iter().map(|d| d.note).collect();
+                c.publish_drafts(p, iid)?;
+                // GitLab publishes in the background: wait (a little) until
+                // the comments are threads, so the refresh after shows them.
+                for _ in 0..10 {
+                    let shown = c.discussions(p, iid)?;
+                    let bodies: Vec<&str> = shown.iter().flat_map(|d| &d.notes).map(|n| n.body.as_str()).collect();
+                    if pending.iter().all(|b| bodies.contains(&b.as_str())) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                Ok(())
+            },
+            |_, _, _| {},
+            window,
+            cx,
+        );
+    }
+
+    /// GitLab's header button while a review is pending: how many comments
+    /// it holds, a click submits them.
+    pub(crate) fn review_button(&self, r: &crate::review::Review, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let n = r.drafts.len();
+        (n > 0 && self.me.is_some()).then(|| {
+            primary("gl-submit-review", if self.busy { "Submitting…" } else { "Submit review" }, !self.busy)
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(count_badge(n))
+                .on_click(cx.listener(|v, _, window, cx| v.submit_review(window, cx)))
+        })
     }
 
     // ---- what they look like ----------------------------------------------
@@ -396,9 +464,18 @@ impl GitLabView {
                     .flex()
                     .items_center()
                     .gap_2()
+                    // GitLab's two ways: into your review, or straight away.
                     .child(
-                        primary("gl-line-send", if self.busy { "Adding…" } else { "Add comment now" }, enabled)
-                            .when(enabled, |d| d.on_click(cx.listener(|v, _, window, cx| v.send_line_comment(window, cx)))),
+                        primary(
+                            "gl-line-draft",
+                            if self.review.ready().is_some_and(|r| !r.drafts.is_empty()) { "Add to review" } else { "Start a review" },
+                            enabled,
+                        )
+                        .when(enabled, |d| d.on_click(cx.listener(|v, _, window, cx| v.send_line_comment(true, window, cx)))),
+                    )
+                    .child(
+                        secondary("gl-line-send", if self.busy { "Adding…" } else { "Add comment now" })
+                            .when(enabled, |d| d.on_click(cx.listener(|v, _, window, cx| v.send_line_comment(false, window, cx)))),
                     )
                     .child(div().flex_1())
                     .child(secondary("gl-line-cancel", "Cancel").on_click(cx.listener(|v, _, _, cx| v.close_line_comment(cx)))),

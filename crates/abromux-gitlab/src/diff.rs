@@ -48,6 +48,9 @@ pub enum Body {
     TooLarge,
     /// GitLab collapsed it (big) and sent no diff with the list.
     Collapsed,
+    /// Past GitLab's limits for one diff (1000 files, 200 KB a file): the
+    /// review fetches both sides and diffs them itself, when it's shown.
+    Pending,
 }
 
 impl Body {
@@ -58,12 +61,43 @@ impl Body {
         if f.diff.starts_with("Binary files ") {
             return Body::Binary;
         }
-        let mut hunks = parse(&f.diff);
+        let body = Body::text(&f.diff, &f.new_path);
+        if body == Body::Unchanged && f.collapsed && f.diff.is_empty() {
+            return Body::Collapsed;
+        }
+        body
+    }
+
+    /// A file GitLab didn't send, from both sides' bytes (`None`: no such
+    /// file on that side): as GitLab would show it, 3 lines of context.
+    pub fn local(old: Option<&[u8]>, new: Option<&[u8]>, path: &str) -> Body {
+        let binary = |b: &[u8]| b[..b.len().min(8000)].contains(&0);
+        if old.is_some_and(binary) || new.is_some_and(binary) {
+            return Body::Binary;
+        }
+        let text = |b: Option<&[u8]>| b.map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+        let (old, new) = (text(old), text(new));
+        // A pathological pair gives up on the best diff after a while, not on the diff.
+        let diff = similar::TextDiff::configure()
+            .timeout(std::time::Duration::from_secs(2))
+            .diff_lines(&old, &new)
+            .unified_diff()
+            .context_radius(3)
+            .to_string();
+        Body::text(&diff, path)
+    }
+
+    /// A unified diff's hunks, highlighted, with GitLab's word changes.
+    fn text(diff: &str, path: &str) -> Body {
+        let mut hunks = parse(diff);
         if hunks.is_empty() {
-            return if f.collapsed && f.diff.is_empty() { Body::Collapsed } else { Body::Unchanged };
+            return Body::Unchanged;
         }
         for h in &mut hunks {
-            let mut hl = Highlighter::new(&f.new_path);
+            for l in &mut h.lines {
+                clip(&mut l.text);
+            }
+            let mut hl = Highlighter::new(path);
             for l in &mut h.lines {
                 if l.kind != Kind::NoNewline {
                     l.spans = hl.line(&l.text);
@@ -89,6 +123,19 @@ impl Body {
             Kind::Removed => (a, r + 1),
             _ => (a, r),
         })
+    }
+}
+
+/// Past this many characters a line is cut short: laying out a minified
+/// file's 300 KB line every frame would stall scrolling.
+pub const LONG_LINE: usize = 5000;
+
+fn clip(text: &mut String) {
+    if text.len() > LONG_LINE {
+        let cut = (0..=LONG_LINE).rev().find(|i| text.is_char_boundary(*i)).unwrap_or(0);
+        let more = text[cut..].chars().count();
+        text.truncate(cut);
+        text.push_str(&format!(" … ({more} more characters)"));
     }
 }
 
@@ -335,6 +382,28 @@ fn hunk_starts(header: &str) -> Option<(u32, u32)> {
 #[allow(clippy::single_range_in_vec_init)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_diffs_read_like_gitlabs() {
+        // Added: every line, from line 1.
+        let Body::Text(h) = Body::local(None, Some(b"a\nb\n"), "x.txt") else { panic!() };
+        assert_eq!((h.len(), h[0].new_start, h[0].lines.len()), (1, 1, 2));
+        assert!(h[0].lines.iter().all(|l| l.kind == Kind::Added));
+        // Modified: the change with 3 lines of context, as GitLab cuts it.
+        let old: String = (1..=20).map(|n| format!("{n}\n")).collect();
+        let new = old.replace("10\n", "ten\n");
+        let Body::Text(h) = Body::local(Some(old.as_bytes()), Some(new.as_bytes()), "x.txt") else { panic!() };
+        assert_eq!(h.len(), 1);
+        assert_eq!((h[0].old_start, h[0].new_start, h[0].lines.len()), (7, 7, 8));
+        // Deleted, binary, and the same on both sides.
+        assert!(Body::local(Some(b"gone\n"), None, "x.txt").hunks()[0].lines.iter().all(|l| l.kind == Kind::Removed));
+        assert_eq!(Body::local(None, Some(b"\x89PNG\0\0"), "x.png"), Body::Binary);
+        assert_eq!(Body::local(Some(b"same\n"), Some(b"same\n"), "x.txt"), Body::Unchanged);
+        // A minified line is cut short, saying by how much.
+        let long = format!("{}\n", "x".repeat(LONG_LINE + 1234));
+        let Body::Text(h) = Body::local(None, Some(long.as_bytes()), "min.js") else { panic!() };
+        assert!(h[0].lines[0].text.ends_with(" … (1234 more characters)"));
+    }
 
     #[test]
     fn numbers_lines() {

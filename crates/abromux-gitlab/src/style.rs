@@ -191,7 +191,8 @@ pub fn file_color(path: &str) -> Hsla {
     let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
     c(match ext.as_deref() {
         Some("rs") => 0xe37933,
-        Some("md" | "markdown") => 0x63a6e9,
+        Some("md" | "markdown" | "txt" | "rst") => 0x63a6e9,
+        Some("csv" | "tsv" | "xls" | "xlsx") => 0x52b87a,
         Some("js" | "mjs" | "cjs" | "jsx") => 0xe9be74,
         Some("ts" | "tsx") => 0x3178c6,
         Some("py") => 0x4b8bbe,
@@ -204,6 +205,18 @@ pub fn file_color(path: &str) -> Hsla {
         Some("sh" | "bash" | "zsh") => 0x89c46a,
         _ => MUTED,
     })
+}
+
+/// A file's icon in the tree, as GitLab picks one by type: a picture for
+/// images, the Markdown mark, else a page; colored by `file_color`.
+pub fn file_icon(path: &str, size: f32) -> Svg {
+    let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    let name = match ext.as_deref() {
+        Some("png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "ico" | "bmp") => "file-image",
+        Some("md" | "markdown") => "markdown",
+        _ => "file",
+    };
+    icon(name, size, file_color(path))
 }
 
 /// GitLab's loading spinner, centered with some room around it.

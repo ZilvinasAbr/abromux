@@ -1,0 +1,15 @@
+[
+  {
+    "created_at": "2026-11-06T08:41:52.582Z",
+    "id": 122,
+    "iid": 10,
+    "name": null,
+    "project_id": 19,
+    "ref": "main",
+    "sha": "d681978678e6bcd6852cffd2a368eb94bc1857b3",
+    "source": "push",
+    "status": "pending",
+    "updated_at": "2026-11-06T08:41:53.149Z",
+    "web_url": "http://localhost:8929/alice/review-fixtures/-/pipelines/122"
+  }
+]

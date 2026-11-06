@@ -15,6 +15,8 @@ with a repo, and merge requests that cover what the review UI must handle:
   !6  "An idea we dropped"      closed
   !7  "abromux 0.18.1 to 0.18.3" real code from this repo, with a thread
   !8  "Add 40 modules"          many files (the file tree)
+  !9  "Vendor everything"       past GitLab's diff limits: 1,203 files, ~70,000 lines,
+                                a 40,000-line file and a 300 KB one-line file
 
 Stdlib only. Rerunning deletes and recreates the project.
 """
@@ -228,6 +230,17 @@ impl Limiter {
             write(dir, f"{area}/mod{i}/lib.rs", f"pub fn {area}_{i}() -> u32 {{\n    {i}\n}}\n")
     git(dir, "add", "-A"); git(dir, "commit", "-m", "Add 40 modules"); git(dir, "push", "-u", "origin", "many-files")
 
+    # !9: past every limit GitLab puts on a diff (1000 files, 50,000 lines,
+    # 200 KB a file), so the review has to fetch what GitLab leaves out.
+    git(dir, "checkout", "main"); git(dir, "checkout", "-b", "huge")
+    for a in range(12):
+        for i in range(100):
+            write(dir, f"gen/area{a:02}/f{i:03}.txt", "".join(f"area {a} file {i} line {n}\n" for n in range(20)))
+    write(dir, "data/table.csv", "".join(f"{n},{n * n},row {n}\n" for n in range(6000)))
+    write(dir, "huge/generated.rs", "".join(f"pub const C{n}: u32 = {n};\n" for n in range(40000)))
+    write(dir, "vendor/min.js", "var a=[" + ",".join(str(n) for n in range(60000)) + "];\n")
+    git(dir, "add", "-A"); git(dir, "commit", "-m", "Vendor everything"); git(dir, "push", "-u", "origin", "huge")
+
 
 def wait_diff(pid, iid, head=None):
     """The MR's diff_refs once GitLab has them (for `head`, if given)."""
@@ -279,7 +292,10 @@ def main():
     # Labels as GitLab colors them, a scoped one among them.
     for name, color in (("backend", "#1068bf"), ("bug", "#dd2b0e"), ("priority::high", "#e9be74"), ("docs", "#2da160")):
         call("POST", f"/projects/{pid}/labels", {"name": name, "color": color})
-    mk = lambda src, title, desc, labels="": call("POST", f"/projects/{pid}/merge_requests", {
+    # Open milestones for the sidebar's milestone picker.
+    for title in ("v1.0", "v1.1"):
+        call("POST", f"/projects/{pid}/milestones", {"title": title})
+    mk =lambda src, title, desc, labels="": call("POST", f"/projects/{pid}/merge_requests", {
         "source_branch": src, "target_branch": "main", "title": title, "description": desc, "labels": labels,
         "reviewer_ids": [bob["id"]], "assignee_id": alice["id"]}, sudo="alice")
     with tempfile.TemporaryDirectory() as d:
@@ -328,6 +344,7 @@ def main():
         # Markdown of every kind, for comparing how comments render.
         call("POST", f"/projects/{pid}/merge_requests/{m7['iid']}/notes", {"body": RICH}, sudo="bob")
     mk("many-files", "Add 40 modules", "Lots of small files.")
+    mk("huge", "Vendor everything", "More than GitLab shows in one diff.")
 
     refs = wait_diff(pid, m1["iid"], head)
     t1 = thread(pid, m1["iid"], refs, "bob", "Should this be `u64`? Keys can repeat a lot.", "src/limiter.rs", new_line=6)
