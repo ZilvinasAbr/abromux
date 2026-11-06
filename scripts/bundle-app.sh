@@ -9,6 +9,8 @@
 # Cargo.toml, commit, `git tag v<version>`, then build.
 #   scripts/bundle-app.sh --nightly [dir] # "AbroMux Nightly.app" (scripts/nightly.sh)
 #   scripts/bundle-app.sh --nightly --name zoom [dir]  # "AbroMux Nightly zoom.app"
+#   scripts/bundle-app.sh --nightly --dist  # notarized dist/AbroMux-Nightly-<version>.dmg,
+#                                           # from a committed tree, for a GitHub pre-release
 #
 # The nightly app has its own bundle id, name, neon icon and support folder,
 # so it runs next to the release one. A named nightly gets its own again, so
@@ -45,8 +47,8 @@ while (($#)); do
   esac
   shift
 done
-if $dist && $nightly; then
-  echo "--dist builds the release app only." >&2
+if $dist && $nightly && [[ -n "$flavor" ]]; then
+  echo "--dist builds the shared nightly only, not a --name one." >&2
   exit 1
 fi
 if [[ -n "$flavor" ]] && { ! $nightly || [[ ! "$flavor" =~ ^[a-z0-9-]+$ ]]; }; then
@@ -76,7 +78,11 @@ cargo build --release
 # build number macOS compares to tell newer from older.
 version="$(target/release/abromux version | cut -d' ' -f2)"
 build="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
-if $dist && [[ "$version" == *+* ]]; then
+if $dist && $nightly && [[ "$version" == *-dirty ]]; then
+  echo "Refusing to ship $version: commit first, so the nightly names a commit." >&2
+  exit 1
+fi
+if $dist && ! $nightly && [[ "$version" == *+* ]]; then
   echo "Refusing to ship $version: --dist needs a clean checkout of tag v${version%%+*}." >&2
   exit 1
 fi
@@ -152,10 +158,10 @@ codesign --verify --strict "$app"
 
 if $dist; then
   mkdir -p dist
-  dmg="dist/AbroMux-$version.dmg"
+  dmg="dist/${name// /-}-$version.dmg"
   ln -s /Applications "$tmp/Applications"
   rm -f "$dmg"
-  hdiutil create -volname AbroMux -srcfolder "$tmp" -fs HFS+ -format UDZO -quiet "$dmg"
+  hdiutil create -volname "$name" -srcfolder "$tmp" -fs HFS+ -format UDZO -quiet "$dmg"
   codesign --force --sign "$identity" --timestamp "$dmg"
   # Notarizing the disk image covers the app inside it too.
   xcrun notarytool submit "$dmg" --keychain-profile "$profile" --wait

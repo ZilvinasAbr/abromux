@@ -1,0 +1,173 @@
+{
+  "assignee": {
+    "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+    "id": 2,
+    "locked": false,
+    "name": "Alice Author",
+    "public_email": null,
+    "state": "active",
+    "username": "alice",
+    "web_url": "http://localhost:8929/alice"
+  },
+  "assignees": [
+    {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    }
+  ],
+  "author": {
+    "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+    "bot": false,
+    "id": 2,
+    "locked": false,
+    "name": "Alice Author",
+    "public_email": null,
+    "state": "active",
+    "username": "alice",
+    "web_url": "http://localhost:8929/alice"
+  },
+  "blocking_discussions_resolved": true,
+  "changes_count": "1",
+  "closed_at": "2026-11-06T05:25:07.664Z",
+  "closed_by": {
+    "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+    "id": 2,
+    "locked": false,
+    "name": "Alice Author",
+    "public_email": null,
+    "state": "active",
+    "username": "alice",
+    "web_url": "http://localhost:8929/alice"
+  },
+  "created_at": "2026-11-06T05:25:00.561Z",
+  "description": "",
+  "detailed_merge_status": "not_open",
+  "diff_refs": {
+    "base_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc",
+    "head_sha": "abc83289188ae0c5bc49212eabf30b92ccd0a497",
+    "start_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc"
+  },
+  "discussion_locked": null,
+  "downvotes": 0,
+  "draft": false,
+  "first_contribution": false,
+  "first_deployed_to_production_at": null,
+  "force_remove_source_branch": true,
+  "has_conflicts": false,
+  "head_pipeline": {
+    "archived": false,
+    "before_sha": "0000000000000000000000000000000000000000",
+    "committed_at": null,
+    "coverage": null,
+    "created_at": "2026-11-06T05:24:49.240Z",
+    "detailed_status": {
+      "details_path": "/alice/review-fixtures/-/pipelines/71",
+      "favicon": "/assets/ci_favicons/favicon_status_pending-5bdf338420e5221ca24353b6bff1c9367189588750632e9a871b7af09ff6a2ae.png",
+      "group": "pending",
+      "has_details": true,
+      "icon": "status_pending",
+      "illustration": null,
+      "label": "pending",
+      "text": "Pending",
+      "tooltip": "pending"
+    },
+    "duration": null,
+    "finished_at": null,
+    "id": 71,
+    "iid": 5,
+    "project_id": 14,
+    "queued_duration": null,
+    "ref": "abandoned",
+    "sha": "abc83289188ae0c5bc49212eabf30b92ccd0a497",
+    "source": "push",
+    "started_at": null,
+    "status": "pending",
+    "tag": false,
+    "updated_at": "2026-11-06T05:24:49.448Z",
+    "user": {
+      "avatar_url": "https://www.gravatar.com/avatar/22c77d0ccea2a47f2940d3e87e4fce8cdbcf63a37e3042ff48d6724b00a9c2ab?s=80&d=identicon",
+      "id": 1,
+      "locked": false,
+      "name": "Administrator",
+      "public_email": null,
+      "state": "active",
+      "username": "root",
+      "web_url": "http://localhost:8929/root"
+    },
+    "web_url": "http://localhost:8929/alice/review-fixtures/-/pipelines/71",
+    "yaml_errors": null
+  },
+  "id": 76,
+  "iid": 6,
+  "imported": false,
+  "imported_from": "none",
+  "labels": [],
+  "latest_build_finished_at": null,
+  "latest_build_started_at": null,
+  "merge_after": null,
+  "merge_commit_sha": null,
+  "merge_error": null,
+  "merge_status": "can_be_merged",
+  "merge_user": null,
+  "merge_when_pipeline_succeeds": false,
+  "merged_at": null,
+  "merged_by": null,
+  "milestone": null,
+  "pipeline": null,
+  "prepared_at": "2026-11-06T05:25:05.326Z",
+  "project_id": 14,
+  "reference": "!6",
+  "references": {
+    "full": "alice/review-fixtures!6",
+    "relative": "!6",
+    "short": "!6"
+  },
+  "reviewers": [
+    {
+      "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+      "id": 3,
+      "locked": false,
+      "name": "Bob Reviewer",
+      "public_email": null,
+      "state": "active",
+      "username": "bob",
+      "web_url": "http://localhost:8929/bob"
+    }
+  ],
+  "sha": "abc83289188ae0c5bc49212eabf30b92ccd0a497",
+  "should_remove_source_branch": null,
+  "source_branch": "abandoned",
+  "source_project_id": 14,
+  "squash": false,
+  "squash_commit_sha": null,
+  "squash_on_merge": false,
+  "state": "closed",
+  "subscribed": false,
+  "target_branch": "main",
+  "target_project_id": 14,
+  "task_completion_status": {
+    "completed_count": 0,
+    "count": 0
+  },
+  "time_stats": {
+    "human_time_estimate": null,
+    "human_total_time_spent": null,
+    "time_estimate": 0,
+    "total_time_spent": 0
+  },
+  "title": "An idea we dropped",
+  "updated_at": "2026-11-06T05:25:07.711Z",
+  "upvotes": 0,
+  "user": {
+    "can_merge": false
+  },
+  "user_notes_count": 0,
+  "web_url": "http://localhost:8929/alice/review-fixtures/-/merge_requests/6",
+  "work_in_progress": false
+}

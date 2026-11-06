@@ -1,0 +1,112 @@
+{
+  "base_commit_sha": "cba919704a5f3e108d3d03f508d6543d06c73e6c",
+  "commits": [
+    {
+      "author_email": "alice@example.test",
+      "author_name": "Alice",
+      "authored_date": "2026-11-06T06:26:21.000+02:00",
+      "committed_date": "2026-11-06T06:26:21.000+02:00",
+      "committer_email": "alice@example.test",
+      "committer_name": "Alice",
+      "created_at": "2026-11-06T06:26:21.000+02:00",
+      "extended_trailers": {},
+      "id": "078d84320b01110a1b7f070ebacd54fbb3aa47e1",
+      "message": "Add a per-key rate limiter\n",
+      "parent_ids": [
+        "cba919704a5f3e108d3d03f508d6543d06c73e6c"
+      ],
+      "short_id": "078d8432",
+      "title": "Add a per-key rate limiter",
+      "trailers": {},
+      "web_url": "http://localhost:8929/alice/review-fixtures/-/commit/078d84320b01110a1b7f070ebacd54fbb3aa47e1"
+    }
+  ],
+  "created_at": "2026-11-06T04:26:38.154Z",
+  "diffs": [
+    {
+      "a_mode": "0",
+      "b_mode": "100644",
+      "collapsed": false,
+      "deleted_file": false,
+      "diff": "Binary files /dev/null and b/assets/logo.png differ\n",
+      "generated_file": false,
+      "new_file": true,
+      "new_path": "assets/logo.png",
+      "old_path": "assets/logo.png",
+      "renamed_file": false,
+      "too_large": false
+    },
+    {
+      "a_mode": "100644",
+      "b_mode": "100644",
+      "collapsed": false,
+      "deleted_file": false,
+      "diff": "",
+      "generated_file": false,
+      "new_file": false,
+      "new_path": "docs/NOTES.md",
+      "old_path": "docs/notes.txt",
+      "renamed_file": true,
+      "too_large": false
+    },
+    {
+      "a_mode": "100644",
+      "b_mode": "100644",
+      "collapsed": false,
+      "deleted_file": false,
+      "diff": "@@ -3,5 +3,5 @@ pub struct Config {\n }\n \n pub fn load() -> Config {\n-    Config { limit: 100 }\n+    Config { limit: std::env::var(\"LIMIT\").ok().and_then(|v| v.parse().ok()).unwrap_or(100) }\n }\n",
+      "generated_file": false,
+      "new_file": false,
+      "new_path": "src/config.rs",
+      "old_path": "src/config.rs",
+      "renamed_file": false,
+      "too_large": false
+    },
+    {
+      "a_mode": "100644",
+      "b_mode": "0",
+      "collapsed": false,
+      "deleted_file": true,
+      "diff": "@@ -1,2 +0,0 @@\n-// old code nobody uses\n-pub fn unused() {}\n",
+      "generated_file": false,
+      "new_file": false,
+      "new_path": "src/legacy.rs",
+      "old_path": "src/legacy.rs",
+      "renamed_file": false,
+      "too_large": false
+    },
+    {
+      "a_mode": "0",
+      "b_mode": "100644",
+      "collapsed": false,
+      "deleted_file": false,
+      "diff": "@@ -0,0 +1,19 @@\n+use std::collections::HashMap;\n+\n+/// Allows each key at most `limit` times.\n+pub struct Limiter {\n+    limit: u32,\n+    seen: HashMap<String, u32>,\n+}\n+\n+impl Limiter {\n+    pub fn new(limit: u32) -> Self {\n+        Self { limit, seen: HashMap::new() }\n+    }\n+\n+    pub fn allow(&mut self, key: &str) -> bool {\n+        let n = self.seen.entry(key.to_string()).or_insert(0);\n+        *n += 1;\n+        *n <= self.limit\n+    }\n+}\n",
+      "generated_file": false,
+      "new_file": true,
+      "new_path": "src/limiter.rs",
+      "old_path": "src/limiter.rs",
+      "renamed_file": false,
+      "too_large": false
+    },
+    {
+      "a_mode": "100644",
+      "b_mode": "100644",
+      "collapsed": false,
+      "deleted_file": false,
+      "diff": "@@ -1,11 +1,16 @@\n use std::collections::HashMap;\n \n mod config;\n+mod limiter;\n \n fn main() {\n     let cfg = config::load();\n+    let mut limiter = limiter::Limiter::new(cfg.limit);\n     let mut hits: HashMap<String, u32> = HashMap::new();\n     for line in std::io::stdin().lines().map_while(Result::ok) {\n+        if !limiter.allow(&line) {\n+            continue;\n+        }\n         *hits.entry(line).or_default() += 1;\n     }\n     println!(\"{} distinct keys, limit {}\", hits.len(), cfg.limit);\n",
+      "generated_file": false,
+      "new_file": false,
+      "new_path": "src/main.rs",
+      "old_path": "src/main.rs",
+      "renamed_file": false,
+      "too_large": false
+    }
+  ],
+  "head_commit_sha": "078d84320b01110a1b7f070ebacd54fbb3aa47e1",
+  "id": 168,
+  "merge_request_id": 65,
+  "patch_id_sha": "3413b74ddaa7ea021092b3ad963e080871fc936c",
+  "real_size": "6",
+  "start_commit_sha": "cba919704a5f3e108d3d03f508d6543d06c73e6c",
+  "state": "collected"
+}

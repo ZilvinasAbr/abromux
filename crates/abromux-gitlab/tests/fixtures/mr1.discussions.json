@@ -1,0 +1,457 @@
+[
+  {
+    "id": "7d4d4710326cdaeeab8e69db896f630f00dd3378",
+    "individual_note": true,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+          "id": 2,
+          "locked": false,
+          "name": "Alice Author",
+          "public_email": null,
+          "state": "active",
+          "username": "alice",
+          "web_url": "http://localhost:8929/alice"
+        },
+        "body": "requested review from @bob",
+        "commands_changes": {},
+        "confidential": false,
+        "created_at": "2026-11-06T05:24:56.980Z",
+        "id": 264,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 71,
+        "noteable_iid": 1,
+        "noteable_type": "MergeRequest",
+        "project_id": 14,
+        "resolvable": false,
+        "system": true,
+        "type": null,
+        "updated_at": "2026-11-06T05:24:56.982Z"
+      }
+    ],
+    "resolvable": false
+  },
+  {
+    "id": "2a8dbb9637974be478692c9973fe365d96334dad",
+    "individual_note": true,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+          "id": 2,
+          "locked": false,
+          "name": "Alice Author",
+          "public_email": null,
+          "state": "active",
+          "username": "alice",
+          "web_url": "http://localhost:8929/alice"
+        },
+        "body": "assigned to @alice",
+        "commands_changes": {},
+        "confidential": false,
+        "created_at": "2026-11-06T05:24:57.170Z",
+        "id": 265,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 71,
+        "noteable_iid": 1,
+        "noteable_type": "MergeRequest",
+        "project_id": 14,
+        "resolvable": false,
+        "system": true,
+        "type": null,
+        "updated_at": "2026-11-06T05:24:57.173Z"
+      }
+    ],
+    "resolvable": false
+  },
+  {
+    "id": "fa1465f94001385d9db14aac092e5c5e70b4c5e7",
+    "individual_note": true,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/22c77d0ccea2a47f2940d3e87e4fce8cdbcf63a37e3042ff48d6724b00a9c2ab?s=80&d=identicon",
+          "id": 1,
+          "locked": false,
+          "name": "Administrator",
+          "public_email": null,
+          "state": "active",
+          "username": "root",
+          "web_url": "http://localhost:8929/root"
+        },
+        "body": "added 1 commit\n\n<ul><li>5897ae5b - Document LIMIT</li></ul>\n\n[Compare with previous version](/alice/review-fixtures/-/merge_requests/1/diffs?diff_id=184&start_sha=c14b30a3eaf9f02d44a03f700abc79247a8325b0)",
+        "commands_changes": {},
+        "confidential": false,
+        "created_at": "2026-11-06T05:25:00.258Z",
+        "id": 270,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 71,
+        "noteable_iid": 1,
+        "noteable_type": "MergeRequest",
+        "project_id": 14,
+        "resolvable": false,
+        "system": true,
+        "type": null,
+        "updated_at": "2026-11-06T05:25:00.258Z"
+      }
+    ],
+    "resolvable": false
+  },
+  {
+    "id": "31a7e07f3407f1e802643d4949cce2846a23ff81",
+    "individual_note": false,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+          "id": 3,
+          "locked": false,
+          "name": "Bob Reviewer",
+          "public_email": null,
+          "state": "active",
+          "username": "bob",
+          "web_url": "http://localhost:8929/bob"
+        },
+        "body": "Should this be `u64`? Keys can repeat a lot.",
+        "commands_changes": {},
+        "commit_id": null,
+        "confidential": false,
+        "created_at": "2026-11-06T05:25:09.732Z",
+        "id": 283,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 71,
+        "noteable_iid": 1,
+        "noteable_type": "MergeRequest",
+        "position": {
+          "base_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc",
+          "head_sha": "5897ae5bf202c453be8be0b17225e1d49f052cf9",
+          "line_range": null,
+          "new_line": 6,
+          "new_path": "src/limiter.rs",
+          "old_line": null,
+          "old_path": "src/limiter.rs",
+          "position_type": "text",
+          "start_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc"
+        },
+        "project_id": 14,
+        "resolvable": true,
+        "resolved": false,
+        "resolved_at": null,
+        "resolved_by": null,
+        "suggestions": [],
+        "system": false,
+        "type": "DiffNote",
+        "updated_at": "2026-11-06T05:25:09.732Z"
+      },
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+          "id": 2,
+          "locked": false,
+          "name": "Alice Author",
+          "public_email": null,
+          "state": "active",
+          "username": "alice",
+          "web_url": "http://localhost:8929/alice"
+        },
+        "body": "u32 is plenty here, the limit caps it.",
+        "commands_changes": {},
+        "commit_id": null,
+        "confidential": false,
+        "created_at": "2026-11-06T05:25:09.840Z",
+        "id": 284,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 71,
+        "noteable_iid": 1,
+        "noteable_type": "MergeRequest",
+        "position": {
+          "base_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc",
+          "head_sha": "5897ae5bf202c453be8be0b17225e1d49f052cf9",
+          "line_range": null,
+          "new_line": 6,
+          "new_path": "src/limiter.rs",
+          "old_line": null,
+          "old_path": "src/limiter.rs",
+          "position_type": "text",
+          "start_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc"
+        },
+        "project_id": 14,
+        "resolvable": true,
+        "resolved": false,
+        "resolved_at": null,
+        "resolved_by": null,
+        "suggestions": [],
+        "system": false,
+        "type": "DiffNote",
+        "updated_at": "2026-11-06T05:25:09.840Z"
+      },
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+          "id": 3,
+          "locked": false,
+          "name": "Bob Reviewer",
+          "public_email": null,
+          "state": "active",
+          "username": "bob",
+          "web_url": "http://localhost:8929/bob"
+        },
+        "body": "Fair enough :+1:",
+        "commands_changes": {},
+        "commit_id": null,
+        "confidential": false,
+        "created_at": "2026-11-06T05:25:09.925Z",
+        "id": 285,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 71,
+        "noteable_iid": 1,
+        "noteable_type": "MergeRequest",
+        "position": {
+          "base_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc",
+          "head_sha": "5897ae5bf202c453be8be0b17225e1d49f052cf9",
+          "line_range": null,
+          "new_line": 6,
+          "new_path": "src/limiter.rs",
+          "old_line": null,
+          "old_path": "src/limiter.rs",
+          "position_type": "text",
+          "start_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc"
+        },
+        "project_id": 14,
+        "resolvable": true,
+        "resolved": false,
+        "resolved_at": null,
+        "resolved_by": null,
+        "suggestions": [],
+        "system": false,
+        "type": "DiffNote",
+        "updated_at": "2026-11-06T05:25:09.925Z"
+      }
+    ],
+    "resolvable": true,
+    "resolved": false
+  },
+  {
+    "id": "7189c66d3698114a9963ef01440bf0bdb69244be",
+    "individual_note": false,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+          "id": 3,
+          "locked": false,
+          "name": "Bob Reviewer",
+          "public_email": null,
+          "state": "active",
+          "username": "bob",
+          "web_url": "http://localhost:8929/bob"
+        },
+        "body": "Simpler:\n\n```suggestion:-0+0\n        *n <= self.limit // inclusive\n```",
+        "commands_changes": {},
+        "commit_id": null,
+        "confidential": false,
+        "created_at": "2026-11-06T05:25:10.017Z",
+        "id": 286,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 71,
+        "noteable_iid": 1,
+        "noteable_type": "MergeRequest",
+        "position": {
+          "base_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc",
+          "head_sha": "5897ae5bf202c453be8be0b17225e1d49f052cf9",
+          "line_range": null,
+          "new_line": 17,
+          "new_path": "src/limiter.rs",
+          "old_line": null,
+          "old_path": "src/limiter.rs",
+          "position_type": "text",
+          "start_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc"
+        },
+        "project_id": 14,
+        "resolvable": true,
+        "resolved": false,
+        "resolved_at": null,
+        "resolved_by": null,
+        "suggestions": [
+          {
+            "appliable": true,
+            "applied": false,
+            "from_content": "        *n <= self.limit\n",
+            "from_line": 17,
+            "id": 13,
+            "to_content": "        *n <= self.limit // inclusive\n",
+            "to_line": 17
+          }
+        ],
+        "system": false,
+        "type": "DiffNote",
+        "updated_at": "2026-11-06T05:25:10.017Z"
+      }
+    ],
+    "resolvable": true,
+    "resolved": false
+  },
+  {
+    "id": "435ed7a6e174fc679f7866f1366f61268c664c79",
+    "individual_note": false,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+          "id": 3,
+          "locked": false,
+          "name": "Bob Reviewer",
+          "public_email": null,
+          "state": "active",
+          "username": "bob",
+          "web_url": "http://localhost:8929/bob"
+        },
+        "body": "Was anything still calling this?",
+        "commands_changes": {},
+        "commit_id": null,
+        "confidential": false,
+        "created_at": "2026-11-06T05:25:10.138Z",
+        "id": 287,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 71,
+        "noteable_iid": 1,
+        "noteable_type": "MergeRequest",
+        "position": {
+          "base_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc",
+          "head_sha": "5897ae5bf202c453be8be0b17225e1d49f052cf9",
+          "line_range": null,
+          "new_line": null,
+          "new_path": "src/legacy.rs",
+          "old_line": 2,
+          "old_path": "src/legacy.rs",
+          "position_type": "text",
+          "start_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc"
+        },
+        "project_id": 14,
+        "resolvable": true,
+        "resolved": true,
+        "resolved_at": "2026-11-06T05:25:10.230Z",
+        "resolved_by": {
+          "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+          "id": 2,
+          "locked": false,
+          "name": "Alice Author",
+          "public_email": null,
+          "state": "active",
+          "username": "alice",
+          "web_url": "http://localhost:8929/alice"
+        },
+        "suggestions": [],
+        "system": false,
+        "type": "DiffNote",
+        "updated_at": "2026-11-06T05:25:10.230Z"
+      }
+    ],
+    "resolvable": true,
+    "resolved": true
+  },
+  {
+    "id": "2a411ca07a7662565b19a800decf237bf31292d1",
+    "individual_note": false,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+          "id": 3,
+          "locked": false,
+          "name": "Bob Reviewer",
+          "public_email": null,
+          "state": "active",
+          "username": "bob",
+          "web_url": "http://localhost:8929/bob"
+        },
+        "body": "Parse error is silently ignored.",
+        "commands_changes": {},
+        "commit_id": null,
+        "confidential": false,
+        "created_at": "2026-11-06T05:25:10.292Z",
+        "id": 288,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 71,
+        "noteable_iid": 1,
+        "noteable_type": "MergeRequest",
+        "position": {
+          "base_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc",
+          "head_sha": "5897ae5bf202c453be8be0b17225e1d49f052cf9",
+          "line_range": null,
+          "new_line": 6,
+          "new_path": "src/config.rs",
+          "old_line": null,
+          "old_path": "src/config.rs",
+          "position_type": "text",
+          "start_sha": "7a5c14b3dc61f3caf53549dbcefba287012109cc"
+        },
+        "project_id": 14,
+        "resolvable": true,
+        "resolved": false,
+        "resolved_at": null,
+        "resolved_by": null,
+        "suggestions": [],
+        "system": false,
+        "type": "DiffNote",
+        "updated_at": "2026-11-06T05:25:10.292Z"
+      }
+    ],
+    "resolvable": true,
+    "resolved": false
+  },
+  {
+    "id": "04787fb32795d916f95ebe0556c6a72e91a814c7",
+    "individual_note": true,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+          "id": 3,
+          "locked": false,
+          "name": "Bob Reviewer",
+          "public_email": null,
+          "state": "active",
+          "username": "bob",
+          "web_url": "http://localhost:8929/bob"
+        },
+        "body": "Looks good overall, two nits. :thumbsup:",
+        "commands_changes": {},
+        "confidential": false,
+        "created_at": "2026-11-06T05:25:10.387Z",
+        "id": 289,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 71,
+        "noteable_iid": 1,
+        "noteable_type": "MergeRequest",
+        "project_id": 14,
+        "resolvable": false,
+        "system": false,
+        "type": null,
+        "updated_at": "2026-11-06T05:25:10.387Z"
+      }
+    ],
+    "resolvable": false
+  }
+]

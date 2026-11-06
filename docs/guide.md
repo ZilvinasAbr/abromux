@@ -12,6 +12,8 @@ Everything AbroMux does, in detail. For a quick start, see the [README](../READM
 - **Links** in terminal output underline while you hold ⌘ over them: URLs, OSC 8 hyperlinks, and paths to files that exist (relative ones from the shell's directory, `path:line` too). ⌘-click opens web links in a browser to the right of the terminal (a new tab there if that pane already shows one) and anything else with its default app.
 - **Panes** split right or down, and each pane has a tab bar of terminal and browser tabs. Drag a divider to resize. Drag a tab to reorder it, onto another pane's tab bar or middle to move it there, onto a pane's edge to split that pane, or onto the outer edge of the pane area to split the whole workspace (full width or height), or onto a workspace in the sidebar to move it into that workspace. A highlight shows where it will land. Move Tab to New Workspace (⌘⇧P) gives the focused tab a workspace of its own.
 
+- **GitLab merge requests** open in a tab that looks like GitLab's own review pages (see "GitLab reviews"): the list, the overview with its threads, commits, and the changes with a file tree, inline or side-by-side diffs, suggestions and image diffs. You can comment, reply, resolve threads, start threads on lines and approve.
+
 ## Build from source
 
 Requirements:
@@ -50,6 +52,8 @@ scripts/nightly.sh --name zoom     # "AbroMux Nightly zoom.app" and `abromux-nig
 
 A named nightly (bundle id `dev.abromux.nightly.<name>`, support folder `abromux-nightly-<name>/`) runs beside the release and the shared nightly, so agents testing different branches don't replace each other's build.
 
+A nightly others can download: commit, then `scripts/bundle-app.sh --nightly --dist` builds a notarized `dist/AbroMux-Nightly-<version>.dmg`, published as a GitHub pre-release tagged `nightly-<commit>`. Pre-releases are never GitHub's "latest" release, so the release app's update check doesn't offer them.
+
 AbroMux Nightly runs next to AbroMux. It has a neon icon (`assets/app/abromux-nightly.svg`), its own name, the bundle id `dev.abromux.nightly` (so separate notification permissions and settings), and its own socket and session in `~/Library/Application Support/abromux-nightly/`. It's signed like the release but never notarized: `scripts/bundle-app.sh --nightly` is what `nightly.sh` calls, and it refuses `--dist`. The binary decides which one it is at runtime from the bundle it sits in (`src/channel.rs`); `cargo run` counts as the release. Install agent hooks from the release `abromux`, not `abromux-nightly`: hooks point at the binary you install them from, and do nothing once that app is gone.
 
 ## Updates
@@ -63,6 +67,23 @@ AbroMux checks for updates like cmux does (cmux uses Sparkle; AbroMux does the s
 Nothing downloads until you choose Install and Relaunch. **Check for Updates…** (in the AbroMux menu, the command palette, or Settings › App › Updates) checks right away and also tells you when you're already on the latest version. The palette's **Apply Update (If Available)** installs a found update, or checks if there isn't one yet. Turn the daily check off with `"app": { "automaticallyCheckForUpdates": false }` or the switch in Settings.
 
 The check time and a skipped version are kept in `update.json` in the support folder, and each step is written to `update.log` there. An app running from the disk image or from a folder you can't write to says so and won't install; move it into Applications first. Nightly builds only check: they come from `scripts/nightly.sh`, not from releases. To try the flow from a nightly, launch it with `ABROMUX_UPDATE_FROM=0.1.0` so it thinks it's on an old version (`ABROMUX_UPDATE_FEED` points the check at another releases API URL). `cargo test update::tests::live -- --ignored` downloads, verifies and swaps the real latest release in a scratch folder.
+
+## GitLab reviews
+
+A GitLab tab (⌘⇧P → New GitLab Tab) shows merge requests the way GitLab's web UI does, in its dark theme. It's built in as a plugin (`crates/abromux-gitlab`, the `gitlab` Cargo feature, on by default) and writes what a reviewer does: comments, replies, resolving, threads on lines and approvals. Merging and editing the merge request are still done in GitLab.
+
+- **Sign in** with the GitLab URL and a personal access token with the `api` scope (a `read_api` token works too, but then writing says the token needs `api`). The token is checked, then kept in your login Keychain (service `abromux-gitlab`, account = the URL). New GitLab tabs then open on that GitLab, so you sign in once. `ABROMUX_GITLAB_TOKEN` overrides it.
+- **The list** has the merge requests you're asked to review, the ones you created, and all you can see, open, merged, closed or all of them, with checklist progress, coloured labels, the target branch when it isn't the default, pipeline status, assignees and reviewers, resolved threads ("1 of 4") and Approved, Merged and Closed badges, newest first, and a filter.
+- **A merge request** has GitLab's header and tabs. Overview: the description, approvals, merge status, the activity (GitLab's own notes, comments, threads on the diff with the code around their line; resolved ones folded) and the sidebar. Commits, by day. Changes: the file tree (with search: `limit`, `*.rs`, `src/*`), each file's diff with syntax highlighting and GitLab's word-level changes, threads under their lines, suggestions as "Suggested change", images old and new side by side, and "Viewed" marks that fold files.
+- **Changes tools**: Inline or Side-by-side; the arrows in a hunk header or at a file's end show unchanged lines (20 at a time, or all); "Compare main and latest version" picks other versions of the merge request to compare (an "added N commits" note's "Compare with previous version" does it too); a commit's title in Commits shows just that commit's changes, with Prev and Next; the file's header stays at the top while you read it. Large or generated files fold, with "View file" to see them in GitLab.
+- **Overview tools**: the pipeline of the latest push, and the activity filtered to comments or history, oldest or newest first. Code blocks in descriptions and comments are highlighted as in GitLab.
+- **More Changes tools**: the file browser as a tree with folding folders or as a flat list; buttons to expand or collapse every file; "one file at a time", with Previous and Next file (`j`/`k` and `n`/`p` move between files in it); a click on a line number marks the line, as GitLab's line links do.
+- **Reviewing**: the comment box at the end of the Overview; under each thread a Reply box (Reply, Reply and resolve) and Resolve thread or Reopen thread; on a diff line, the speech bubble that shows on hover starts a thread there (on the latest version, inline or side by side); Approve or Revoke approval in the approvals box. Each write is sent to GitLab, then the page refreshes in place. An error shows above the page and keeps what you typed. While you type in a box, the keys below don't fire, and Esc closes the box.
+- **Keys**, as in GitLab: `j`/`]` and `k`/`[` for the next and previous file, `n` and `p` for the next and previous unresolved thread (also the arrows next to the thread count).
+- **It stays current**: the open merge request is fetched again every two minutes (and on Refresh) without losing your place, so new comments and pushes show up as on GitLab's page.
+- **Opening one directly**: `abromux rpc surface.create '{"type":"gitlab","url":"https://gitlab.example.com/group/project/-/merge_requests/12"}'`. A tab comes back after a restart on the same page, with its Viewed marks.
+
+In a narrow pane the file tree and sidebar step aside; the button left of "Compare" brings the tree back. Developing the plugin against a GitLab in Docker is described in [`dev/gitlab/README.md`](../dev/gitlab/README.md).
 
 ## Passkeys
 
@@ -479,6 +500,8 @@ History lives in `<git common dir>/abromux-perf/history.jsonl`, outside the tree
 - `src/main.rs`: the app shell (pane tab bars, splits, actions); `src/sidebar.rs`: the sidebar's rows, groups, menus and drag to reorder
 - `src/bench.rs`: `abromux bench-vt` and `abromux bench-kitty`, the headless parse benchmarks used by `scripts/perf.py`
 - `src/server.rs`: the control socket's method handlers; `src/cli.rs`: the `abromux` commands; `src/ipc.rs`: the shared wire format
+- `src/plugins.rs`: the plugins built in; `crates/abromux-plugin`: the interface a plugin's tab implements; `crates/abromux-gitlab`: the GitLab review tab
+- `dev/gitlab/`: a GitLab in Docker with review fixtures, and scripts to drive and screenshot the plugin (see its README)
 
 ## Known POC limits
 

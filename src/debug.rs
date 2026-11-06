@@ -44,6 +44,9 @@ fn post_mouse(window: &Window, arg: &str) -> anyhow::Result<()> {
             .ok_or_else(|| anyhow!("missing number {i}"))
     };
     let (x, y) = (num(1)?, num(2)?);
+    if parts[0] == "scroll" {
+        return post_scroll(window, x, y, num(3)?);
+    }
     let right = parts.contains(&"right");
     let clicks: isize = parts
         .iter()
@@ -120,6 +123,71 @@ fn post_mouse(window: &Window, arg: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `ui:scroll,X,Y,DY`: a native scroll wheel event of DY pixels (positive
+/// scrolls up) at window point X,Y, through gpui's hit testing to whatever
+/// scrolls there.
+fn post_scroll(window: &Window, x: f64, y: f64, dy: f64) -> anyhow::Result<()> {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Point {
+        x: f64,
+        y: f64,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Rect {
+        origin: Point,
+        size: Point,
+    }
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventCreateScrollWheelEvent(
+            source: *mut Object,
+            units: u32,
+            wheel_count: u32,
+            wheel1: i32, ...
+        ) -> *mut Object;
+        fn CGEventSetLocation(event: *mut Object, at: Point);
+        fn CFRelease(cf: *mut Object);
+    }
+    let RawWindowHandle::AppKit(h) = HasWindowHandle::window_handle(window)?.as_raw() else {
+        bail!("not an AppKit window")
+    };
+    unsafe {
+        let view = h.ns_view.as_ptr() as *mut Object;
+        let win: *mut Object = msg_send![view, window];
+        let content: *mut Object = msg_send![win, contentView];
+        let frame: Rect = msg_send![content, frame];
+        // An event made from a CGEvent has no window, so AppKit won't route
+        // it; it goes straight to gpui's view instead. Without a window its
+        // locationInWindow is its screen point (bottom left), so place it
+        // where that equals the window point: CoreGraphics counts from the
+        // main screen's top left.
+        let screens: *mut Object = msg_send![objc::class!(NSScreen), screens];
+        let main: *mut Object = msg_send![screens, objectAtIndex: 0usize];
+        let main_frame: Rect = msg_send![main, frame];
+        let at = Point {
+            x,
+            y: main_frame.size.y - (frame.size.y - y),
+        };
+        const PIXEL: u32 = 0;
+        let cg = CGEventCreateScrollWheelEvent(std::ptr::null_mut(), PIXEL, 1, dy as i32);
+        if cg.is_null() {
+            bail!("CoreGraphics refused the scroll event");
+        }
+        CGEventSetLocation(cg, at);
+        let ev: *mut Object = msg_send![objc::class!(NSEvent), eventWithCGEvent: cg];
+        CFRelease(cg);
+        if ev.is_null() {
+            bail!("NSEvent refused the scroll event");
+        }
+        // On the next run loop pass: gpui is mid-update now and the view's
+        // handler would re-enter it.
+        let _: () = msg_send![view, performSelector: sel!(scrollWheel:) withObject: ev afterDelay: 0f64];
+    }
+    Ok(())
+}
+
 /// Mouse steps go to this (gpui's own dispatch_event isn't callable from
 /// outside the crate).
 pub type OnMouse<V> = fn(&mut V, PlatformInput, &mut Window, &mut Context<V>);
@@ -130,7 +198,8 @@ pub type OnMouse<V> = fn(&mut V, PlatformInput, &mut Window, &mut Context<V>);
 /// (window pixels; positive DY scrolls up), and `mods:cmd|ctrl|none` for a
 /// modifier-only change. Those go to the focused terminal; `ui:` takes the
 /// same arguments as `mouse:` and goes through gpui's hit testing like a
-/// real event, to whatever is under it (sidebar rows, menus, drags).
+/// real event, to whatever is under it (sidebar rows, menus, drags), and
+/// `ui:scroll,X,Y,DY` scrolls whatever is there.
 pub fn run_script<V: 'static>(
     script: String,
     on_mouse: OnMouse<V>,

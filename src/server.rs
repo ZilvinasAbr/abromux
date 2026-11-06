@@ -880,10 +880,23 @@ impl AbroMux {
                 json!(t.update(cx, |t, _| t.read_text(scrollback, lines)))
             }
 
+            // A plugin tab's own command (crates/abromux-plugin: Tab::command).
+            "surface.plugin" => {
+                let (_, _, s) = self.surface_target(p)?;
+                let Surface::Plugin(t) = s else {
+                    bail!("that surface isn't a plugin tab")
+                };
+                let name = str_param(p, "command").context("missing command")?;
+                let args = p.get("args").cloned().unwrap_or(json!({}));
+                let out = t.command(name, &args, window, cx)?;
+                cx.notify();
+                out
+            }
             "surface.read_selection" => {
                 let (_, _, s) = self.surface_target(p)?;
                 match s {
                     Surface::Terminal(t) => json!(t.read(cx).selection_text().unwrap_or_default()),
+                    Surface::Plugin(_) => bail!("that surface has no text selection"),
                     Surface::Browser(b) => {
                         let acx = cx.to_async();
                         return Ok(Reply::Later(
@@ -1308,6 +1321,10 @@ impl AbroMux {
             }
             // For scripts/perf.py: frame timing and synthetic input.
             "debug.frame" => {
+                // `refresh`: draw the next frame even if nothing changed.
+                if bool_param(p, "refresh", false) {
+                    window.refresh();
+                }
                 return Ok(later(
                     debug::after_next_frame(window, cx),
                     Duration::from_secs(10),
@@ -1544,6 +1561,10 @@ impl AbroMux {
                                 q["cwd"] = json!(cwd);
                             }
                         }
+                        Surface::Plugin(t) => {
+                            q = t.save(cx);
+                            q["type"] = json!(t.plugin());
+                        }
                     }
                 }
                 let new = self.make_surface(wi, &q, window, cx)?;
@@ -1575,6 +1596,7 @@ impl AbroMux {
                     Surface::Terminal(_) => {
                         bail!("reload is for browser tabs (respawn-pane restarts a terminal)")
                     }
+                    Surface::Plugin(_) => bail!("reload is for browser tabs"),
                 }
                 self.describe_moved(id, cx)?
             }
@@ -1688,6 +1710,7 @@ impl AbroMux {
         match self.surface_target(p)?.2 {
             Surface::Terminal(t) => Ok(t),
             Surface::Browser(_) => bail!("that surface is a browser, not a terminal"),
+            Surface::Plugin(t) => bail!("that surface is a {} tab, not a terminal", t.plugin()),
         }
     }
 
@@ -1698,6 +1721,7 @@ impl AbroMux {
             return match self.surface_target(p)?.2 {
                 Surface::Browser(b) => Ok(b),
                 Surface::Terminal(_) => bail!("that surface is a terminal, not a browser"),
+                Surface::Plugin(t) => bail!("that surface is a {} tab, not a browser", t.plugin()),
             };
         }
         let ws = &self.workspaces[self.workspace_target(p)?];
@@ -1805,7 +1829,12 @@ impl AbroMux {
                     self.make_browser(&url, window, cx)
                 }
             }
-            t => bail!("unknown surface type {t:?} (terminal or browser)"),
+            t if crate::plugins::find(t).is_some() => self.make_plugin(t, p, window, cx)?,
+            t => {
+                let mut kinds = vec!["terminal", "browser"];
+                kinds.extend(crate::plugins::all().iter().map(|p| p.id));
+                bail!("unknown surface type {t:?} ({})", kinds.join(", "))
+            }
         })
     }
 
@@ -1850,6 +1879,10 @@ impl AbroMux {
             Surface::Browser(b) => {
                 v["type"] = json!("browser");
                 v["url"] = json!(b.read(cx).url);
+            }
+            Surface::Plugin(t) => {
+                v["type"] = json!(t.plugin());
+                v["state"] = t.state(cx);
             }
         }
         v

@@ -1,0 +1,72 @@
+[
+  {
+    "id": "e7194c9df989432805413d2b331540ef6db81e4d",
+    "individual_note": true,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+          "id": 2,
+          "locked": false,
+          "name": "Alice Author",
+          "public_email": null,
+          "state": "active",
+          "username": "alice",
+          "web_url": "http://localhost:8929/alice"
+        },
+        "body": "requested review from @bob",
+        "commands_changes": {},
+        "confidential": false,
+        "created_at": "2026-11-06T05:24:59.971Z",
+        "id": 266,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 72,
+        "noteable_iid": 2,
+        "noteable_type": "MergeRequest",
+        "project_id": 14,
+        "resolvable": false,
+        "system": true,
+        "type": null,
+        "updated_at": "2026-11-06T05:24:59.972Z"
+      }
+    ],
+    "resolvable": false
+  },
+  {
+    "id": "99d5848b7f3a06e0a1bdf0d355d7c67057d6de2d",
+    "individual_note": true,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+          "id": 2,
+          "locked": false,
+          "name": "Alice Author",
+          "public_email": null,
+          "state": "active",
+          "username": "alice",
+          "web_url": "http://localhost:8929/alice"
+        },
+        "body": "assigned to @alice",
+        "commands_changes": {},
+        "confidential": false,
+        "created_at": "2026-11-06T05:25:00.007Z",
+        "id": 267,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 72,
+        "noteable_iid": 2,
+        "noteable_type": "MergeRequest",
+        "project_id": 14,
+        "resolvable": false,
+        "system": true,
+        "type": null,
+        "updated_at": "2026-11-06T05:25:00.009Z"
+      }
+    ],
+    "resolvable": false
+  }
+]

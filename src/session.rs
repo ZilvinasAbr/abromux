@@ -137,6 +137,14 @@ pub enum TabState {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         zoom: Option<f64>,
     },
+    /// A plugin's tab (src/plugins.rs), with what it saved.
+    Plugin {
+        plugin: String,
+        #[serde(default)]
+        state: serde_json::Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
 }
 
 pub fn path() -> Option<PathBuf> {
@@ -613,6 +621,20 @@ impl AbroMux {
                 }
                 (s, name)
             }
+            TabState::Plugin {
+                plugin,
+                state,
+                name,
+            } => match self.make_plugin(&plugin, &state, window, cx) {
+                Ok(s) => (s, name),
+                // Not built in any more, or it can't open what it saved: keep
+                // the pane, with a terminal that says why.
+                Err(e) => {
+                    eprintln!("restoring a {plugin} tab: {e:#}");
+                    let s = self.make_terminal_full(None, ws, vec![], None, None, window, cx);
+                    (s, Some(format!("{plugin} (not restored)")))
+                }
+            },
         };
         if name.is_some() {
             s.set_custom_title(name, cx);
@@ -629,7 +651,7 @@ impl NodeState {
                 .iter()
                 .filter_map(|t| match t {
                     TabState::Terminal { surface, .. } => *surface,
-                    TabState::Browser { .. } => None,
+                    TabState::Browser { .. } | TabState::Plugin { .. } => None,
                 })
                 .max()
                 .unwrap_or(0),
@@ -671,6 +693,7 @@ fn layout_key(n: &NodeState) -> String {
                 .map(|t| match t {
                     TabState::Terminal { cwd, .. } => format!("t:{cwd}"),
                     TabState::Browser { url, .. } => format!("b:{url}"),
+                    TabState::Plugin { plugin, state, .. } => format!("p:{plugin}:{state}"),
                 })
                 .collect();
             format!("[{}]", tabs.join(","))
@@ -746,12 +769,36 @@ fn tab_state(s: &Surface, scrollback: bool, refs: &Refs, cx: &App) -> TabState {
             history: scrollback.then(|| b.read(cx).history_state(cx)).flatten(),
             zoom: Some(b.read(cx).zoom()).filter(|&z| z != 1.0),
         },
+        Surface::Plugin(p) => TabState::Plugin {
+            plugin: p.plugin().into(),
+            state: p.save(cx),
+            name: p.custom_title(),
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_tabs_round_trip() {
+        let t = TabState::Plugin {
+            plugin: "gitlab".into(),
+            state: serde_json::json!({ "host": "http://gl.test" }),
+            name: Some("Reviews".into()),
+        };
+        let json = serde_json::to_string(&t).unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"plugin","plugin":"gitlab","state":{"host":"http://gl.test"},"name":"Reviews"}"#
+        );
+        let back: TabState = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::to_string(&back).unwrap(), json);
+        // No state saved: the plugin opens on `null`.
+        let bare: TabState = serde_json::from_str(r#"{"kind":"plugin","plugin":"x"}"#).unwrap();
+        assert!(matches!(bare, TabState::Plugin { state, .. } if state.is_null()));
+    }
 
     #[test]
     fn round_trips_and_tolerates_missing_fields() {

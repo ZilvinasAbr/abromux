@@ -28,6 +28,7 @@ mod notify_hook;
 mod menubar;
 mod osc99;
 mod palette;
+mod plugins;
 mod pty;
 mod quit;
 mod server;
@@ -200,6 +201,7 @@ impl AssetSource for Assets {
             "panel-left",
             "bell",
             "git-branch",
+            "git-pull-request",
             "folder",
             "search",
             "circle-x",
@@ -221,7 +223,7 @@ impl AssetSource for Assets {
             "triangle-alert",
             "power"
         );
-        Ok(bytes.map(Cow::Borrowed))
+        Ok(bytes.or_else(|| plugins::asset(path)).map(Cow::Borrowed))
     }
 
     fn list(&self, _: &str) -> Result<Vec<SharedString>> {
@@ -689,6 +691,28 @@ impl AbroMux {
         self.make_builtin_browser(url, window, cx)
     }
 
+    /// A tab of plugin `id` (src/plugins.rs), opened on `params`: what it
+    /// saved, or the socket's params, or `{}`.
+    fn make_plugin(
+        &mut self,
+        id: &str,
+        params: &serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Surface> {
+        let plugin = plugins::find(id).ok_or_else(|| anyhow::anyhow!("no plugin {id:?}"))?;
+        let tab = (plugin.open)(params, window, cx)?;
+        self.surface_ref(tab.entity_id());
+        Ok(Surface::Plugin(tab))
+    }
+
+    fn open_plugin(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match self.make_plugin(id, &serde_json::json!({}), window, cx) {
+            Ok(s) => self.add_tab(s, window, cx),
+            Err(e) => window.push_notification(Notification::error(format!("{e:#}")), cx),
+        }
+    }
+
     fn make_builtin_browser(
         &mut self,
         url: &str,
@@ -1130,6 +1154,7 @@ impl AbroMux {
                 match s {
                     Surface::Browser(b) => b.update(cx, |b, cx| b.set_shown(false, cx)),
                     Surface::Terminal(t) => t.update(cx, |t, _| t.close()),
+                    Surface::Plugin(_) => {}
                 }
             }
         }
@@ -2229,6 +2254,7 @@ impl AbroMux {
         let content = match pane.active_surface() {
             Some(Surface::Terminal(t)) => t.clone().into_any_element(),
             Some(Surface::Browser(b)) => b.clone().into_any_element(),
+            Some(Surface::Plugin(p)) => p.view().into_any_element(),
             None => div().into_any_element(),
         };
         let browser = matches!(pane.active_surface(), Some(Surface::Browser(_)));
@@ -2568,6 +2594,9 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &SwapRight, w, cx| this.swap_dir(Dir::Right, w, cx)))
             .on_action(cx.listener(|this, _: &SwapUp, w, cx| this.swap_dir(Dir::Up, w, cx)))
             .on_action(cx.listener(|this, _: &SwapDown, w, cx| this.swap_dir(Dir::Down, w, cx)))
+            .on_action(cx.listener(|this, a: &keymap::OpenPlugin, window, cx| {
+                this.open_plugin(&a.id, window, cx)
+            }))
             .on_action(cx.listener(|this, a: &keymap::RunCommand, window, cx| {
                 this.run_command(a.index, a.project.clone(), window, cx)
             }))
@@ -2957,6 +2986,7 @@ fn run_app(cwd: Option<String>) {
                     });
                 }
                 let view = cx.new(|cx| AbroMux::new(cwd, session, window, cx));
+                plugins::set_host(view.downgrade(), cx);
                 cx.new(|cx| Root::new(view, window, cx))
             },
         )

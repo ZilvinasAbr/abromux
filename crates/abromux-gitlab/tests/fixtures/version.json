@@ -1,0 +1,11 @@
+{
+  "enterprise": false,
+  "kas": {
+    "enabled": false,
+    "externalK8sProxyUrl": null,
+    "externalUrl": null,
+    "version": null
+  },
+  "revision": "0d4c9a9a2fa",
+  "version": "19.5.3"
+}
