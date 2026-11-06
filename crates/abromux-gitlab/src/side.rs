@@ -106,7 +106,7 @@ impl GitLabView {
 
     /// PUT the merge request's `fields`, then fetch it again.
     pub(crate) fn save_side(&mut self, fields: serde_json::Value, window: &mut Window, cx: &mut Context<Self>) {
-        self.write(move |c, p, iid| c.update(p, iid, fields).map(|_| ()), |_, _, _| {}, window, cx);
+        self.write(crate::edit::Write::Sidebar, move |c, p, iid| c.update(p, iid, fields).map(|_| ()), |_, _, _| {}, window, cx);
     }
 
     /// Tick or untick a person or a label in the open dropdown; pick a
