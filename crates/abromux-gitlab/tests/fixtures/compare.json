@@ -1,0 +1,60 @@
+{
+  "commit": {
+    "author_email": "alice@example.test",
+    "author_name": "Alice",
+    "authored_date": "2026-11-06T07:24:40.000+02:00",
+    "committed_date": "2026-11-06T07:24:40.000+02:00",
+    "committer_email": "alice@example.test",
+    "committer_name": "Alice",
+    "created_at": "2026-11-06T07:24:40.000+02:00",
+    "extended_trailers": {},
+    "id": "5897ae5bf202c453be8be0b17225e1d49f052cf9",
+    "message": "Document LIMIT\n\nThe limit was only in the code. Say in the README how to\nchange it, with the default.\n",
+    "parent_ids": [
+      "c14b30a3eaf9f02d44a03f700abc79247a8325b0"
+    ],
+    "short_id": "5897ae5b",
+    "title": "Document LIMIT",
+    "trailers": {},
+    "web_url": "http://localhost:8929/alice/review-fixtures/-/commit/5897ae5bf202c453be8be0b17225e1d49f052cf9"
+  },
+  "commits": [
+    {
+      "author_email": "alice@example.test",
+      "author_name": "Alice",
+      "authored_date": "2026-11-06T07:24:40.000+02:00",
+      "committed_date": "2026-11-06T07:24:40.000+02:00",
+      "committer_email": "alice@example.test",
+      "committer_name": "Alice",
+      "created_at": "2026-11-06T07:24:40.000+02:00",
+      "extended_trailers": {},
+      "id": "5897ae5bf202c453be8be0b17225e1d49f052cf9",
+      "message": "Document LIMIT\n\nThe limit was only in the code. Say in the README how to\nchange it, with the default.\n",
+      "parent_ids": [
+        "c14b30a3eaf9f02d44a03f700abc79247a8325b0"
+      ],
+      "short_id": "5897ae5b",
+      "title": "Document LIMIT",
+      "trailers": {},
+      "web_url": "http://localhost:8929/alice/review-fixtures/-/commit/5897ae5bf202c453be8be0b17225e1d49f052cf9"
+    }
+  ],
+  "compare_same_ref": false,
+  "compare_timeout": false,
+  "diffs": [
+    {
+      "a_mode": "100644",
+      "b_mode": "100644",
+      "collapsed": false,
+      "deleted_file": false,
+      "diff": "@@ -1,3 +1,5 @@\n # review-fixtures\n \n A tiny project for testing review UIs.\n+\n+Set `LIMIT` to change the limit.\n",
+      "generated_file": null,
+      "new_file": false,
+      "new_path": "README.md",
+      "old_path": "README.md",
+      "renamed_file": false,
+      "too_large": false
+    }
+  ],
+  "web_url": "http://localhost:8929/alice/review-fixtures/-/compare/c14b30a3eaf9f02d44a03f700abc79247a8325b0..5897ae5bf202c453be8be0b17225e1d49f052cf9"
+}

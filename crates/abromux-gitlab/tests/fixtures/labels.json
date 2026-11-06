@@ -1,0 +1,50 @@
+[
+  {
+    "archived": false,
+    "color": "#1068bf",
+    "description": null,
+    "description_html": "",
+    "id": 17,
+    "is_project_label": true,
+    "name": "backend",
+    "priority": null,
+    "subscribed": false,
+    "text_color": "#FFFFFF"
+  },
+  {
+    "archived": false,
+    "color": "#dd2b0e",
+    "description": null,
+    "description_html": "",
+    "id": 18,
+    "is_project_label": true,
+    "name": "bug",
+    "priority": null,
+    "subscribed": false,
+    "text_color": "#FFFFFF"
+  },
+  {
+    "archived": false,
+    "color": "#2da160",
+    "description": null,
+    "description_html": "",
+    "id": 20,
+    "is_project_label": true,
+    "name": "docs",
+    "priority": null,
+    "subscribed": false,
+    "text_color": "#FFFFFF"
+  },
+  {
+    "archived": false,
+    "color": "#e9be74",
+    "description": null,
+    "description_html": "",
+    "id": 19,
+    "is_project_label": true,
+    "name": "priority::high",
+    "priority": null,
+    "subscribed": false,
+    "text_color": "#1F1E24"
+  }
+]

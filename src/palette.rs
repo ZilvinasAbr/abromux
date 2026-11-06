@@ -73,6 +73,11 @@ fn commands(project: Option<&Path>, cx: &App) -> Vec<Cmd> {
     let builtin = keymap::ACTIONS
         .iter()
         .filter_map(|a| a.title.map(|t| (t.to_string(), None, vec![], (a.action)())));
+    let plugins = crate::plugins::all().iter().map(|p| -> Cmd {
+        let action = Box::new(keymap::OpenPlugin { id: p.id.into() });
+        (p.title.into(), None, vec![p.id.into()], action)
+    });
+    let builtin = builtin.chain(plugins);
     // A project file that doesn't parse shows its error as a command.
     let local = project.map(|p| (p, settings::read_project(p)));
     let local_titles: Vec<String> = match &local {

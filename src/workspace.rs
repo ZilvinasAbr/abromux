@@ -1,13 +1,15 @@
 //! Workspace model: each workspace owns a tree of split panes; each pane
 //! holds tabs ("surfaces") that are either terminals or browsers.
 
-use crate::{agent::Kind, browser::BrowserView, terminal::TerminalView};
+use crate::{agent::Kind, browser::BrowserView, plugins::TabHandle, terminal::TerminalView};
 use gpui::{App, Axis, Entity, EntityId, Focusable, Window};
 
 #[derive(Clone)]
 pub enum Surface {
     Terminal(Entity<TerminalView>),
     Browser(Entity<BrowserView>),
+    /// A plugin's tab (src/plugins.rs).
+    Plugin(TabHandle),
 }
 
 impl Surface {
@@ -15,6 +17,7 @@ impl Surface {
         match self {
             Surface::Terminal(t) => t.entity_id(),
             Surface::Browser(b) => b.entity_id(),
+            Surface::Plugin(p) => p.entity_id(),
         }
     }
 
@@ -32,6 +35,7 @@ impl Surface {
                 _ => "terminal",
             },
             Surface::Browser(_) => "globe",
+            Surface::Plugin(p) => p.icon(cx),
         }
     }
 
@@ -66,6 +70,7 @@ impl Surface {
                     "New Tab".into()
                 }
             }
+            Surface::Plugin(p) => p.title(cx),
         }
     }
 
@@ -74,6 +79,7 @@ impl Surface {
         match self {
             Surface::Terminal(t) => t.read(cx).custom_title.clone(),
             Surface::Browser(b) => b.read(cx).custom_title.clone(),
+            Surface::Plugin(p) => p.custom_title(),
         }
     }
 
@@ -91,6 +97,7 @@ impl Surface {
                 b.custom_title = title;
                 cx.notify();
             }),
+            Surface::Plugin(p) => p.set_custom_title(title, cx),
         }
     }
 
@@ -103,13 +110,14 @@ impl Surface {
                 .as_ref()
                 .is_some_and(|a| a.page_url().is_some()),
             Surface::Browser(_) => true,
+            Surface::Plugin(_) => false,
         }
     }
 
     pub fn cwd(&self, cx: &App) -> Option<String> {
         match self {
             Surface::Terminal(t) => Some(t.read(cx).cwd.clone()),
-            Surface::Browser(_) => None,
+            Surface::Browser(_) | Surface::Plugin(_) => None,
         }
     }
 
@@ -117,6 +125,7 @@ impl Surface {
         match self {
             Surface::Terminal(t) => window.focus(&t.focus_handle(cx)),
             Surface::Browser(b) => BrowserView::focus_address(b, window, cx),
+            Surface::Plugin(p) => window.focus(&p.focus_handle(cx)),
         }
     }
 }
@@ -764,7 +773,7 @@ impl Workspace {
             Surface::Terminal(t) => {
                 Some(t.read(cx).shown_title().trim().to_string()).filter(|t| !t.is_empty())
             }
-            Surface::Browser(_) => None,
+            Surface::Browser(_) | Surface::Plugin(_) => None,
         };
         if let Some(t) = self.focused_surface().and_then(title).or_else(|| {
             self.root

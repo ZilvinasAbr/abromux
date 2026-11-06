@@ -6,6 +6,8 @@ version = 4
 name = "abromux"
 version = "0.18.3"
 dependencies = [
+ "abromux-gitlab",
+ "abromux-plugin",
  "anyhow",
  "bindgen",
  "block",
@@ -23,6 +25,28 @@ dependencies = [
  "serde",
  "serde_json",
  "smol_str",
+]
+
+[[package]]
+name = "abromux-gitlab"
+version = "0.1.0"
+dependencies = [
+ "abromux-plugin",
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "image",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "abromux-plugin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,0 +1,15 @@
+[
+  {
+    "a_mode": "0",
+    "b_mode": "100644",
+    "collapsed": false,
+    "deleted_file": false,
+    "diff": "@@ -0,0 +1 @@\n+# IDEA.md\n",
+    "generated_file": false,
+    "new_file": true,
+    "new_path": "IDEA.md",
+    "old_path": "IDEA.md",
+    "renamed_file": false,
+    "too_large": false
+  }
+]
