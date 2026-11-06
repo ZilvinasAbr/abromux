@@ -52,6 +52,8 @@ scripts/nightly.sh --name zoom     # "AbroMux Nightly zoom.app" and `abromux-nig
 
 A named nightly (bundle id `dev.abromux.nightly.<name>`, support folder `abromux-nightly-<name>/`) runs beside the release and the shared nightly, so agents testing different branches don't replace each other's build.
 
+A nightly others can download: commit, then `scripts/bundle-app.sh --nightly --dist` builds a notarized `dist/AbroMux-Nightly-<version>.dmg`, published as a GitHub pre-release tagged `nightly-<commit>`. Pre-releases are never GitHub's "latest" release, so the release app's update check doesn't offer them.
+
 AbroMux Nightly runs next to AbroMux. It has a neon icon (`assets/app/abromux-nightly.svg`), its own name, the bundle id `dev.abromux.nightly` (so separate notification permissions and settings), and its own socket and session in `~/Library/Application Support/abromux-nightly/`. It's signed like the release but never notarized: `scripts/bundle-app.sh --nightly` is what `nightly.sh` calls, and it refuses `--dist`. The binary decides which one it is at runtime from the bundle it sits in (`src/channel.rs`); `cargo run` counts as the release. Install agent hooks from the release `abromux`, not `abromux-nightly`: hooks point at the binary you install them from, and do nothing once that app is gone.
 
 ## Updates
