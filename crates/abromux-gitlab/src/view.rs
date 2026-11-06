@@ -164,7 +164,7 @@ pub struct GitLabView {
     /// Writing (edit.rs): the text fields, a write under way, the last
     /// one's error, the thread being replied to, the line being commented on.
     pub(crate) boxes: crate::edit::Boxes,
-    pub(crate) busy: bool,
+    pub(crate) busy: Option<crate::edit::Write>,
     /// The Overview's "Add reaction" picker is open.
     pub(crate) emoji_picker: bool,
     pub(crate) write_error: Option<String>,
@@ -238,7 +238,7 @@ impl GitLabView {
         .detach();
         let mut v = Self {
             boxes,
-            busy: false,
+            busy: None,
             emoji_picker: false,
             write_error: None,
             replying: None,
@@ -1190,7 +1190,7 @@ impl Tab for GitLabView {
                 "width": f32::from(self.width.get()),
             },
             "edit": {
-                "busy": self.busy,
+                "busy": self.busy.map(|w| format!("{w:?}")),
                 "error": self.write_error,
                 "replying": self.replying,
                 "commenting": self.commenting,
