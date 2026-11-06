@@ -137,6 +137,12 @@ pub struct GitLabView {
     pub(crate) late: std::collections::HashMap<String, Option<String>>,
     /// The file just jumped to, and when: rows arriving keep it in view.
     pub(crate) jump: Option<(usize, std::time::Instant)>,
+    /// The file gone to (`v`, `j`/`k`, the tree), highlighted with its
+    /// Viewed checkbox ringed, until you scroll yourself.
+    pub(crate) current: Option<usize>,
+    /// `current_file()` as of this frame: the headers drawn inside the list
+    /// can't ask the list where its top is while it draws them.
+    pub(crate) current_drawn: std::cell::Cell<Option<usize>>,
     /// Code selected with the mouse (select.rs), and the lines of the code
     /// blocks drawn, for copying a block's selection.
     pub(crate) sel: Option<crate::select::Selection>,
@@ -148,6 +154,8 @@ pub struct GitLabView {
     /// What GitLab found for the people picker's search: (query, people).
     pub(crate) people_found: Option<(String, Vec<User>)>,
     pub(crate) _people_task: Option<Task<()>>,
+    /// "Copy link" just copied: it reads "Copied" for a moment.
+    link_copied: Option<Task<()>>,
     /// The overview's activity: which entries, which order, the menu open.
     pub(crate) activity: crate::mr::ActivityFilter,
     pub(crate) newest_first: bool,
@@ -250,6 +258,8 @@ impl GitLabView {
             side_menu: None,
             late: Default::default(),
             jump: None,
+            current: None,
+            current_drawn: Default::default(),
             sel: None,
             sel_lines: Default::default(),
             sel_drawn: Default::default(),
@@ -257,6 +267,7 @@ impl GitLabView {
             pick: Default::default(),
             people_found: None,
             _people_task: None,
+            link_copied: None,
             activity: Default::default(),
             newest_first: false,
             activity_menu: false,
@@ -635,6 +646,7 @@ impl GitLabView {
     pub(crate) fn open_mr(&mut self, project: u64, iid: u64, cx: &mut Context<Self>) {
         if self.loc.iid != Some(iid) || self.loc.project != Some(project) {
             self.loc.viewed.clear();
+            self.current = None;
             self.folded.clear();
             self.open_resolved.clear();
             self.collapsed_replies.clear();
@@ -675,6 +687,7 @@ impl GitLabView {
         self.loc.project = None;
         self.loc.iid = None;
         self.loc.viewed.clear();
+        self.current = None;
         self.review = Load::Idle;
         self._review_task = None;
         self.rows.clear();
@@ -860,7 +873,7 @@ impl GitLabView {
             "n" => self.jump_thread(true, cx),
             "p" => self.jump_thread(false, cx),
             // The file being read: Viewed, or not any more.
-            "v" if self.loc.section == Section::Changes => self.toggle_viewed_here(cx),
+            "v" if self.loc.section == Section::Changes => self.mark_viewed_here(cx),
             _ => return,
         }
         cx.stop_propagation();
@@ -1058,6 +1071,7 @@ impl Tab for GitLabView {
                 "threads_shown": self.rows.iter().filter(|r| matches!(r, Row::Thread(..))).count(),
                 "top_row": self.diff_list.logical_scroll_top().item_ix,
                 "active_file": self.active_file().and_then(|i| shown.as_ref().map(|r| r.files[i].path().to_string())),
+                "current_file": self.current_file().and_then(|i| shown.as_ref().map(|r| r.files[i].path().to_string())),
                 "files": shown.as_ref().map(|r| r.files.len()),
                 "compare": { "base": self.compare.base, "head": self.compare.head, "commit": self.compare.commit },
                 "folded": folded,
@@ -1129,6 +1143,7 @@ impl Tab for GitLabView {
                 self.file_index(p)?;
                 self.toggle_viewed(p, cx);
             }
+            "mark_viewed" => self.mark_viewed_here(cx),
             "tree" => self.show_tree = Some(!self.tree_shown()),
             "one_file" => {
                 let on = args.get("on").and_then(Value::as_bool).unwrap_or(true);
@@ -1428,14 +1443,24 @@ impl GitLabView {
             })
             .child(
                 // Just the icon in a narrow pane.
-                button("gl-open-web", if narrow { "" } else { "Open in GitLab" })
+                // This page's link on GitLab, to paste anywhere. (Opening it
+                // here would only come back to this tab.)
+                button("gl-copy-link", if narrow { "" } else if self.link_copied.is_some() { "Copied" } else { "Copy link" })
                     .flex_none()
                     .gap_2()
-                    .child(icon("external-link", 14., c(TEXT)))
+                    .child(if self.link_copied.is_some() { app_icon("check", 14., c(TEXT)) } else { icon("copy", 14., c(TEXT)) })
                     .flex_row_reverse()
-                    .on_click(cx.listener(|v, _, window, cx| {
-                        let url = v.web_url();
-                        abromux_plugin::open_url(&url, window, cx);
+                    .on_click(cx.listener(|v, _, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(v.web_url()));
+                        v.link_copied = Some(cx.spawn(async move |this, cx| {
+                            cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
+                            this.update(cx, |v, cx| {
+                                v.link_copied = None;
+                                cx.notify();
+                            })
+                            .ok();
+                        }));
+                        cx.notify();
                     })),
             )
             .child(button("gl-refresh", "Refresh").flex_none().on_click(cx.listener(|v, _, _, cx| v.refresh(cx))))

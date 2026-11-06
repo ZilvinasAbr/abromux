@@ -22,6 +22,8 @@ pub const TEXT: u32 = 0xececef;
 pub const MUTED: u32 = 0xbfbfc3;
 pub const HEADING: u32 = 0xffffff;
 pub const LINK: u32 = 0x9dc8f2;
+/// GitLab's focus ring.
+pub const FOCUS: u32 = 0x428fdc;
 pub const GREEN: u32 = 0x35b597;
 pub const RED: u32 = 0xfc7988;
 pub const ORANGE: u32 = 0xe9be74;
