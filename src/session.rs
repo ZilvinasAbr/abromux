@@ -275,9 +275,7 @@ impl AbroMux {
                     .group
                     .and_then(|g| self.groups.iter().position(|x| x.id == g)),
                 focused: ws
-                    .root
                     .panes()
-                    .iter()
                     .position(|p| p.id == ws.focused_pane)
                     .unwrap_or(0),
                 root: node_state(&ws.root, scrollback, &self.surface_refs, cx),
@@ -501,7 +499,7 @@ impl AbroMux {
                 ids.push(None);
                 continue;
             };
-            let panes: Vec<usize> = root.panes().iter().map(|p| p.id).collect();
+            let panes: Vec<usize> = root.panes().map(|p| p.id).collect();
             let focused_pane = panes
                 .get(state.focused)
                 .or(panes.first())

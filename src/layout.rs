@@ -250,7 +250,7 @@ impl AbroMux {
         let mut focus = None;
         let mut setup = spec.setup.clone();
         let root = self.build_layout(layout, id, &dir, spec, &mut setup, &mut focus, window, cx);
-        let panes: Vec<usize> = root.panes().iter().map(|p| p.id).collect();
+        let panes: Vec<usize> = root.panes().map(|p| p.id).collect();
         let focused = focus.unwrap_or(panes[0]);
         let name = spec.name.clone().or(name);
         let mut ws = Workspace::new(id, name, root, focused);

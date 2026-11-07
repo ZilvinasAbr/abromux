@@ -193,8 +193,7 @@ impl AbroMux {
     fn surface_title(&self, surface: EntityId, cx: &App) -> Option<String> {
         self.workspaces
             .iter()
-            .flat_map(|w| w.root.panes())
-            .flat_map(|p| p.tabs.iter())
+            .flat_map(|w| w.surfaces())
             .find(|s| s.entity_id() == surface)
             .map(|s| s.title(cx))
     }

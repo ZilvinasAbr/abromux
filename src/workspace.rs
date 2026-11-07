@@ -160,12 +160,28 @@ pub enum Node {
     },
 }
 
-impl Node {
-    pub fn panes(&self) -> Vec<&Pane> {
-        match self {
-            Node::Leaf(p) => vec![p],
-            Node::Split { children, .. } => children.iter().flat_map(|c| c.panes()).collect(),
+/// A tree's panes in order, walked as they're asked for.
+pub struct Panes<'a>(Vec<&'a Node>);
+
+impl<'a> Iterator for Panes<'a> {
+    type Item = &'a Pane;
+
+    fn next(&mut self) -> Option<&'a Pane> {
+        loop {
+            match self.0.pop()? {
+                Node::Leaf(p) => return Some(p),
+                Node::Split { children, .. } => {
+                    let [a, b] = &**children;
+                    self.0.extend([b, a]);
+                }
+            }
         }
+    }
+}
+
+impl Node {
+    pub fn panes(&self) -> Panes<'_> {
+        Panes(vec![self])
     }
 
     pub fn pane_mut(&mut self, id: usize) -> Option<&mut Pane> {
@@ -282,7 +298,7 @@ impl Node {
         };
         let child = children
             .iter()
-            .find(|c| c.panes().iter().any(|p| p.id == pane))?;
+            .find(|c| c.panes().any(|p| p.id == pane))?;
         child
             .split_along(pane, axis)
             .or((*a == axis).then_some(*id))
@@ -487,6 +503,25 @@ pub fn parse_color(s: &str) -> Option<u32> {
 }
 
 impl Workspace {
+    /// Its panes, in layout order. Callers go through these rather than
+    /// walking `root`, which is for code that changes the layout itself.
+    pub fn panes(&self) -> Panes<'_> {
+        self.root.panes()
+    }
+
+    /// Every tab of every pane.
+    pub fn surfaces(&self) -> impl Iterator<Item = &Surface> {
+        self.panes().flat_map(|p| p.tabs.iter())
+    }
+
+    pub fn pane(&self, id: usize) -> Option<&Pane> {
+        self.panes().find(|p| p.id == id)
+    }
+
+    pub fn pane_mut(&mut self, id: usize) -> Option<&mut Pane> {
+        self.root.pane_mut(id)
+    }
+
     pub fn new(id: usize, custom_name: Option<String>, root: Node, focused_pane: usize) -> Self {
         Self {
             id,
@@ -522,9 +557,7 @@ impl Workspace {
     pub fn last_pane(&mut self) -> Option<usize> {
         self.track_focus();
         let prev = self.prev_pane?;
-        self.root
-            .panes()
-            .iter()
+        self.panes()
             .any(|p| p.id == prev)
             .then_some(prev)
     }
@@ -553,9 +586,7 @@ impl Workspace {
     }
 
     pub fn focused(&self) -> Option<&Pane> {
-        self.root
-            .panes()
-            .into_iter()
+        self.panes()
             .find(|p| p.id == self.focused_pane)
     }
 
@@ -592,15 +623,13 @@ impl Workspace {
     }
 
     pub fn contains(&self, id: EntityId) -> bool {
-        self.root
-            .panes()
-            .iter()
+        self.panes()
             .any(|p| p.tabs.iter().any(|s| s.entity_id() == id))
     }
 
     /// Pane, index and pane tab count of tab `id`.
     fn find_tab(&self, id: EntityId) -> Option<(usize, usize, usize)> {
-        self.root.panes().iter().find_map(|p| {
+        self.panes().find_map(|p| {
             p.tabs
                 .iter()
                 .position(|s| s.entity_id() == id)
@@ -614,7 +643,7 @@ impl Workspace {
             return false;
         };
         let alone = count == 1;
-        let has = |pane| self.root.panes().iter().any(|p| p.id == pane);
+        let has = |pane| self.panes().any(|p| p.id == pane);
         match to {
             // A pane's only tab can't be split off it or reordered within it.
             TabDrop::Tabs { pane, .. } | TabDrop::Split { pane, .. } => {
@@ -701,7 +730,7 @@ impl Workspace {
     /// before it (in order) takes focus, or the new first pane if it was
     /// first. False, and no change, if it's the root leaf.
     pub fn remove_pane(&mut self, pane: usize) -> bool {
-        let order: Vec<usize> = self.root.panes().iter().map(|p| p.id).collect();
+        let order: Vec<usize> = self.panes().map(|p| p.id).collect();
         if !self.root.remove(pane) {
             return false;
         }
@@ -709,7 +738,7 @@ impl Workspace {
             let at = order.iter().position(|&id| id == pane).unwrap_or(0);
             self.focused_pane = match at.checked_sub(1) {
                 Some(prev) => order[prev],
-                None => self.root.panes()[0].id,
+                None => self.panes().next().unwrap().id,
             };
         }
         true
@@ -760,20 +789,14 @@ impl Workspace {
     /// cwd of the focused terminal, or of any terminal in the workspace.
     pub fn cwd(&self, cx: &App) -> Option<String> {
         self.focused_surface().and_then(|s| s.cwd(cx)).or_else(|| {
-            self.root
-                .panes()
-                .iter()
-                .flat_map(|p| p.tabs.iter())
+            self.surfaces()
                 .find_map(|s| s.cwd(cx))
         })
     }
 
     /// Claude Code is working in one of its terminals.
     pub fn claude_running(&self, cx: &App) -> bool {
-        self.root
-            .panes()
-            .iter()
-            .flat_map(|p| p.tabs.iter())
+        self.surfaces()
             .any(|s| s.claude_running(cx))
     }
 
@@ -794,10 +817,7 @@ impl Workspace {
             Surface::Browser(_) | Surface::Plugin(_) => None,
         };
         if let Some(t) = self.focused_surface().and_then(title).or_else(|| {
-            self.root
-                .panes()
-                .iter()
-                .flat_map(|p| p.tabs.iter())
+            self.surfaces()
                 .find_map(title)
         }) {
             return t;
@@ -929,7 +949,7 @@ mod tests {
         }
     }
     fn ids(n: &Node) -> Vec<usize> {
-        n.panes().iter().map(|p| p.id).collect()
+        n.panes().map(|p| p.id).collect()
     }
 
     #[test]
@@ -989,11 +1009,11 @@ mod tests {
                 .is_ok()
         );
         // `active` stands in for the tabs, which need a window to make.
-        ws.root.pane_mut(1).unwrap().active = 7;
+        ws.pane_mut(1).unwrap().active = 7;
         assert!(!ws.swap_pane(1, Dir::Left), "nothing left of pane 1");
         assert!(ws.swap_pane(1, Dir::Right));
-        assert_eq!(ws.root.pane_mut(2).unwrap().active, 7);
-        assert_eq!(ws.root.pane_mut(1).unwrap().active, 0);
+        assert_eq!(ws.pane_mut(2).unwrap().active, 7);
+        assert_eq!(ws.pane_mut(1).unwrap().active, 0);
         assert_eq!(ws.focused_pane, 2, "focus follows the swapped pane");
 
         assert_eq!(ws.last_pane(), Some(1));

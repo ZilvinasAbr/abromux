@@ -306,10 +306,7 @@ impl AbroMux {
             }
         }
         let tabs: Vec<(String, String)> = ws
-            .root
-            .panes()
-            .into_iter()
-            .flat_map(|p| p.tabs.iter())
+            .surfaces()
             .filter_map(|s| {
                 let (kind, key, _) = surface_link(s, cx)?;
                 Some((key.clone(), clean_title(kind, &key, &s.title(cx))?))
@@ -341,9 +338,7 @@ impl AbroMux {
     /// Keys of the links workspace `wi`'s panes show now.
     fn visible_links(&self, wi: usize, cx: &App) -> HashSet<String> {
         let ws = &self.workspaces[wi];
-        ws.root
-            .panes()
-            .into_iter()
+        ws.panes()
             .filter(|p| ws.shows(p.id))
             .filter_map(|p| p.active_surface())
             .filter_map(|s| surface_link(s, cx).map(|(_, k, _)| k))
@@ -380,10 +375,7 @@ impl AbroMux {
         let mut changed = false;
         for ws in &mut self.workspaces {
             let seen: Vec<(Kind, String, String, String)> = ws
-                .root
-                .panes()
-                .into_iter()
-                .flat_map(|p| p.tabs.iter())
+                .surfaces()
                 .filter_map(|s| {
                     let (kind, key, url) = surface_link(s, cx)?;
                     Some((kind, key, url, s.title(cx)))
@@ -418,7 +410,7 @@ impl AbroMux {
 
     /// The tab in workspace `wi` showing the link with `key`.
     pub(crate) fn link_tab(&self, wi: usize, key: &str, cx: &App) -> Option<(usize, EntityId)> {
-        self.workspaces[wi].root.panes().into_iter().find_map(|p| {
+        self.workspaces[wi].panes().find_map(|p| {
             p.tabs
                 .iter()
                 .find(|s| surface_link(s, cx).is_some_and(|(_, k, _)| k == key))
@@ -472,8 +464,7 @@ impl AbroMux {
     /// some). None: there's none yet.
     fn link_pane(&mut self, wi: usize, cx: &App) -> Option<usize> {
         let ws = &self.workspaces[wi];
-        let panes = ws.root.panes();
-        if let Some(p) = ws.link_pane.filter(|id| panes.iter().any(|p| p.id == *id)) {
+        if let Some(p) = ws.link_pane.filter(|id| ws.pane(*id).is_some()) {
             return Some(p);
         }
         let pages = |p: &&crate::workspace::Pane| {
@@ -482,8 +473,8 @@ impl AbroMux {
                 .filter(|s| s.is_browser(cx) || s.is_plugin("gitlab"))
                 .count()
         };
-        let found = panes
-            .iter()
+        let found = ws
+            .panes()
             .filter(|p| pages(p) > 0)
             .max_by_key(|p| (p.id != ws.focused_pane, pages(p)))
             .map(|p| p.id);
@@ -553,9 +544,7 @@ impl AbroMux {
             self.track_link(wi, Link { kind, key, url, title }, cx);
             self.workspaces[wi].link_pane = self
                 .workspaces[wi]
-                .root
                 .panes()
-                .into_iter()
                 .find(|p| p.tabs.iter().any(|t| t.entity_id() == s.entity_id()))
                 .map(|p| p.id);
         }

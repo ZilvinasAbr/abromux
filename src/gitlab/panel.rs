@@ -55,10 +55,7 @@ impl AbroMux {
         let st = store(cx).read(cx);
         let url = st.web_url(&key);
         let existing = self.workspaces[self.active]
-            .root
-            .panes()
-            .into_iter()
-            .flat_map(|p| p.tabs.iter())
+            .surfaces()
             .find(|s| tab_mr(s, st, cx).as_ref() == Some(&key))
             .map(|s| s.entity_id());
         match existing {
@@ -99,7 +96,7 @@ impl AbroMux {
         let mut open = HashSet::new();
         let mut shown = HashSet::new();
         for (wi, ws) in self.workspaces.iter().enumerate() {
-            for p in ws.root.panes() {
+            for p in ws.panes() {
                 for t in &p.tabs {
                     if let Some(k) = tab_mr(t, st, cx) {
                         let active = p.active_surface().is_some_and(|a| a.entity_id() == t.entity_id());
@@ -122,10 +119,7 @@ impl AbroMux {
             .iter()
             .map(|ws| {
                 let cwds: Vec<String> = ws
-                    .root
-                    .panes()
-                    .iter()
-                    .flat_map(|p| p.tabs.iter())
+                    .surfaces()
                     .filter_map(|s| s.cwd(cx))
                     .collect();
                 (ws.id, places(ws.home.as_deref(), &cwds))

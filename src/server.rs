@@ -729,9 +729,7 @@ impl AbroMux {
                 let (wi, pane) = self.pane_target(p)?;
                 let ws = &self.workspaces[wi];
                 let pane = ws
-                    .root
                     .panes()
-                    .into_iter()
                     .find(|x| x.id == pane)
                     .context("no such pane")?;
                 json!(
@@ -856,9 +854,7 @@ impl AbroMux {
                 let at = match (&anchor, index) {
                     (Some(((_, _, a), after)), _) => {
                         let pane = self.workspaces[dwi]
-                            .root
                             .panes()
-                            .into_iter()
                             .find(|x| x.id == dpane);
                         let i = pane
                             .and_then(|x| {
@@ -1287,9 +1283,7 @@ impl AbroMux {
                             vec![self.surface_target(p)?.2.entity_id()]
                         } else {
                             self.workspaces[wi]
-                                .root
                                 .panes()
-                                .iter()
                                 .flat_map(|p| p.tabs.iter().map(|t| t.entity_id()))
                                 .collect()
                         };
@@ -1887,9 +1881,7 @@ impl AbroMux {
     /// The workspace and pane holding surface `id`.
     fn pane_of(&self, id: EntityId) -> Option<(usize, usize)> {
         self.workspaces.iter().enumerate().find_map(|(wi, ws)| {
-            ws.root
-                .panes()
-                .into_iter()
+            ws.panes()
                 .find(|p| p.tabs.iter().any(|t| t.entity_id() == id))
                 .map(|p| (wi, p.id))
         })
@@ -1913,9 +1905,7 @@ impl AbroMux {
         let tabs: Vec<(usize, Surface, bool)> = {
             let ws = &self.workspaces[wi];
             let pane = ws
-                .root
                 .panes()
-                .into_iter()
                 .find(|q| q.id == pane_id)
                 .context("no such pane")?;
             pane.tabs
@@ -2193,9 +2183,7 @@ impl AbroMux {
         let (wi, pane, s) = self.surface_target(p)?;
         let id = s.entity_id();
         let tabs: Vec<EntityId> = self.workspaces[wi]
-            .root
             .panes()
-            .into_iter()
             .find(|x| x.id == pane)
             .map(|x| x.tabs.iter().map(|t| t.entity_id()).collect())
             .unwrap_or_default();
@@ -2252,14 +2240,14 @@ impl AbroMux {
                 let new = self.make_surface(wi, &q, window, cx)?;
                 let nid = new.entity_id();
                 let ws = &mut self.workspaces[wi];
-                let was = ws.root.pane_mut(pane).and_then(|x| x.active_surface().map(|s| s.entity_id()));
+                let was = ws.pane_mut(pane).and_then(|x| x.active_surface().map(|s| s.entity_id()));
                 if ws.insert_tab(pane, at + 1, new).is_err() {
                     bail!("pane:{pane} is gone");
                 }
                 if focus {
                     self.focus_surface(nid, cx);
                     self.select_workspace(wi, window, cx);
-                } else if let Some(x) = ws.root.pane_mut(pane)
+                } else if let Some(x) = ws.pane_mut(pane)
                     && let Some(i) = x.tabs.iter().position(|t| Some(t.entity_id()) == was)
                 {
                     // insert_tab made the new tab active; keep the old one.
@@ -2367,9 +2355,7 @@ impl AbroMux {
     ) -> anyhow::Result<(usize, usize, Surface)> {
         let all = |wi: usize| {
             let ws = &self.workspaces[wi];
-            ws.root
-                .panes()
-                .into_iter()
+            ws.panes()
                 .flat_map(|p| p.tabs.iter().map(move |t| (wi, p.id, t.clone())))
                 .collect::<Vec<_>>()
         };
@@ -2431,10 +2417,7 @@ impl AbroMux {
         ws.focused_surface()
             .and_then(browser)
             .or_else(|| {
-                ws.root
-                    .panes()
-                    .iter()
-                    .flat_map(|p| p.tabs.iter())
+                ws.surfaces()
                     .find_map(browser)
             })
             .context("no browser surface in this workspace (open one with `abromux browser open`)")
@@ -2449,15 +2432,13 @@ impl AbroMux {
         };
         match parse_sel(s, "pane")? {
             Sel::Ref(id) => self.workspaces.iter().enumerate().find_map(|(wi, w)| {
-                w.root
-                    .panes()
-                    .iter()
+                w.panes()
                     .any(|p| p.id == id)
                     .then_some((wi, id))
             }),
             Sel::Index(i) => {
                 let wi = self.workspace_target(p)?;
-                self.workspaces[wi].root.panes().get(i).map(|p| (wi, p.id))
+                self.workspaces[wi].panes().nth(i).map(|p| (wi, p.id))
             }
         }
         .with_context(|| format!("no pane {s}"))
@@ -2468,9 +2449,7 @@ impl AbroMux {
         if str_param(p, "surface").is_none() && str_param(p, "pane").is_some() {
             let (wi, pane) = self.pane_target(p)?;
             let s = self.workspaces[wi]
-                .root
                 .panes()
-                .into_iter()
                 .find(|x| x.id == pane)
                 .and_then(|x| x.active_surface())
                 .cloned()
@@ -2539,14 +2518,14 @@ impl AbroMux {
             s.set_custom_title(run.title.clone(), cx);
         }
         let new_id = s.entity_id();
-        let panes: Vec<usize> = self.workspaces[wi].root.panes().iter().map(|p| p.id).collect();
+        let panes: Vec<usize> = self.workspaces[wi].panes().map(|p| p.id).collect();
         let at = panes.iter().position(|p| *p == pane).unwrap_or(0);
         let other = panes.get(at + 1).or(at.checked_sub(1).and_then(|i| panes.get(i))).copied();
         match other {
             Some(o) => {
                 self.add_tab_to(wi, o, s, false, window, cx);
                 // Showing in its pane, but the focus stays on the plugin's tab.
-                if let Some(p) = self.workspaces[wi].root.pane_mut(o)
+                if let Some(p) = self.workspaces[wi].pane_mut(o)
                     && let Some(i) = p.tabs.iter().position(|t| t.entity_id() == new_id)
                 {
                     p.active = i;
@@ -2657,9 +2636,7 @@ impl AbroMux {
     }
 
     fn panes_json(&self, ws: &Workspace, cx: &App) -> Vec<Value> {
-        ws.root
-            .panes()
-            .iter()
+        ws.panes()
             .enumerate()
             .map(|(i, p)| {
                 json!({
@@ -2752,9 +2729,7 @@ impl AbroMux {
             "mark-read" => {
                 let ws = &self.workspaces[wi];
                 let ids: Vec<EntityId> = ws
-                    .root
                     .panes()
-                    .iter()
                     .flat_map(|p| p.tabs.iter().map(|t| t.entity_id()))
                     .collect();
                 for id in ids {
@@ -2794,7 +2769,7 @@ impl AbroMux {
             "unread": self.ws_unread(ws),
             "cwd": cwd,
             "branch": cwd.as_deref().and_then(git_branch),
-            "pane_count": ws.root.panes().len(),
+            "pane_count": ws.panes().count(),
             "description": ws.description,
             "color": ws.color.map(|c| format!("#{c:06x}")),
             "group": ws.group.map(|g| format!("group:{g}")),
