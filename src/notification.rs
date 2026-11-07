@@ -649,12 +649,7 @@ fn banner_title(title: &str) -> &str {
 
 /// "now", "5m", "3h", "2d".
 fn ago(d: Duration) -> String {
-    match d.as_secs() {
-        s if s < 60 => "now".into(),
-        s if s < 3600 => format!("{}m", s / 60),
-        s if s < 86400 => format!("{}h", s / 3600),
-        s => format!("{}d", s / 86400),
-    }
+    abromux_gitlab::time::ago_short(d.as_secs() as i64)
 }
 
 #[cfg(test)]
