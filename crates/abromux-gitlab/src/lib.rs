@@ -19,6 +19,7 @@ mod discussion;
 mod edit;
 mod emoji;
 pub mod highlight;
+pub mod local;
 mod mr;
 mod search;
 mod projects;

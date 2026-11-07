@@ -211,6 +211,7 @@ fn limits(s: &GitlabSettings) -> cache::Limits {
 
 pub fn init(cx: &mut App) {
     cache::init(cache_dir());
+    abromux_gitlab::local::init(crate::channel::support_dir().join("local-diffs"));
     cache::set_limits(Some(limits(settings(cx))));
     let index = load_index();
     let (front_tx, front_rx) = mpsc::unbounded();

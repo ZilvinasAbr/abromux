@@ -12,7 +12,20 @@ impl Global for Shell {}
 /// Answer plugins' requests (`abromux_plugin::Host`) with `view`.
 pub fn set_host(view: WeakEntity<crate::AbroMux>, cx: &mut App) {
     cx.set_global(Shell(view));
-    cx.set_global(abromux_plugin::Host { open_url });
+    cx.set_global(abromux_plugin::Host { open_url, run_terminal });
+}
+
+/// A plugin's command in a terminal (a local diff's agents): deferred, as
+/// `open_url` is, so the app's view is free to add the tab.
+fn run_terminal(run: abromux_plugin::Run, window: &mut Window, cx: &mut App) {
+    let Some(view) = cx.try_global::<Shell>().and_then(|s| s.0.upgrade()) else { return };
+    window.defer(cx, move |window, cx| {
+        view.update(cx, |this, cx| {
+            if let Err(e) = this.run_beside(run, window, cx) {
+                eprintln!("abromux: a plugin's terminal: {e:#}");
+            }
+        });
+    });
 }
 
 /// The plugin that shows `url` itself, if one does.

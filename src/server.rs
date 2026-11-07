@@ -1882,6 +1882,68 @@ impl AbroMux {
 
     // ---- actions --------------------------------------------------------
 
+    /// A plugin's [`abromux_plugin::Run`]: typed into terminal `send_to`,
+    /// or a new terminal running `command` beside tab `beside`: a tab in
+    /// the pane to the right of (else any pane besides) its own, else a
+    /// split to its right. Focus stays where it is.
+    pub(crate) fn run_beside(
+        &mut self,
+        run: abromux_plugin::Run,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        if let Some(to) = &run.send_to {
+            let t = self.terminal_target(&json!({ "surface": to }))?;
+            let text = run.text.clone().unwrap_or_default();
+            t.update(cx, |t, cx| {
+                t.send(text.as_bytes());
+                cx.notify();
+            });
+            // Enter on its own, after the text: an agent's input box takes
+            // a pasted line with its newline as a new line, not a send.
+            let t = t.downgrade();
+            cx.spawn(async move |_, cx| {
+                cx.background_executor().timer(std::time::Duration::from_millis(150)).await;
+                let _ = t.update(cx, |t, cx| {
+                    t.send(b"\r");
+                    cx.notify();
+                });
+            })
+            .detach();
+            return Ok(());
+        }
+        let (wi, pane) = match run.beside.and_then(|id| Some((self.workspace_of(id)?, id))) {
+            Some((wi, id)) => (wi, self.workspaces[wi].tab_position(id).context("the tab is gone")?.0),
+            None => (self.active, self.workspaces[self.active].focused_pane),
+        };
+        let p = json!({ "type": "terminal", "cwd": run.cwd, "command": run.command });
+        let s = self.make_surface(wi, &p, window, cx)?;
+        if run.title.is_some() {
+            s.set_custom_title(run.title.clone(), cx);
+        }
+        let new_id = s.entity_id();
+        let panes: Vec<usize> = self.workspaces[wi].root.panes().iter().map(|p| p.id).collect();
+        let at = panes.iter().position(|p| *p == pane).unwrap_or(0);
+        let other = panes.get(at + 1).or(at.checked_sub(1).and_then(|i| panes.get(i))).copied();
+        match other {
+            Some(o) => {
+                self.add_tab_to(wi, o, s, false, window, cx);
+                // Showing in its pane, but the focus stays on the plugin's tab.
+                if let Some(p) = self.workspaces[wi].root.pane_mut(o)
+                    && let Some(i) = p.tabs.iter().position(|t| t.entity_id() == new_id)
+                {
+                    p.active = i;
+                }
+            }
+            None => {
+                self.split_pane(wi, pane, gpui::Axis::Horizontal, false, s, false, window, cx)
+                    .context("pane not found")?;
+            }
+        }
+        cx.notify();
+        Ok(())
+    }
+
     /// A terminal (`--cwd`, `--command`) or browser (`--url`) for workspace `wi`.
     fn make_surface(
         &mut self,

@@ -27,6 +27,22 @@ pub fn parse(iso: &str) -> Option<i64> {
     Some(t)
 }
 
+/// `secs` since the epoch as GitLab writes times: `2026-11-05T19:36:28.000Z`.
+pub fn iso(secs: i64) -> String {
+    // Civil from days (Howard Hinnant's algorithm), `parse` backwards.
+    let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.000Z", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
 pub fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
@@ -87,6 +103,13 @@ pub fn day(iso: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn iso_round_trips() {
+        for t in ["2026-11-05T19:36:28.000Z", "2000-02-29T00:00:00.000Z", "1970-01-01T00:00:00.000Z", "2024-12-31T23:59:59.000Z"] {
+            assert_eq!(iso(parse(t).unwrap()), t);
+        }
+    }
 
     #[test]
     fn parses_and_words() {
