@@ -526,6 +526,44 @@ fn normalize(kind: Kind, payload: &Value) -> Option<Value> {
     Some(p)
 }
 
+/// What an `agent.report` means for the agent's tab, from its params
+/// (Claude Code's event names, which [`normalize`] maps every agent onto).
+#[derive(Clone, Debug, PartialEq)]
+pub enum AgentEvent {
+    /// A prompt went in, or a tool ran.
+    Working,
+    /// It waits for you; what it said, if anything.
+    NeedsInput(Option<String>),
+    /// It finished; its summary, if any.
+    Stopped(Option<String>),
+    Ended,
+}
+
+impl AgentEvent {
+    /// None for an event that changes nothing: one we don't use, or Claude's
+    /// reminder after a minute idle (its Stop already told you).
+    pub fn of_report(p: &Value) -> Option<AgentEvent> {
+        let s = |k: &str| p.get(k).and_then(Value::as_str);
+        Some(match s("event")? {
+            "UserPromptSubmit" | "PostToolUse" => AgentEvent::Working,
+            // Claude's Notification, Codex's PermissionRequest.
+            event @ ("Notification" | "PermissionRequest") => {
+                let message = s("message").map(String::from);
+                // Older Claude versions send no notification_type.
+                let idle = s("notification_type") == Some("idle_prompt")
+                    || message.as_deref().is_some_and(|m| m.contains("waiting for your input"));
+                if event == "Notification" && idle {
+                    return None;
+                }
+                AgentEvent::NeedsInput(message)
+            }
+            "Stop" => AgentEvent::Stopped(s("summary").map(String::from)),
+            "SessionEnd" => AgentEvent::Ended,
+            _ => return None,
+        })
+    }
+}
+
 /// `agent.report`'s params for a hook payload.
 fn report(kind: Kind, payload: &Value, surface: &str, pid: Option<u32>) -> Option<Value> {
     let payload = normalize(kind, payload)?;
@@ -922,6 +960,21 @@ fn write(path: &Path, text: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decodes_reports() {
+        let ev = |v: Value| AgentEvent::of_report(&v);
+        assert_eq!(ev(json!({ "event": "PostToolUse" })), Some(AgentEvent::Working));
+        assert_eq!(ev(json!({ "event": "Stop", "summary": "Done" })), Some(AgentEvent::Stopped(Some("Done".into()))));
+        assert_eq!(
+            ev(json!({ "event": "PermissionRequest", "message": "Asks to run ls" })),
+            Some(AgentEvent::NeedsInput(Some("Asks to run ls".into())))
+        );
+        assert_eq!(ev(json!({ "event": "Notification", "notification_type": "idle_prompt", "message": "x" })), None);
+        assert_eq!(ev(json!({ "event": "Notification", "message": "Claude is waiting for your input" })), None);
+        assert_eq!(ev(json!({ "event": "SessionStart" })), None);
+        assert_eq!(ev(json!({ "event": "SessionEnd" })), Some(AgentEvent::Ended));
+    }
 
     #[test]
     fn titles() {

@@ -8,7 +8,7 @@
 
 use crate::{
     AbroMux, BrowserView, DEFAULT_URL,
-    agent::{Agent, Kind},
+    agent::{Agent, AgentEvent, Kind},
     browser::normalize_url,
     browser_auto, debug, ipc, one_line,
     status::{self, RUNNING, WARNING},
@@ -23,7 +23,7 @@ use futures::{
     future::{Either, LocalBoxFuture, select},
 };
 use gpui::{
-    App, AppContext as _, AsyncApp, Axis, Context, Entity, EntityId, Keystroke, Timer, Window,
+    App, AsyncApp, Axis, Context, Entity, EntityId, Keystroke, Timer, Window,
 };
 use serde_json::{Value, json};
 use std::{
@@ -1002,7 +1002,7 @@ impl AbroMux {
             // From `abromux hooks claude-event` (agent.rs).
             "agent.report" => {
                 let t = self.terminal_target(p)?;
-                let ended = str_param(p, "event") == Some("SessionEnd");
+                let ended = AgentEvent::of_report(p) == Some(AgentEvent::Ended);
                 let reported = Agent::from_report(p);
                 let has_mode = p.get("permission_mode").is_some_and(|m| !m.is_null());
                 t.update(cx, |t, _| match (ended, reported) {
@@ -2054,122 +2054,27 @@ impl AbroMux {
         let Some(kind) = str_param(p, "kind").and_then(Kind::parse) else {
             return;
         };
-        let (label, title) = (kind.label(), kind.title());
         if let Some(prompt) = str_param(p, "prompt") {
             self.auto_name(surface, kind, prompt.to_string(), cx);
         }
-        match str_param(p, "event").unwrap_or_default() {
-            "UserPromptSubmit" | "PostToolUse" => {
-                self.set_agent_status(surface, label, Some(("Running", RUNNING)), cx)
-            }
-            // Claude's Notification, Codex's PermissionRequest.
-            event @ ("Notification" | "PermissionRequest") => {
-                let message = str_param(p, "message")
-                    .map(String::from)
-                    .unwrap_or_else(|| format!("{label} needs your attention"));
-                // Claude also says so after a minute idle; Stop already did.
-                if event == "Notification"
-                    && (str_param(p, "notification_type") == Some("idle_prompt")
-                        || message.contains("waiting for your input"))
-                {
-                    return;
-                }
+        let Some(event) = AgentEvent::of_report(p) else {
+            return;
+        };
+        let (label, title) = (kind.label(), kind.title());
+        match event {
+            AgentEvent::Working => self.set_agent_status(surface, label, Some(("Running", RUNNING)), cx),
+            AgentEvent::NeedsInput(message) => {
+                let message = message.unwrap_or_else(|| format!("{label} needs your attention"));
                 self.set_agent_status(surface, label, Some(("Needs input", WARNING)), cx);
                 self.add_notification(surface, title.into(), message, false, window, cx);
             }
-            "Stop" => {
+            AgentEvent::Stopped(summary) => {
                 self.set_agent_status(surface, label, None, cx);
-                let body = str_param(p, "summary").unwrap_or("Finished").to_string();
+                let body = summary.unwrap_or_else(|| "Finished".into());
                 self.add_notification(surface, title.into(), body, false, window, cx);
             }
-            "SessionEnd" => self.set_agent_status(surface, label, None, cx),
-            _ => {}
+            AgentEvent::Ended => self.set_agent_status(surface, label, None, cx),
         }
-    }
-
-    /// Name the workspace of `surface` from what its agent is asked to do,
-    /// and keep renaming it as the work moves on, until you name it
-    /// yourself. On with `automation.workspaceAutoNaming`, and always for a
-    /// ⇧⌘I workspace still on its made-up name.
-    fn auto_name(
-        &mut self,
-        surface: gpui::EntityId,
-        kind: Kind,
-        prompt: String,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(ws) = self.workspaces.iter().find(|w| w.contains(surface)) else {
-            return;
-        };
-        let on = cx
-            .global::<crate::settings::Settings>()
-            .automation
-            .workspace_auto_naming;
-        if ws.custom_name.is_some() || !(on || ws.home.is_some()) {
-            return;
-        }
-        let (id, titled) = (ws.id, ws.auto_title.is_some());
-        let naming = self.naming.entry(id).or_default();
-        // "yes", "go on": nothing new to name it from, once it has a name.
-        let short = prompt.split_whitespace().count() < 4;
-        if naming.failed || (titled && !naming.prompts.is_empty() && short) {
-            return;
-        }
-        naming.add(prompt);
-        if naming.running {
-            naming.again = true;
-            return;
-        }
-        self.run_naming(id, kind, cx);
-    }
-
-    /// Ask `kind`'s CLI for a title from the prompts so far; once it
-    /// answers, again if more came meanwhile.
-    fn run_naming(&mut self, id: usize, kind: Kind, cx: &mut Context<Self>) {
-        let current = self
-            .ws_index(id)
-            .and_then(|i| self.workspaces[i].auto_title.clone());
-        let Some(naming) = self.naming.get_mut(&id) else {
-            return;
-        };
-        let current = current.filter(|_| naming.titled);
-        naming.running = true;
-        naming.again = false;
-        let prompts = naming.prompts.clone();
-        let task = cx.background_spawn(async move {
-            crate::agent::title_for(kind, &prompts, current.as_deref())
-        });
-        cx.spawn(async move |this, cx| {
-            let title = task.await;
-            this.update(cx, |this, cx| {
-                let Some(naming) = this.naming.get_mut(&id) else {
-                    return; // Renamed or cleared meanwhile.
-                };
-                naming.running = false;
-                let Some(t) = title else {
-                    // A CLI that fails isn't run again on every prompt.
-                    naming.failed = !naming.titled;
-                    return;
-                };
-                naming.titled = true;
-                let again = naming.again;
-                let Some(i) = this.ws_index(id) else {
-                    this.naming.remove(&id);
-                    return;
-                };
-                if this.workspaces[i].custom_name.is_some() {
-                    this.naming.remove(&id);
-                    return;
-                }
-                this.workspaces[i].auto_title = Some(one_line(&t));
-                cx.notify();
-                if again {
-                    this.run_naming(id, kind, cx);
-                }
-            })
-            .ok();
-        })
-        .detach();
     }
 
     /// `tab-action`: what the tab bar's right-click menu does, on one tab.
@@ -2785,57 +2690,9 @@ impl AbroMux {
 }
 
 
-/// Auto-naming's state for one workspace ([`AbroMux::auto_name`]).
-#[derive(Default)]
-pub struct Naming {
-    /// Its agents' prompts, oldest first, cut to the latest
-    /// `PROMPT_CHARS` or so.
-    prompts: Vec<String>,
-    /// An agent CLI is making a title now.
-    running: bool,
-    /// More prompts came while it was.
-    again: bool,
-    /// It has named the workspace (so its name isn't the made-up one).
-    titled: bool,
-    /// Its first try failed: no more tries until the name is cleared.
-    failed: bool,
-}
-
-impl Naming {
-    fn add(&mut self, prompt: String) {
-        self.prompts.push(prompt);
-        let mut total = 0;
-        let keep = self
-            .prompts
-            .iter()
-            .rev()
-            .take_while(|p| {
-                total += p.chars().count();
-                total <= crate::agent::PROMPT_CHARS
-            })
-            .count()
-            .max(1);
-        let drop = self.prompts.len() - keep;
-        self.prompts.drain(..drop);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn naming_keeps_the_latest_prompts() {
-        let mut n = Naming::default();
-        let big = "x".repeat(crate::agent::PROMPT_CHARS - 10);
-        n.add("first".into());
-        n.add(big.clone());
-        n.add("latest".into());
-        assert_eq!(n.prompts, vec![big.clone(), "latest".to_string()]);
-        // One prompt is kept even when it's too long alone.
-        n.add("y".repeat(crate::agent::PROMPT_CHARS + 5));
-        assert_eq!(n.prompts.len(), 1);
-    }
 
     #[test]
     fn zoom_and_notification_ids() {

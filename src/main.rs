@@ -31,6 +31,7 @@ mod menu;
 mod notification;
 mod notify_hook;
 mod menubar;
+mod naming;
 mod osc99;
 mod palette;
 mod plugins;
@@ -326,9 +327,9 @@ struct AbroMux {
     /// The session this launch restored (without scrollback), for ⌘⇧O,
     /// with the id each of its workspaces was built as.
     launch_session: Option<(session::Session, Vec<Option<usize>>)>,
-    /// Auto-naming's state per workspace (`server::auto_name`); clearing a
+    /// Auto-naming's state per workspace (`naming.rs`); clearing a
     /// workspace's name starts it over.
-    naming: HashMap<usize, server::Naming>,
+    naming: HashMap<usize, naming::Naming>,
     /// A task is redrawing the window while Claude's logo turns somewhere.
     spinning: bool,
 }
