@@ -617,19 +617,18 @@ fn summary(jsonl: &str) -> Option<String> {
         })
 }
 
-/// How much of a prompt goes to the app, to name its workspace from.
-const PROMPT_CHARS: usize = 2000;
+/// How much of a prompt goes to the app, to name its workspace from, and
+/// how much of a workspace's latest prompts it names it from.
+pub(crate) const PROMPT_CHARS: usize = 2000;
 
-/// A short title for a session that starts with `prompt`, from the agent's
-/// own CLI (`claude -p` on a small model, or `codex exec`), run through a
-/// login shell so it's found on the user's PATH. Blocks for up to a minute;
-/// None for other agents or if it fails.
-pub fn title_for(kind: Kind, prompt: &str) -> Option<String> {
+/// A short title for a session of `prompts` (oldest first), from the
+/// agent's own CLI (`claude -p` on a small model, or `codex exec`), run
+/// through a login shell so it's found on the user's PATH. With `current`,
+/// the title it has now, kept unless the work has moved on. Blocks for up
+/// to a minute; None for other agents or if it fails.
+pub fn title_for(kind: Kind, prompts: &[String], current: Option<&str>) -> Option<String> {
     use std::process::{Command, Stdio};
-    let ask = format!(
-        "Reply with only a title of 2 to 5 words for a coding session that starts \
-         with the request below. No quotes, no trailing punctuation.\n\n<request>\n{prompt}\n</request>"
-    );
+    let ask = naming_request(prompts, current);
     let dir = std::env::temp_dir();
     static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -685,6 +684,26 @@ pub fn title_for(kind: Kind, prompt: &str) -> Option<String> {
     let text = reader.join().ok()?;
     let _ = std::fs::remove_file(&out);
     status.success().then(|| clean_title(&text)).flatten()
+}
+
+/// What [`title_for`] asks the agent.
+fn naming_request(prompts: &[String], current: Option<&str>) -> String {
+    let requests: String = prompts
+        .iter()
+        .map(|p| format!("<request>\n{p}\n</request>\n"))
+        .collect();
+    let keep = match current {
+        Some(t) => format!(
+            "Its title now is \"{t}\". Reply with it unchanged unless the latest \
+             requests are about something else. "
+        ),
+        None => String::new(),
+    };
+    format!(
+        "Reply with only a title of 2 to 5 words for a coding session made of the \
+         requests below, oldest first, saying what the work is about. {keep}No quotes, \
+         no trailing punctuation.\n\n{requests}"
+    )
 }
 
 /// The first line of a model's answer, as a name: no quotes or markdown,
@@ -915,6 +934,17 @@ mod tests {
             Some("Refactor sidebar")
         );
         assert_eq!(clean_title("   \n"), None);
+    }
+
+    #[test]
+    fn naming_request_lists_prompts_and_keeps_title() {
+        let prompts = ["Fix the login".to_string(), "Now add tests".to_string()];
+        let first = naming_request(&prompts[..1], None);
+        assert!(first.contains("<request>\nFix the login\n</request>"));
+        assert!(!first.contains("title now"));
+        let later = naming_request(&prompts, Some("Login fix"));
+        assert!(later.contains("Its title now is \"Login fix\""));
+        assert!(later.find("Fix the login") < later.find("Now add tests"));
     }
 
     #[test]

@@ -69,7 +69,7 @@ So the list below reads in context:
   - [x] a per-workspace log (`log`, `list-log`, `clear-log`) *(partial: the sidebar shows only the newest entry)*
 - [x] **Sidebar settings**: font size, hiding details, wrapping titles, branch layout, last path segment only, tint and opacity. *(cmux's `sidebar`, `sidebarAppearance` and `workspaceColors` keys; not `matchTerminalBackground`, light/dark tints, badge or spinner positions, compact status)*
 - [x] **New workspaces inherit the cwd** (a setting). *(`app.workspaceInheritWorkingDirectory`, and `app.newWorkspacePlacement`)*
-- [x] **Auto-naming workspaces** from what the agent is doing. *(`automation.workspaceAutoNaming`, off by default: Claude Code and Codex name it from the first prompt; not tabs)*
+- [x] **Auto-naming workspaces** from what the agent is doing. *(`automation.workspaceAutoNaming`, off by default: Claude Code and Codex name it from their prompts and keep it current; ⇧⌘I workspaces on a made-up name always; not tabs)*
 - [ ] **Custom sidebars**: user-written, SwiftUI-style sidebar files. Beta in cmux.
 
 ## 4. Notifications and attention

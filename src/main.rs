@@ -305,9 +305,9 @@ struct AbroMux {
     /// The session this launch restored (without scrollback), for ⌘⇧O,
     /// with the id each of its workspaces was built as.
     launch_session: Option<(session::Session, Vec<Option<usize>>)>,
-    /// Workspaces auto-naming has asked an agent CLI to name, once each
-    /// (`server::auto_name`); clearing a workspace's name lets it ask again.
-    naming: Vec<usize>,
+    /// Auto-naming's state per workspace (`server::auto_name`); clearing a
+    /// workspace's name starts it over.
+    naming: HashMap<usize, server::Naming>,
     /// A task is redrawing the window while Claude's logo turns somewhere.
     spinning: bool,
 }
@@ -360,7 +360,7 @@ impl AbroMux {
             menubar: None,
             palette: None,
             launch_session: None,
-            naming: vec![],
+            naming: HashMap::new(),
             spinning: false,
         };
         cx.observe_window_activation(window, |this, window, cx| {
@@ -1087,7 +1087,15 @@ impl AbroMux {
 
     /// ⇧⌘I, once named: a workspace with its own folder under
     /// `~/.abromux/ws` (`app.workspaceFoldersDirectory`) and a shell in it.
-    fn new_folder_workspace(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+    /// A made-up name (`named` false) is only a stand-in: agents working
+    /// there rename it until you name it yourself (`server::auto_name`).
+    fn new_folder_workspace(
+        &mut self,
+        name: String,
+        named: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let root = folder::root(cx.global::<settings::Settings>());
         let dir = match folder::create_in(&root, &name) {
             Ok(d) => d,
@@ -1103,7 +1111,11 @@ impl AbroMux {
         self.building_home = None;
         let ws = &mut self.workspaces[index];
         ws.home = Some(dir);
-        ws.custom_name = Some(name);
+        if named {
+            ws.custom_name = Some(name);
+        } else {
+            ws.auto_title = Some(name);
+        }
         cx.notify();
     }
 
@@ -1245,7 +1257,7 @@ impl AbroMux {
                             // Back to following the terminal's title.
                             ws.custom_name = None;
                             ws.auto_title = None;
-                            this.naming.retain(|&n| n != id);
+                            this.naming.remove(&id);
                         } else if name != ws.name(cx) {
                             ws.custom_name = Some(name);
                         }
