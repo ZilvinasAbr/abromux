@@ -41,6 +41,8 @@ block = "0.1"
 raw-window-handle = "0.6"
 # Kitty graphics PNG decoding (already a gpui dependency)
 image = "0.25"
+# Markdown tabs (src/markdown.rs); already a gpui-component dependency
+markdown = "=1.0.0"
 
 [build-dependencies]
 bindgen = "0.71"

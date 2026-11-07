@@ -18,6 +18,7 @@ dependencies = [
  "image",
  "lb-wry",
  "libc",
+ "markdown",
  "memchr",
  "objc",
  "portable-pty",

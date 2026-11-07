@@ -53,7 +53,7 @@ So the list below reads in context:
 - [x] **Focused-pane border**: an active-pane border color and a configurable divider color. *(`panes.focusBorderColor` and `panes.dividerColor` in the config file)*
 - [x] **Keeping the workspace open when its last tab closes** (a setting). *(`app.keepWorkspaceOpenWhenClosingLastSurface`, as in cmux only for ⌘W: a fresh terminal takes the tab's place)*
 - [ ] **Canvas layout**: a freeform canvas workspace with pane gaps and snapping. This is beta in cmux.
-- [ ] **Markdown viewer as a surface**: live reload (`cmux markdown`).
+- [x] **Markdown viewer as a surface**: live reload (`cmux markdown`). *(`abromux markdown <file>`, `open <file>.md` or ⌘-click a `.md` path: a browser tab locked to local files, rendered GFM with relative links and images, updated in place as the file changes; no syntax highlighting in code blocks)*
 
 ## 3. Workspaces and sidebar
 
@@ -189,7 +189,7 @@ Left out on purpose (2026-11-01). Don't pick these up for parity work until the 
 
 If the goal is daily-driver parity, a reasonable sequence is:
 
-Done so far: notifications (hooks, a menu-bar item, `dismiss-notification` / `mark-notification-read`, ⌥⌘U and ⌃⌘U); small CLI gaps (`read-selection`, `tab-action`, `wait-for`, shell completions, `browser zoom`); browser zoom; moving tabs between panes and workspaces from the CLI (`move-surface`, `split-off`, `join-pane`, `break-pane`), `zoom-pane`, `trigger-flash` and keeping a workspace open on ⌘W; workspace descriptions, colors, groups, drag to reorder, sidebar settings, auto-naming and reopening the previous session; customizable shortcuts and custom palette commands, including workspace layouts and project commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload and a Settings window; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; agent status, notifications and resume for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; sidebar status, progress and log.
+Done so far: a Markdown viewer tab; notifications (hooks, a menu-bar item, `dismiss-notification` / `mark-notification-read`, ⌥⌘U and ⌃⌘U); small CLI gaps (`read-selection`, `tab-action`, `wait-for`, shell completions, `browser zoom`); browser zoom; moving tabs between panes and workspaces from the CLI (`move-surface`, `split-off`, `join-pane`, `break-pane`), `zoom-pane`, `trigger-flash` and keeping a workspace open on ⌘W; workspace descriptions, colors, groups, drag to reorder, sidebar settings, auto-naming and reopening the previous session; customizable shortcuts and custom palette commands, including workspace layouts and project commands; copy-on-select, a password indicator, a scrollbar and scroll speed, `last-pane` / `swap-pane`; a config file with reload and a Settings window; renaming tabs, focused-pane border, safe paste, respawning a pane, dropping files on a terminal; command palette; Ghostty config, font size and clear scrollback; IME and mouse reporting; session restore; notifications; find, directional focus and resize; browser automation; agent status, notifications and resume for Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode and Pi; sidebar status, progress and log.
 
 Next:
 
