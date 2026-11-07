@@ -6,6 +6,7 @@ use crate::{
     browser_history::{self, Entry},
     browser_native::{self, Pixels},
     downloads::{self, Downloads},
+    markdown,
     webauthn,
     terminal::{Find, FindNext, FindPrevious, UseSelectionForFind},
     theme::*,
@@ -27,7 +28,7 @@ use std::{
     f32::consts::PI,
     path::PathBuf,
     sync::{Arc, Mutex, OnceLock},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 actions!(
@@ -99,6 +100,8 @@ enum WebMsg {
     DownloadDone { url: String, ok: bool },
     /// The page's bitmap for cover `generation`.
     Cover { generation: u64, pixels: Option<Pixels> },
+    /// A Markdown tab's `mailto:` link: the system's.
+    External(String),
 }
 
 /// What the page has logged, for `browser console`, `errors` and `network`.
@@ -191,6 +194,11 @@ pub struct BrowserView {
     /// When a click outside closed the list, so the same click on the
     /// button doesn't open it again.
     downloads_closed_at: Option<std::time::Instant>,
+    /// A Markdown tab (src/markdown.rs): it shows local files only, and
+    /// follows the shown one as it changes.
+    pub markdown: bool,
+    /// The file it last looked at and when that changed.
+    md_seen: Option<(PathBuf, Option<SystemTime>)>,
 }
 
 impl EventEmitter<BrowserEvent> for BrowserView {}
@@ -205,7 +213,8 @@ impl BrowserView {
     pub fn new(url: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (tx, mut rx) = mpsc::unbounded::<WebMsg>();
         let (tx_title, tx_url, tx_ipc) = (tx.clone(), tx.clone(), tx.clone());
-        let (tx_dl_start, tx_dl_done) = (tx.clone(), tx.clone());
+        let (tx_dl_start, tx_dl_done, tx_nav) = (tx.clone(), tx.clone(), tx.clone());
+        let is_markdown = markdown::is_markdown_url(url);
         let builder = wry::WebViewBuilder::new();
         // A blank page gets the pane's background rather than white. A URL
         // loads once the WebAuthn bridge is in, so its first page has it.
@@ -250,9 +259,29 @@ impl BrowserView {
                 if url.starts_with("http://") || url.starts_with("https://") {
                     let _ = tx_ipc.unbounded_send(WebMsg::OpenTab { url, focus });
                 }
-            })
-            .build_as_child(window)
-            .expect("create webview");
+            });
+        // Only Markdown tabs can load the scheme, and they load nothing else:
+        // web links open as browser tabs beside them.
+        let raw = if is_markdown {
+            raw.with_custom_protocol(markdown::SCHEME.into(), |_, req| markdown::respond(&req))
+                .with_navigation_handler(move |url| {
+                    if markdown::is_markdown_url(&url) || url.starts_with("about:") {
+                        return true;
+                    }
+                    let msg = if url.starts_with("http://") || url.starts_with("https://") {
+                        WebMsg::OpenTab { url, focus: true }
+                    } else if url.starts_with("mailto:") {
+                        WebMsg::External(url)
+                    } else {
+                        return false;
+                    };
+                    let _ = tx_nav.unbounded_send(msg);
+                    false
+                })
+        } else {
+            raw
+        };
+        let raw = raw.build_as_child(window).expect("create webview");
         webauthn::install(&raw);
         let (page_tx, mut page_rx) = mpsc::unbounded::<String>();
         {
@@ -320,7 +349,9 @@ impl BrowserView {
                 let ok = this.update_in(cx, |this, window, cx| {
                     match msg {
                         WebMsg::Title(t) => {
-                            browser_history::retitle(&this.url, &t);
+                            if !this.markdown {
+                                browser_history::retitle(&this.url, &t);
+                            }
                             this.load_title = Some(t.clone());
                             this.title = t;
                         }
@@ -330,7 +361,7 @@ impl BrowserView {
                             } else {
                                 u
                             };
-                            if finished {
+                            if finished && !this.markdown {
                                 browser_history::visit(&u, this.load_title.as_deref());
                             } else {
                                 this.load_title = None;
@@ -376,6 +407,10 @@ impl BrowserView {
                             this.cover_arrived(generation, pixels, cx);
                             return;
                         }
+                        WebMsg::External(url) => {
+                            cx.open_url(&url);
+                            return;
+                        }
                     }
                     cx.emit(BrowserEvent::TitleChanged);
                     cx.notify();
@@ -404,6 +439,9 @@ impl BrowserView {
 
         let downloads = downloads::entity(cx);
         cx.observe(&downloads, |_, _, cx| cx.notify()).detach();
+        if is_markdown {
+            Self::follow_markdown(cx);
+        }
 
         Self {
             webview,
@@ -435,7 +473,47 @@ impl BrowserView {
             downloads,
             downloads_open: false,
             downloads_closed_at: None,
+            markdown: is_markdown,
+            md_seen: None,
         }
+    }
+
+    /// A Markdown tab's live reload: while it's on screen, check the shown
+    /// file twice a second and put its new content in place when it changes
+    /// (without a reload, so the scroll position stays).
+    fn follow_markdown(cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+                let alive = this.update(cx, |this, cx| {
+                    if !this.shown {
+                        return;
+                    }
+                    let Some(path) = markdown::path_of(&this.url) else {
+                        return;
+                    };
+                    let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+                    match &this.md_seen {
+                        // A page just navigated to is already current.
+                        Some((seen, _)) if *seen != path => {}
+                        Some((_, seen)) if *seen != mtime => {
+                            if markdown::is_markdown(&path) {
+                                this.script(&markdown::reload_script(&path), cx);
+                            } else {
+                                this.reload(cx);
+                            }
+                        }
+                        Some(_) => return,
+                        None => {}
+                    }
+                    this.md_seen = Some((path, mtime));
+                });
+                if alive.is_err() {
+                    return;
+                }
+            }
+        })
+        .detach();
     }
 
     /// A message from the page script (browser_page.js) in any frame.
@@ -480,6 +558,12 @@ impl BrowserView {
     }
 
     pub fn focus_address(this: &Entity<Self>, window: &mut Window, cx: &mut App) {
+        // A Markdown tab has no address bar.
+        if this.read(cx).markdown {
+            let _ = this.read(cx).webview.read(cx).raw().focus();
+            this.update(cx, |this, cx| this.page_focused(window, cx));
+            return;
+        }
         let this = this.read(cx);
         // Take native focus back from the page so typing reaches the address bar.
         let _ = this.webview.read(cx).raw().focus_parent();
@@ -1451,6 +1535,61 @@ impl Render for BrowserView {
         });
         let downloads_button = self.render_downloads_button(cx);
         let downloads = self.downloads_open.then(|| self.render_downloads(cx));
+        let address = if let Some(path) = self.markdown.then(|| markdown::path_of(&self.url)).flatten() {
+            // A Markdown tab shows the file it's on instead of an address bar.
+            div()
+                .flex_1()
+                .min_w_0()
+                .h(px(24.))
+                .mx_1()
+                .px_2()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .text_size(px(12.))
+                .text_color(rgb(MUTED))
+                .child(icon("markdown").size(px(13.)).text_color(rgb(MUTED)))
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(crate::workspace::tilde(&path.to_string_lossy())),
+                )
+                .into_any_element()
+        } else {
+            div()
+                .flex_1()
+                .h(px(24.))
+                .mx_1()
+                .px_2()
+                .flex()
+                .items_center()
+                .rounded(px(6.))
+                .bg(rgb(INPUT_BG))
+                .text_size(px(12.))
+                .key_context(OMNIBAR)
+                .on_action(cx.listener(|this, _: &SuggestNext, _, cx| {
+                    this.move_suggestion(true, cx)
+                }))
+                .on_action(cx.listener(|this, _: &SuggestPrev, _, cx| {
+                    this.move_suggestion(false, cx)
+                }))
+                .on_action(cx.listener(|this, _: &DismissSuggestions, window, cx| {
+                    this.dismiss_suggestions(window, cx)
+                }))
+                .on_action(cx.listener(|this, _: &RemoveSuggestion, _, cx| {
+                    this.remove_suggestion(cx)
+                }))
+                .child(
+                    Input::new(&self.address)
+                        .appearance(false)
+                        .text_size(px(12.)),
+                )
+                .into_any_element()
+        };
+        let downloads_button = if self.markdown { None } else { downloads_button };
         let find_bar = self
             .find_input
             .clone()
@@ -1508,36 +1647,7 @@ impl Render for BrowserView {
                     .child(self.render_nav(Nav::Back, cx))
                     .child(self.render_nav(Nav::Forward, cx))
                     .child(self.render_nav(Nav::Reload, cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .h(px(24.))
-                            .mx_1()
-                            .px_2()
-                            .flex()
-                            .items_center()
-                            .rounded(px(6.))
-                            .bg(rgb(INPUT_BG))
-                            .text_size(px(12.))
-                            .key_context(OMNIBAR)
-                            .on_action(cx.listener(|this, _: &SuggestNext, _, cx| {
-                                this.move_suggestion(true, cx)
-                            }))
-                            .on_action(cx.listener(|this, _: &SuggestPrev, _, cx| {
-                                this.move_suggestion(false, cx)
-                            }))
-                            .on_action(cx.listener(|this, _: &DismissSuggestions, window, cx| {
-                                this.dismiss_suggestions(window, cx)
-                            }))
-                            .on_action(cx.listener(|this, _: &RemoveSuggestion, _, cx| {
-                                this.remove_suggestion(cx)
-                            }))
-                            .child(
-                                Input::new(&self.address)
-                                    .appearance(false)
-                                    .text_size(px(12.)),
-                            ),
-                    )
+                    .child(address)
                     .children(downloads_button),
             )
             .children(find_bar)

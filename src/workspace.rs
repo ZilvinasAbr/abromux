@@ -34,6 +34,7 @@ impl Surface {
                 },
                 _ => "terminal",
             },
+            Surface::Browser(b) if b.read(cx).markdown => "markdown",
             Surface::Browser(_) => "globe",
             Surface::Plugin(p) => p.icon(cx),
         }
@@ -64,6 +65,8 @@ impl Surface {
                 let b = b.read(cx);
                 if !b.title.is_empty() {
                     b.title.clone()
+                } else if let Some(name) = crate::markdown::title_of(&b.url) {
+                    name
                 } else if !b.url.is_empty() {
                     b.url.clone()
                 } else {

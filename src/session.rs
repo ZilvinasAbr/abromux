@@ -605,7 +605,9 @@ impl AbroMux {
                 (s, name)
             }
             // terminal-browser can't take the built-in browser's history.
-            TabState::Browser { url, name, .. } if crate::settings::terminal_browser(cx) => {
+            TabState::Browser { url, name, .. }
+                if crate::settings::terminal_browser(cx) && !crate::markdown::is_markdown_url(&url) =>
+            {
                 (self.make_browser(&url, window, cx), name)
             }
             TabState::Browser {
@@ -616,7 +618,10 @@ impl AbroMux {
             } => {
                 let s = match history {
                     Some(h) => {
-                        let s = self.make_browser("", window, cx);
+                        // A Markdown tab is one from the start (its scheme is
+                        // set up then); others start blank under their history.
+                        let first = if crate::markdown::is_markdown_url(&url) { url.as_str() } else { "" };
+                        let s = self.make_browser(first, window, cx);
                         if let Surface::Browser(b) = &s {
                             b.update(cx, |b, cx| {
                                 if b.restore_history(&h, cx) {

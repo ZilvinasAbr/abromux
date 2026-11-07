@@ -2590,9 +2590,16 @@ impl AbroMux {
                     self.make_browser(&url, window, cx)
                 }
             }
+            "markdown" => {
+                let path = str_param(p, "path").context("missing path (the Markdown file to show)")?;
+                let path = std::path::Path::new(path);
+                anyhow::ensure!(path.is_absolute(), "the path must be absolute: {}", path.display());
+                anyhow::ensure!(path.exists(), "no such file: {}", path.display());
+                self.make_builtin_browser(&crate::markdown::url_for(path), window, cx)
+            }
             t if crate::plugins::find(t).is_some() => self.make_plugin(t, p, window, cx)?,
             t => {
-                let mut kinds = vec!["terminal", "browser"];
+                let mut kinds = vec!["terminal", "browser", "markdown"];
                 kinds.extend(crate::plugins::all().iter().map(|p| p.id));
                 bail!("unknown surface type {t:?} ({})", kinds.join(", "))
             }

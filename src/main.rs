@@ -26,6 +26,7 @@ mod keymap;
 mod layout;
 mod link;
 mod links;
+mod markdown;
 mod menu;
 mod notification;
 mod notify_hook;
@@ -245,7 +246,9 @@ impl AssetSource for Assets {
             "download",
             "info",
             "triangle-alert",
-            "power"
+            "power",
+            // Markdown tabs.
+            "markdown"
         );
         Ok(bytes.or_else(|| plugins::asset(path)).map(Cow::Borrowed))
     }
@@ -715,7 +718,8 @@ impl AbroMux {
     /// set to `terminalBrowser`, a terminal running `terminal-browser`
     /// (the built-in one, with a warning, if it isn't installed).
     fn make_browser(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> Surface {
-        if settings::terminal_browser(cx) {
+        // Markdown tabs are the built-in browser's.
+        if settings::terminal_browser(cx) && !markdown::is_markdown_url(url) {
             match terminal_browser::command(url) {
                 Some(cmd) => {
                     let ws = self.workspaces.get(self.active).map_or(0, |w| w.id);
@@ -788,10 +792,10 @@ impl AbroMux {
     }
 
     /// ⌘-click on a terminal link: web URLs open in a browser to the right
-    /// of the terminal (a new tab there if that pane already shows one),
-    /// local files and folders with their default app, and anything that
-    /// could run code only in Finder (see `link::local`). Other schemes do
-    /// nothing.
+    /// of the terminal (a new tab there if that pane already shows one), and
+    /// so do Markdown files, as Markdown tabs; other local files and folders
+    /// open with their default app, and anything that could run code only
+    /// in Finder (see `link::local`). Other schemes do nothing.
     fn open_link(
         &mut self,
         from: EntityId,
@@ -804,12 +808,19 @@ impl AbroMux {
             other => {
                 let mut open = std::process::Command::new("/usr/bin/open");
                 match link::local(&other) {
-                    Some(link::Local::Open(p)) => open.arg(p),
-                    Some(link::Local::Reveal(p)) => open.arg("-R").arg(p),
+                    Some(link::Local::Open(p)) if markdown::is_markdown(&p) && p.is_file() => {
+                        markdown::url_for(&p)
+                    }
+                    Some(link::Local::Open(p)) => {
+                        let _ = open.arg(p).spawn();
+                        return;
+                    }
+                    Some(link::Local::Reveal(p)) => {
+                        let _ = open.arg("-R").arg(p).spawn();
+                        return;
+                    }
                     None => return,
-                };
-                let _ = open.spawn();
-                return;
+                }
             }
         };
         let Some(wi) = self.workspaces.iter().position(|w| w.contains(from)) else {

@@ -139,6 +139,9 @@ Commands:
   quit
   rpc <method> [json-params]
 
+  markdown [open] <file>... [--direction <dir>] [--focus <true|false>]
+                                                             (a Markdown tab split next to the caller; follows edits)
+
   browser [--surface <ref>] <subcommand> ...
   browser open [url] [--direction <dir>] [--focus <true|false>]   (browser split next to the caller)
   browser open-split [url]
@@ -1077,6 +1080,7 @@ fn dispatch(
             return Ok(());
         }
         "open" => return open(pos, opts),
+        "markdown" | "md" => return markdown(pos, opts),
         "browser" => return browser(pos, opts, as_json),
         "rpc" => {
             let method = pos.first().ok_or("rpc: missing <method>")?.clone();
@@ -1831,6 +1835,9 @@ fn open(pos: Vec<String>, opts: Map<String, Value>) -> Result<(), String> {
         let v = if Path::new(&target).is_dir() {
             o.insert("cwd".into(), json!(absolute(&target)));
             call("workspace.create", o)?
+        } else if Path::new(&target).is_file() && crate::markdown::is_markdown(Path::new(&target)) {
+            o.insert("url".into(), json!(crate::markdown::url_for(Path::new(&absolute(&target)))));
+            call("browser.open", o)?
         } else {
             o.insert("url".into(), json!(target));
             call("browser.open", o)?
@@ -1841,6 +1848,28 @@ fn open(pos: Vec<String>, opts: Map<String, Value>) -> Result<(), String> {
                 .or(v.get("surface").and_then(|s| s.get("ref")))
                 .unwrap_or(&Value::Null))
         );
+    }
+    Ok(())
+}
+
+/// `abromux markdown [open] <file>…`: each in a Markdown tab, split off
+/// next to the caller as `browser open` does.
+fn markdown(mut pos: Vec<String>, opts: Map<String, Value>) -> Result<(), String> {
+    if pos.first().is_some_and(|p| p == "open") {
+        pos.remove(0);
+    }
+    if pos.is_empty() {
+        return Err("markdown: missing <file>".into());
+    }
+    for file in pos {
+        let path = absolute(&file);
+        if !Path::new(&path).is_file() {
+            return Err(format!("markdown: no such file: {file}"));
+        }
+        let mut o = opts.clone();
+        o.insert("url".into(), json!(crate::markdown::url_for(Path::new(&path))));
+        let v = call("browser.open", o)?;
+        println!("OK {}", s(v.get("surface").and_then(|s| s.get("ref")).unwrap_or(&v["ref"])));
     }
     Ok(())
 }
