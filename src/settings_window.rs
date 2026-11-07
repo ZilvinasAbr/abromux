@@ -903,6 +903,12 @@ fn sidebar_page() -> Page {
                         |s| s.sidebar.show_workspace_description,
                     ),
                     switch(
+                        "Tracked links",
+                        "The selected workspace's Jira tickets, merge requests and pinned pages, under its row (⌥⌘1…9).",
+                        &["sidebar", "showLinks"],
+                        |s| s.sidebar.show_links,
+                    ),
+                    switch(
                         "Latest notification",
                         "",
                         &["sidebar", "showNotificationMessage"],

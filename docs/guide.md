@@ -190,6 +190,20 @@ Everything is in `gitlab-cache/` under Application Support (`index.json` for the
 
 `abromux mr list [mine|recent|workspace]` prints the cache (`--json` for everything), `abromux mr open <url|group/project!iid>` opens one in the caller's workspace, and `abromux mr refresh [<ref>]` checks everything now, or loads one again.
 
+## Tracked links
+
+A workspace keeps a list of links: the Jira tickets, GitLab merge requests and pages its work is about. The selected workspace shows them in the sidebar, under its row, each with its key (`PAY-1423`, `api!812`) and title; the ones on screen are highlighted. Hold ⌥⌘ to see their numbers, and ⌥⌘1…9 shows one.
+
+Showing a link never makes a second tab of it: if a tab already shows that ticket or merge request (any page of it: `…/browse/PAY-1423`, a board with `selectedIssue=PAY-1423`, a merge request's `/diffs`), that tab comes forward. Otherwise it opens in the workspace's link pane, the pane its pages are in (a new one to the right if there's none), a merge request in a GitLab tab. ⌘-clicking a link in a terminal, or a page opening one in a new tab, goes to the existing tab the same way.
+
+What's listed:
+- Tickets and merge requests opened in the workspace's tabs are tracked on their own.
+- Its merge requests from its branches (the merge requests panel's "This workspace") are listed after the tracked ones.
+- ⌥⌘T tracks the focused tab's page, whatever it is; again untracks it. The × on a row untracks it too, and it isn't tracked again on its own.
+- From a terminal: `abromux link add <url|PAY-123|group/project!iid>`, `abromux link remove <n|key|url>`, `abromux link [list]`, `abromux link open <n|key|url>` (`--focus false` leaves focus where it is), and `abromux link open --all` for every one. Workspace folders' `AGENTS.md` asks agents to track what they work on this way.
+
+A bare key like `PAY-1423` needs to know its Jira: `"jira": { "host": "acme.atlassian.net" }` in the config file, else the one a ticket tracked before is on. `"sidebar": { "showLinks": false }` hides the list. The links are saved with the session.
+
 ## Settings window
 
 ⌘, (or the app menu › Settings…) opens Settings: a page each for General, Sidebar, Workspace Colors, Panes, Keyboard Shortcuts, Commands and GitLab, with a search field over all of them. It's a front end for the config file below, not a separate store. Each change writes just that key to `config.json` and applies at once. A setting put back to its default is removed from the file, and the rest of the file (other keys, their order, commands) stays as you wrote it. The undo arrow next to a setting resets it, and the one by a page's title resets the whole page.

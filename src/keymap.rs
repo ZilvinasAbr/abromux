@@ -100,6 +100,8 @@ pub const ACTIONS: &[Act] = {
         "toggleSidebar", Some("Toggle Sidebar"), ToggleSidebar, [(None, ["cmd-b"])];
         "toggleMergeRequests", Some("Toggle Merge Requests Panel"), ToggleMergeRequests,
             [(None, ["alt-cmd-b"])];
+        "trackTab", Some("Track or Untrack This Tab's Link"), TrackTab, [(None, ["alt-cmd-t"])];
+        "openAllLinks", Some("Open All of This Workspace's Links"), OpenAllLinks, [(None, [])];
         "goToMergeRequest", Some("Go to Merge Request…"), GoToMergeRequest,
             [(None, ["cmd-shift-m"])];
         "refreshMergeRequests", Some("Refresh Merge Requests"), RefreshMergeRequests,
@@ -160,6 +162,15 @@ pub const ACTIONS: &[Act] = {
         "tab7", None, Tab7, [(None, ["ctrl-7"])];
         "tab8", None, Tab8, [(None, ["ctrl-8"])];
         "tab9", None, Tab9, [(None, ["ctrl-9"])];
+        "link1", None, Link1, [(None, ["alt-cmd-1"])];
+        "link2", None, Link2, [(None, ["alt-cmd-2"])];
+        "link3", None, Link3, [(None, ["alt-cmd-3"])];
+        "link4", None, Link4, [(None, ["alt-cmd-4"])];
+        "link5", None, Link5, [(None, ["alt-cmd-5"])];
+        "link6", None, Link6, [(None, ["alt-cmd-6"])];
+        "link7", None, Link7, [(None, ["alt-cmd-7"])];
+        "link8", None, Link8, [(None, ["alt-cmd-8"])];
+        "link9", None, Link9, [(None, ["alt-cmd-9"])];
     ]
 };
 

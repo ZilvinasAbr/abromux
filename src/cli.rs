@@ -118,6 +118,11 @@ Commands:
   open <path-or-url>...                                      (directories open workspaces, URLs open browser splits)
   focus-window [--window <ref>]                              (bring abromux to the front; there is one window)
   sidebar <toggle|show|hide>
+  link [list]                                                (this workspace's tracked links: Jira tickets, merge
+                                                             requests, pinned pages; in the sidebar, ⌥⌘1…9)
+  link add <url|PAY-123|group/project!iid>                   (track one here)
+  link remove <n|key|url>                                    (untrack it; it isn't tracked again on its own)
+  link open <n|key|url> | --all [--focus <true|false>]       (its tab, else a new one in the pane the links are in)
   mr list [mine|recent|workspace]                            (cached GitLab merge requests: the panel's, or one group)
   mr open <url|group/project!iid>                            (in a tab of this workspace, from the cache, then refetched)
   mr refresh [<url|group/project!iid>]                       (check now: everything, or refetch one)
@@ -553,6 +558,14 @@ fn dispatch(
     mut opts: Map<String, Value>,
     as_json: bool,
 ) -> Result<(), String> {
+    // `link <sub> [arg]`, as `mr`.
+    let mut link_sub = String::new();
+    if cmd == "link" {
+        link_sub = if pos.is_empty() { "list".into() } else { pos.remove(0) };
+        if let Some(arg) = pos.first() {
+            opts.insert("ref".into(), json!(arg));
+        }
+    }
     // `mr <sub> [arg]`: the argument goes in by the subcommand's name.
     let mut mr_sub = String::new();
     if cmd == "mr" {
@@ -983,6 +996,46 @@ fn dispatch(
                 return Err(format!(
                     "mr: unknown subcommand {s:?} (list, open, refresh, panel)"
                 ));
+            }
+        },
+        "link" => match link_sub.as_str() {
+            "list" | "ls" => ("link.list", |v| {
+                lines(v, |l| {
+                    let title = l["title"].as_str().map(|t| format!("  {t}")).unwrap_or_default();
+                    let from = if l["tracked"].as_bool() == Some(true) { "" } else { "  (branch)" };
+                    let tab = l["tab"].as_str().map(|t| format!("  [{t}]")).unwrap_or_default();
+                    format!("{:>2}  {:<5} {}{title}{from}{tab}", l["index"], s(&l["kind"]), s(&l["key"]))
+                })
+            }),
+            "add" | "track" => {
+                if !opts.contains_key("ref") {
+                    return Err("link add: missing <url|PAY-123|group/project!iid>".into());
+                }
+                ("link.add", |v| {
+                    let state = if v["added"].as_bool() == Some(true) { "tracked" } else { "already tracked" };
+                    format!("OK {} {} {state}", s(&v["kind"]), s(&v["key"]))
+                })
+            }
+            "remove" | "rm" | "untrack" => {
+                if !opts.contains_key("ref") {
+                    return Err("link remove: missing <key|url|index>".into());
+                }
+                ("link.remove", |v| format!("OK untracked {}", s(&v["key"])))
+            }
+            "open" | "show" => {
+                if !opts.contains_key("ref") && !opts.contains_key("all") {
+                    return Err("link open: missing <key|url|index>, or --all".into());
+                }
+                ("link.open", |v| {
+                    let refs: Vec<String> = v["surfaces"]
+                        .as_array()
+                        .map(|a| a.iter().map(s).collect())
+                        .unwrap_or_default();
+                    format!("OK {}", refs.join(" "))
+                })
+            }
+            s => {
+                return Err(format!("link: unknown subcommand {s:?} (list, add, remove, open)"));
             }
         },
         "quit" => ("app.quit", |_| "OK".into()),

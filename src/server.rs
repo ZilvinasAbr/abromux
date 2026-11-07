@@ -1387,6 +1387,67 @@ impl AbroMux {
                 }
                 json!(null)
             }
+            "link.list" => {
+                let wi = self.workspace_target(p)?;
+                let tracked: Vec<String> =
+                    self.workspaces[wi].links.iter().map(|l| l.key.clone()).collect();
+                let list: Vec<Value> = self
+                    .shown_links(wi, cx)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, l)| {
+                        let tab = self
+                            .link_tab(wi, &l.key, cx)
+                            .and_then(|(_, id)| self.surface_refs.get(&id).copied())
+                            .map(|n| format!("surface:{n}"));
+                        json!({
+                            "index": i + 1, "kind": l.kind.name(), "key": l.key, "url": l.url,
+                            "title": l.title, "tracked": tracked.contains(&l.key), "tab": tab,
+                        })
+                    })
+                    .collect();
+                json!(list)
+            }
+            "link.add" => {
+                let wi = self.workspace_target(p)?;
+                let r = str_param(p, "ref").context("missing <url|PAY-123|group/project!iid>")?;
+                let link = self.parse_link(r, cx).map_err(anyhow::Error::msg)?;
+                let added = self.track_link(wi, link.clone(), cx);
+                json!({ "key": link.key, "kind": link.kind.name(), "url": link.url, "added": added })
+            }
+            "link.remove" => {
+                let wi = self.workspace_target(p)?;
+                let r = str_param(p, "ref").context("missing <key|url|index>")?;
+                let key = self.find_link(wi, r, cx)?.key;
+                self.untrack_link(wi, &key, cx);
+                json!({ "key": key })
+            }
+            "link.open" => {
+                let wi = self.workspace_target(p)?;
+                let focus = bool_param(p, "focus", true);
+                let ids = if bool_param(p, "all", false) {
+                    self.show_all_links(wi, window, cx)
+                } else {
+                    let r = str_param(p, "ref").context("missing <key|url|index>, or --all")?;
+                    let link = match self.find_link(wi, r, cx) {
+                        Ok(l) => l,
+                        Err(e) if r.parse::<usize>().is_ok() => return Err(e),
+                        // Not tracked yet: track it, then show it.
+                        Err(_) => {
+                            let l = self.parse_link(r, cx).map_err(anyhow::Error::msg)?;
+                            self.track_link(wi, l.clone(), cx);
+                            l
+                        }
+                    };
+                    self.show_link(wi, &link, focus, window, cx).into_iter().collect()
+                };
+                let refs: Vec<Value> = ids
+                    .iter()
+                    .filter_map(|id| self.surface_refs.get(id))
+                    .map(|n| json!(format!("surface:{n}")))
+                    .collect();
+                json!({ "surfaces": refs })
+            }
             "mr.panel" => {
                 self.mr_panel = match str_param(p, "state").unwrap_or("toggle") {
                     "show" => true,
@@ -1735,6 +1796,23 @@ impl AbroMux {
     }
 
     /// `--workspace`, else the caller's workspace, else the selected one.
+    /// One of workspace `wi`'s links by its number in the list (from 1),
+    /// key, or any way of writing it (`link add` takes).
+    fn find_link(&self, wi: usize, r: &str, cx: &App) -> anyhow::Result<crate::links::Link> {
+        let links = self.shown_links(wi, cx);
+        if let Ok(n) = r.parse::<usize>() {
+            return n
+                .checked_sub(1)
+                .and_then(|i| links.get(i).cloned())
+                .with_context(|| format!("no link {n}: the workspace has {}", links.len()));
+        }
+        let key = self.parse_link(r, cx).map(|l| l.key).unwrap_or_else(|_| r.to_string());
+        links
+            .into_iter()
+            .find(|l| l.key == key)
+            .with_context(|| format!("{r} isn't one of this workspace's links"))
+    }
+
     fn workspace_target(&self, p: &Value) -> anyhow::Result<usize> {
         if let Some(w) = str_param(p, "workspace") {
             return self.find_workspace(w);

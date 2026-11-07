@@ -110,6 +110,20 @@ abromux notify --title 'Done' --body 'All 213 tests pass'
 
 Clear status pills and progress you set once they no longer apply.
 
+## Track the tickets and merge requests you work on
+
+The user's sidebar lists your workspace's links under its row: its Jira tickets, GitLab merge requests and any page pinned to it (⌥⌘1…9 shows one). When you start on a ticket, or open a merge request, track it:
+
+```bash
+abromux link add PAY-1423                  # a Jira key, a Jira or GitLab URL, or group/project!12
+abromux link add https://gitlab.example.com/acme/api/-/merge_requests/812
+abromux link                               # what's tracked (--json for more)
+abromux link remove PAY-1423               # no longer part of this work
+abromux link open PAY-1423 --focus false   # show it in its tab (made if missing), focus stays put
+```
+
+Merge requests from your branches are listed already; tickets and merge requests opened in your workspace's tabs are tracked on their own.
+
 ## Other commands
 
 ```bash

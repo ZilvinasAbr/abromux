@@ -76,9 +76,19 @@ pub struct Settings {
     pub browser: BrowserSettings,
     pub notifications: NotificationSettings,
     pub gitlab: GitlabSettings,
+    pub jira: JiraSettings,
 }
 
 impl Global for Settings {}
+
+/// Jira, for tracked links (`crate::links`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct JiraSettings {
+    /// The Jira a bare ticket key (`abromux link add PAY-1423`) is on, e.g.
+    /// `acme.atlassian.net`. None: the one a tracked ticket is on.
+    pub host: Option<String>,
+}
 
 /// The GitLab merge requests panel and cache (`crate::gitlab`).
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -318,6 +328,8 @@ pub struct SidebarSettings {
     /// Let long names wrap instead of cutting them off.
     pub wrap_workspace_titles: bool,
     pub show_workspace_description: bool,
+    /// The selected workspace's tracked links under its row (`crate::links`).
+    pub show_links: bool,
     #[serde(deserialize_with = "opt_color")]
     pub workspace_description_color: Option<Rgba>,
     pub show_notification_message: bool,
@@ -343,6 +355,7 @@ impl Default for SidebarSettings {
             hide_all_details: false,
             wrap_workspace_titles: false,
             show_workspace_description: true,
+            show_links: true,
             workspace_description_color: None,
             show_notification_message: true,
             show_branch_directory: true,

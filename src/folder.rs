@@ -65,6 +65,17 @@ out; `abromux folder repos` lists git repos it knows of on this machine.
 
 Commit in the worktrees as usual: the commits land in the original repo.
 
+## Tickets and merge requests
+
+Track the Jira tickets and GitLab merge requests this work is for, so they
+show under the workspace in the sidebar:
+
+    abromux link add PAY-1423
+    abromux link add https://gitlab.example.com/group/project/-/merge_requests/12
+
+`abromux link` lists them; `abromux link remove <key>` untracks one that's
+no longer part of the work.
+
 ## Resources outside this folder
 
 When the workspace is done, everything made for it is removed, so keep track
