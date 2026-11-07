@@ -18,6 +18,7 @@ mod gitlab;
 mod cursor;
 mod debug;
 mod downloads;
+mod find_bar;
 mod ghostty;
 mod hold;
 mod icon;
