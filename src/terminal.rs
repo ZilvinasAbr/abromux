@@ -459,6 +459,24 @@ impl TerminalView {
         }
     }
 
+    /// Give the program `text` to send, as if pasted and then Return was
+    /// pressed. With bracketed paste on (agents' input boxes ask for it)
+    /// the Return is outside the paste, so it sends; the paste skips the
+    /// paste protection prompt, as abromux is the one typing. Returns false
+    /// when the program has no bracketed paste: then it can't tell a
+    /// Return right after the text from one in it, and the caller sends
+    /// the Return itself a moment later.
+    pub fn submit(&mut self, text: &str) -> bool {
+        if !self.term.bracketed_paste() {
+            self.send(text.as_bytes());
+            return false;
+        }
+        let mut bytes = self.term.encode_paste(text);
+        bytes.push(b'\r');
+        self.send(&bytes);
+        true
+    }
+
     /// Closing its tab: end the shell, which a held one wouldn't on its own
     /// (dropping the view only lets go, as quitting does).
     pub fn close(&mut self) {

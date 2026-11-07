@@ -33,7 +33,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-type Request = (Value, oneshot::Sender<Value>);
+type Request = (Value, oneshot::Sender<Value>, Hangup);
+
+/// Resolves once the connection a request came on has closed.
+pub(crate) type Hangup = futures::future::Shared<oneshot::Receiver<()>>;
 
 /// How long a page gets to answer one script.
 const SCRIPT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -197,12 +200,12 @@ pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> 
     });
 
     cx.spawn_in(window, async move |this, cx| {
-        while let Some((req, reply)) = rx.next().await {
+        while let Some((req, reply, gone)) = rx.next().await {
             let id = req.get("id").cloned().unwrap_or(Value::Null);
             let method = req["method"].as_str().unwrap_or_default().to_string();
             let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
             let Ok(out) = this.update_in(cx, |this, window, cx| {
-                let out = this.handle(&method, &params, window, cx);
+                let out = this.handle(&method, &params, &gone, window, cx);
                 this.refresh_unread(cx);
                 out
             }) else {
@@ -241,6 +244,9 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
+    // Dropped when this returns, which is when the connection closes.
+    let (_open, closed) = oneshot::channel::<()>();
+    let gone = closed.shared();
     for line in BufReader::new(stream).lines() {
         let Ok(line) = line else { return };
         if line.trim().is_empty() {
@@ -249,7 +255,7 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
         let resp = match serde_json::from_str::<Value>(&line) {
             Ok(req) => {
                 let (reply_tx, reply_rx) = oneshot::channel();
-                if tx.unbounded_send((req, reply_tx)).is_err() {
+                if tx.unbounded_send((req, reply_tx, gone.clone())).is_err() {
                     return;
                 }
                 futures::executor::block_on(reply_rx)
@@ -366,10 +372,12 @@ fn unescape(s: &str) -> String {
 }
 
 impl AbroMux {
+    /// One request; `gone` resolves when its caller has hung up.
     fn handle(
         &mut self,
         method: &str,
         p: &Value,
+        gone: &Hangup,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<Reply> {
@@ -481,7 +489,8 @@ impl AbroMux {
                     Some(wi) => {
                         let r = self.ws_ref(wi);
                         let id = self.workspaces[wi].id;
-                        self.remove_folder_later(id, path, bool_param(p, "force", false), window, cx);
+                        let gone = gone.clone();
+                        self.remove_folder_later(id, path, bool_param(p, "force", false), gone, window, cx);
                         json!({ "workspace": r })
                     }
                     None => json!({ "workspace": null }),
@@ -2396,12 +2405,16 @@ impl AbroMux {
         if let Some(to) = &run.send_to {
             let t = self.terminal_target(&json!({ "surface": to }))?;
             let text = run.text.clone().unwrap_or_default();
-            t.update(cx, |t, cx| {
-                t.send(text.as_bytes());
+            let sent = t.update(cx, |t, cx| {
                 cx.notify();
+                t.submit(&text)
             });
-            // Enter on its own, after the text: an agent's input box takes
-            // a pasted line with its newline as a new line, not a send.
+            if sent {
+                return Ok(());
+            }
+            // No bracketed paste: Return on its own, a moment after the
+            // text, or a program reading it all at once takes it as a new
+            // line in what was typed.
             let t = t.downgrade();
             cx.spawn(async move |_, cx| {
                 cx.background_executor().timer(std::time::Duration::from_millis(150)).await;
@@ -2693,6 +2706,26 @@ impl AbroMux {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hangup_waits_for_the_caller_to_close() {
+        let (app_end, caller) = UnixStream::pair().unwrap();
+        let (tx, mut rx) = mpsc::unbounded();
+        let served = std::thread::spawn(move || serve(app_end, tx));
+        let mut w = caller.try_clone().unwrap();
+        w.write_all(b"{\"id\":1,\"method\":\"system.ping\"}\n").unwrap();
+        let (_, reply, gone) = futures::executor::block_on(rx.next()).unwrap();
+        reply.send(ipc::ok(&json!(1), json!("pong"))).unwrap();
+        let mut line = String::new();
+        BufReader::new(&caller).read_line(&mut line).unwrap();
+        assert!(line.contains("pong"));
+        // Answered, but the caller is still connected.
+        assert!(gone.peek().is_none());
+        drop(w);
+        drop(caller);
+        served.join().unwrap();
+        assert!(futures::executor::block_on(gone).is_err(), "resolves (sender dropped)");
+    }
 
     #[test]
     fn zoom_and_notification_ids() {

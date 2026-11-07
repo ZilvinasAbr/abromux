@@ -1189,20 +1189,23 @@ impl AbroMux {
     }
 
     /// `abromux folder remove` from (maybe) one of workspace `id`'s own
-    /// shells: give it a moment to print, close the workspace, then delete
-    /// the folder off the main thread and say how it went.
+    /// shells: once it has printed and hung up (`gone`), close the
+    /// workspace, then delete the folder off the main thread and say how it
+    /// went.
     pub(crate) fn remove_folder_later(
         &mut self,
         id: usize,
         dir: std::path::PathBuf,
         force: bool,
+        gone: server::Hangup,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(800))
-                .await;
+            // A caller that keeps the connection open doesn't hold this up
+            // for long.
+            let limit = cx.background_executor().timer(Duration::from_secs(10));
+            futures::future::select(gone, limit).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if let Some(i) = this.ws_index(id) {
                     this.close_workspace(i, window, cx);
