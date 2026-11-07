@@ -254,19 +254,7 @@ fn expand(path: &str) -> PathBuf {
     }
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .map_err(|e| format!("git: {e}"))?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-    }
-}
+use abromux_plugin::git::text as git;
 
 /// Check `source` out into workspace folder `ws`: a worktree on `branch`
 /// (default `ws/<folder>`) for a git repo, a copy for anything else.

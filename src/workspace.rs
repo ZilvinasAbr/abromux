@@ -899,8 +899,17 @@ pub fn tilde(path: &str) -> String {
     }
 }
 
-/// Current git branch for a directory (walks up to the repo root).
-pub fn git_branch(dir: &str) -> Option<String> {
+/// What's checked out where `dir` is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Head {
+    Branch(String),
+    /// A detached HEAD: its commit, shortened.
+    Detached(String),
+}
+
+/// What's checked out in the repo (or worktree) holding `dir`, read from
+/// its `HEAD` file without running git: cheap enough for every frame.
+pub fn git_head(dir: &str) -> Option<Head> {
     let mut p = std::path::PathBuf::from(dir);
     loop {
         let dot = p.join(".git");
@@ -918,12 +927,19 @@ pub fn git_branch(dir: &str) -> Option<String> {
     }
 }
 
-fn read_head(path: &std::path::Path) -> Option<String> {
+/// The branch, or a detached HEAD's short hash, as the sidebar shows it.
+pub fn git_branch(dir: &str) -> Option<String> {
+    git_head(dir).map(|h| match h {
+        Head::Branch(b) | Head::Detached(b) => b,
+    })
+}
+
+fn read_head(path: &std::path::Path) -> Option<Head> {
     let s = std::fs::read_to_string(path).ok()?;
     let s = s.trim();
     Some(match s.strip_prefix("ref: refs/heads/") {
-        Some(b) => b.to_string(),
-        None => s.chars().take(7).collect(),
+        Some(b) => Head::Branch(b.to_string()),
+        None => Head::Detached(s.chars().take(7).collect()),
     })
 }
 
