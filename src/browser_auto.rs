@@ -128,6 +128,7 @@ const A = window.__abromuxAuto || (window.__abromuxAuto = {
     if (label && label.trim()) return this.squash(label);
     if (e.labels && e.labels.length) return this.squash([...e.labels].map(l => l.innerText).join(' '));
     if (role === 'img') return this.squash(e.getAttribute('alt') || e.getAttribute('title') || '');
+    if (role === 'iframe') return this.squash(e.getAttribute('title') || e.getAttribute('name') || '');
     if (e instanceof HTMLInputElement && /^(button|submit|reset)$/.test(e.type)) return e.value || e.type;
     if (/^(textbox|searchbox|combobox|listbox|spinbutton|slider)$/.test(role)) {
       return this.squash(e.getAttribute('placeholder') || e.getAttribute('title') || '');
@@ -172,7 +173,8 @@ const A = window.__abromuxAuto || (window.__abromuxAuto = {
       let role = this.role(n);
       if (role === 'none' || role === 'presentation' || role === 'generic') role = null;
       const interactive = role && this.INTERACTIVE.has(role) || n.hasAttribute('onclick') || n.tabIndex >= 0 && n.hasAttribute('tabindex');
-      const keep = opts.interactive ? interactive : role || interactive;
+      // Iframes stay in interactive snapshots, for `frame <ref>`.
+      const keep = opts.interactive ? interactive || role === 'iframe' : role || interactive;
       const kids = n.shadowRoot ? n.shadowRoot.childNodes : n.childNodes;
       if (!keep) {
         out.push(...this.collect(kids, opts));
@@ -213,6 +215,7 @@ const A = window.__abromuxAuto || (window.__abromuxAuto = {
       }
       lines.push(line);
       if (it.role === 'link' && it.e.getAttribute('href')) lines.push(`${pad}  - /url: ${this.cut(it.e.getAttribute('href'), 200)}`);
+      if (it.role === 'iframe' && it.e.src) lines.push(`${pad}  - /src: ${this.cut(it.e.src, 200)}`);
       this.render(kids, depth + 1, lines, opts);
     }
   },
@@ -338,12 +341,13 @@ const A = window.__abromuxAuto || (window.__abromuxAuto = {
     }
     if (e instanceof HTMLButtonElement || e instanceof HTMLAnchorElement || e.getAttribute('role') === 'button') e.click();
   },
-  KEYS: { enter: 'Enter', return: 'Enter', tab: 'Tab', escape: 'Escape', esc: 'Escape', backspace: 'Backspace', delete: 'Delete',
+  KEYS: { shift: 'Shift', ctrl: 'Control', control: 'Control', alt: 'Alt', option: 'Alt', cmd: 'Meta', meta: 'Meta', command: 'Meta',
+    enter: 'Enter', return: 'Enter', tab: 'Tab', escape: 'Escape', esc: 'Escape', backspace: 'Backspace', delete: 'Delete',
     space: ' ', up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', arrowup: 'ArrowUp', arrowdown: 'ArrowDown',
     arrowleft: 'ArrowLeft', arrowright: 'ArrowRight', home: 'Home', end: 'End', pageup: 'PageUp', pagedown: 'PageDown' },
-  press(o) {
-    if (o.selector) this.el(o.selector).focus();
-    const parts = String(o.key).split(/[+-](?=.)/);
+  // `ctrl+a`, `Shift+Tab`, `Enter`: the key's DOM name and its modifiers.
+  parseKey(spec) {
+    const parts = String(spec).split(/[+-](?=.)/);
     let k = parts.pop();
     const mods = {};
     for (const m of parts.map(p => p.toLowerCase())) {
@@ -355,6 +359,22 @@ const A = window.__abromuxAuto || (window.__abromuxAuto = {
     }
     k = this.KEYS[k.toLowerCase()] || (k.length === 1 ? k : k[0].toUpperCase() + k.slice(1));
     if (k.length === 1 && mods.shiftKey) k = k.toUpperCase();
+    return { k, mods };
+  },
+  // Just the one event, for holding a key (keydown) and letting go (keyup).
+  keyEvent(o, type) {
+    if (o.selector) this.el(o.selector).focus();
+    const { k, mods } = this.parseKey(o.key);
+    // A modifier key is down during its own keydown and up for its keyup, as in real input.
+    const own = { Shift: 'shiftKey', Control: 'ctrlKey', Alt: 'altKey', Meta: 'metaKey' }[k];
+    if (own) mods[own] = type === 'keydown';
+    return { prevented: !this.key(this.active(), type, k, { ...mods, repeat: !!o.repeat }) };
+  },
+  keydown(o) { return this.keyEvent(o, 'keydown'); },
+  keyup(o) { return this.keyEvent(o, 'keyup'); },
+  press(o) {
+    if (o.selector) this.el(o.selector).focus();
+    const { k, mods } = this.parseKey(o.key);
     const e = this.active();
     if (this.key(e, 'keydown', k, mods)) {
       // What the browser would do by default.
@@ -472,10 +492,34 @@ const A = window.__abromuxAuto || (window.__abromuxAuto = {
     throw new Error(`unknown state ${o.state} (visible, hidden, attached or detached)`);
   },
 
+  // ---- storage and frames ----------------------------------------------
+  storage(o) {
+    const area = o.area === 'session' ? sessionStorage : o.area === 'local' ? localStorage : null;
+    if (!area) throw new Error(`storage area must be local or session, got ${o.area}`);
+    switch (o.op || 'get') {
+      case 'get':
+        if (o.key != null) return area.getItem(o.key);
+        return Object.fromEntries(Array.from({ length: area.length }, (_, i) => area.key(i)).map(k => [k, area.getItem(k)]));
+      case 'set': if (o.key == null) throw new Error('storage set needs a key'); area.setItem(o.key, o.value ?? ''); return null;
+      case 'remove': if (o.key == null) throw new Error('storage remove needs a key'); area.removeItem(o.key); return null;
+      case 'clear': { const n = area.length; area.clear(); return n; }
+    }
+    throw new Error(`unknown storage operation ${o.op} (get, set, remove or clear)`);
+  },
+  // `frame <sel>`: ask the iframe for its token, which it sends natively.
+  frameAsk(o) {
+    const e = this.el(o.selector);
+    if (!(e instanceof HTMLIFrameElement || e instanceof HTMLFrameElement)) throw new Error(`${o.selector} isn't an iframe`);
+    if (!e.contentWindow) throw new Error(`${o.selector} has no document yet`);
+    e.contentWindow.postMessage({ __abromuxAsk: o.nonce }, '*');
+    return { src: e.src || 'about:blank', name: e.name || e.title || '' };
+  },
+
   run(name, o) {
     try {
       const f = { snapshot: this.snapshot, click: this.click, dblclick: this.dblclick, hover: this.hover, focus: this.focus,
         check: this.check, scroll_into_view: this.scrollIntoView, fill: this.fill, type: this.type, press: this.press,
+        keydown: this.keydown, keyup: this.keyup, storage: this.storage, frame_ask: this.frameAsk,
         select: this.select, scroll: this.scroll, get: this.get, is: this.is, find: this.findBy, wait_for: this.waitFor }[name];
       if (!f) throw new Error(`unknown action ${name}`);
       return JSON.stringify({ result: f.call(this, o) ?? null });

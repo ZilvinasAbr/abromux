@@ -4,6 +4,8 @@
 use crate::{
     browser_find,
     browser_history::{self, Entry},
+    browser_native::{self, Pixels},
+    downloads::{self, Downloads},
     webauthn,
     terminal::{Find, FindNext, FindPrevious, UseSelectionForFind},
     theme::*,
@@ -19,9 +21,12 @@ use gpui_component::{
     wry::{self, WebViewExtMacOS},
 };
 use objc::{msg_send, runtime::Object, sel, sel_impl};
+use serde_json::Value;
 use std::{
+    collections::{HashMap, VecDeque},
     f32::consts::PI,
-    sync::{Mutex, OnceLock},
+    path::PathBuf,
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
@@ -39,13 +44,19 @@ actions!(
         RemoveSuggestion,
         ZoomIn,
         ZoomOut,
-        ActualSize
+        ActualSize,
+        ToggleDownloads
     ]
 );
 
 /// Key context of the address bar, for its bindings in main.rs.
 pub const OMNIBAR: &str = "Omnibar";
 const MAX_SUGGESTIONS: usize = 8;
+/// Console messages, errors and requests kept per pane, each.
+const LOG_CAP: usize = 1000;
+/// How long a popover waits for the page's bitmap before it hides the page
+/// anyway.
+const COVER_WAIT: Duration = Duration::from_millis(150);
 
 /// Page zoom steps for ⌘= / ⌘-, Safari's.
 const ZOOM_LEVELS: [f64; 11] = [0.5, 0.75, 0.85, 1.0, 1.15, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
@@ -84,6 +95,47 @@ enum WebMsg {
     Find(String),
     Selection(String),
     OpenTab { url: String, focus: bool },
+    DownloadStarted { url: String, path: PathBuf },
+    DownloadDone { url: String, ok: bool },
+    /// The page's bitmap for cover `generation`.
+    Cover { generation: u64, pixels: Option<Pixels> },
+}
+
+/// What the page has logged, for `browser console`, `errors` and `network`.
+/// Each entry is the page script's JSON plus the frame it came from.
+#[derive(Default)]
+pub struct PageLog {
+    pub console: VecDeque<Value>,
+    pub errors: VecDeque<Value>,
+    pub network: VecDeque<Value>,
+}
+
+impl PageLog {
+    fn push(&mut self, mut item: Value, frame: Option<&str>) {
+        let list = match item["type"].as_str() {
+            Some("console") => &mut self.console,
+            Some("error") => &mut self.errors,
+            Some("network") => &mut self.network,
+            _ => return,
+        };
+        if let Some(f) = frame {
+            item["frame"] = Value::String(f.to_string());
+        }
+        if list.len() >= LOG_CAP {
+            list.pop_front();
+        }
+        list.push_back(item);
+    }
+}
+
+/// The page under a popover: native views draw above gpui, so the page
+/// hides and a bitmap of it stands in while something overlaps it.
+enum Cover {
+    None,
+    /// Waiting for the bitmap; the page still shows (`hidden`: no longer).
+    Pending { generation: u64, hidden: bool },
+    /// The bitmap, or None if WebKit had none to give.
+    Shown(Option<Arc<RenderImage>>),
 }
 
 /// Page script for ⌘-click / middle-click on links.
@@ -122,6 +174,23 @@ pub struct BrowserView {
     load_title: Option<String>,
     /// WKWebView's `pageZoom`, 1.0 at actual size.
     zoom: f64,
+    /// Something overlaps the page (a popover, the palette, a menu).
+    covered: bool,
+    cover: Cover,
+    cover_generation: u64,
+    /// Bitmaps to free from the GPU at the next render.
+    stale_covers: Vec<Arc<RenderImage>>,
+    pub log: PageLog,
+    /// The frame `browser frame` picked (its page script's token) and its
+    /// URL; None for the page itself.
+    pub frame: Option<(String, String)>,
+    /// `browser frame`'s questions to iframes, by nonce, waiting for their token.
+    frame_asks: HashMap<String, oneshot::Sender<String>>,
+    downloads: Entity<Downloads>,
+    downloads_open: bool,
+    /// When a click outside closed the list, so the same click on the
+    /// button doesn't open it again.
+    downloads_closed_at: Option<std::time::Instant>,
 }
 
 impl EventEmitter<BrowserEvent> for BrowserView {}
@@ -136,6 +205,7 @@ impl BrowserView {
     pub fn new(url: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (tx, mut rx) = mpsc::unbounded::<WebMsg>();
         let (tx_title, tx_url, tx_ipc) = (tx.clone(), tx.clone(), tx.clone());
+        let (tx_dl_start, tx_dl_done) = (tx.clone(), tx.clone());
         let builder = wry::WebViewBuilder::new();
         // A blank page gets the pane's background rather than white. A URL
         // loads once the WebAuthn bridge is in, so its first page has it.
@@ -155,6 +225,17 @@ impl BrowserView {
                 let _ = tx_url.unbounded_send(WebMsg::Url { url, finished });
             })
             .with_initialization_script(LINKS_SCRIPT)
+            // WebKit saves it where wry says (a free name in ~/Downloads).
+            .with_download_started_handler(move |url, path| {
+                let _ = tx_dl_start.unbounded_send(WebMsg::DownloadStarted {
+                    url,
+                    path: path.clone(),
+                });
+                true
+            })
+            .with_download_completed_handler(move |url, _, ok| {
+                let _ = tx_dl_done.unbounded_send(WebMsg::DownloadDone { url, ok });
+            })
             .with_ipc_handler(move |req| {
                 #[derive(serde::Deserialize)]
                 #[serde(rename_all = "camelCase")]
@@ -173,6 +254,14 @@ impl BrowserView {
             .build_as_child(window)
             .expect("create webview");
         webauthn::install(&raw);
+        let (page_tx, mut page_rx) = mpsc::unbounded::<String>();
+        {
+            let wk = raw.webview();
+            browser_native::install(&*wk as *const _ as *mut Object, page_tx);
+        }
+        // wry's delegate class exists now that a webview does.
+        browser_native::downloads_install();
+        browser_native::page_shortcuts_install();
         // NSViews don't clip by default since macOS 14; keep the page from
         // drawing past its frame over the focused pane's border just outside.
         {
@@ -275,6 +364,18 @@ impl BrowserView {
                             cx.emit(BrowserEvent::OpenTab { url, focus });
                             return;
                         }
+                        WebMsg::DownloadStarted { url, path } => {
+                            this.downloads.update(cx, |d, cx| d.started(url, path, cx));
+                            return;
+                        }
+                        WebMsg::DownloadDone { url, ok } => {
+                            this.downloads.update(cx, |d, cx| d.finished(&url, ok, cx));
+                            return;
+                        }
+                        WebMsg::Cover { generation, pixels } => {
+                            this.cover_arrived(generation, pixels, cx);
+                            return;
+                        }
                     }
                     cx.emit(BrowserEvent::TitleChanged);
                     cx.notify();
@@ -285,6 +386,24 @@ impl BrowserView {
             }
         })
         .detach();
+
+        cx.spawn(async move |this, cx| {
+            while let Some(json) = page_rx.next().await {
+                let Ok(msg) = serde_json::from_str::<Value>(&json) else {
+                    continue;
+                };
+                if this
+                    .update(cx, |this, cx| this.page_message(msg, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        let downloads = downloads::entity(cx);
+        cx.observe(&downloads, |_, _, cx| cx.notify()).detach();
 
         Self {
             webview,
@@ -306,6 +425,51 @@ impl BrowserView {
             native_shown: true,
             load_title: None,
             zoom: 1.0,
+            covered: false,
+            cover: Cover::None,
+            cover_generation: 0,
+            stale_covers: vec![],
+            log: PageLog::default(),
+            frame: None,
+            frame_asks: HashMap::new(),
+            downloads,
+            downloads_open: false,
+            downloads_closed_at: None,
+        }
+    }
+
+    /// A message from the page script (browser_page.js) in any frame.
+    fn page_message(&mut self, msg: Value, cx: &mut Context<Self>) {
+        let main = msg["main"].as_bool().unwrap_or(true);
+        let frame = if main { None } else { msg["frameUrl"].as_str() };
+        match msg["kind"].as_str() {
+            Some("hello") => {
+                // A new document in the page drops its frames, the picked one too.
+                if main {
+                    self.frame = None;
+                    self.frame_asks.clear();
+                    browser_native::hover(self.wk_webview(cx), "");
+                }
+            }
+            Some("answer") => {
+                if let (Some(nonce), Some(token)) = (msg["nonce"].as_str(), msg["token"].as_str())
+                    && let Some(tx) = self.frame_asks.remove(nonce)
+                {
+                    let _ = tx.send(token.to_string());
+                }
+            }
+            Some("events") => {
+                if let Some(items) = msg["items"].as_array() {
+                    for item in items {
+                        self.log.push(item.clone(), frame);
+                    }
+                }
+            }
+            Some("hover") => {
+                let url = msg["url"].as_str().unwrap_or("");
+                browser_native::hover(self.wk_webview(cx), url);
+            }
+            _ => {}
         }
     }
 
@@ -356,18 +520,107 @@ impl BrowserView {
 
     /// Native views float above gpui content, so hidden panes must be hidden
     /// explicitly.
-    pub fn set_shown(&mut self, shown: bool, cx: &mut App) {
-        self.shown = shown;
-        self.sync_native(cx);
+    pub fn set_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        self.set_visibility(shown, false, cx);
     }
 
-    fn sync_native(&mut self, cx: &mut App) {
-        let shown = self.shown && self.suggestions.is_empty();
-        if self.native_shown != shown {
-            self.native_shown = shown;
-            self.webview
-                .update(cx, |w, _| if shown { w.show() } else { w.hide() });
+    /// Whether the pane is on screen, and whether something of the app's
+    /// (a popover, the palette, a menu) overlaps it. A covered page shows
+    /// as a bitmap of itself, which gpui can draw things over.
+    pub fn set_visibility(&mut self, shown: bool, covered: bool, cx: &mut Context<Self>) {
+        if (self.shown, self.covered) != (shown, covered) {
+            self.shown = shown;
+            self.covered = covered;
+            self.sync_native(cx);
         }
+    }
+
+    fn sync_native(&mut self, cx: &mut Context<Self>) {
+        let covered =
+            self.shown && (self.covered || !self.suggestions.is_empty() || self.downloads_open);
+        let native = if !covered {
+            if let Cover::Shown(Some(img)) = std::mem::replace(&mut self.cover, Cover::None) {
+                self.stale_covers.push(img);
+            }
+            self.cover = Cover::None;
+            self.shown
+        } else {
+            match self.cover {
+                Cover::Shown(_) => false,
+                Cover::Pending { hidden, .. } => !hidden,
+                Cover::None => {
+                    self.take_cover(cx);
+                    true
+                }
+            }
+        };
+        if self.native_shown != native {
+            self.native_shown = native;
+            if !native {
+                browser_native::hover(self.wk_webview(cx), "");
+            }
+            self.webview
+                .update(cx, |w, _| if native { w.show() } else { w.hide() });
+        }
+        cx.notify();
+    }
+
+    /// Snapshot the page to stand in for it. The page stays until the bitmap
+    /// comes (or `COVER_WAIT` passes), so there's no blank frame.
+    fn take_cover(&mut self, cx: &mut Context<Self>) {
+        self.cover_generation += 1;
+        let generation = self.cover_generation;
+        self.cover = Cover::Pending {
+            generation,
+            hidden: false,
+        };
+        let rx = browser_native::snapshot(self.wk_webview(cx));
+        let tx = self.tx.clone();
+        cx.foreground_executor()
+            .spawn(async move {
+                let pixels = rx.await.ok().flatten();
+                let _ = tx.unbounded_send(WebMsg::Cover { generation, pixels });
+            })
+            .detach();
+        cx.spawn(async move |this, cx| {
+            Timer::after(COVER_WAIT).await;
+            let _ = this.update(cx, |this, cx| {
+                if let Cover::Pending {
+                    generation: g,
+                    hidden,
+                } = &mut this.cover
+                    && *g == generation
+                {
+                    *hidden = true;
+                    this.sync_native_shown(false, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn sync_native_shown(&mut self, native: bool, cx: &mut Context<Self>) {
+        if self.native_shown != native {
+            self.native_shown = native;
+            self.webview
+                .update(cx, |w, _| if native { w.show() } else { w.hide() });
+            cx.notify();
+        }
+    }
+
+    fn cover_arrived(&mut self, generation: u64, pixels: Option<Pixels>, cx: &mut Context<Self>) {
+        let Cover::Pending { generation: g, .. } = self.cover else {
+            return;
+        };
+        if g != generation {
+            return;
+        }
+        let img = pixels.and_then(|(bgra, w, h)| {
+            let buf = image::RgbaImage::from_raw(w, h, bgra)?;
+            Some(Arc::new(RenderImage::new(vec![image::Frame::new(buf)])))
+        });
+        self.cover = Cover::Shown(img);
+        self.sync_native_shown(false, cx);
     }
 
     fn set_suggestions(&mut self, suggestions: Vec<Entry>, cx: &mut Context<Self>) {
@@ -614,7 +867,7 @@ impl BrowserView {
         let _: () = unsafe { msg_send![self.wk_webview(cx), stopLoading] };
     }
 
-    fn wk_webview(&self, cx: &App) -> *mut Object {
+    pub(crate) fn wk_webview(&self, cx: &App) -> *mut Object {
         let webview = self.webview.read(cx).raw().webview();
         &*webview as *const _ as *mut Object
     }
@@ -826,16 +1079,42 @@ impl BrowserView {
             .evaluate_script_with_callback(js, done)?)
     }
 
-    /// `eval`, as a future of the JSON. Canceled if the page drops the script.
-    pub fn eval_async(&self, js: &str, cx: &App) -> oneshot::Receiver<String> {
-        let (tx, rx) = oneshot::channel();
-        let tx = Mutex::new(Some(tx));
-        let _ = self.eval(js, cx, move |out| {
-            if let Some(tx) = tx.lock().unwrap().take() {
-                let _ = tx.send(out);
+    /// Run `js` where automation commands act: in the frame `browser frame`
+    /// picked, else in the page. Err if that frame is gone; canceled if the
+    /// page dropped the script.
+    pub fn eval_target(&self, js: &str, cx: &App) -> oneshot::Receiver<browser_native::Answer> {
+        match &self.frame {
+            Some((token, _)) => browser_native::eval_in_frame(self.wk_webview(cx), token, js),
+            None => {
+                let (tx, rx) = oneshot::channel();
+                let tx = Mutex::new(Some(tx));
+                let _ = self.eval(js, cx, move |out| {
+                    if let Some(tx) = tx.lock().unwrap().take() {
+                        let _ = tx.send(Ok(out));
+                    }
+                });
+                rx
             }
-        });
+        }
+    }
+
+    /// Wait for the iframe asked with `nonce` to answer with its token.
+    pub fn ask_frame(&mut self, nonce: String) -> oneshot::Receiver<String> {
+        let (tx, rx) = oneshot::channel();
+        self.frame_asks.insert(nonce, tx);
         rx
+    }
+
+    /// Point automation commands at a frame (its token and URL), or back at
+    /// the page.
+    pub fn set_frame(&mut self, frame: Option<(String, String)>, cx: &App) -> bool {
+        if let Some((token, _)) = &frame
+            && !browser_native::frame_known(self.wk_webview(cx), token)
+        {
+            return false;
+        }
+        self.frame = frame;
+        true
     }
 
     /// Save a PNG of the page as shown (WKWebView's own snapshot) to `path`.
@@ -920,8 +1199,258 @@ impl BrowserView {
     }
 }
 
+impl BrowserView {
+    /// Open the downloads list (⌥⌘L, the toolbar button), taking keyboard
+    /// focus from the page so Esc closes it.
+    fn open_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.downloads.read(cx).list.is_empty() {
+            return;
+        }
+        let _ = self.webview.read(cx).raw().focus_parent();
+        window.focus(&self.focus);
+        self.set_downloads_open(true, cx);
+    }
+
+    pub fn set_downloads_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.downloads_open != open {
+            self.downloads_open = open;
+            if !open {
+                self.downloads_closed_at = Some(std::time::Instant::now());
+            }
+            self.sync_native(cx);
+        }
+    }
+
+    /// The toolbar's downloads button, once there are any: a bar under the
+    /// arrow shows running ones' progress, and it bounces when one starts.
+    fn render_downloads_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let d = self.downloads.read(cx);
+        if d.list.is_empty() {
+            return None;
+        }
+        let running: Vec<_> = d
+            .list
+            .iter()
+            .filter(|d| d.state == downloads::State::Running)
+            .collect();
+        let fraction = (!running.is_empty()).then(|| {
+            let (written, total) = running.iter().fold((0u64, 0u64), |(w, t), d| {
+                (w + d.written, t + d.total.unwrap_or(0))
+            });
+            if total > 0 {
+                (written as f32 / total as f32).clamp(0.05, 1.)
+            } else {
+                0.3
+            }
+        });
+        let starts = d.starts;
+        let tint = if fraction.is_some() || self.downloads_open {
+            ACCENT_BRIGHT
+        } else {
+            MUTED
+        };
+        let arrow = icon("download").text_color(rgb(tint)).with_animation(
+            ("download-bounce", starts),
+            Animation::new(Duration::from_millis(450)),
+            |icon, t| {
+                let lift = 4. * (PI * t).sin();
+                icon.with_transformation(Transformation::translate(point(px(0.), px(-lift))))
+            },
+        );
+        Some(
+            button_frame("downloads")
+                .size(px(24.))
+                .relative()
+                .when(self.downloads_open, |b| b.bg(rgba(HOVER)))
+                .child(arrow)
+                .children(fraction.map(|f| {
+                    div()
+                        .absolute()
+                        .bottom(px(2.))
+                        .left(px(5.))
+                        .w(px(14.))
+                        .h(px(2.))
+                        .rounded(px(1.))
+                        .bg(rgba(0xffffff26))
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(f))
+                                .rounded(px(1.))
+                                .bg(rgb(ACCENT_BRIGHT)),
+                        )
+                }))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    let just_closed = this
+                        .downloads_closed_at
+                        .is_some_and(|t| t.elapsed() < Duration::from_millis(300));
+                    if !this.downloads_open && !just_closed {
+                        this.open_downloads(window, cx);
+                    }
+                }))
+                .into_any_element(),
+        )
+    }
+
+    /// The downloads list, under the toolbar at the right.
+    fn render_downloads(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let list = self.downloads.read(cx).list.clone();
+        let rows: Vec<_> = list
+            .iter()
+            .rev()
+            .map(|d| {
+                let id = d.id;
+                let status = match d.state {
+                    downloads::State::Running => match d.total {
+                        Some(t) => {
+                            format!("{} of {}", downloads::size(d.written), downloads::size(t))
+                        }
+                        None => format!("{} so far", downloads::size(d.written)),
+                    },
+                    downloads::State::Done => downloads::size(d.written),
+                    downloads::State::Failed => "Failed".into(),
+                    downloads::State::Canceled => "Canceled".into(),
+                };
+                let running = d.state == downloads::State::Running;
+                let done = d.state == downloads::State::Done;
+                let path = d.path.clone();
+                let reveal = path.clone();
+                div()
+                    .id(("download", id as usize))
+                    .mx(px(6.))
+                    .px(px(8.))
+                    .py(px(6.))
+                    .rounded(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .when(done, |r| r.cursor_pointer().hover(|s| s.bg(rgba(HOVER))))
+                    .on_click(move |_, _, _| {
+                        if done {
+                            let _ = std::process::Command::new("open").arg(&path).spawn();
+                        }
+                    })
+                    .child(icon("download").flex_none().text_color(rgb(MUTED)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(12.5))
+                                    .text_color(rgb(TEXT))
+                                    .child(d.name()),
+                            )
+                            .children(d.fraction().filter(|_| running).map(|f| {
+                                div().h(px(3.)).rounded(px(2.)).bg(rgba(0xffffff1a)).child(
+                                    div()
+                                        .h_full()
+                                        .w(relative(f))
+                                        .rounded(px(2.))
+                                        .bg(rgb(ACCENT_BRIGHT)),
+                                )
+                            }))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(MUTED))
+                                    .child(status),
+                            ),
+                    )
+                    .when(running, |r| {
+                        r.child(icon_button(("download-cancel", id as usize), "x").on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.downloads.update(cx, |d, cx| d.cancel(id, cx));
+                            }),
+                        ))
+                    })
+                    .when(done, |r| {
+                        r.child(
+                            icon_button(("download-reveal", id as usize), "search").on_click(
+                                move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    let _ = std::process::Command::new("open")
+                                        .arg("-R")
+                                        .arg(&reveal)
+                                        .spawn();
+                                },
+                            ),
+                        )
+                    })
+            })
+            .collect();
+        let finished = list.iter().any(|d| d.state != downloads::State::Running);
+        div()
+            .id("downloads-list")
+            .absolute()
+            .top(px(4.))
+            .right(px(8.))
+            .w(px(340.))
+            .max_h(px(420.))
+            .overflow_y_scroll()
+            .py(px(6.))
+            .flex()
+            .flex_col()
+            .gap(px(1.))
+            .rounded(px(8.))
+            .bg(rgb(MENU_BG))
+            .border_1()
+            .border_color(rgb(MENU_BORDER))
+            .shadow_lg()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.set_downloads_open(false, cx)))
+            .child(
+                div()
+                    .px(px(14.))
+                    .pb(px(4.))
+                    .flex()
+                    .items_center()
+                    .text_size(px(11.))
+                    .text_color(rgb(MUTED))
+                    .child(div().flex_1().child("Downloads"))
+                    .when(finished, |h| {
+                        h.child(
+                            div()
+                                .id("downloads-clear")
+                                .cursor_pointer()
+                                .hover(|s| s.text_color(rgb(TEXT)))
+                                .child("Clear")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.downloads.update(cx, |d, cx| d.clear(cx));
+                                    if this.downloads.read(cx).list.is_empty() {
+                                        this.set_downloads_open(false, cx);
+                                    }
+                                })),
+                        )
+                    }),
+            )
+            .children(rows)
+    }
+}
+
 impl Render for BrowserView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        for img in self.stale_covers.drain(..) {
+            let _ = window.drop_image(img);
+        }
+        let cover = match &self.cover {
+            Cover::Shown(img) => Some(img.clone()),
+            Cover::Pending { hidden: true, .. } => Some(None),
+            _ => None,
+        }
+        .map(|img| {
+            div()
+                .absolute()
+                .inset_0()
+                .bg(rgb(PANE_BG))
+                .children(img.map(|img| gpui::img(img).size_full()))
+        });
+        let downloads_button = self.render_downloads_button(cx);
+        let downloads = self.downloads_open.then(|| self.render_downloads(cx));
         let find_bar = self
             .find_input
             .clone()
@@ -944,6 +1473,20 @@ impl Render for BrowserView {
                 this.set_zoom(zoom_step(this.zoom, false), cx)
             }))
             .on_action(cx.listener(|this, _: &ActualSize, _, cx| this.set_zoom(1.0, cx)))
+            .on_action(cx.listener(|this, _: &ToggleDownloads, window, cx| {
+                if this.downloads_open {
+                    this.set_downloads_open(false, cx);
+                } else {
+                    this.open_downloads(window, cx);
+                }
+            }))
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                if this.downloads_open && ev.keystroke.key == "escape" {
+                    cx.stop_propagation();
+                    this.set_downloads_open(false, cx);
+                    this.focus_page(window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.find_step(true, cx)))
             .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.find_step(false, cx)))
@@ -994,7 +1537,8 @@ impl Render for BrowserView {
                                     .appearance(false)
                                     .text_size(px(12.)),
                             ),
-                    ),
+                    )
+                    .children(downloads_button),
             )
             .children(find_bar)
             .child(
@@ -1003,9 +1547,47 @@ impl Render for BrowserView {
                     .min_h_0()
                     .relative()
                     .child(self.webview.clone())
-                    .children(self.render_suggestions(cx)),
+                    .children(cover)
+                    .children(self.render_suggestions(cx))
+                    .children(downloads),
             )
     }
+}
+
+/// Context menus open now: pages under them show as bitmaps, so the menus
+/// aren't hidden behind them.
+static MENUS_OPEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub fn menus_open() -> bool {
+    MENUS_OPEN.load(std::sync::atomic::Ordering::Relaxed) > 0
+}
+
+/// Count a context menu as open until it's dismissed (or dropped). Call it
+/// from the menu's builder.
+pub fn track_menu(window: &mut Window, cx: &mut Context<gpui_component::menu::PopupMenu>) {
+    use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};
+    MENUS_OPEN.fetch_add(1, Ordering::Relaxed);
+    let done = Rc::new(Cell::new(false));
+    let close = {
+        let done = done.clone();
+        move || {
+            if !done.replace(true) {
+                MENUS_OPEN.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+    };
+    let on_dismiss = close.clone();
+    cx.subscribe_in(
+        &cx.entity(),
+        window,
+        move |_, _, _: &DismissEvent, window, _| {
+            on_dismiss();
+            window.refresh();
+        },
+    )
+    .detach();
+    cx.on_release(move |_, _| close()).detach();
+    window.refresh();
 }
 
 /// Yields after each left click in the app. Pages are native views, so gpui

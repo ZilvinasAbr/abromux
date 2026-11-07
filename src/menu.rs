@@ -159,6 +159,8 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Toggle Developer Tools", browser::ToggleDevTools),
                 MenuItem::action("Show JavaScript Console", browser::ShowConsole),
+                MenuItem::separator(),
+                MenuItem::action("Show Downloads", browser::ToggleDownloads),
             ],
         },
         Menu {

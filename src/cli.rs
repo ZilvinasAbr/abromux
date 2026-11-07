@@ -147,6 +147,12 @@ Commands:
   browser url|get-url
   browser eval <script>
   browser zoom [in|out|reset|<factor>|<percent>%]            (no argument: print the page zoom)
+  browser tab [list] | tab new [url] | tab switch <n|surface> | tab close [<n|surface>]
+                                                             (the browser tabs in the browser's pane)
+  browser downloads [list|clear|cancel <id>]                 (this session's downloads, newest last)
+  browser wait-download [--id <n>] [--path <file|dir>] [--timeout <ms>]
+                                                             (until the running download, else the next
+                                                             one, finishes; prints its path. Default 30000)
 
   Automation (<sel> is a CSS selector or a ref like e3 from the last snapshot):
   browser snapshot [--interactive] [--compact] [--selector <sel>]   (accessibility tree with refs)
@@ -154,6 +160,7 @@ Commands:
   browser fill <sel> <text>                                  (replace the field's value)
   browser type <sel> <text>                                  (key by key, into what's there)
   browser press <key> [--selector <sel>]                     (Enter, Tab, Escape, ArrowDown, ctrl+a, ...)
+  browser keydown|keyup <key> [--selector <sel>]             (just that event, to hold a key and let go)
   browser select <sel> <value>...
   browser scroll [up|down|left|right] [px] [--selector <sel>]   (default down 500)
   browser get url|title|text|html|value|attr|count|box|styles [<sel>] [<attr or style names>...]
@@ -162,6 +169,17 @@ Commands:
   browser wait [<sel>] [--state visible|hidden|attached|detached] [--text <t>] [--url <part>]
                [--load interactive|complete] [--js <expr>] [--timeout <ms>]   (default 10000)
   browser screenshot [<path.png>]                            (default: a file in $TMPDIR)
+  browser frame [<sel>|main]                                 (run the commands above in that iframe, cross-
+                                                             origin too; main: the page again)
+  browser console|errors|network [--clear] [--filter <text>] [--limit <n>] [--level <log|warn|error|...>]
+                                                             (what the page logged, threw and requested)
+  browser cookies [get [<name>]] [--all] [--url <url>]       (the page's cookies, HttpOnly too; --all: every site)
+  browser cookies set <name> <value> [--domain <d>] [--path <p>] [--expires <unix secs>] [--secure]
+                      [--http-only] [--same-site <Strict|Lax|None>]
+  browser cookies clear [<name>] [--all]
+  browser storage local|session [get [<key>] | set <key> <value> | remove <key> | clear]
+  browser state save|load <file.json>                        (cookies and the page's localStorage, in
+                                                             Playwright's storageState format)
 ";
 
 /// Flags that take no value.
@@ -182,6 +200,9 @@ const SWITCHES: &[&str] = &[
     "all-read",
     "selection",
     "signal",
+    "clear",
+    "secure",
+    "http-only",
 ];
 
 struct Args {
@@ -1386,12 +1407,295 @@ fn browser(
                 |_| "OK".into(),
             )
         }
-        "press" => {
+        "press" | "keydown" | "keyup" => {
             if arg.is_empty() {
-                return Err("browser press: missing <key>".into());
+                return Err(format!("browser {sub}: missing <key>"));
             }
             opts.insert("key".into(), json!(arg));
-            ("browser.press", |_| "OK".into())
+            (
+                match sub.as_str() {
+                    "press" => "browser.press",
+                    "keydown" => "browser.keydown",
+                    _ => "browser.keyup",
+                },
+                |_| "OK".into(),
+            )
+        }
+        "storage" => {
+            let area = pos.first().cloned().unwrap_or_default();
+            if area != "local" && area != "session" {
+                return Err("browser storage: expected local or session".into());
+            }
+            pos.remove(0);
+            let op = if pos.is_empty() {
+                "get".to_string()
+            } else {
+                pos.remove(0)
+            };
+            if let Some(k) = pos.first() {
+                opts.insert("key".into(), json!(k));
+            }
+            match op.as_str() {
+                "set" => {
+                    if pos.len() < 2 {
+                        return Err("browser storage set: expected <key> <value>".into());
+                    }
+                    opts.insert("value".into(), json!(pos[1..].join(" ")));
+                }
+                "get" | "remove" | "clear" => {}
+                op => {
+                    return Err(format!(
+                        "browser storage: unknown operation {op:?} (get, set, remove or clear)"
+                    ));
+                }
+            }
+            opts.insert("area".into(), json!(area));
+            opts.insert("op".into(), json!(op));
+            ("browser.storage", |v| match v {
+                Value::Null => "OK".into(),
+                Value::Number(n) => format!("OK cleared {n}"),
+                Value::Object(_) => pretty(v),
+                v => raw(v),
+            })
+        }
+        "console" => ("browser.console", |v| {
+            lines(v, |e| {
+                let frame = e["frame"]
+                    .as_str()
+                    .map(|f| format!(" ({f})"))
+                    .unwrap_or_default();
+                format!("[{}] {}{frame}", s(&e["level"]), s(&e["text"]))
+            })
+        }),
+        "errors" => ("browser.errors", |v| {
+            lines(v, |e| {
+                let mut out = s(&e["text"]);
+                if let Some(src) = e["source"].as_str().filter(|x| !x.is_empty()) {
+                    out += &format!("\n    at {src}");
+                }
+                out
+            })
+        }),
+        "network" | "requests" => ("browser.network", |v| {
+            lines(v, |e| {
+                let status = match &e["status"] {
+                    Value::Number(n) if n.as_u64() == Some(0) => "failed".to_string(),
+                    Value::Number(n) => n.to_string(),
+                    _ => "-".into(),
+                };
+                let ms = e["ms"]
+                    .as_u64()
+                    .map(|m| format!("  {m}ms"))
+                    .unwrap_or_default();
+                let err = e["error"]
+                    .as_str()
+                    .map(|x| format!("  ({x})"))
+                    .unwrap_or_default();
+                format!(
+                    "{} {status} {} [{}]{ms}{err}",
+                    s(&e["method"]),
+                    s(&e["url"]),
+                    s(&e["kind"])
+                )
+            })
+        }),
+        "frame" => {
+            if let Some(sel) = pos.first() {
+                opts.insert("selector".into(), json!(sel));
+            }
+            ("browser.frame", |v| match v["frame"].as_str() {
+                Some(f) => format!("frame {f}"),
+                None => "main".into(),
+            })
+        }
+        "cookies" => {
+            let op = if pos.is_empty() {
+                "get".to_string()
+            } else {
+                pos.remove(0)
+            };
+            match op.as_str() {
+                "get" | "list" | "clear" | "delete" => {
+                    if let Some(n) = pos.first() {
+                        opts.insert("name".into(), json!(n));
+                    }
+                }
+                "set" => {
+                    if pos.is_empty() {
+                        return Err("browser cookies set: expected <name> <value>".into());
+                    }
+                    opts.insert("name".into(), json!(pos.remove(0)));
+                    opts.insert("value".into(), json!(pos.join(" ")));
+                }
+                op => {
+                    return Err(format!(
+                        "browser cookies: unknown operation {op:?} (get, set or clear)"
+                    ));
+                }
+            }
+            opts.insert(
+                "op".into(),
+                json!(if op == "list" { "get" } else { op.as_str() }),
+            );
+            ("browser.cookies", |v| match v {
+                Value::Array(_) => lines(v, |c| {
+                    let mut flags = vec![];
+                    if c["httpOnly"] == json!(true) {
+                        flags.push("HttpOnly");
+                    }
+                    if c["secure"] == json!(true) {
+                        flags.push("Secure");
+                    }
+                    let flags = if flags.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  [{}]", flags.join(", "))
+                    };
+                    format!(
+                        "{}={}  ({}{}){flags}",
+                        s(&c["name"]),
+                        s(&c["value"]),
+                        s(&c["domain"]),
+                        s(&c["path"])
+                    )
+                }),
+                v if v.get("deleted").is_some() => format!("OK deleted {}", v["deleted"]),
+                _ => "OK".into(),
+            })
+        }
+        "state" => {
+            let op = pos.first().cloned().unwrap_or_default();
+            if op != "save" && op != "load" {
+                return Err("browser state: expected save or load <file>".into());
+            }
+            let path = pos
+                .get(1)
+                .ok_or(format!("browser state {op}: missing <file>"))?;
+            let path = Path::new(path);
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .map_err(|e| e.to_string())?
+                    .join(path)
+            };
+            opts.insert("op".into(), json!(op));
+            opts.insert("path".into(), json!(path));
+            ("browser.state", |v| {
+                if v.get("path").is_some() {
+                    format!(
+                        "OK {} ({} cookies, {} origins)",
+                        s(&v["path"]),
+                        v["cookies"],
+                        v["origins"]
+                    )
+                } else {
+                    let skipped = v["skipped"].as_array().map_or(0, Vec::len);
+                    let mut out = format!("OK {} cookies", v["cookies"]);
+                    for o in v["origins"].as_array().into_iter().flatten() {
+                        out += &format!(", localStorage for {}", s(o));
+                    }
+                    if skipped > 0 {
+                        out += &format!(" ({skipped} other origins skipped: open them first)");
+                    }
+                    out
+                }
+            })
+        }
+        "tab" | "tabs" => {
+            let op = if pos.is_empty() {
+                "list".to_string()
+            } else {
+                pos.remove(0)
+            };
+            match op.as_str() {
+                "list" => {}
+                "new" => {
+                    if let Some(u) = pos.first() {
+                        opts.insert("url".into(), json!(u));
+                    }
+                }
+                "switch" | "select" | "close" => {
+                    if let Some(t) = pos.first() {
+                        opts.insert("target".into(), json!(t));
+                    } else if op != "close" {
+                        return Err(format!("browser tab {op}: missing <index or surface>"));
+                    }
+                }
+                op => {
+                    return Err(format!(
+                        "browser tab: unknown operation {op:?} (list, new, switch or close)"
+                    ));
+                }
+            }
+            opts.insert(
+                "op".into(),
+                json!(if op == "select" {
+                    "switch"
+                } else {
+                    op.as_str()
+                }),
+            );
+            ("browser.tab", |v| match v {
+                Value::Array(_) => lines(v, |t| {
+                    format!(
+                        "{} {} {}  {}{}",
+                        t["index"],
+                        s(&t["ref"]),
+                        s(&t["title"]),
+                        s(&t["url"]),
+                        if t["active"] == json!(true) {
+                            "  (active)"
+                        } else {
+                            ""
+                        }
+                    )
+                }),
+                v if v.get("closed").is_some() => format!("OK closed {}", s(&v["closed"])),
+                v => format!("OK {}", s(&v["ref"])),
+            })
+        }
+        "downloads" => {
+            let op = if pos.is_empty() {
+                "list".to_string()
+            } else {
+                pos.remove(0)
+            };
+            if op == "cancel" {
+                opts.insert(
+                    "id".into(),
+                    json!(
+                        pos.first()
+                            .ok_or("browser downloads cancel: missing <id>")?
+                    ),
+                );
+            }
+            opts.insert("op".into(), json!(op));
+            ("browser.downloads", |v| match v {
+                Value::Array(_) => lines(v, |d| {
+                    format!(
+                        "{} {} {}  {}",
+                        d["id"],
+                        s(&d["state"]),
+                        s(&d["path"]),
+                        s(&d["url"])
+                    )
+                }),
+                v if v.get("cleared").is_some() => format!("OK cleared {}", v["cleared"]),
+                _ => "OK".into(),
+            })
+        }
+        "wait-download" => {
+            if let Some(Value::String(p)) = opts.get("path").cloned() {
+                let path = Path::new(&p);
+                if !path.is_absolute() {
+                    let abs = std::env::current_dir()
+                        .map_err(|e| e.to_string())?
+                        .join(path);
+                    opts.insert("path".into(), json!(abs));
+                }
+            }
+            ("browser.wait_download", |v| s(&v["path"]))
         }
         "select" => {
             selector(&mut pos, &mut opts, &sub)?;
