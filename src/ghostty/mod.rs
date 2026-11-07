@@ -207,6 +207,24 @@ pub struct MouseGeometry {
     pub padding: u32,
 }
 
+// GhosttyStyle flag bits (style.h); bindgen skips these casted macros.
+const STYLE_FLAG_BOLD: GhosttyStyleFlags = 1 << 0;
+const STYLE_FLAG_ITALIC: GhosttyStyleFlags = 1 << 1;
+const STYLE_FLAG_FAINT: GhosttyStyleFlags = 1 << 2;
+const STYLE_FLAG_INVERSE: GhosttyStyleFlags = 1 << 4;
+const STYLE_FLAG_INVISIBLE: GhosttyStyleFlags = 1 << 5;
+const STYLE_FLAG_STRIKETHROUGH: GhosttyStyleFlags = 1 << 6;
+const STYLE_UNDERLINE_MASK: GhosttyStyleFlags = 0x7 << GHOSTTY_STYLE_UNDERLINE_SHIFT;
+
+/// A zeroed FFI value struct (one without a size field).
+macro_rules! zeroed {
+    ($t:ty) => {{
+        #[allow(unused_unsafe)]
+        let v: $t = unsafe { mem::zeroed() };
+        v
+    }};
+}
+
 macro_rules! sized {
     ($t:ty) => {{
         #[allow(unused_unsafe)]
@@ -298,10 +316,8 @@ unsafe extern "C" fn on_clipboard_write(
     w: *const GhosttyClipboardWrite,
 ) {
     let ud = unsafe { &mut *(ud as *mut Userdata) };
+    // A frozen layout since libghostty-vt 1.0: no size field to check.
     let w = unsafe { &*w };
-    if w.size < mem::size_of::<GhosttyClipboardWrite>() {
-        return; // an older layout: returning without a reply denies it
-    }
     let result = if !ud.clipboard_write {
         GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED
     } else if w.contents_len == 0 {
@@ -433,7 +449,7 @@ impl Terminal {
             let mut mouse_event = ptr::null_mut();
             check(ghostty_mouse_event_new(ptr::null(), &mut mouse_event))?;
             let track_last_cell = true;
-            ghostty_mouse_encoder_setopt(
+            ghostty_mouse_encoder_set(
                 mouse_encoder,
                 GHOSTTY_MOUSE_ENCODER_OPT_TRACK_LAST_CELL,
                 &track_last_cell as *const _ as *const c_void,
@@ -746,7 +762,7 @@ impl Terminal {
     ) -> Vec<u8> {
         unsafe {
             let enc = self.mouse_encoder;
-            ghostty_mouse_encoder_setopt_from_terminal(enc, self.raw);
+            ghostty_mouse_encoder_set_from_terminal(enc, self.raw);
             let mut size = sized!(GhosttyMouseEncoderSize);
             size.screen_width = g.width;
             size.screen_height = g.height;
@@ -758,12 +774,12 @@ impl Terminal {
                 size.padding_left,
                 size.padding_right,
             ) = (g.padding, g.padding, g.padding, g.padding);
-            ghostty_mouse_encoder_setopt(
+            ghostty_mouse_encoder_set(
                 enc,
                 GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
                 &size as *const _ as *const c_void,
             );
-            ghostty_mouse_encoder_setopt(
+            ghostty_mouse_encoder_set(
                 enc,
                 GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
                 &any_pressed as *const _ as *const c_void,
@@ -781,7 +797,7 @@ impl Terminal {
             match button {
                 Some(b) => ghostty_mouse_event_set_button(ev, b as GhosttyMouseButton),
                 None => ghostty_mouse_event_clear_button(ev),
-            }
+            };
             ghostty_mouse_event_set_mods(ev, mods);
             ghostty_mouse_event_set_position(ev, GhosttyMousePosition { x: pos.0, y: pos.1 });
             let mut buf = [0u8; 64];
@@ -854,22 +870,22 @@ impl Terminal {
 
     pub fn scroll(&mut self, delta_rows: isize) {
         let mut v = GhosttyTerminalScrollViewport {
-            tag: GHOSTTY_SCROLL_VIEWPORT_DELTA,
+            tag: GHOSTTY_TERMINAL_SCROLL_VIEWPORT_DELTA,
             ..Default::default()
         };
         v.value.delta = delta_rows;
-        unsafe { ghostty_terminal_scroll_viewport(self.raw, v) }
+        unsafe { ghostty_terminal_scroll_viewport(self.raw, v) };
     }
 
     /// Make scrollable row `row` (0 is the oldest scrollback line) the top
     /// of the viewport, in the row space of [`scrollbar`](Self::scrollbar).
     pub fn scroll_to_row(&mut self, row: u64) {
         let mut v = GhosttyTerminalScrollViewport {
-            tag: GHOSTTY_SCROLL_VIEWPORT_ROW,
+            tag: GHOSTTY_TERMINAL_SCROLL_VIEWPORT_ROW,
             ..Default::default()
         };
         v.value.row = row as _;
-        unsafe { ghostty_terminal_scroll_viewport(self.raw, v) }
+        unsafe { ghostty_terminal_scroll_viewport(self.raw, v) };
     }
 
     /// The scrollable area in rows: its total, where the viewport starts in
@@ -892,10 +908,10 @@ impl Terminal {
 
     pub fn scroll_to_bottom(&mut self) {
         let v = GhosttyTerminalScrollViewport {
-            tag: GHOSTTY_SCROLL_VIEWPORT_BOTTOM,
+            tag: GHOSTTY_TERMINAL_SCROLL_VIEWPORT_BOTTOM,
             ..Default::default()
         };
-        unsafe { ghostty_terminal_scroll_viewport(self.raw, v) }
+        unsafe { ghostty_terminal_scroll_viewport(self.raw, v) };
     }
 
     fn string_data(&self, key: GhosttyTerminalData) -> String {
@@ -940,7 +956,7 @@ impl Terminal {
         unshifted: u32,
     ) -> Vec<u8> {
         unsafe {
-            ghostty_key_encoder_setopt_from_terminal(self.key_encoder, self.raw);
+            ghostty_key_encoder_set_from_terminal(self.key_encoder, self.raw);
             let ev = self.key_event;
             ghostty_key_event_set_action(ev, action);
             ghostty_key_event_set_key(ev, key);
@@ -948,10 +964,14 @@ impl Terminal {
             ghostty_key_event_set_consumed_mods(ev, 0);
             ghostty_key_event_set_composing(ev, false);
             ghostty_key_event_set_unshifted_codepoint(ev, unshifted);
-            match text {
-                Some(t) => ghostty_key_event_set_utf8(ev, t.as_ptr() as *const _, t.len()),
-                None => ghostty_key_event_set_utf8(ev, ptr::null(), 0),
-            }
+            let utf8 = match text {
+                Some(t) => GhosttyString {
+                    ptr: t.as_ptr(),
+                    len: t.len(),
+                },
+                None => GhosttyString::default(),
+            };
+            ghostty_key_event_set_utf8(ev, utf8);
             let mut buf = [0u8; 128];
             let mut len = 0usize;
             let r = ghostty_key_encoder_encode(
@@ -975,7 +995,7 @@ impl Terminal {
             ..Default::default()
         };
         point.value.coordinate = GhosttyPointCoordinate { x, y: y as u32 };
-        let mut r = sized!(GhosttyGridRef);
+        let mut r = zeroed!(GhosttyGridRef);
         (unsafe { ghostty_terminal_grid_ref(self.raw, point, &mut r) } == GHOSTTY_SUCCESS)
             .then_some(r)
     }
@@ -1006,7 +1026,7 @@ impl Terminal {
         else {
             return;
         };
-        let mut sel = sized!(GhosttySelection);
+        let mut sel = zeroed!(GhosttySelection);
         sel.start = start;
         sel.end = end;
         unsafe {
@@ -1023,7 +1043,7 @@ impl Terminal {
         unsafe {
             let mut opts = sized!(GhosttyTerminalSelectWordOptions);
             opts.ref_ = r;
-            let mut sel = sized!(GhosttySelection);
+            let mut sel = zeroed!(GhosttySelection);
             if ghostty_terminal_select_word(self.raw, &opts, &mut sel) == GHOSTTY_SUCCESS {
                 ghostty_terminal_set(
                     self.raw,
@@ -1039,29 +1059,19 @@ impl Terminal {
     }
 
     pub fn selection_text(&self) -> Option<String> {
-        let mut opts = sized!(GhosttyTerminalSelectionFormatOptions);
-        opts.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN;
-        opts.unwrap = true;
-        opts.trim = true;
-        unsafe {
-            let mut out: *mut u8 = ptr::null_mut();
-            let mut len = 0usize;
-            if ghostty_terminal_selection_format_alloc(
+        let mut sel = zeroed!(GhosttySelection);
+        let has = unsafe {
+            ghostty_terminal_get(
                 self.raw,
-                ptr::null(),
-                opts,
-                &mut out,
-                &mut len,
-            ) != GHOSTTY_SUCCESS
-            {
-                return None;
-            }
-            let text = (!out.is_null()).then(|| {
-                String::from_utf8_lossy(std::slice::from_raw_parts(out, len)).into_owned()
-            });
-            ghostty_free(ptr::null(), out, len);
-            text.filter(|t| !t.is_empty())
+                GHOSTTY_TERMINAL_DATA_SELECTION,
+                &mut sel as *mut _ as *mut c_void,
+            )
+        } == GHOSTTY_SUCCESS;
+        if !has {
+            return None;
         }
+        Some(self.format(GHOSTTY_FORMATTER_FORMAT_PLAIN, Some(&sel), GHOSTTY_FORMATTER_EXTRAS_NONE))
+            .filter(|t| !t.is_empty())
     }
 
     /// Plain text of the whole screen, scrollback included.
@@ -1076,29 +1086,44 @@ impl Terminal {
     }
 
     fn format_screen(&self, emit: GhosttyFormatterFormat) -> String {
-        let mut opts = sized!(GhosttyFormatterTerminalOptions);
-        opts.emit = emit;
-        opts.unwrap = true;
-        opts.trim = true;
-        opts.extra.size = mem::size_of::<GhosttyFormatterTerminalExtra>();
-        opts.extra.screen.size = mem::size_of::<GhosttyFormatterScreenExtra>();
+        self.format(emit, None, GHOSTTY_FORMATTER_EXTRAS_NONE)
+    }
+
+    /// Format the screen (scrollback included), or only `selection`, with
+    /// lines unwrapped and trailing blanks trimmed.
+    fn format(
+        &self,
+        emit: GhosttyFormatterFormat,
+        selection: Option<&GhosttySelection>,
+        extras: GhosttyFormatterExtras,
+    ) -> String {
         unsafe {
             let mut f = ptr::null_mut();
-            if ghostty_formatter_terminal_new(ptr::null(), &mut f, self.raw, opts)
-                != GHOSTTY_SUCCESS
-            {
+            if ghostty_formatter_terminal_new(ptr::null(), &mut f, self.raw) != GHOSTTY_SUCCESS {
                 return String::new();
             }
+            let (unwrap, trim) = (true, true);
+            let set = |opt, v: *const c_void| ghostty_formatter_set(f, opt, v) == GHOSTTY_SUCCESS;
+            let ok = set(GHOSTTY_FORMATTER_OPT_EMIT, &emit as *const _ as *const c_void)
+                && set(GHOSTTY_FORMATTER_OPT_UNWRAP, &unwrap as *const _ as *const c_void)
+                && set(GHOSTTY_FORMATTER_OPT_TRIM, &trim as *const _ as *const c_void)
+                && set(GHOSTTY_FORMATTER_OPT_EXTRAS, &extras as *const _ as *const c_void)
+                && selection.is_none_or(|sel| {
+                    set(GHOSTTY_FORMATTER_OPT_SELECTION, sel as *const _ as *const c_void)
+                });
             let mut out: *mut u8 = ptr::null_mut();
             let mut len = 0usize;
-            let ok = ghostty_formatter_format_alloc(f, ptr::null(), &mut out, &mut len)
-                == GHOSTTY_SUCCESS;
+            let ok = ok
+                && ghostty_formatter_format_alloc(f, ptr::null(), &mut out, &mut len)
+                    == GHOSTTY_SUCCESS;
             let text = if ok && !out.is_null() {
                 String::from_utf8_lossy(std::slice::from_raw_parts(out, len)).into_owned()
             } else {
                 String::new()
             };
-            ghostty_free(ptr::null(), out, len);
+            if !out.is_null() {
+                ghostty_free(ptr::null(), out, len);
+            }
             ghostty_formatter_free(f);
             text
         }
@@ -1162,12 +1187,14 @@ impl Terminal {
         if self.search.is_null() {
             return false;
         }
-        let opt = if older {
-            GHOSTTY_SEARCH_OPT_SELECT_NEXT
-        } else {
-            GHOSTTY_SEARCH_OPT_SELECT_PREV
+        let r = unsafe {
+            if older {
+                ghostty_search_select_next(self.search)
+            } else {
+                ghostty_search_select_prev(self.search)
+            }
         };
-        unsafe { ghostty_search_set(self.search, opt, ptr::null()) == GHOSTTY_SUCCESS }
+        r == GHOSTTY_SUCCESS
     }
 
     /// Total matches, and the selected one's index counting from the newest.
@@ -1235,7 +1262,7 @@ impl Terminal {
             if buf.len == 0 {
                 return Vec::new();
             }
-            let mut sels = vec![sized!(GhosttySelection); buf.len];
+            let mut sels = vec![zeroed!(GhosttySelection); buf.len];
             buf = GhosttySelectionBuffer {
                 ptr: sels.as_mut_ptr(),
                 cap: sels.len(),
@@ -1250,7 +1277,7 @@ impl Terminal {
                 return Vec::new();
             }
             sels.truncate(buf.len);
-            let mut sel = sized!(GhosttySelection);
+            let mut sel = zeroed!(GhosttySelection);
             let selected = (ghostty_search_get(
                 self.search,
                 GHOSTTY_SEARCH_DATA_SELECTED_MATCH,
@@ -1351,11 +1378,11 @@ impl Terminal {
                     x: cursor.viewport_x,
                     y: cursor.viewport_y,
                     style: match cursor.visual_style {
-                        GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR => CursorStyle::Bar,
-                        GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE => {
+                        GHOSTTY_CURSOR_STYLE_BAR => CursorStyle::Bar,
+                        GHOSTTY_CURSOR_STYLE_UNDERLINE => {
                             CursorStyle::Underline
                         }
-                        GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW => {
+                        GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW => {
                             CursorStyle::BlockHollow
                         }
                         _ => CursorStyle::Block,
@@ -1474,19 +1501,20 @@ impl Terminal {
                         &mut styled as *mut _ as *mut c_void,
                     );
                     if styled {
-                        let mut style = sized!(GhosttyStyle);
+                        let mut style = zeroed!(GhosttyStyle);
                         ghostty_render_state_row_cells_get(
                             cells,
                             GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE,
                             &mut style as *mut _ as *mut c_void,
                         );
-                        cell.bold = style.bold;
-                        cell.italic = style.italic;
-                        cell.faint = style.faint;
-                        cell.underline = style.underline != 0;
-                        cell.strikethrough = style.strikethrough;
-                        cell.inverse = style.inverse;
-                        cell.invisible = style.invisible;
+                        let f = style.flags;
+                        cell.bold = f & STYLE_FLAG_BOLD != 0;
+                        cell.italic = f & STYLE_FLAG_ITALIC != 0;
+                        cell.faint = f & STYLE_FLAG_FAINT != 0;
+                        cell.underline = f & STYLE_UNDERLINE_MASK != 0;
+                        cell.strikethrough = f & STYLE_FLAG_STRIKETHROUGH != 0;
+                        cell.inverse = f & STYLE_FLAG_INVERSE != 0;
+                        cell.invisible = f & STYLE_FLAG_INVISIBLE != 0;
                     }
                     ghostty_render_state_row_cells_get(
                         cells,
@@ -1512,7 +1540,7 @@ impl Terminal {
             );
             while ghostty_render_state_image_iterator_next(self.image_iter) {
                 let mut protocol: GhosttyImageProtocol = GHOSTTY_IMAGE_PROTOCOL_KITTY;
-                let mut layer: GhosttyRenderStateImageLayer = 0;
+                let mut layer: GhosttyImageLayer = GHOSTTY_IMAGE_LAYER_BELOW_TEXT;
                 let mut im = Image {
                     id: 0,
                     generation: 0,
@@ -1570,10 +1598,10 @@ impl Terminal {
                     continue;
                 }
                 im.layer = match layer {
-                    GHOSTTY_RENDER_STATE_IMAGE_LAYER_BELOW_BACKGROUND => {
+                    GHOSTTY_IMAGE_LAYER_BELOW_BACKGROUND => {
                         ImageLayer::BelowBackground
                     }
-                    GHOSTTY_RENDER_STATE_IMAGE_LAYER_ABOVE_TEXT => ImageLayer::AboveText,
+                    GHOSTTY_IMAGE_LAYER_ABOVE_TEXT => ImageLayer::AboveText,
                     _ => ImageLayer::BelowText,
                 };
                 images.push(im);
@@ -1621,21 +1649,18 @@ impl Terminal {
             }
             let (mut w, mut h) = (0u32, 0u32);
             let mut format: GhosttyKittyImageFormat = GHOSTTY_KITTY_IMAGE_FORMAT_RGBA;
-            let mut data: *const u8 = ptr::null();
-            let mut len = 0usize;
+            let mut pixels = GhosttyString::default();
             let keys = [
-                GHOSTTY_KITTY_IMAGE_DATA_WIDTH,
-                GHOSTTY_KITTY_IMAGE_DATA_HEIGHT,
-                GHOSTTY_KITTY_IMAGE_DATA_FORMAT,
-                GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR,
-                GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN,
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_WIDTH,
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_HEIGHT,
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_FORMAT,
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_PIXELS,
             ];
-            let mut values: [*mut c_void; 5] = [
+            let mut values: [*mut c_void; 4] = [
                 &mut w as *mut _ as *mut c_void,
                 &mut h as *mut _ as *mut c_void,
                 &mut format as *mut _ as *mut c_void,
-                &mut data as *mut _ as *mut c_void,
-                &mut len as *mut _ as *mut c_void,
+                &mut pixels as *mut _ as *mut c_void,
             ];
             if ghostty_kitty_graphics_image_get_multi(
                 image,
@@ -1644,10 +1669,11 @@ impl Terminal {
                 values.as_mut_ptr(),
                 ptr::null_mut(),
             ) != GHOSTTY_SUCCESS
-                || data.is_null()
+                || pixels.ptr.is_null()
             {
                 return None;
             }
+            let (data, len) = (pixels.ptr, pixels.len);
             let bpp = match format {
                 GHOSTTY_KITTY_IMAGE_FORMAT_RGB => 3,
                 GHOSTTY_KITTY_IMAGE_FORMAT_RGBA => 4,
