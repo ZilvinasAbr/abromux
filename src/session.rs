@@ -165,7 +165,7 @@ pub fn path() -> Option<PathBuf> {
     if std::env::var("ABROMUX_DEMO").is_ok() || std::env::var("ABROMUX_SCRIPT").is_ok() {
         return None;
     }
-    std::env::var("HOME").ok()?;
+    crate::paths::home_var()?;
     Some(crate::channel::support_dir().join("session.json"))
 }
 
@@ -210,9 +210,7 @@ pub fn source(from: &str) -> PathBuf {
     if let Some(p) = named_source(from) {
         return p;
     }
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    from.strip_prefix("~/")
-        .map_or_else(|| from.into(), |rest| home.join(rest))
+    crate::paths::expand_tilde(from)
 }
 
 /// The session a `--from` name stands for, None for a file path.

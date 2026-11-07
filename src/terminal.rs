@@ -225,7 +225,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Self {
         let (cols, rows) = (80, 24);
-        let cwd = cwd.unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+        let cwd = cwd.unwrap_or_else(|| crate::paths::home().to_string_lossy().into_owned());
         let (opened, feed) =
             spawn_shell(&cwd, &env, command.as_deref(), (cols, rows), 0, attach, cx);
         let focus = cx.focus_handle();

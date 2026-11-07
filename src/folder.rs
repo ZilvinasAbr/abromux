@@ -244,15 +244,7 @@ pub fn root(s: &Settings) -> PathBuf {
     }
 }
 
-/// `~` and `~/…` from home.
-fn expand(path: &str) -> PathBuf {
-    let home = || PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    match path.strip_prefix('~') {
-        Some("") => home(),
-        Some(rest) if rest.starts_with('/') => home().join(&rest[1..]),
-        _ => PathBuf::from(path),
-    }
-}
+use crate::paths::expand_tilde as expand;
 
 use abromux_plugin::git::text as git;
 
@@ -406,7 +398,7 @@ pub fn blockers(ws: &Path) -> Vec<String> {
 pub fn remove(ws: &Path, force: bool) -> Result<Vec<String>, String> {
     let meta =
         read_meta(ws).ok_or_else(|| format!("{}: not a workspace folder", ws.display()))?;
-    let home = std::env::var("HOME").map(PathBuf::from).ok();
+    let home = crate::paths::home_var();
     if ws.parent().is_none() || home.as_deref() == Some(ws) {
         return Err(format!("{}: won't delete that", ws.display()));
     }
@@ -474,7 +466,7 @@ pub fn list(root: &Path) -> Vec<(PathBuf, Meta)> {
 /// roots (`~/repos`, `~/src`, `~/code`, `~/projects`, `~/dev`, `~/Developer`)
 /// that hold a `.git`.
 pub fn known_repos() -> Vec<PathBuf> {
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let home = crate::paths::home();
     let mut out = vec![];
     for root in ["repos", "src", "code", "projects", "dev", "Developer"] {
         let Ok(entries) = std::fs::read_dir(home.join(root)) else {

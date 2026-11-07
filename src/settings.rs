@@ -825,12 +825,7 @@ pub fn error_notification(e: String) -> Notification {
 }
 
 pub fn path() -> PathBuf {
-    let xdg = std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config")
-        });
-    xdg.join("abromux/config.json")
+    crate::paths::xdg_config().join("abromux/config.json")
 }
 
 /// The settings in the config file, or the defaults if there is none.

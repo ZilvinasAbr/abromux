@@ -174,9 +174,7 @@ impl Kind {
 
     /// The agent's config folder, if it's set up here.
     fn dir(self) -> anyhow::Result<Option<PathBuf>> {
-        let home = std::env::var("HOME")
-            .map(PathBuf::from)
-            .context("HOME isn't set")?;
+        let home = crate::paths::home_var().context("HOME isn't set")?;
         let env = |var: &str| std::env::var_os(var).map(PathBuf::from);
         let dir = match self {
             // Created if missing: Claude Code is the main one.
@@ -190,9 +188,7 @@ impl Kind {
             Kind::Droid => home.join(".factory"),
             Kind::Cursor => home.join(".cursor"),
             Kind::OpenCode => env("OPENCODE_CONFIG_DIR").unwrap_or_else(|| {
-                env("XDG_CONFIG_HOME")
-                    .unwrap_or(home.join(".config"))
-                    .join("opencode")
+                crate::paths::xdg_config().join("opencode")
             }),
             Kind::Pi => env("PI_CODING_AGENT_DIR").unwrap_or(home.join(".pi/agent")),
         };

@@ -84,8 +84,9 @@ fn classify(word: &[&str], cwd: &str) -> Option<(usize, usize, Target)> {
     let s = text.find(|c: char| !"([{".contains(c))?;
     let path = trim_end(&text[s..]);
     let (file, line) = split_line(path);
-    let full = if let Some(rest) = file.strip_prefix("~/") {
-        PathBuf::from(std::env::var("HOME").ok()?).join(rest)
+    let full = if file.starts_with("~/") {
+        crate::paths::home_var()?;
+        crate::paths::expand_tilde(file)
     } else {
         PathBuf::from(cwd).join(file)
     };

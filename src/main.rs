@@ -34,6 +34,7 @@ mod notify_hook;
 mod menubar;
 mod naming;
 mod osc99;
+mod paths;
 mod palette;
 mod plugins;
 mod pty;
@@ -1678,7 +1679,7 @@ impl AbroMux {
                 .position(|w| w.custom_name.as_deref() == Some(name.as_str()));
             let base = base
                 .or_else(|| self.focused_cwd(cx).map(Into::into))
-                .unwrap_or_else(|| std::env::var("HOME").unwrap_or_default().into());
+                .unwrap_or_else(crate::paths::home);
             let Some(i) = open else {
                 self.open_layout(spec, Some(name), &base, window, cx);
                 return;

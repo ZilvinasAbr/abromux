@@ -1879,16 +1879,7 @@ fn open_config(cx: &mut App) {
     cx.open_with_system(&settings::path());
 }
 
-/// The Ghostty config file abromux reads, if there is one.
+/// The Ghostty config file whose settings win: the last one abromux reads.
 fn ghostty_config() -> Option<PathBuf> {
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    let xdg = std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| home.join(".config"));
-    [
-        xdg.join("ghostty/config"),
-        home.join("Library/Application Support/com.mitchellh.ghostty/config"),
-    ]
-    .into_iter()
-    .find(|p| p.is_file())
+    crate::paths::ghostty_configs().into_iter().rev().find(|p| p.is_file())
 }

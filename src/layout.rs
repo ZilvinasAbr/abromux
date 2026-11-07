@@ -205,8 +205,7 @@ impl WorkspaceSpec {
 pub fn resolve(cwd: Option<&str>, base: &Path) -> PathBuf {
     let path = match cwd {
         None | Some("" | ".") => base.to_path_buf(),
-        Some("~") => home(),
-        Some(c) if c.starts_with("~/") => home().join(&c[2..]),
+        Some(c) if c == "~" || c.starts_with("~/") => crate::paths::expand_tilde(c),
         Some(c) => base.join(c),
     };
     // `app/../tests` as `tests`, as the shell would show it.
@@ -221,10 +220,6 @@ pub fn resolve(cwd: Option<&str>, base: &Path) -> PathBuf {
         }
     }
     out
-}
-
-fn home() -> PathBuf {
-    std::env::var("HOME").unwrap_or_else(|_| "/".into()).into()
 }
 
 impl AbroMux {
@@ -424,7 +419,7 @@ mod tests {
     #[test]
     fn resolves_cwds() {
         let base = Path::new("/p");
-        let home = home();
+        let home = crate::paths::home();
         assert_eq!(resolve(None, base), base);
         assert_eq!(resolve(Some("."), base), base);
         assert_eq!(resolve(Some("./app"), base), Path::new("/p/app"));

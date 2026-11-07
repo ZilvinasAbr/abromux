@@ -411,7 +411,7 @@ impl AbroMux {
                 spec.check().map_err(anyhow::Error::msg)?;
                 let base = str_param(p, "cwd")
                     .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| std::env::var("HOME").unwrap_or_default().into());
+                    .unwrap_or_else(crate::paths::home);
                 let prev = self.workspaces.get(self.active).map(|w| w.id);
                 let name = str_param(p, "name").map(String::from);
                 let wi = self.open_layout(&spec, name, &base, window, cx);

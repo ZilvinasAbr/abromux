@@ -20,8 +20,7 @@ use std::path::PathBuf;
 /// cmux's own session file (the release app's), or the copy it keeps of
 /// the one before if that's all there is.
 pub fn session_path() -> PathBuf {
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    let dir = home.join("Library/Application Support/cmux");
+    let dir = crate::paths::home().join("Library/Application Support/cmux");
     let current = dir.join("session-com.cmuxterm.app.json");
     let previous = dir.join("session-com.cmuxterm.app-previous.json");
     if !current.exists() && previous.exists() {

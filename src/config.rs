@@ -116,15 +116,9 @@ const DEFAULT_KEYBINDS: &[(&str, &str)] = &[
 
 impl Config {
     pub fn load() -> Self {
-        let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-        let xdg = std::env::var("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| home.join(".config"));
+        let xdg = crate::paths::xdg_config();
         let mut entries = vec![];
-        for path in [
-            xdg.join("ghostty/config"),
-            home.join("Library/Application Support/com.mitchellh.ghostty/config"),
-        ] {
+        for path in crate::paths::ghostty_configs() {
             read_file(&path, &mut entries, 0);
         }
         let mut theme = vec![];

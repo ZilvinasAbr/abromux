@@ -893,8 +893,9 @@ pub fn move_workspace(
 }
 
 pub fn tilde(path: &str) -> String {
-    match std::env::var("HOME") {
-        Ok(home) if path.starts_with(&home) => format!("~{}", &path[home.len()..]),
+    let home = crate::paths::home_var().map(|h| h.to_string_lossy().into_owned());
+    match home {
+        Some(home) if path.starts_with(&home) => format!("~{}", &path[home.len()..]),
         _ => path.to_string(),
     }
 }
