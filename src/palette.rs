@@ -289,8 +289,9 @@ impl AbroMux {
         };
         if p.mode == Mode::NewFolder {
             let typed = crate::one_line(&p.input.read(cx).value());
-            let name = if typed.is_empty() { p.suggested } else { typed };
-            return self.new_folder_workspace(name, window, cx);
+            let named = !typed.is_empty();
+            let name = if named { typed } else { p.suggested };
+            return self.new_folder_workspace(name, named, window, cx);
         }
         if let Mode::OpenLink(id) = p.mode {
             let url = p.input.read(cx).value().trim().to_string();

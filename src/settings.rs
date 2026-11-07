@@ -478,8 +478,10 @@ pub struct WorkspaceGroups {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct Automation {
-    /// Name a workspace from its agent's first prompt, summarised by that
-    /// agent's own CLI (`claude -p`, `codex exec`). A name you give it wins.
+    /// Name a workspace from its agent's prompts, summarised by that agent's
+    /// own CLI (`claude -p`, `codex exec`), renaming it as the work moves on.
+    /// A name you give it wins and stops that. (A ⇧⌘I workspace left on its
+    /// made-up name is named this way even when off.)
     pub workspace_auto_naming: bool,
     /// The agent CLI that cleans up a workspace folder (right-click › Clean
     /// Up and Delete Folder…), run with the instruction as its one argument.

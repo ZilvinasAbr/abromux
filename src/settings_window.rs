@@ -814,8 +814,9 @@ fn general_page() -> Page {
                 "Automation",
                 [switch(
                     "Name workspaces from agent prompts",
-                    "Summarise a coding agent's first prompt into the workspace name, \
-                     using that agent's own CLI. A name you give it wins.",
+                    "Summarise what a coding agent is asked into the workspace name, \
+                     using that agent's own CLI, and keep it current. A name you give \
+                     it wins. ⇧⌘I workspaces left on their made-up name always are.",
                     &["automation", "workspaceAutoNaming"],
                     |s| s.automation.workspace_auto_naming,
                 )],
