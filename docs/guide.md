@@ -5,7 +5,9 @@ Everything AbroMux does, in detail. For a quick start, see the [README](../READM
 ## Features
 
 - **Terminal panes** use [libghostty-vt](https://github.com/ghostty-org/ghostty) for all terminal state: VT parsing, screen and scrollback, colors, selection and key encoding. It is linked statically through a bindgen FFI layer. A shell runs in a PTY (`portable-pty`) and GPUI draws each cell. Text goes through the macOS input system, so IMEs and dead keys compose as usual. Mouse clicks, drags and the wheel go to TUI apps that ask for them (vim, htop, lazygit); hold Shift to select or scroll locally. Full-screen apps without mouse support get arrow keys from the wheel, like Ghostty's alternate scroll.
-- **Browser panes** are native WKWebViews (wry, via `gpui-component`). Each has an address bar with back, forward and reload. Typing in the address bar suggests pages from your browsing history, ranked as in cmux (where the text matches, plus how recently, often and directly you've visited them). ↑/↓ pick one, Return opens it, Esc closes the list, ⇧⌫ deletes the highlighted entry, and ↓ on the page's own URL lists your most typed and recent ones. History is shared by all browser panes and kept in `browser-history.json` under Application Support. ⌘-click or middle-click on a link opens it in a new tab after the current one (⇧ to switch to it). Passkeys and security keys work in them once the app is signed with Apple's web-browser entitlement (see "Passkeys").
+- **Browser panes** are native WKWebViews (wry, via `gpui-component`). Each has an address bar with back, forward and reload. Typing in the address bar suggests pages from your browsing history, ranked as in cmux (where the text matches, plus how recently, often and directly you've visited them). ↑/↓ pick one, Return opens it, Esc closes the list, ⇧⌫ deletes the highlighted entry, and ↓ on the page's own URL lists your most typed and recent ones. History is shared by all browser panes and kept in `browser-history.json` under Application Support. ⌘-click or middle-click on a link opens it in a new tab after the current one (⇧ to switch to it). Passkeys and security keys work in them once the app is signed with Apple's web-browser entitlement (see "Passkeys"). Hovering a link shows its URL at the page's bottom-left corner, as in Safari.
+- **Downloads** from browser panes go to `~/Downloads` (a file already there gets ` (1)` and so on), including links the server marks `Content-Disposition: attachment`. Once there's one, a download button joins the toolbar: a bar under it shows progress while one runs, and it hops when one starts. Click it for the session's list: click a finished one to open it, the magnifier shows it in Finder, `×` cancels a running one, and Clear empties the list (the files stay). `abromux browser downloads` and `wait-download` do the same from the CLI.
+- **Popovers over pages**: the command palette, ⌘I, the update popover, the sidebar's right-click menus, address-bar suggestions, the downloads list and dragging a tab all draw over a browser pane. Native webviews draw above everything the app draws, so while one of these is open the page is swapped for a bitmap of itself, taken just before; it comes back live when the popover closes.
 - **Workspaces** sit in a left sidebar, cmux style. Each entry shows the name, the focused tab's title, the git branch and the cwd, plus whatever scripts report through the CLI: status pills (`set-status`), a progress bar (`set-progress`) and the newest `log` line.
 - **Coding agents** (Claude Code, Codex, Gemini CLI, Droid, Cursor CLI, OpenCode and Pi) show up in the sidebar once you've run `abromux hooks install`: a "Running" pill while the agent works and "Needs input" when it asks for permission (Cursor's hooks can't say when it asks). When it asks, or finishes a turn, its terminal gets a notification ("Codex: Asks to run …", "Claude Code: <the start of its reply>"). Their tabs show the agent's logo (Claude Code and Codex) or a robot.
 - **Notifications** come from terminal programs (OSC 9, OSC 99 and OSC 777, as Claude Code, Codex and others send them), from the bell, and from `abromux notify`. One you aren't looking at rings its pane, puts a dot on its tab and on its workspace, shows its text under the workspace in the sidebar, counts on the dock icon, and, while AbroMux is in the background, shows a macOS banner that takes you to it when clicked (banners need AbroMux.app; a `cargo run` build has the rest). It's read once you look at that terminal. ⌘I lists them all; ⌘⇧U jumps to the newest unread one. ⌥⌘U marks the terminal in front of you unread (or read), and ⌃⌘U sends its notification to the back of the queue and jumps to the next one, to work through a pile one at a time. A bell in the macOS menu bar shows the unread count and lists them. [Notification hooks](#notifications) can filter or change each one.
@@ -457,7 +459,25 @@ abromux browser get text '#result'
 abromux browser screenshot page.png
 ```
 
-There are also `dblclick`, `hover`, `focus`, `check`/`uncheck`, `type`, `press`, `select`, `scroll`, `get`, `is`, `find` (by role, text, label, placeholder, alt, title or test id) and `wait` for selectors, URLs and load states. The events are synthesized in the page with JavaScript, so sites that only react to real input won't respond to them.
+There are also `dblclick`, `hover`, `focus`, `check`/`uncheck`, `type`, `press`, `keydown`/`keyup`, `select`, `scroll`, `get`, `is`, `find` (by role, text, label, placeholder, alt, title or test id) and `wait` for selectors, URLs and load states. The events are synthesized in the page with JavaScript, so sites that only react to real input won't respond to them.
+
+More for debugging and sessions:
+
+```bash
+abromux browser console --level error          # what the page logged (also --filter, --limit, --clear)
+abromux browser errors                         # uncaught exceptions and unhandled rejections
+abromux browser network --filter /api/         # fetch/XHR with status and time, plus the page's other loads
+abromux browser frame e7                       # later commands run in that iframe (cross-origin too); `frame main` goes back
+abromux browser tab new https://example.com    # also `tab` (list), `tab switch 1`, `tab close`
+abromux browser cookies                        # the page's cookies, HttpOnly too (--all: every site)
+abromux browser cookies set theme dark --path /
+abromux browser storage local set token abc    # local or session: get [key], set, remove, clear
+abromux browser state save auth.json           # cookies + localStorage, Playwright's storageState format
+abromux browser state load auth.json
+abromux browser wait-download --path ./out/    # the running download, else the next one; prints its path
+```
+
+A page script in every frame (`src/browser_page.js`) records console messages, errors and requests (the last 1000 of each per pane, kept across navigations), and gives each frame a token. `frame` asks the iframe for its token with a `postMessage`, which works across origins, and later scripts run there through WebKit's `evaluateJavaScript:inFrame:`. `network` sees `fetch` and XHR with their status, and the page's other loads (documents, scripts, styles, images) through the Resource Timing API, whose status WebKit may leave blank. Cookies go through the webview's `WKHTTPCookieStore`. `state load` restores localStorage only for the origin the page is on, so open the site first.
 
 Coding agents running in abromux can learn this CLI from two agent skills in [`skills/`](../skills): `abromux` (splits, tabs, running and reading other terminals, sidebar status and notifications) and `abromux-browser` (the browser automation above). `abromux skills install` copies them into `~/.claude/skills` (or `$CLAUDE_CONFIG_DIR`) and, if Codex is set up, `~/.codex/skills` (or `$CODEX_HOME`). They're built into the binary, so rerun it after updating abromux; `abromux skills uninstall` removes them, and `abromux skills show [name]` prints one.
 
@@ -567,5 +587,5 @@ History lives in `<git common dir>/abromux-perf/history.jsonl`, outside the tree
 
 ## Known POC limits
 
-- Native webviews always draw above GPUI content. Hidden tabs and workspaces are hidden explicitly, but popovers can't overlap a visible browser.
-- While a webview has keyboard focus, it gets the keystrokes, so ⌘-shortcuts may not reach the app.
+- Native webviews always draw above GPUI content. Hidden tabs and workspaces are hidden explicitly, and the app's popovers swap a page they cover for a still bitmap of it (see "Popovers over pages"); a popover the app doesn't know about (a new one) would still draw under the page.
+- While a page has keyboard focus, keys with ⌘ or ⌃ go to the app first (`abx_page_shortcuts_install` in `src/browser_native.m`): a shortcut the app handles doesn't reach the page, so a site can't use ⌘T, ⌘W, ⌘L and the like for itself. Other ⌘ keys (⌘C, ⌘A, ⌘B in an editor) reach the page as usual.

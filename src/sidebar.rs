@@ -1051,6 +1051,7 @@ impl AbroMux {
                     .child(icon("plus").size(px(11. * z)).text_color(rgb(MUTED))),
             )
             .context_menu(move |menu, window, cx| {
+                crate::browser::track_menu(window, cx);
                 Self::group_menu(this.clone(), gid, menu, window, cx)
             })
             .with_own_id(("group-menu", gid))
@@ -1460,6 +1461,7 @@ impl AbroMux {
                 }))
             })
             .context_menu(move |menu, window, cx| {
+                crate::browser::track_menu(window, cx);
                 Self::workspace_menu(this.clone(), id, menu, window, cx)
             })
             .with_own_id(("ws-menu", id))
