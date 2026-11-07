@@ -45,6 +45,34 @@ pub trait Tab: Render + Focusable {
 pub struct Host {
     /// Open a web page in abromux's browser, beside the focused tab.
     pub open_url: fn(&str, &mut Window, &mut App),
+    /// Run something in a terminal, see [`Run`].
+    pub run_terminal: fn(Run, &mut Window, &mut App),
+}
+
+/// A command for a terminal: started in a new one beside the tab `beside`
+/// (in the pane next to its own, else a new split), or typed into the
+/// terminal `send_to` (a ref like `surface:3`).
+#[derive(Clone, Debug, Default)]
+pub struct Run {
+    pub beside: Option<EntityId>,
+    pub cwd: Option<String>,
+    pub command: Option<String>,
+    pub send_to: Option<String>,
+    /// For `send_to`: the text, entered.
+    pub text: Option<String>,
+    /// The new terminal's tab name.
+    pub title: Option<String>,
+}
+
+/// Run `run` in a terminal of abromux's. Without abromux (tests) it fails.
+pub fn run_terminal(run: Run, window: &mut Window, cx: &mut App) -> Result<(), String> {
+    match cx.try_global::<Host>().map(|h| h.run_terminal) {
+        Some(f) => {
+            f(run, window, cx);
+            Ok(())
+        }
+        None => Err("no abromux to run it in".into()),
+    }
 }
 
 impl gpui::Global for Host {}

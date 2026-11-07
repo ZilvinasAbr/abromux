@@ -225,6 +225,8 @@ impl GitLabView {
         // In a side-by-side diff's half-width thread GitLab leaves out the
         // @username and the badges, keeping the header one line.
         let compact = self.loc.parallel && self.loc.section == crate::Section::Changes;
+        // A local diff's authors have no roles in it.
+        let local = self.is_local();
         // Who and when wrap within their part; the badges and buttons keep
         // to the right of the first line.
         let who = div()
@@ -242,8 +244,8 @@ impl GitLabView {
             .items_start()
             .gap_1()
             .child(who)
-            .when(!compact && author.id == mr_author, |d| d.child(badge("Author", c(0xa4a3a8), c(BG)).flex_none()))
-            .when_some(self.review.ready().and_then(|r| r.roles.get(&author.id).copied()).filter(|_| !compact), |d, role| {
+            .when(!compact && !local && author.id == mr_author, |d| d.child(badge("Author", c(0xa4a3a8), c(BG)).flex_none()))
+            .when_some(self.review.ready().and_then(|r| r.roles.get(&author.id).copied()).filter(|_| !compact && !local), |d, role| {
                 d.child(badge(role, c(0xa4a3a8), c(BG)).flex_none())
             })
             .children(actions.map(|a| a.flex_none().mt(px(-4.))))
@@ -290,10 +292,12 @@ impl GitLabView {
                         .on_click(cx.listener(move |v, _, window, cx| v.open_reply(&id, window, cx))),
                 )
             })
-            .child(
-                button(format!("note-link-{}", d.id), "link", c(MUTED), "Copy link")
-                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))),
-            )
+            .when(self.has_web(), |el| {
+                el.child(
+                    button(format!("note-link-{}", d.id), "link", c(MUTED), "Copy link")
+                        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))),
+                )
+            })
     }
 
     /// A note: avatar (unless the timeline shows it already), header, body.

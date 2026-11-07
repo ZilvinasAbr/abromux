@@ -131,6 +131,7 @@ impl GitLabView {
                         Ok(()) => {
                             done(v, window, cx);
                             v.refresh_quietly(cx);
+                            v.start_agents(window, cx);
                         }
                         Err(e) => v.write_error = Some(format!("{e:#}")),
                     }

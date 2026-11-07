@@ -62,6 +62,16 @@ Commands:
   list-pane-surfaces [--workspace <ref>] [--pane <ref>]
   new-surface [--type <terminal|browser>] [--pane <ref>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>]
   gitlab [<merge request URL>] [--pane <ref>] [--focus <true|false>]   (a GitLab review tab; no URL: the list)
+  diff [<X..Y|X...Y|X>] [--cwd <dir>] [--title <text>] [--agent <command>] [--send-here | --send-to <surface>]
+       [--direction <dir> | --pane <ref>] [--focus <true|false>]
+                                                             (any git diff in the GitLab tab, beside this terminal;
+                                                             no range: uncommitted changes, X: X to the working tree.
+                                                             Each comment starts --agent (default claude, or
+                                                             $ABROMUX_DIFF_AGENT) in a terminal beside it, or with
+                                                             --send-here/--send-to goes to that agent instead)
+  diff list                                                  (local diff reviews, newest first)
+  diff threads <id> [--unresolved]                           (a review's comment threads)
+  diff reply <id> <thread> [--resolve] [--as <name>] [<text>]   (answer in a thread; no text: stdin)
   close-surface [--surface <ref>] [--workspace <ref>]
   focus-surface --surface <ref>
   rename-tab [--surface <ref>] [--workspace <ref>] [<title>]  (no title: back to the program's own)
@@ -152,6 +162,9 @@ Commands:
 /// Flags that take no value.
 const SWITCHES: &[&str] = &[
     "json",
+    "resolve",
+    "send-here",
+    "unresolved",
     "scrollback",
     "all",
     "help",
@@ -234,6 +247,136 @@ pub fn run(argv: Vec<String>) -> i32 {
         Ok(()) => 0,
         Err(e) => fail(e),
     }
+}
+
+/// `abromux diff …`: any git diff reviewed in the GitLab tab
+/// (`abromux_gitlab::local`). `list`, `threads` and `reply` work on files
+/// only, so an agent can answer without the app.
+fn diff_cmd(mut pos: Vec<String>, opts: Map<String, Value>, as_json: bool) -> Result<(), String> {
+    use abromux_gitlab::local;
+    local::init(crate::channel::support_dir().join("local-diffs"));
+    let text = |k: &str, opts: &Map<String, Value>| opts.get(k).and_then(Value::as_str).map(str::to_string);
+    let e = |e: anyhow::Error| format!("{e:#}");
+    match pos.first().map(String::as_str) {
+        Some("list" | "ls") => {
+            let all = local::all();
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&all).unwrap_or_default());
+                return Ok(());
+            }
+            if all.is_empty() {
+                println!("No local diff reviews (open one with `abromux diff`).");
+            }
+            for s in all {
+                let open = s.threads.iter().filter(|t| !t.resolved()).count();
+                println!("{}  {}  {}  ({} threads, {open} open)", s.id, s.repo, s.describe(), s.threads.len());
+            }
+            return Ok(());
+        }
+        Some("threads") => {
+            let id = local::find(pos.get(1).ok_or("diff threads: missing <id>")?).map_err(e)?;
+            let s = local::load(&id).map_err(e)?;
+            let unresolved = opts.contains_key("unresolved");
+            let threads: Vec<&local::Thread> = s.threads.iter().filter(|t| !unresolved || !t.resolved()).collect();
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&threads).unwrap_or_default());
+                return Ok(());
+            }
+            for t in threads {
+                let at = t.position().map_or("(the whole diff)".to_string(), |p| {
+                    let line = p.new_line.map_or_else(|| format!("old {}", p.old_line.unwrap_or(0)), |n| n.to_string());
+                    format!("{}:{line}", p.path())
+                });
+                println!("{}  {}  {at}", t.id, if t.resolved() { "resolved" } else { "open" });
+                for n in &t.notes {
+                    let mut lines = n.body.lines();
+                    println!("  {}: {}", n.author.name, lines.next().unwrap_or_default());
+                    for l in lines {
+                        println!("    {l}");
+                    }
+                }
+            }
+            return Ok(());
+        }
+        Some("reply") => {
+            let id = local::find(pos.get(1).ok_or("diff reply: missing <id>")?).map_err(e)?;
+            let thread = pos.get(2).ok_or("diff reply: missing <thread>")?.clone();
+            let mut body = pos[3..].join(" ");
+            if body.is_empty() && !std::io::stdin().is_terminal() {
+                use std::io::Read as _;
+                std::io::stdin().read_to_string(&mut body).map_err(|e| e.to_string())?;
+            }
+            let resolve = opts.contains_key("resolve");
+            if body.trim().is_empty() && !resolve {
+                return Err("diff reply: give the answer (as text, or on stdin)".into());
+            }
+            let t = local::reply(&id, &thread, &body, resolve, text("as", &opts).as_deref()).map_err(e)?;
+            println!("OK {id} {t}{}", if resolve { " resolved" } else { "" });
+            return Ok(());
+        }
+        _ => {}
+    }
+    // Open one: the range, from here (or --cwd).
+    let spec = if pos.is_empty() { String::new() } else { pos.remove(0) };
+    let cwd = match text("cwd", &opts) {
+        Some(c) => std::path::PathBuf::from(c),
+        None => std::env::current_dir().map_err(|e| e.to_string())?,
+    };
+    let caller = opts.get("caller").cloned();
+    let send_to = match (opts.contains_key("send_here"), text("send_to", &opts)) {
+        (_, Some(t)) => Some(Some(t)),
+        (true, None) => Some(Some(
+            caller.as_ref().and_then(|c| c["surface"].as_str()).map(str::to_string).ok_or("--send-here: not in an abromux terminal")?,
+        )),
+        // Asked again without either: comments start agents again.
+        (false, None) => Some(None),
+    };
+    let open = local::Open { title: text("title", &opts), agent: text("agent", &opts), send_to };
+    let id = local::create(&cwd, &spec, open).map_err(e)?;
+    let s = local::load(&id).map_err(e)?;
+    let host = local::host_of(&id);
+    let focus = opts.get("focus").cloned().unwrap_or(json!(true));
+    // Already open: that tab, fetched again.
+    let tree = ipc::call("workspace.tree", json!({ "all": true })).map_err(|e| e.to_string())?;
+    let existing = tree.as_array().into_iter().flatten().flat_map(|w| w["panes"].as_array().into_iter().flatten()).find_map(|p| {
+        p["surfaces"].as_array()?.iter().find(|t| t["state"]["local"] == json!(id)).and_then(|t| t["ref"].as_str().map(str::to_string))
+    });
+    let surface = match existing {
+        Some(r) => {
+            if focus != json!(false) {
+                ipc::call("surface.focus", json!({ "surface": r })).map_err(|e| e.to_string())?;
+            }
+            ipc::call("surface.plugin", json!({ "surface": r, "command": "refresh" })).map_err(|e| e.to_string())?;
+            r
+        }
+        None => {
+            let mut p = json!({
+                "type": "gitlab", "host": host, "project": local::PROJECT, "iid": local::IID,
+                "section": "changes", "focus": focus,
+            });
+            if let Some(c) = caller {
+                p["caller"] = c;
+            }
+            let v = match text("pane", &opts) {
+                Some(pane) => {
+                    p["pane"] = json!(pane);
+                    ipc::call("surface.create", p).map_err(|e| e.to_string())?
+                }
+                None => {
+                    p["direction"] = json!(text("direction", &opts).unwrap_or_else(|| "right".into()));
+                    ipc::call("surface.split", p).map_err(|e| e.to_string())?["surface"].clone()
+                }
+            };
+            v["ref"].as_str().unwrap_or_default().to_string()
+        }
+    };
+    if as_json {
+        println!("{}", json!({ "id": id, "surface": surface, "repo": s.repo, "diff": s.describe(), "agent": s.agent, "send_to": s.send_to }));
+    } else {
+        let to = s.send_to.as_ref().map_or_else(|| format!("start `{}`", s.agent), |t| format!("go to {t}"));
+        println!("OK {surface} {id}  {} in {}  (comments {to})", s.describe(), s.repo);
+    }
+    Ok(())
 }
 
 /// `abromux folder …`: workspace folders (⇧⌘I). Works on files and git only,
@@ -438,6 +581,7 @@ fn dispatch(
             return Ok(());
         }
         "folder" => return folder_cmd(pos, &opts),
+        "diff" => return diff_cmd(pos, opts, as_json),
         "ping" => ("system.ping", |v| v.as_str().unwrap_or_default().into()),
         "identify" => ("system.identify", pretty),
         "list-workspaces" => ("workspace.list", |v| lines(v, workspace_line)),

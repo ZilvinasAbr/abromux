@@ -199,6 +199,8 @@ pub struct GitLabView {
     refreshing: bool,
     _sign_in_task: Option<Task<()>>,
     _poll: Task<()>,
+    /// A local diff (`local.rs`): its store and the repository watched.
+    _local_watch: Option<Task<()>>,
 }
 
 impl GitLabView {
@@ -315,6 +317,7 @@ impl GitLabView {
             refreshing: false,
             _sign_in_task: None,
             _poll: Self::poll(cx),
+            _local_watch: None,
         };
         // A newer load of what's showing, from another tab or abromux's poller.
         cx.observe_global::<crate::cache::Shared>(|v, cx| v.adopt_shared(cx)).detach();
@@ -329,6 +332,18 @@ impl GitLabView {
     /// Use the stored token for the host, or show the sign-in form.
     fn connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let host = self.host();
+        // A local diff: answered from git, no sign-in.
+        if let Some(id) = crate::local::id_of(&host) {
+            self.client = Some(Client::new(&host, "", Arc::new(crate::local::LocalGitLab::new(id))));
+            self.sign_in = None;
+            self._local_watch = Some(Self::watch_local(id.to_string(), cx));
+            self.load_list(cx);
+            if let (Some(p), Some(iid)) = (self.loc.project, self.loc.iid) {
+                self.load_review(Target::Id(p, iid), cx);
+            }
+            return;
+        }
+        self._local_watch = None;
         match auth::token(&host) {
             Some(token) => {
                 self.client = Some(Client::new(&host, &token, Arc::new(Curl)));
@@ -607,7 +622,9 @@ impl GitLabView {
                 self.review_serial = serial;
                 self.review = Load::Ready(r);
                 self.rebuild_rows(cx);
-            } else if let Target::Id(p, iid) = target {
+            } else if let Target::Id(p, iid) = target
+                && !crate::local::is_local(&host)
+            {
                 self.replay(host.clone(), p, iid, cx);
             }
         }
@@ -628,6 +645,10 @@ impl GitLabView {
                         Target::Id(p, iid) => (p, iid),
                         Target::Path(path, iid) => (c.project_id(&path)?, iid),
                     };
+                    // A local diff isn't kept on disk: git has it.
+                    if crate::local::is_local(c.host()) {
+                        return crate::load_review(&c, p, iid).map(|r| (r, 0));
+                    }
                     crate::cache::fetch(&c, p, iid)
                 })
                 .await;
@@ -1026,6 +1047,70 @@ impl GitLabView {
         self.loc.iid.is_some()
     }
 
+    /// The local review showing, by id, if it's one.
+    pub fn local_id(&self) -> Option<String> {
+        crate::local::id_of(self.loc.host()).map(str::to_string)
+    }
+
+    /// Showing a local diff (`abromux diff`): no GitLab behind it, so no
+    /// state, pipelines, approvals, merging, reactions or sidebar.
+    pub(crate) fn is_local(&self) -> bool {
+        crate::local::is_local(self.loc.host())
+    }
+
+    /// A local diff's store and repository, checked every second and a
+    /// half: an agent's reply or edit shows without a refresh.
+    fn watch_local(id: String, cx: &mut Context<Self>) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            let mut last: Option<String> = None;
+            loop {
+                cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
+                let i = id.clone();
+                let sig = cx.background_spawn(async move { crate::local::signature(&i) }).await;
+                let changed = last.as_ref().is_some_and(|l| *l != sig);
+                last = Some(sig);
+                let alive = this.update(cx, |v, cx| {
+                    if changed && v.busy.is_none() {
+                        v.refresh_quietly(cx);
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+    }
+
+    /// The agents a local diff's comments asked for (`local::AgentJob`):
+    /// each started in a terminal beside the tab, or told in the terminal
+    /// the review sends to.
+    pub(crate) fn start_agents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.local_id() else { return };
+        let exe = std::env::current_exe().map_or_else(|_| "abromux".to_string(), |p| p.to_string_lossy().into_owned());
+        for job in crate::local::take_jobs(&id) {
+            let run = crate::local::launch(&job, &exe).map_err(|e| format!("{e:#}")).and_then(|l| {
+                let run = abromux_plugin::Run {
+                    beside: Some(cx.entity_id()),
+                    cwd: Some(l.cwd),
+                    command: l.command,
+                    send_to: l.send_to,
+                    text: l.text,
+                    title: Some(l.title),
+                };
+                abromux_plugin::run_terminal(run, window, cx)
+            });
+            if let Err(e) = run {
+                self.write_error = Some(format!("Couldn't start the agent: {e}"));
+            }
+        }
+    }
+
+    /// Whether there's a GitLab page to link to: not for a local diff
+    /// (`abromux diff`), whose merge request has no web URL.
+    pub(crate) fn has_web(&self) -> bool {
+        !self.is_local() && self.review.ready().is_none_or(|r| !r.mr.web_url.is_empty())
+    }
+
     /// GitLab's own page for what the tab shows.
     fn web_url(&self) -> String {
         match (self.review.ready(), self.in_mr()) {
@@ -1047,7 +1132,7 @@ impl GitLabView {
 
     /// Wide enough for the Overview's sidebar.
     pub(crate) fn sidebar_fits(&self) -> bool {
-        self.width.get() >= px(1000.)
+        !self.is_local() && self.width.get() >= px(1000.)
     }
 
     /// The review the Changes tab shows: the latest version's, or the
@@ -1130,6 +1215,12 @@ impl Focusable for GitLabView {
 
 impl Tab for GitLabView {
     fn title(&self, _: &App) -> String {
+        if crate::local::is_local(self.loc.host()) {
+            return match &self.review {
+                Load::Ready(r) => format!("Diff: {}", r.mr.title),
+                _ => "Diff".into(),
+            };
+        }
         match (&self.review, self.loc.iid) {
             (Load::Ready(r), Some(_)) => format!("!{} {}", r.mr.iid, r.mr.title),
             (_, Some(iid)) => format!("!{iid}"),
@@ -1138,7 +1229,7 @@ impl Tab for GitLabView {
     }
 
     fn icon(&self) -> &'static str {
-        "git-pull-request"
+        if crate::local::is_local(self.loc.host()) { "git-branch" } else { "git-pull-request" }
     }
 
     fn save(&self, _: &App) -> Value {
@@ -1168,6 +1259,7 @@ impl Tab for GitLabView {
         json!({
             "location": self.save(cx),
             "host": self.host(),
+            "local": self.local_id(),
             "page": page,
             "me": self.me.as_ref().map(|u| &u.username),
             "sign_in_error": self.sign_in_error,
@@ -1511,13 +1603,14 @@ impl GitLabView {
             .text_size(px(13.));
         // The host first, unless the pane is narrow: it says least.
         let mut parts: Vec<String> = vec![];
-        if self.width.get() >= px(800.) || !self.in_mr() {
+        if !self.is_local() && (self.width.get() >= px(800.) || !self.in_mr()) {
             let host = self.host();
             parts.push(host.trim_start_matches("https://").trim_start_matches("http://").to_string());
         }
         if let (Some(r), true) = (self.review.ready(), self.in_mr()) {
             let full = &r.mr.references.full;
             let project = full.rsplit_once('!').map_or(full.as_str(), |(p, _)| p);
+            let project = if self.is_local() { project.trim_start_matches("local/") } else { project };
             parts.extend(project.split('/').map(str::to_string));
         } else if let Some(b) = &self.loc.browse {
             parts.extend(b.path.split('/').map(str::to_string));
@@ -1528,16 +1621,24 @@ impl GitLabView {
             }
             crumbs = crumbs.child(div().when(i == 0, |d| d.text_color(c(MUTED))).child(part));
         }
-        crumbs = crumbs.child(sep()).child(
-            div()
-                .id("gl-crumb-mrs")
-                .cursor_pointer()
-                .hover(|s| s.underline())
-                .child(if self.showing_projects() { "Projects" } else { "Merge requests" })
-                .on_click(cx.listener(|v, _, _, cx| v.back(cx))),
-        );
-        if let Some(iid) = self.loc.iid {
-            crumbs = crumbs.child(sep()).child(div().font_weight(FontWeight::SEMIBOLD).child(format!("!{iid}")));
+        // A local diff has no list or number: what it compares instead.
+        if self.is_local() {
+            if let Some(r) = self.review.ready() {
+                let range = format!("{} → {}", r.mr.target_branch, r.mr.source_branch);
+                crumbs = crumbs.child(sep()).child(div().font_weight(FontWeight::SEMIBOLD).child(range));
+            }
+        } else {
+            crumbs = crumbs.child(sep()).child(
+                div()
+                    .id("gl-crumb-mrs")
+                    .cursor_pointer()
+                    .hover(|s| s.underline())
+                    .child(if self.showing_projects() { "Projects" } else { "Merge requests" })
+                    .on_click(cx.listener(|v, _, _, cx| v.back(cx))),
+            );
+            if let Some(iid) = self.loc.iid {
+                crumbs = crumbs.child(sep()).child(div().font_weight(FontWeight::SEMIBOLD).child(format!("!{iid}")));
+            }
         }
         div()
             .flex()
@@ -1552,7 +1653,7 @@ impl GitLabView {
                     d.child(div().flex_none().text_color(c(MUTED)).child(format!("@{}", me.username)))
                 })
             })
-            .child(
+            .when(self.has_web(), |d| d.child(
                 // Just the icon in a narrow pane.
                 // This page's link on GitLab, to paste anywhere. (Opening it
                 // here would only come back to this tab.)
@@ -1573,7 +1674,7 @@ impl GitLabView {
                         }));
                         cx.notify();
                     })),
-            )
+            ))
             .child(button("gl-refresh", "Refresh").flex_none().on_click(cx.listener(|v, _, _, cx| v.refresh(cx))))
     }
 

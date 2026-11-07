@@ -1331,7 +1331,7 @@ impl GitLabView {
                 // Where GitLab can't show it here, its file page can.
                 let blob = matches!(f.body(), Body::TooLarge | Body::Collapsed | Body::Unchanged)
                     .then(|| {
-                        let project = r.mr.web_url.split("/-/").next()?;
+                        let project = r.mr.web_url.split("/-/").next().filter(|p| !p.is_empty())?;
                         let sha = r.mr.diff_refs.as_ref()?.head_sha.clone();
                         Some(format!("{project}/-/blob/{sha}/{}", f.meta.new_path))
                     })
@@ -1745,7 +1745,7 @@ impl GitLabView {
         if f.meta.deleted_file {
             return None;
         }
-        let project = r.mr.web_url.split("/-/").next()?.to_string();
+        let project = r.mr.web_url.split("/-/").next().filter(|p| !p.is_empty())?.to_string();
         let sha = r.mr.diff_refs.as_ref()?.head_sha.clone();
         let short = sha.get(..8).unwrap_or(&sha).to_string();
         Some((format!("{project}/-/blob/{sha}/{}", f.meta.new_path), short))
