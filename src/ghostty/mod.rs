@@ -316,10 +316,8 @@ unsafe extern "C" fn on_clipboard_write(
     w: *const GhosttyClipboardWrite,
 ) {
     let ud = unsafe { &mut *(ud as *mut Userdata) };
+    // A frozen layout since libghostty-vt 1.0: no size field to check.
     let w = unsafe { &*w };
-    if w.size < mem::size_of::<GhosttyClipboardWrite>() {
-        return; // an older layout: returning without a reply denies it
-    }
     let result = if !ud.clipboard_write {
         GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED
     } else if w.contents_len == 0 {
