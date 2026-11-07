@@ -10,7 +10,7 @@ use crate::{
     style::*,
     time,
     types::MergeRequest,
-    view::{GitLabView, Load},
+    view::{Failure, GitLabView, Load},
 };
 use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -80,7 +80,7 @@ impl GitLabView {
             this.update(cx, |v, cx| {
                 let Some(s) = v.search.as_mut() else { return };
                 if s.found.as_ref().is_some_and(|(asked, _)| *asked == query) {
-                    let got = got.map_err(|e| format!("{e:#}"));
+                    let got = got.map_err(|e| Failure::of(&e));
                     if let Ok(mrs) = &got {
                         v.avatars.want(mrs.iter().map(|m| &m.author), cx, |v| &mut v.avatars);
                     }
@@ -130,7 +130,7 @@ impl GitLabView {
         let (heading, status): (&str, Option<String>) = match &s.found {
             None if rows.is_empty() => ("", Some("Type to search merge requests.".into())),
             None => ("Merge requests in this list", None),
-            Some((_, Load::Failed(e))) => ("", Some(e.clone())),
+            Some((_, Load::Failed(e))) => ("", Some(e.text.clone())),
             Some((_, Load::Ready(m))) if m.is_empty() => ("", Some("No merge requests found.".into())),
             Some((_, Load::Ready(_))) => ("Merge requests", None),
             Some(_) => ("", Some("Searching…".into())),

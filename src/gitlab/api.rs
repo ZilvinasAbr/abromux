@@ -5,7 +5,7 @@
 
 use super::model::{Light, MrKey};
 use super::throttle::Throttle;
-use abromux_gitlab::api::{Client, Response, Transport};
+use abromux_gitlab::api::{ApiError, Client, Response, Transport};
 use serde_json::{Value, json};
 use std::{
     sync::{Arc, Mutex},
@@ -34,22 +34,38 @@ impl std::fmt::Display for Error {
 }
 
 impl Error {
-    /// What the plugin's client said, as one of these.
+    /// What the plugin's client said, as one of these: by the status in its
+    /// [`ApiError`], or the throttle's [`Paused`].
     pub fn of(e: &anyhow::Error) -> Error {
-        let m = format!("{e:#}");
-        if m.contains("(401)") || m.contains("(403)") {
-            Error::Auth(m)
-        } else if m.contains("(404)") {
-            Error::NotFound
-        } else if m.contains("answered 429") || m.contains(PAUSED) {
-            Error::Throttled
-        } else {
-            Error::Other(m)
+        if e.chain().any(|c| c.is::<Paused>()) {
+            return Error::Throttled;
+        }
+        Error::of_status(ApiError::status_of(e), format!("{e:#}"))
+    }
+
+    /// An answer's `status` (None: no answer at all), with `message` for
+    /// the kinds that show one.
+    fn of_status(status: Option<u16>, message: String) -> Error {
+        match status {
+            Some(401 | 403) => Error::Auth(message),
+            Some(404) => Error::NotFound,
+            Some(429) => Error::Throttled,
+            _ => Error::Other(message),
         }
     }
 }
 
-const PAUSED: &str = "paused for GitLab's rate limit";
+/// A request not sent because the throttle is paused.
+#[derive(Debug)]
+struct Paused;
+
+impl std::fmt::Display for Paused {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("paused for GitLab's rate limit")
+    }
+}
+
+impl std::error::Error for Paused {}
 
 /// A transport that keeps to the throttle.
 pub struct Paced {
@@ -60,7 +76,7 @@ pub struct Paced {
 impl Paced {
     fn check(&self) -> anyhow::Result<()> {
         if self.throttle.lock().unwrap().paused(Instant::now()).is_some() {
-            anyhow::bail!("{PAUSED}");
+            return Err(Paused.into());
         }
         Ok(())
     }
@@ -87,8 +103,8 @@ impl Transport for Paced {
     }
 
     fn get_many(&self, urls: &[String], token: &str) -> Vec<anyhow::Result<Response>> {
-        if let Err(e) = self.check() {
-            return urls.iter().map(|_| Err(anyhow::anyhow!("{e}"))).collect();
+        if self.check().is_err() {
+            return urls.iter().map(|_| Err(Paused.into())).collect();
         }
         let got = self.inner.get_many(urls, token);
         for r in &got {
@@ -110,18 +126,13 @@ pub fn graphql(c: &Client, query: &str) -> Result<Value, Error> {
     let url = format!("{}/api/graphql", c.host());
     let body = json!({ "query": query }).to_string();
     let r = c.transport().send("POST", &url, c.token(), body.as_bytes()).map_err(|e| Error::of(&e))?;
-    match r.status {
-        200..=299 => {}
-        401 => return Err(Error::Auth(format!("{} didn't accept the token", c.host()))),
-        403 => return Err(Error::Auth("the token can't read that (needs read_api)".into())),
-        404 => return Err(Error::NotFound),
-        429 => return Err(Error::Throttled),
-        s => {
-            return Err(Error::Other(format!(
-                "GitLab answered {s}: {}",
-                String::from_utf8_lossy(&r.body).chars().take(200).collect::<String>()
-            )));
-        }
+    if !(200..=299).contains(&r.status) {
+        let message = match r.status {
+            401 => format!("{} didn't accept the token", c.host()),
+            403 => "the token can't read that (needs read_api)".into(),
+            s => format!("GitLab answered {s}: {}", String::from_utf8_lossy(&r.body).chars().take(200).collect::<String>()),
+        };
+        return Err(Error::of_status(Some(r.status), message));
     }
     let v: Value = serde_json::from_slice(&r.body)
         .map_err(|e| Error::Other(format!("GitLab sent something that isn't JSON: {e}")))?;
@@ -325,4 +336,30 @@ mod tests {
         assert_eq!(c.branches[0].1[0].0, MrKey::new("g/p", 3));
     }
 
+    #[test]
+    fn errors_by_status_not_wording() {
+        let api = |status| abromux_gitlab_status(status).context("while checking");
+        assert!(matches!(Error::of(&api(401)), Error::Auth(_)));
+        assert!(matches!(Error::of(&api(403)), Error::Auth(_)));
+        assert_eq!(Error::of(&api(404)), Error::NotFound);
+        assert_eq!(Error::of(&api(429)), Error::Throttled);
+        assert!(matches!(Error::of(&api(500)), Error::Other(_)));
+        assert_eq!(Error::of(&anyhow::Error::from(Paused)), Error::Throttled);
+        // A message that merely mentions a status is not that status.
+        assert!(matches!(Error::of(&anyhow::anyhow!("curl: (401) something")), Error::Other(_)));
+    }
+
+    /// The plugin client's error for `status`, as its `check` makes it.
+    fn abromux_gitlab_status(status: u16) -> anyhow::Error {
+        let t = Arc::new(Canned(status));
+        Client::new("http://gl.test", "t", t).current_user().unwrap_err()
+    }
+
+    struct Canned(u16);
+
+    impl Transport for Canned {
+        fn get(&self, _: &str, _: &str) -> anyhow::Result<Response> {
+            Ok(Response { status: self.0, ..Default::default() })
+        }
+    }
 }

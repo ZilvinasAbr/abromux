@@ -8,7 +8,7 @@ use crate::{
     style::*,
     time,
     types::Project,
-    view::{GitLabView, Load},
+    view::{Failure, GitLabView, Load},
 };
 use gpui::{prelude::*, *};
 
@@ -34,7 +34,7 @@ impl GitLabView {
                 .update(cx, |v, cx| {
                     v.projects = match got {
                         Ok(ps) => Load::Ready(std::rc::Rc::new(ps)),
-                        Err(e) => Load::Failed(format!("{e:#}")),
+                        Err(e) => Load::Failed(Failure::of(&e)),
                     };
                     cx.notify();
                 })
