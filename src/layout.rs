@@ -249,7 +249,7 @@ impl AbroMux {
         let root = match self.build_layout(layout, id, &dir, spec, &mut setup, &mut focus, window, cx) {
             Some(root) => root,
             None => {
-                let t = self.make_terminal(Some(dir.to_string_lossy().into_owned()), id, window, cx);
+                let t = self.make_terminal(id, crate::TerminalOpts::cwd(Some(dir.to_string_lossy().into_owned())), window, cx);
                 self.leaf_node(vec![t], 0).expect("one tab")
             }
         };
@@ -339,7 +339,7 @@ impl AbroMux {
                     .chain(&s.env)
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
-                let surface = self.make_terminal_with(cwd, ws, env, window, cx);
+                let surface = self.make_terminal(ws, crate::TerminalOpts { cwd, env, ..Default::default() }, window, cx);
                 if let Surface::Terminal(t) = &surface {
                     // The shell reads these once it starts.
                     let text: String = setup

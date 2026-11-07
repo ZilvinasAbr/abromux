@@ -565,8 +565,9 @@ impl AbroMux {
                 surface,
             } => {
                 let cwd = std::path::Path::new(&cwd).is_dir().then_some(cwd);
-                let attach = surface.zip(held.as_deref());
-                let s = self.make_terminal_full(cwd, ws, vec![], None, attach, window, cx);
+                let attach = surface.zip(held);
+                let opts = crate::TerminalOpts { cwd, attach, ..Default::default() };
+                let s = self.make_terminal(ws, opts, window, cx);
                 if let Surface::Terminal(t) = &s {
                     t.update(cx, |t, cx| {
                         if t.attached {
@@ -626,7 +627,7 @@ impl AbroMux {
                 // the pane, with a terminal that says why.
                 Err(e) => {
                     eprintln!("restoring a {plugin} tab: {e:#}");
-                    let s = self.make_terminal_full(None, ws, vec![], None, None, window, cx);
+                    let s = self.make_terminal(ws, crate::TerminalOpts::default(), window, cx);
                     (s, Some(format!("{plugin} (not restored)")))
                 }
             },

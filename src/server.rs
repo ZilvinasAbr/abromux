@@ -2458,7 +2458,7 @@ impl AbroMux {
                 let cwd = str_param(p, "cwd")
                     .map(String::from)
                     .or_else(|| self.workspaces[wi].cwd(cx));
-                let s = self.make_terminal(cwd, self.workspaces[wi].id, window, cx);
+                let s = self.make_terminal(self.workspaces[wi].id, crate::TerminalOpts::cwd(cwd), window, cx);
                 if let (Some(cmd), Surface::Terminal(t)) = (str_param(p, "command"), &s) {
                     t.update(cx, |t, _| t.send(format!("{cmd}\r").as_bytes()));
                 }

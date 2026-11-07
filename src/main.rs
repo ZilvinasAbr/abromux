@@ -261,6 +261,25 @@ impl AssetSource for Assets {
     }
 }
 
+/// How a new terminal starts: [`Default`] is a shell in the default folder.
+#[derive(Default)]
+struct TerminalOpts {
+    cwd: Option<String>,
+    /// Extra environment for the shell.
+    env: Vec<(String, String)>,
+    /// Run this instead of a shell session.
+    command: Option<String>,
+    /// Take back a terminal the holder kept from the last session: its
+    /// surface number and holder id.
+    attach: Option<(usize, String)>,
+}
+
+impl TerminalOpts {
+    fn cwd(cwd: Option<String>) -> Self {
+        TerminalOpts { cwd, ..Default::default() }
+    }
+}
+
 struct AbroMux {
     workspaces: Vec<Workspace>,
     active: usize,
@@ -631,59 +650,20 @@ impl AbroMux {
         r
     }
 
-    /// A shell in `cwd`; `ws` is the owning workspace's id (exported to the
-    /// shell so `abromux` run inside it targets its own workspace and surface).
+    /// A new terminal tab, as `opts` says; `ws` is the owning workspace's
+    /// id (exported to the shell so `abromux` run inside it targets its own
+    /// workspace and surface). A terminal the holder kept from the last
+    /// session (`opts.attach`) keeps its surface number, which its shell's
+    /// `ABROMUX_SURFACE_ID` still names.
     fn make_terminal(
         &mut self,
-        cwd: Option<String>,
         ws: usize,
+        opts: TerminalOpts,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Surface {
-        self.make_terminal_with(cwd, ws, vec![], window, cx)
-    }
-
-    /// `make_terminal` with extra environment variables for the shell.
-    fn make_terminal_with(
-        &mut self,
-        cwd: Option<String>,
-        ws: usize,
-        env: Vec<(String, String)>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Surface {
-        self.make_terminal_running(cwd, ws, env, None, window, cx)
-    }
-
-    /// `make_terminal_with` whose shell runs `command` instead of a session.
-    fn make_terminal_running(
-        &mut self,
-        cwd: Option<String>,
-        ws: usize,
-        env: Vec<(String, String)>,
-        command: Option<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Surface {
-        self.make_terminal_full(cwd, ws, env, command, None, window, cx)
-    }
-
-    /// `make_terminal_running` that can take back a terminal the holder kept
-    /// from the last session: `(its surface number, its holder id)`. The shell
-    /// kept the `ABROMUX_SURFACE_ID` it started with, so the surface keeps that
-    /// number.
-    #[allow(clippy::too_many_arguments)]
-    fn make_terminal_full(
-        &mut self,
-        cwd: Option<String>,
-        ws: usize,
-        mut env: Vec<(String, String)>,
-        command: Option<String>,
-        attach: Option<(usize, &str)>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Surface {
-        let surface = attach.map_or(self.next_surface + 1, |(n, _)| n);
+        let TerminalOpts { cwd, mut env, command, attach } = opts;
+        let surface = attach.as_ref().map_or(self.next_surface + 1, |(n, _)| *n);
         let home = self
             .workspaces
             .iter()
@@ -708,7 +688,8 @@ impl AbroMux {
                 path.to_string_lossy().into_owned(),
             ));
         }
-        let term = cx.new(|cx| TerminalView::new(cwd, env, command, attach.map(|(_, a)| a), cx));
+        let held = attach.as_ref().map(|(_, a)| a.as_str());
+        let term = cx.new(|cx| TerminalView::new(cwd, env, command, held, cx));
         // Its env names `surface` even when the shell is a new one; restore
         // reserved the numbers the last session used, so it's free.
         self.surface_refs.insert(term.entity_id(), surface);
@@ -746,7 +727,8 @@ impl AbroMux {
             match terminal_browser::command(url) {
                 Some(cmd) => {
                     let ws = self.workspaces.get(self.active).map_or(0, |w| w.id);
-                    let s = self.make_terminal_running(None, ws, vec![], Some(cmd), window, cx);
+                    let opts = TerminalOpts { command: Some(cmd), ..Default::default() };
+                    let s = self.make_terminal(ws, opts, window, cx);
                     if let Surface::Terminal(t) = &s {
                         terminal_browser::attach(t, url, cx);
                     }
@@ -1001,7 +983,7 @@ impl AbroMux {
             let ws = &self.workspaces[wi];
             let (pane, _, _) = ws.tab_position(id).unwrap();
             let cwd = ws.cwd(cx);
-            let term = self.make_terminal(cwd, ws.id, window, cx);
+            let term = self.make_terminal(ws.id, TerminalOpts::cwd(cwd), window, cx);
             self.add_tab_to(wi, pane, term, true, window, cx);
         }
         self.close_surface(id, window, cx)
@@ -1115,7 +1097,7 @@ impl AbroMux {
     ) -> usize {
         self.next_ws += 1;
         let id = self.next_ws;
-        let surface = self.make_terminal(cwd, id, window, cx);
+        let surface = self.make_terminal(id, TerminalOpts::cwd(cwd), window, cx);
         let pane = Pane {
             id: self.pane_id(),
             tabs: vec![surface],
@@ -1197,7 +1179,7 @@ impl AbroMux {
             .filter(|a| !a.trim().is_empty())
             .unwrap_or_else(|| "claude".into());
         let id = self.workspaces[wi].id;
-        let s = self.make_terminal(Some(home.to_string_lossy().into_owned()), id, window, cx);
+        let s = self.make_terminal(id, TerminalOpts::cwd(Some(home.to_string_lossy().into_owned())), window, cx);
         if let Surface::Terminal(t) = &s {
             t.update(cx, |t, _| t.send(format!("{} '{ask}'\r", agent.trim()).as_bytes()));
         }
@@ -1430,7 +1412,7 @@ impl AbroMux {
         } else {
             let cwd = self.focused_cwd(cx);
             let ws = self.ws().id;
-            self.make_terminal(cwd, ws, window, cx)
+            self.make_terminal(ws, TerminalOpts::cwd(cwd), window, cx)
         };
         let pane = self.ws().focused_pane;
         self.split_pane(self.active, pane, axis, false, surface, true, window, cx);
@@ -1729,7 +1711,7 @@ impl AbroMux {
             _ => {
                 let cwd = self.focused_cwd(cx);
                 let ws = self.ws().id;
-                let s = self.make_terminal(cwd, ws, window, cx);
+                let s = self.make_terminal(ws, TerminalOpts::cwd(cwd), window, cx);
                 let Surface::Terminal(t) = &s else { return };
                 let t = t.clone();
                 self.add_tab(s, window, cx);
@@ -2609,7 +2591,7 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &NewTerminal, window, cx| {
                 let cwd = this.focused_cwd(cx);
                 let ws = this.ws().id;
-                let s = this.make_terminal(cwd, ws, window, cx);
+                let s = this.make_terminal(ws, TerminalOpts::cwd(cwd), window, cx);
                 this.add_tab(s, window, cx)
             }))
             .on_action(cx.listener(|this, _: &NewBrowser, window, cx| {
