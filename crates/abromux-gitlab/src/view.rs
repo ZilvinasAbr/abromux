@@ -1052,6 +1052,12 @@ impl GitLabView {
         crate::local::id_of(self.loc.host()).map(str::to_string)
     }
 
+    /// Showing a local diff (`abromux diff`): no GitLab behind it, so no
+    /// state, pipelines, approvals, merging, reactions or sidebar.
+    pub(crate) fn is_local(&self) -> bool {
+        crate::local::is_local(self.loc.host())
+    }
+
     /// A local diff's store and repository, checked every second and a
     /// half: an agent's reply or edit shows without a refresh.
     fn watch_local(id: String, cx: &mut Context<Self>) -> Task<()> {
@@ -1102,7 +1108,7 @@ impl GitLabView {
     /// Whether there's a GitLab page to link to: not for a local diff
     /// (`abromux diff`), whose merge request has no web URL.
     pub(crate) fn has_web(&self) -> bool {
-        self.local_id().is_none() && self.review.ready().is_none_or(|r| !r.mr.web_url.is_empty())
+        !self.is_local() && self.review.ready().is_none_or(|r| !r.mr.web_url.is_empty())
     }
 
     /// GitLab's own page for what the tab shows.
@@ -1126,7 +1132,7 @@ impl GitLabView {
 
     /// Wide enough for the Overview's sidebar.
     pub(crate) fn sidebar_fits(&self) -> bool {
-        self.width.get() >= px(1000.)
+        !self.is_local() && self.width.get() >= px(1000.)
     }
 
     /// The review the Changes tab shows: the latest version's, or the
@@ -1597,13 +1603,14 @@ impl GitLabView {
             .text_size(px(13.));
         // The host first, unless the pane is narrow: it says least.
         let mut parts: Vec<String> = vec![];
-        if self.width.get() >= px(800.) || !self.in_mr() {
+        if !self.is_local() && (self.width.get() >= px(800.) || !self.in_mr()) {
             let host = self.host();
             parts.push(host.trim_start_matches("https://").trim_start_matches("http://").to_string());
         }
         if let (Some(r), true) = (self.review.ready(), self.in_mr()) {
             let full = &r.mr.references.full;
             let project = full.rsplit_once('!').map_or(full.as_str(), |(p, _)| p);
+            let project = if self.is_local() { project.trim_start_matches("local/") } else { project };
             parts.extend(project.split('/').map(str::to_string));
         } else if let Some(b) = &self.loc.browse {
             parts.extend(b.path.split('/').map(str::to_string));
@@ -1614,16 +1621,24 @@ impl GitLabView {
             }
             crumbs = crumbs.child(div().when(i == 0, |d| d.text_color(c(MUTED))).child(part));
         }
-        crumbs = crumbs.child(sep()).child(
-            div()
-                .id("gl-crumb-mrs")
-                .cursor_pointer()
-                .hover(|s| s.underline())
-                .child(if self.showing_projects() { "Projects" } else { "Merge requests" })
-                .on_click(cx.listener(|v, _, _, cx| v.back(cx))),
-        );
-        if let Some(iid) = self.loc.iid {
-            crumbs = crumbs.child(sep()).child(div().font_weight(FontWeight::SEMIBOLD).child(format!("!{iid}")));
+        // A local diff has no list or number: what it compares instead.
+        if self.is_local() {
+            if let Some(r) = self.review.ready() {
+                let range = format!("{} → {}", r.mr.target_branch, r.mr.source_branch);
+                crumbs = crumbs.child(sep()).child(div().font_weight(FontWeight::SEMIBOLD).child(range));
+            }
+        } else {
+            crumbs = crumbs.child(sep()).child(
+                div()
+                    .id("gl-crumb-mrs")
+                    .cursor_pointer()
+                    .hover(|s| s.underline())
+                    .child(if self.showing_projects() { "Projects" } else { "Merge requests" })
+                    .on_click(cx.listener(|v, _, _, cx| v.back(cx))),
+            );
+            if let Some(iid) = self.loc.iid {
+                crumbs = crumbs.child(sep()).child(div().font_weight(FontWeight::SEMIBOLD).child(format!("!{iid}")));
+            }
         }
         div()
             .flex()

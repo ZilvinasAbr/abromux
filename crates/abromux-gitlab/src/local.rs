@@ -915,7 +915,7 @@ impl LocalGitLab {
         };
         let agent = match &st.send_to {
             Some(t) => format!("sent to the agent in `{t}`"),
-            None => format!("start `{}` in a terminal beside this tab", st.agent),
+            None => format!("sent to a new `{}` in a terminal beside this tab", st.agent),
         };
         let description = format!(
             "A local diff of `{}`: `{cmd}`.\n\nComments here don't go to GitLab: each new thread (or a submitted review's threads, or a reply) is {agent}, which makes the change or answers, and replies in the thread.",

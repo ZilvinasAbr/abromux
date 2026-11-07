@@ -259,6 +259,7 @@ impl GitLabView {
             _ => ("Open", GREEN, 0x002c26),
         };
         let unresolved = r.unresolved();
+        let local = self.is_local();
         let sections = [
             (Section::Overview, "Overview", r.mr.user_notes_count as usize),
             (Section::Commits, "Commits", r.commits.len()),
@@ -266,6 +267,8 @@ impl GitLabView {
             // What the Changes tab shows: a commit or a version's files, as GitLab counts them.
             (Section::Changes, "Changes", self.shown().map_or(r.files.len(), |s| s.files.len())),
         ];
+        // A local diff has no pipelines.
+        let sections = sections.into_iter().filter(|(s, ..)| !(local && *s == Section::Pipelines));
         let tabs = sections.map(|(s, label, n)| {
             let on = self.loc.section == s;
             div()
@@ -303,7 +306,7 @@ impl GitLabView {
                         .gap_2()
                         .pt_2()
                         .text_color(c(MUTED))
-                        .child(badge(state, c(bg), c(fg)).child(icon("merge", 12., c(fg))).flex_row_reverse().flex_none())
+                        .when(!local, |d| d.child(badge(state, c(bg), c(fg)).child(icon("merge", 12., c(fg))).flex_row_reverse().flex_none()))
                         .child(
                             div()
                                 .min_w(px(0.))
@@ -313,7 +316,7 @@ impl GitLabView {
                                 .child(m.title.clone()),
                         )
                         .child(branch(&m.source_branch, mono.clone()).flex_none())
-                        .child(div().flex_none().child("into"))
+                        .child(div().flex_none().child(if local { "against" } else { "into" }))
                         .child(branch(&m.target_branch, mono).flex_none()),
                 )
                 .child(
@@ -348,9 +351,12 @@ impl GitLabView {
                     .gap_1()
                     .pt_2()
                     .text_color(c(MUTED))
-                    .child(badge(state, c(bg), c(fg)).child(icon("merge", 12., c(fg))).flex_row_reverse())
-                    .child(div().ml_1().font_weight(FontWeight::SEMIBOLD).text_color(c(TEXT)).child(m.author.name.clone()))
-                    .child("requested to merge")
+                    // A local diff: "<head> compared with <base>", no state or author.
+                    .when(!local, |d| {
+                        d.child(badge(state, c(bg), c(fg)).child(icon("merge", 12., c(fg))).flex_row_reverse())
+                            .child(div().ml_1().font_weight(FontWeight::SEMIBOLD).text_color(c(TEXT)).child(m.author.name.clone()))
+                            .child("requested to merge")
+                    })
                     .child(branch(&m.source_branch, mono.clone()))
                     // GitLab's "Copy branch name".
                     .child({
@@ -365,9 +371,9 @@ impl GitLabView {
                             .tooltip(hint("Copy branch name"))
                             .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(name.clone())))
                     })
-                    .child("into")
+                    .child(if local { "compared with" } else { "into" })
                     .child(branch(&m.target_branch, mono))
-                    .child(when(&m.created_at)),
+                    .when(!local, |d| d.child(when(&m.created_at))),
             )
             .child(
                 div()
@@ -893,9 +899,13 @@ impl GitLabView {
                 .gap_4()
                 .children(self.write_alert(cx))
                 .children(self.description(&r, window, cx))
-                .child(self.awards(&r, cx))
-                .children(r.mr.head_pipeline.as_ref().map(|p| self.pipeline(p, "gl-pipeline-link", cx)))
-                .child(self.widgets(&r, self.mono(cx), cx))
+                // Reactions, pipelines, approving and merging are GitLab's;
+                // a local diff has none of them.
+                .when(!self.is_local(), |d| {
+                    d.child(self.awards(&r, cx))
+                        .children(r.mr.head_pipeline.as_ref().map(|p| self.pipeline(p, "gl-pipeline-link", cx)))
+                        .child(self.widgets(&r, self.mono(cx), cx))
+                })
                 // Merged, GitLab follows with the merge commit's pipeline on the target.
                 .children(r.merge_pipeline.as_ref().map(|p| self.pipeline(p, "gl-merge-pipeline-link", cx)))
                 .child(self.activity_header(cx))
