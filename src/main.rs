@@ -598,6 +598,28 @@ impl AbroMux {
         self.next_pane
     }
 
+    /// A new pane holding `tabs`, showing tab `active`. None without tabs.
+    /// Layouts and restored sessions build their trees from this and
+    /// [`split_node`](Self::split_node).
+    fn leaf_node(&mut self, tabs: Vec<Surface>, active: usize) -> Option<Node> {
+        let active = active.min(tabs.len().checked_sub(1)?);
+        Some(Node::Leaf(Pane { id: self.pane_id(), tabs, active }))
+    }
+
+    /// `a` and `b` side by side along `axis`, `a` taking `ratio` (kept to
+    /// 0.1–0.9). A side that came out empty collapses into the other.
+    fn split_node(&mut self, axis: Axis, ratio: f32, a: Option<Node>, b: Option<Node>) -> Option<Node> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(Node::Split {
+                id: self.id(),
+                axis,
+                ratio: ratio.clamp(0.1, 0.9),
+                children: Box::new([a, b]),
+            }),
+            (a, b) => a.or(b),
+        }
+    }
+
     // ---- surfaces -------------------------------------------------------
 
     fn surface_ref(&mut self, id: EntityId) -> usize {

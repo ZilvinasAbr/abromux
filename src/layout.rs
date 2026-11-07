@@ -27,7 +27,7 @@
 
 use crate::{
     AbroMux, browser,
-    workspace::{Node, Pane, Surface, Workspace},
+    workspace::{Node, Surface, Workspace},
 };
 use gpui::{Axis, Context, Window};
 use serde::Deserialize;
@@ -249,7 +249,15 @@ impl AbroMux {
         let id = self.next_ws;
         let mut focus = None;
         let mut setup = spec.setup.clone();
-        let root = self.build_layout(layout, id, &dir, spec, &mut setup, &mut focus, window, cx);
+        // `check` keeps panes from being empty; if one were, it would
+        // collapse away, and with nothing left the workspace gets a shell.
+        let root = match self.build_layout(layout, id, &dir, spec, &mut setup, &mut focus, window, cx) {
+            Some(root) => root,
+            None => {
+                let t = self.make_terminal(Some(dir.to_string_lossy().into_owned()), id, window, cx);
+                self.leaf_node(vec![t], 0).expect("one tab")
+            }
+        };
         let panes: Vec<usize> = root.panes().map(|p| p.id).collect();
         let focused = focus.unwrap_or(panes[0]);
         let name = spec.name.clone().or(name);
@@ -278,38 +286,34 @@ impl AbroMux {
         focus: &mut Option<usize>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Node {
+    ) -> Option<Node> {
         match node {
             LayoutNode::Pane { pane } => {
-                let id = self.pane_id();
-                let mut active = 0;
+                // The first surface asking for focus, in this pane if no
+                // earlier pane had one.
+                let wants = pane.surfaces.iter().position(|s| s.focus).filter(|_| focus.is_none());
                 let tabs = pane
                     .surfaces
                     .iter()
-                    .enumerate()
-                    .map(|(i, s)| {
-                        if s.focus && focus.is_none() {
-                            *focus = Some(id);
-                            active = i;
-                        }
-                        self.build_surface(s, ws, dir, spec, setup, window, cx)
-                    })
+                    .map(|s| self.build_surface(s, ws, dir, spec, setup, window, cx))
                     .collect();
-                Node::Leaf(Pane { id, tabs, active })
+                let node = self.leaf_node(tabs, wants.unwrap_or(0))?;
+                if wants.is_some()
+                    && let Node::Leaf(p) = &node
+                {
+                    *focus = Some(p.id);
+                }
+                Some(node)
             }
             LayoutNode::Split(s) => {
                 let [a, b] = &*s.children;
                 let a = self.build_layout(a, ws, dir, spec, setup, focus, window, cx);
                 let b = self.build_layout(b, ws, dir, spec, setup, focus, window, cx);
-                Node::Split {
-                    id: self.id(),
-                    axis: match s.direction {
-                        Direction::Horizontal => Axis::Horizontal,
-                        Direction::Vertical => Axis::Vertical,
-                    },
-                    ratio: s.split.clamp(0.1, 0.9),
-                    children: Box::new([a, b]),
-                }
+                let axis = match s.direction {
+                    Direction::Horizontal => Axis::Horizontal,
+                    Direction::Vertical => Axis::Vertical,
+                };
+                self.split_node(axis, s.split, a, b)
             }
         }
     }

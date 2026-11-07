@@ -14,7 +14,7 @@
 use crate::{
     AbroMux,
     agent::Agent,
-    workspace::{Group, Node, Pane, Surface, Workspace},
+    workspace::{Group, Node, Surface, Workspace},
 };
 use gpui::{App, Axis, Bounds, Context, Pixels, Window, point, px, size};
 use gpui_component::WindowExt;
@@ -527,20 +527,13 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Node> {
-        Some(match state {
+        match state {
             NodeState::Pane { active, tabs } => {
                 let tabs: Vec<Surface> = tabs
                     .into_iter()
                     .map(|t| self.build_tab(t, ws, window, cx))
                     .collect();
-                if tabs.is_empty() {
-                    return None;
-                }
-                Node::Leaf(Pane {
-                    id: self.pane_id(),
-                    active: active.min(tabs.len() - 1),
-                    tabs,
-                })
+                self.leaf_node(tabs, active)
             }
             NodeState::Split {
                 vertical,
@@ -548,25 +541,12 @@ impl AbroMux {
                 children,
             } => {
                 let [a, b] = *children;
-                // A side that came back empty collapses into the other.
-                match (
-                    self.build_node(a, ws, window, cx),
-                    self.build_node(b, ws, window, cx),
-                ) {
-                    (Some(a), Some(b)) => Node::Split {
-                        id: self.id(),
-                        axis: if vertical {
-                            Axis::Vertical
-                        } else {
-                            Axis::Horizontal
-                        },
-                        ratio: ratio.clamp(0.1, 0.9),
-                        children: Box::new([a, b]),
-                    },
-                    (a, b) => a.or(b)?,
-                }
+                let a = self.build_node(a, ws, window, cx);
+                let b = self.build_node(b, ws, window, cx);
+                let axis = if vertical { Axis::Vertical } else { Axis::Horizontal };
+                self.split_node(axis, ratio, a, b)
             }
-        })
+        }
     }
 
     fn build_tab(
