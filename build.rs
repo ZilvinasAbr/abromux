@@ -6,6 +6,7 @@ fn main() {
     version(&root);
     webauthn();
     cursor();
+    browser_native();
 
     let vt = root.join("vendor/ghostty-vt-out");
     let lib = vt.join("lib/libghostty-vt.a");
@@ -124,4 +125,16 @@ fn cursor() {
         .flag("-fobjc-arc")
         .flag("-mmacosx-version-min=13.0")
         .compile("abromux-cursor");
+}
+
+/// Browser panes' native parts (src/browser_native.m): frames, cookies, the
+/// hover label, page bitmaps and downloads.
+fn browser_native() {
+    println!("cargo:rerun-if-changed=src/browser_native.m");
+    cc::Build::new()
+        .file("src/browser_native.m")
+        .flag("-fobjc-arc")
+        .flag("-mmacosx-version-min=13.0")
+        .compile("abromux-browser-native");
+    println!("cargo:rustc-link-lib=framework=AppKit");
 }

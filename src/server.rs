@@ -66,19 +66,101 @@ fn later(
     )
 }
 
-/// Run `js` in the page and wait up to `limit` for its JSON. None if the
-/// page didn't run it (still loading, or navigating away).
+/// Run `js` where automation acts (the frame `browser frame` picked, else
+/// the page) and wait up to `limit` for its JSON. Ok(None) if the page
+/// didn't run it (still loading, or navigating away); Err if the picked
+/// frame is gone or the script threw there.
 async fn eval_json(
     b: &Entity<BrowserView>,
     js: &str,
     cx: &AsyncApp,
     limit: Duration,
-) -> Option<String> {
-    let rx = b.read_with(cx, |b, cx| b.eval_async(js, cx)).ok()?;
+) -> anyhow::Result<Option<String>> {
+    let rx = b
+        .read_with(cx, |b, cx| b.eval_target(js, cx))
+        .map_err(|_| anyhow!("that browser is gone"))?;
     match select(rx, Timer::after(limit)).await {
+        Either::Left((Ok(Ok(out)), _)) => Ok(Some(out)),
+        Either::Left((Ok(Err(e)), _)) => Err(anyhow!(e)),
+        _ => Ok(None),
+    }
+}
+
+/// An answer from the native side (cookies), or an error after `limit`.
+async fn native(
+    rx: oneshot::Receiver<crate::browser_native::Answer>,
+    limit: Duration,
+) -> anyhow::Result<Value> {
+    match select(rx, Timer::after(limit)).await {
+        Either::Left((Ok(Ok(json)), _)) => Ok(serde_json::from_str(&json)?),
+        Either::Left((Ok(Err(e)), _)) => Err(anyhow!(e)),
+        Either::Left((Err(_), _)) => Err(anyhow!("WebKit dropped the request")),
+        Either::Right(_) => Err(anyhow!("WebKit didn't answer in {}s", limit.as_secs())),
+    }
+}
+
+/// Run `js` in the page itself (never a picked frame). None if it didn't.
+async fn eval_page(b: &Entity<BrowserView>, js: &str, cx: &AsyncApp) -> Option<String> {
+    let (tx, rx) = oneshot::channel();
+    let tx = std::sync::Mutex::new(Some(tx));
+    b.read_with(cx, |b, cx| {
+        b.eval(js, cx, move |out| {
+            if let Some(tx) = tx.lock().unwrap().take() {
+                let _ = tx.send(out);
+            }
+        })
+    })
+    .ok()?
+    .ok()?;
+    match select(rx, Timer::after(SCRIPT_TIMEOUT)).await {
         Either::Left((Ok(out), _)) => Some(out),
         _ => None,
     }
+}
+
+/// The host of `url` (`https://a.b:8080/x` → `a.b`).
+fn host_of(url: &str) -> Option<String> {
+    let rest = url.split_once("://")?.1;
+    let host = rest.split(['/', '?', '#']).next()?;
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    let host = if host.starts_with('[') {
+        host.split_once(']')
+            .map_or(host, |(h, _)| h)
+            .trim_start_matches('[')
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+/// Whether a cookie for `domain` goes to `host`.
+fn cookie_matches(domain: &str, host: &str) -> bool {
+    let d = domain.trim_start_matches('.').to_ascii_lowercase();
+    host == d || host.ends_with(&format!(".{d}"))
+}
+
+/// The page's log entries for `browser console|errors|network`, oldest
+/// first: `level` (console) and `filter` (text in the entry) narrow them,
+/// `limit` keeps the newest.
+fn log_entries(list: &std::collections::VecDeque<Value>, p: &Value) -> anyhow::Result<Vec<Value>> {
+    let level = str_param(p, "level");
+    let filter = str_param(p, "filter").map(str::to_lowercase);
+    let mut out: Vec<Value> = list
+        .iter()
+        .filter(|e| level.is_none_or(|l| e["level"].as_str() == Some(l)))
+        .filter(|e| {
+            filter.as_deref().is_none_or(|f| {
+                ["text", "url", "source", "method"]
+                    .iter()
+                    .any(|k| e[*k].as_str().is_some_and(|v| v.to_lowercase().contains(f)))
+            })
+        })
+        .cloned()
+        .collect();
+    if let Some(n) = usize_param(p, "limit")? {
+        out.drain(..out.len().saturating_sub(n));
+    }
+    Ok(out)
 }
 
 /// Bind the socket and start serving. Returns the path, or None if another
@@ -907,7 +989,7 @@ impl AbroMux {
                                     &acx,
                                     SCRIPT_TIMEOUT,
                                 )
-                                .await
+                                .await?
                                 .context("the page didn't answer (is it still loading?)")?;
                                 Ok(match serde_json::from_str(&out) {
                                     Ok(v @ Value::String(_)) => v,
@@ -1028,7 +1110,7 @@ impl AbroMux {
                 return Ok(Reply::Later(
                     async move {
                         let out = eval_json(&b, &script, &acx, SCRIPT_TIMEOUT)
-                            .await
+                            .await?
                             .context("the page didn't run the script (is it still loading?)")?;
                         Ok(serde_json::from_str(&out).unwrap_or(Value::String(out)))
                     }
@@ -1049,20 +1131,66 @@ impl AbroMux {
             | "browser.scroll"
             | "browser.get"
             | "browser.is"
-            | "browser.find" => {
+            | "browser.find"
+            | "browser.keydown"
+            | "browser.keyup"
+            | "browser.storage" => {
                 let b = self.browser_target(p)?;
                 let js = browser_auto::script(method.trim_start_matches("browser."), p);
                 let acx = cx.to_async();
                 return Ok(Reply::Later(
                     async move {
                         let out = eval_json(&b, &js, &acx, SCRIPT_TIMEOUT)
-                            .await
+                            .await?
                             .context("the page didn't run the script (is it still loading?)")?;
                         browser_auto::parse(&out)
                     }
                     .boxed_local(),
                 ));
             }
+            "browser.console" | "browser.errors" | "browser.network" => {
+                let b = self.browser_target(p)?;
+                let clear = bool_param(p, "clear", false);
+                return Ok(Reply::Now(b.update(cx, |b, _| {
+                    let list = match method {
+                        "browser.console" => &mut b.log.console,
+                        "browser.errors" => &mut b.log.errors,
+                        _ => &mut b.log.network,
+                    };
+                    let out = log_entries(list, p)?;
+                    if clear {
+                        list.clear();
+                    }
+                    anyhow::Ok(json!(out))
+                })?));
+            }
+            "browser.frame" => return self.browser_frame(p, cx),
+            "browser.cookies" => return self.browser_cookies(p, cx),
+            "browser.state" => return self.browser_state(p, cx),
+            "browser.tab" => self.browser_tab(p, window, cx)?,
+            "browser.downloads" => {
+                let d = crate::downloads::entity(cx);
+                match str_param(p, "op").unwrap_or("list") {
+                    "list" => json!(
+                        d.read(cx)
+                            .list
+                            .iter()
+                            .map(|d| d.to_json())
+                            .collect::<Vec<_>>()
+                    ),
+                    "clear" => json!({ "cleared": d.update(cx, |d, cx| d.clear(cx)) }),
+                    "cancel" => {
+                        let id =
+                            usize_param(p, "id")?.context("downloads cancel needs an id")? as u64;
+                        if !d.update(cx, |d, cx| d.cancel(id, cx)) {
+                            bail!("download {id} isn't running");
+                        }
+                        json!({ "canceled": id })
+                    }
+                    op => bail!("unknown downloads operation {op:?} (list, clear or cancel)"),
+                }
+            }
+            "browser.wait_download" => return self.wait_download(p, cx),
             "browser.wait" => return self.browser_wait(p, cx),
             "browser.screenshot" => {
                 let b = self.browser_target(p)?;
@@ -1541,11 +1669,379 @@ impl AbroMux {
                         .saturating_duration_since(Instant::now())
                         .max(WAIT_POLL);
                     // A page mid-navigation doesn't answer; try again.
-                    if let Some(out) = eval_json(&b, &script, &acx, left).await
+                    if let Some(out) = eval_json(&b, &script, &acx, left).await?
                         && serde_json::from_str::<String>(&out).is_ok()
                         && browser_auto::parse(&out)? == json!(true)
                     {
                         return Ok(json!({ "waited_ms": start.elapsed().as_millis() as u64 }));
+                    }
+                    if Instant::now() >= deadline {
+                        bail!("timed out after {ms} ms");
+                    }
+                    Timer::after(WAIT_POLL).await;
+                }
+            }
+            .boxed_local(),
+        ))
+    }
+
+    /// `browser frame <iframe>`: point automation commands at that frame
+    /// (cross-origin ones too); `main` goes back to the page, and no
+    /// argument says which is picked.
+    fn browser_frame(&self, p: &Value, cx: &mut Context<Self>) -> anyhow::Result<Reply> {
+        let b = self.browser_target(p)?;
+        match str_param(p, "selector") {
+            None => {
+                let f = b.read(cx).frame.clone();
+                return Ok(Reply::Now(json!({ "frame": f.map(|(_, url)| url) })));
+            }
+            Some("main" | "top" | "page") => {
+                b.update(cx, |b, cx| b.set_frame(None, cx));
+                return Ok(Reply::Now(json!({ "frame": null })));
+            }
+            Some(_) => {}
+        }
+        let nonce = format!(
+            "{:x}{:x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let answer = b.update(cx, |b, _| b.ask_frame(nonce.clone()));
+        let mut opts = p.clone();
+        opts["nonce"] = json!(nonce);
+        let js = browser_auto::script("frame_ask", &opts);
+        let mut acx = cx.to_async();
+        Ok(Reply::Later(
+            async move {
+                let out = eval_json(&b, &js, &acx, SCRIPT_TIMEOUT)
+                    .await?
+                    .context("the page didn't run the script (is it still loading?)")?;
+                let info = browser_auto::parse(&out)?;
+                let token = match select(answer, Timer::after(Duration::from_secs(5))).await {
+                    Either::Left((Ok(t), _)) => t,
+                    _ => bail!(
+                        "the frame didn't answer (still loading, or sandboxed without scripts?)"
+                    ),
+                };
+                let url = info["src"].as_str().unwrap_or("").to_string();
+                let ok = b.update(&mut acx, |b, cx| {
+                    b.set_frame(Some((token, url.clone())), cx)
+                })?;
+                if !ok {
+                    bail!("the frame went away before it could be picked");
+                }
+                Ok(json!({ "frame": url, "name": info["name"] }))
+            }
+            .boxed_local(),
+        ))
+    }
+
+    /// `browser cookies [get|set|clear]`, through WebKit's cookie store, so
+    /// HttpOnly cookies count too. Without `--all`, only the page's.
+    fn browser_cookies(&self, p: &Value, cx: &mut Context<Self>) -> anyhow::Result<Reply> {
+        let b = self.browser_target(p)?;
+        let wk = b.read(cx).wk_webview(cx);
+        let page_url = str_param(p, "url")
+            .map(normalize_url)
+            .unwrap_or_else(|| b.read(cx).url.clone());
+        let host = host_of(&page_url);
+        let all = bool_param(p, "all", false);
+        let name = str_param(p, "name").map(String::from);
+        let wanted = move |c: &Value| {
+            let domain = c["domain"].as_str().unwrap_or("");
+            (all || host.as_deref().is_some_and(|h| cookie_matches(domain, h)))
+                && name
+                    .as_deref()
+                    .is_none_or(|n| c["name"].as_str() == Some(n))
+        };
+        match str_param(p, "op").unwrap_or("get") {
+            "get" => Ok(Reply::Later(
+                async move {
+                    let list = native(crate::browser_native::cookies(wk), SCRIPT_TIMEOUT).await?;
+                    let list: Vec<Value> = list.as_array().into_iter().flatten().filter(|c| wanted(c)).cloned().collect();
+                    Ok(json!(list))
+                }
+                .boxed_local(),
+            )),
+            "set" => {
+                let cname = str_param(p, "name").context("cookies set needs a name")?;
+                let domain = match str_param(p, "domain") {
+                    Some(d) => d.to_string(),
+                    None => host_of(&page_url).context("no page to set the cookie for; give --domain or --url")?,
+                };
+                let expires = match p.get("expires") {
+                    None | Some(Value::Null) => -1.,
+                    Some(Value::String(e)) => e.parse::<f64>().with_context(|| format!("bad --expires {e:?} (seconds since 1970)"))?,
+                    Some(v) => v.as_f64().context("--expires must be seconds since 1970")?,
+                };
+                let cookie = json!([{
+                    "name": cname,
+                    "value": str_param(p, "value").unwrap_or(""),
+                    "domain": domain,
+                    "path": str_param(p, "path").unwrap_or("/"),
+                    "expires": expires,
+                    "secure": bool_param(p, "secure", false),
+                    "httpOnly": bool_param(p, "http_only", false),
+                    "sameSite": str_param(p, "same_site").unwrap_or("Lax"),
+                }]);
+                let rx = crate::browser_native::set_cookies(wk, &cookie.to_string());
+                Ok(Reply::Later(
+                    async move {
+                        native(rx, SCRIPT_TIMEOUT).await?;
+                        Ok(cookie[0].clone())
+                    }
+                    .boxed_local(),
+                ))
+            }
+            "clear" | "delete" => Ok(Reply::Later(
+                async move {
+                    let list = native(crate::browser_native::cookies(wk), SCRIPT_TIMEOUT).await?;
+                    let gone: Vec<Value> = list
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|c| wanted(c))
+                        .map(|c| json!({ "name": c["name"], "domain": c["domain"], "path": c["path"] }))
+                        .collect();
+                    let n = native(crate::browser_native::delete_cookies(wk, &json!(gone).to_string()), SCRIPT_TIMEOUT).await?;
+                    Ok(json!({ "deleted": n }))
+                }
+                .boxed_local(),
+            )),
+            op => bail!("unknown cookies operation {op:?} (get, set or clear)"),
+        }
+    }
+
+    /// `browser state save|load <file>`: cookies and the page origin's
+    /// localStorage, in Playwright's storageState format.
+    fn browser_state(&self, p: &Value, cx: &mut Context<Self>) -> anyhow::Result<Reply> {
+        let b = self.browser_target(p)?;
+        let wk = b.read(cx).wk_webview(cx);
+        let path = PathBuf::from(str_param(p, "path").context("state needs a file")?);
+        let op = str_param(p, "op").unwrap_or("save").to_string();
+        let acx = cx.to_async();
+        let origin_js = "JSON.stringify({ origin: location.origin, localStorage: Object.keys(localStorage).map(name => ({ name, value: localStorage.getItem(name) })) })";
+        Ok(Reply::Later(
+            async move {
+                let page = eval_page(&b, origin_js, &acx).await;
+                let page: Option<Value> = page
+                    .and_then(|s| serde_json::from_str::<String>(&s).ok())
+                    .and_then(|s| serde_json::from_str(&s).ok());
+                match op.as_str() {
+                    "save" => {
+                        let cookies = native(crate::browser_native::cookies(wk), SCRIPT_TIMEOUT).await?;
+                        let origins: Vec<Value> = page
+                            .into_iter()
+                            .filter(|o| o["origin"].as_str().is_some_and(|o| o != "null"))
+                            .collect();
+                        let state = json!({ "cookies": cookies, "origins": origins });
+                        std::fs::write(&path, serde_json::to_string_pretty(&state)?)
+                            .with_context(|| format!("can't write {}", path.display()))?;
+                        Ok(json!({
+                            "path": path,
+                            "cookies": cookies.as_array().map_or(0, Vec::len),
+                            "origins": origins.len(),
+                        }))
+                    }
+                    "load" => {
+                        let text = std::fs::read_to_string(&path)
+                            .with_context(|| format!("can't read {}", path.display()))?;
+                        let state: Value = serde_json::from_str(&text)
+                            .with_context(|| format!("{} isn't a state file", path.display()))?;
+                        let cookies = state["cookies"].as_array().cloned().unwrap_or_default();
+                        let set = if cookies.is_empty() {
+                            json!(0)
+                        } else {
+                            native(crate::browser_native::set_cookies(wk, &json!(cookies).to_string()), SCRIPT_TIMEOUT).await?
+                        };
+                        let here = page.as_ref().and_then(|p| p["origin"].as_str()).unwrap_or("").to_string();
+                        let (mut applied, mut skipped) = (vec![], vec![]);
+                        for o in state["origins"].as_array().into_iter().flatten() {
+                            let origin = o["origin"].as_str().unwrap_or("").to_string();
+                            if origin != here || here.is_empty() {
+                                skipped.push(origin);
+                                continue;
+                            }
+                            let items = o["localStorage"].clone();
+                            let js = format!(
+                                "(() => {{ for (const i of {}) localStorage.setItem(i.name, i.value); return 'ok'; }})()",
+                                items
+                            );
+                            if eval_page(&b, &js, &acx).await.is_none() {
+                                bail!("the page didn't take its localStorage (is it still loading?)");
+                            }
+                            applied.push(origin);
+                        }
+                        Ok(json!({ "cookies": set, "origins": applied, "skipped": skipped }))
+                    }
+                    op => bail!("unknown state operation {op:?} (save or load)"),
+                }
+            }
+            .boxed_local(),
+        ))
+    }
+
+    /// The workspace and pane holding surface `id`.
+    fn pane_of(&self, id: EntityId) -> Option<(usize, usize)> {
+        self.workspaces.iter().enumerate().find_map(|(wi, ws)| {
+            ws.root
+                .panes()
+                .into_iter()
+                .find(|p| p.tabs.iter().any(|t| t.entity_id() == id))
+                .map(|p| (wi, p.id))
+        })
+    }
+
+    /// `browser tab list|new|switch|close`: the browser tabs of the pane the
+    /// browser is in.
+    fn browser_tab(
+        &mut self,
+        p: &Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Value> {
+        let current = self.browser_target(p).ok();
+        let (wi, pane_id) = match &current {
+            Some(b) => self
+                .pane_of(b.entity_id())
+                .context("that browser isn't in a pane")?,
+            None => self.pane_target(p)?,
+        };
+        let tabs: Vec<(usize, Surface, bool)> = {
+            let ws = &self.workspaces[wi];
+            let pane = ws
+                .root
+                .panes()
+                .into_iter()
+                .find(|q| q.id == pane_id)
+                .context("no such pane")?;
+            pane.tabs
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| matches!(t, Surface::Browser(_)))
+                .map(|(i, t)| (i, t.clone(), i == pane.active))
+                .collect()
+        };
+        let pick = |t: &str| -> anyhow::Result<Surface> {
+            if let Ok(n) = t.parse::<usize>() {
+                return tabs
+                    .get(n)
+                    .map(|(_, s, _)| s.clone())
+                    .with_context(|| format!("no browser tab {n}: the pane has {}", tabs.len()));
+            }
+            let (_, _, s) = self.find_surface(t, Some(wi))?;
+            tabs.iter()
+                .find(|(_, x, _)| x.entity_id() == s.entity_id())
+                .map(|(_, s, _)| s.clone())
+                .with_context(|| format!("{t} isn't a browser tab in this pane"))
+        };
+        match str_param(p, "op").unwrap_or("list") {
+            "list" => Ok(json!(
+                tabs.iter()
+                    .enumerate()
+                    .map(|(n, (_, s, active))| {
+                        let mut v = self.describe_surface(s, *active, cx);
+                        v["index"] = json!(n);
+                        v
+                    })
+                    .collect::<Vec<_>>()
+            )),
+            "new" => {
+                let mut opts = json!({ "type": "browser", "builtIn": true });
+                if let Some(url) = str_param(p, "url") {
+                    opts["url"] = json!(url);
+                }
+                let s = self.make_surface(wi, &opts, window, cx)?;
+                let out = self.describe_surface(&s, true, cx);
+                self.add_tab_to(wi, pane_id, s, bool_param(p, "focus", true), window, cx);
+                Ok(out)
+            }
+            "switch" => {
+                let s =
+                    pick(str_param(p, "target").context("tab switch needs an index or surface")?)?;
+                self.focus_surface(s.entity_id(), cx);
+                self.select_workspace(wi, window, cx);
+                Ok(self.describe_surface(&s, true, cx))
+            }
+            "close" => {
+                let s = match str_param(p, "target") {
+                    Some(t) => pick(t)?,
+                    None => current
+                        .map(Surface::Browser)
+                        .context("no browser tab to close")?,
+                };
+                let r = self.sref(&s);
+                self.close_surface(s.entity_id(), window, cx);
+                Ok(json!({ "closed": r }))
+            }
+            op => bail!("unknown tab operation {op:?} (list, new, switch or close)"),
+        }
+    }
+
+    /// `browser wait-download`: wait for a download to finish (one running
+    /// now, else the next to start, or `--id`) and say where it went;
+    /// `--path` moves it there.
+    fn wait_download(&self, p: &Value, cx: &mut Context<Self>) -> anyhow::Result<Reply> {
+        let d = crate::downloads::entity(cx);
+        let ms = match p.get("timeout") {
+            Some(Value::String(t)) => t
+                .parse()
+                .with_context(|| format!("bad timeout {t:?} (milliseconds)"))?,
+            Some(t) => t.as_u64().context("timeout must be milliseconds")?,
+            None => 30_000,
+        };
+        let since = d.read(cx).last_id();
+        let want = usize_param(p, "id")?.map(|n| n as u64);
+        let running = d
+            .read(cx)
+            .list
+            .iter()
+            .rev()
+            .find(|x| x.state == crate::downloads::State::Running)
+            .map(|x| x.id);
+        let target = want.or(running);
+        let dest = str_param(p, "path").map(PathBuf::from);
+        let mut acx = cx.to_async();
+        Ok(Reply::Later(
+            async move {
+                let deadline = Instant::now() + Duration::from_millis(ms);
+                loop {
+                    let found = d.read_with(&acx, |d, _| {
+                        let pick = match target {
+                            Some(id) => d.get(id),
+                            None => d.list.iter().find(|x| x.id > since),
+                        };
+                        pick.cloned()
+                    })?;
+                    if let Some(x) = found {
+                        match x.state {
+                            crate::downloads::State::Running => {}
+                            crate::downloads::State::Done => {
+                                let mut out = x.to_json();
+                                if let Some(dest) = &dest {
+                                    let to = if dest.is_dir() {
+                                        dest.join(x.name())
+                                    } else {
+                                        dest.clone()
+                                    };
+                                    if std::fs::rename(&x.path, &to).is_err() {
+                                        std::fs::copy(&x.path, &to).with_context(|| {
+                                            format!("can't move it to {}", to.display())
+                                        })?;
+                                        let _ = std::fs::remove_file(&x.path);
+                                    }
+                                    out["path"] = json!(to);
+                                    d.update(&mut acx, |d, cx| d.moved(x.id, to.clone(), cx))?;
+                                }
+                                return Ok(out);
+                            }
+                            s => bail!("download {} {}", x.id, s.name()),
+                        }
+                    } else if want.is_some() {
+                        bail!("no download {}", want.unwrap());
                     }
                     if Instant::now() >= deadline {
                         bail!("timed out after {ms} ms");

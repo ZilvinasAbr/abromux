@@ -87,25 +87,24 @@ So the list below reads in context:
 - [x] **Find in page**: ⌘F in browser panes, with the same bar and keys as find in terminal. cmux does it with injected JavaScript that wraps matches in `<mark>`; so does abromux. See [browser-find.md](browser-find.md). *(partial: the bar is a row under the address bar, not floating over the page)*
 - [x] **Browser shortcuts**: ⌘[ / ⌘] for back and forward, ⌘R to reload, ⌥⌘I for devtools, ⌥⌘C for the JS console.
 - [x] **Passkeys, WebAuthn and security keys**: a JS bridge to AuthenticationServices, as in cmux. *(partial: needs Apple's web-browser entitlement in a provisioning profile, see "Passkeys" in guide.md; no conditional/autofill UI)*
-- [ ] **Shortcuts while a webview has focus**: gpui's view gets ⌘ keys first (`performKeyEquivalent:`) even when the WKWebView is first responder, and a click into a page moves gpui focus to its `Browser` context, so ⌘ shortcuts should reach the app. Not yet confirmed with real keystrokes; keys without ⌘ still go only to the page.
-- [ ] **Popovers over webviews**: native webviews draw on top of everything, so UI can't overlap a visible browser.
+- [x] **Shortcuts while a webview has focus**: tested with real key events, WebKit kept every ⌘ key once the page had focus. A key monitor now offers ⌘/⌃ keys to gpui first while a page has focus; ones the app handles (⌘T, ⌘W, ⌘=, ⌘⇧P…) stop there, the rest (⌘C, ⌘A, a site's own shortcuts) still reach the page.
+- [x] **Popovers over webviews**: native webviews draw on top of everything, so UI can't overlap a visible browser. *(a page under the palette, ⌘I, the update popover, sidebar menus, address-bar suggestions, the downloads list or a tab drag is swapped for a bitmap of itself while it's open)*
 - [x] **Zoom**: ⌘= / ⌘- / ⌘0 in browser panes, in Safari's steps (50%–300%), saved with the session. *(also `browser zoom in|out|reset|<factor>|<n>%`)*
-- [ ] **Search-engine settings and search suggestions.**
-- [ ] **Downloads**: ask where to save, list downloads, wait for one to finish.
-- [ ] **Profiles**: separate cookie jars, with list, add, rename, clear and delete.
-- [ ] **Discarding hidden webviews**: memory budgeting for background tabs.
-- [ ] **Link-hover preview** of the URL.
-- [x] **Browser automation in the CLI**: *(partial: events are synthesized with JavaScript, so they aren't trusted input; no iframes)*
+- [x] **Downloads**: ask where to save, list downloads, wait for one to finish. *(partial: saved to ~/Downloads, `Content-Disposition: attachment` too; a toolbar button with progress and the session's list; `browser downloads` and `wait-download [--path]`; no asking where to save)*
+- [ ] **Reload a page whose web process was killed**: macOS ends background WebContent processes under memory pressure, which leaves the tab blank. Handle `webViewWebContentProcessDidTerminate` and reload the page when its tab is shown again (right away if it's visible).
+- [x] **Link-hover preview** of the URL. *(at the page's bottom-left corner, as in Safari, iframes included)*
+- [x] **Browser automation in the CLI**: *(partial: events are synthesized with JavaScript, so they aren't trusted input)*
   - [x] `snapshot`: an accessibility or DOM snapshot with element refs (`--interactive`, `--compact`, `--selector`)
   - [x] `click`, `dblclick`, `hover`, `focus`, `check`, `uncheck`, `scroll-into-view`
-  - [x] `type`, `fill`, `press`, `keydown`, `keyup`, `select`, `scroll` *(partial: no separate `keydown` / `keyup`)*
+  - [x] `type`, `fill`, `press`, `keydown`, `keyup`, `select`, `scroll`
   - [x] `wait`: for a selector, text, URL, load state or JS condition
   - [x] `get`: url, title, text, html, value, attr, count, box or styles; and `is`: visible, enabled or checked
   - [x] `find`: by role, text, label, placeholder, alt, title or testid
   - [x] `screenshot` *(partial: the page must be on screen)*
-  - [ ] `console`, `errors` and network activity
-  - [ ] `cookies`, `storage`, `state save/load`, `addinitscript`, `dialog`, `frame`, `highlight`
-  - [ ] `tab`: new, list, switch or close
+  - [x] `console`, `errors` and network activity *(network: fetch/XHR with status, other loads from Resource Timing)*
+  - [x] `cookies`, `storage`, `state save/load`, `frame` *(frame: cross-origin iframes too; state load sets localStorage only for the page's origin)*
+  - [ ] `addinitscript`, `dialog`, `highlight`
+  - [x] `tab`: new, list, switch or close *(the browser tabs of the browser's pane)*
   - [ ] `devtools toggle`, `focus-mode`, `design-mode`
 
 ## 6. CLI and socket API gaps
@@ -117,7 +116,7 @@ What's missing beyond the browser commands above:
 - [ ] **`capabilities`, `events`**: an event stream with cursors, filters and reconnect.
 - [x] **`wait-for`**: named signals between scripts. *(signal files in `$TMPDIR`, as in cmux)*
 - [x] **`read-selection`**, and `read-screen --selection`. *(also in browser tabs)*
-- [x] **Starting a workspace from a JSON layout**: `new-workspace --layout <json>` and `--description`. *(partial: `--layout`, from JSON or `@file`; no `--description`)*
+- [x] **Starting a workspace from a JSON layout**: `new-workspace --layout <json>` and `--description`. *(`--layout` from JSON or `@file`, and `--description`)*
 - [x] **`workspace-action`, `tab-action`**: one-shot actions with title, color, description and URL. *(partial: no pinned tabs, so no `pin`/`unpin` in either)*
 - [ ] **`top` / `memory`**: CPU, memory and process trees per workspace or surface.
 - [ ] **`surface-health`, `refresh-surfaces`, `debug-terminals`.**
@@ -173,6 +172,8 @@ Left out on purpose (2026-11-01). Don't pick these up for parity work until the 
   - A todo list per workspace: `todo add/list/check/...`.
 - **Sidebar metadata**: linked PR status and number, and listening ports. *(from 3)*
 - **Importing from other browsers**: cookies, history and sessions from Chrome, Firefox, Arc and others. *(from 5)*
+- **Browser profiles and search engines**: separate cookie jars (list, add, rename, clear, delete), and search-engine settings with search suggestions (dropped 2026-11-07). *(from 5)*
+- **Discarding hidden webviews**: cmux unloads a browser tab hidden for 5 minutes and reloads it when shown. abromux keeps them alive, so returning to a tab is instant and keeps its state; the reload above covers pages macOS kills itself (dropped 2026-11-07). *(from 5)*
 - **Tab-bar buttons**: cmux's `surfaceTabBarButtons`, commands as buttons in the pane tab bar (dropped 2026-11-03; abromux's tab bar has no buttons). *(from 7)*
 
 ## 12. cmux Cloud and paid extras (probably out of scope)
@@ -192,6 +193,6 @@ Done so far: notifications (hooks, a menu-bar item, `dismiss-notification` / `ma
 
 Next:
 
-1. **Browser basics**: downloads, profiles, popovers over webviews, and confirming ⌘ shortcuts reach the app while a webview has focus.
+1. **Browser**: reloading a page whose web process was killed, and the rest of automation (`addinitscript`, `dialog`, `highlight`).
 2. **A JSON schema for the config file**, for editor completion and a stricter `config check`.
 3. **SSH/tmux**, as the workspace model matures.

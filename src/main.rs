@@ -8,6 +8,7 @@ mod browser;
 mod browser_auto;
 mod browser_find;
 mod browser_history;
+mod browser_native;
 mod channel;
 mod cli;
 mod cmux;
@@ -16,6 +17,7 @@ mod folder;
 mod gitlab;
 mod cursor;
 mod debug;
+mod downloads;
 mod ghostty;
 mod hold;
 mod icon;
@@ -1911,19 +1913,24 @@ impl AbroMux {
         }
     }
 
-    /// Native webviews draw above gpui, so only the visible ones may be shown.
+    /// Native webviews draw above gpui, so only the visible ones may be
+    /// shown, and a page under one of the app's popovers shows as a bitmap
+    /// of itself that the popover can draw over.
     fn sync_webviews(&self, cx: &mut App) {
+        let covered = self.renaming.is_some()
+            || self.notifications_open
+            || self.palette.is_some()
+            || update::popover_open(cx)
+            || browser::menus_open()
+            // Also while dragging a tab, so drop targets show over pages and
+            // get the mouse.
+            || cx.has_active_drag();
         for (wi, ws) in self.workspaces.iter().enumerate() {
             for p in ws.root.panes() {
                 for (ti, s) in p.tabs.iter().enumerate() {
                     if let Surface::Browser(b) = s {
-                        let shown = wi == self.active && ti == p.active && ws.shows(p.id) && self.renaming.is_none() && !self.notifications_open
-                            && self.palette.is_none()
-                            && !update::popover_open(cx)
-                            // Hidden while dragging a tab so drop targets show
-                            // over them and get the mouse.
-                            && !cx.has_active_drag();
-                        b.update(cx, |b, cx| b.set_shown(shown, cx));
+                        let shown = wi == self.active && ti == p.active && ws.shows(p.id);
+                        b.update(cx, |b, cx| b.set_visibility(shown, covered, cx));
                     }
                 }
             }
