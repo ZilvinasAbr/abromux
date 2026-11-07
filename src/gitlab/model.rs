@@ -49,14 +49,12 @@ impl MrKey {
                 .then(|| Some(MrKey::new(project, iid.trim().parse().ok()?)))
                 .flatten();
         }
-        let rest = s
-            .strip_prefix("https://")
-            .or_else(|| s.strip_prefix("http://"))?;
-        let (_, path) = rest.split_once('/')?;
-        let path = path.split(['?', '#']).next()?;
-        let (project, tail) = path.split_once("/-/merge_requests/")?;
-        let iid = tail.split('/').next()?.parse().ok()?;
-        (!project.is_empty()).then(|| MrKey::new(project, iid))
+        if !(s.starts_with("https://") || s.starts_with("http://")) {
+            return None;
+        }
+        // The key leaves the host out: one GitLab is set up at a time.
+        let (_, project, iid) = abromux_gitlab::api::parse_mr_url(s)?;
+        Some(MrKey::new(&project, iid))
     }
 
     /// The project's last path segment.

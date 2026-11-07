@@ -143,9 +143,7 @@ pub fn key_of_url(url: &str) -> Option<(Kind, String)> {
     if let Some(k) = jira_key_in_url(url) {
         return Some((Kind::Jira, k));
     }
-    if url.contains("/-/merge_requests/")
-        && let Some(k) = MrKey::parse(url)
-    {
+    if let Some(k) = MrKey::parse(url) {
         return Some((Kind::Mr, k.reference()));
     }
     let page = url.split('#').next().unwrap_or(url).trim_end_matches('/');
@@ -163,9 +161,10 @@ pub fn parse(
     if is_web(text) {
         let (kind, key) = key_of_url(text).ok_or_else(|| format!("not a link: {text:?}"))?;
         let url = match kind {
-            // The merge request itself, not one of its pages.
-            Kind::Mr => MrKey::parse(&key)
-                .and_then(|k| mr_url(&k))
+            // The merge request itself, not one of its pages, on the
+            // GitLab the URL is on (which may not be the one set up).
+            Kind::Mr => abromux_gitlab::api::parse_mr_url(text)
+                .map(|(host, project, iid)| format!("{host}/{project}/-/merge_requests/{iid}"))
                 .unwrap_or_else(|| text.to_string()),
             Kind::Jira => match origin(text) {
                 Some(o) => format!("{o}/browse/{key}"),
@@ -712,7 +711,10 @@ mod tests {
         let l = parse("acme/api!812", None, &mr_url).unwrap();
         assert_eq!((l.kind, &*l.url), (Kind::Mr, "https://gitlab.acme.com/acme/api/-/merge_requests/812"));
         let l = parse("https://gitlab.acme.com/acme/api/-/merge_requests/812/diffs", None, &mr_url).unwrap();
-        assert_eq!(l.key, "acme/api!812");
+        assert_eq!((&*l.key, &*l.url), ("acme/api!812", "https://gitlab.acme.com/acme/api/-/merge_requests/812"));
+        // A merge request on another GitLab keeps its own host.
+        let l = parse("https://git.other.org/acme/api/-/merge_requests/5#note_1", None, &mr_url).unwrap();
+        assert_eq!((l.kind, &*l.url), (Kind::Mr, "https://git.other.org/acme/api/-/merge_requests/5"));
         assert!(parse("hello", jira, &mr_url).is_err());
     }
 
