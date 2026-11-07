@@ -106,7 +106,7 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
         name: title.clone().filter(|_| by_user),
         auto_name: title.filter(|_| !by_user),
         description: str_of(ws, "customDescription").map(str::to_string),
-        color: str_of(ws, "customColor").and_then(hex_color),
+        color: str_of(ws, "customColor").and_then(crate::workspace::parse_color),
         group: None,
         home: None,
         links: vec![],
@@ -116,11 +116,6 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
     })
 }
 
-/// `#rrggbb` as abromux keeps colors.
-fn hex_color(s: &str) -> Option<u32> {
-    let h = s.strip_prefix('#').unwrap_or(s);
-    (h.len() == 6).then(|| u32::from_str_radix(h, 16).ok())?
-}
 
 /// A layout node. `panes` counts panes in tree order, so `focused` can say
 /// which one holds the focused panel.

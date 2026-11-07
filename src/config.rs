@@ -306,13 +306,9 @@ fn unquote(s: &str) -> &str {
         .unwrap_or(s)
 }
 
+/// A Ghostty colour value (`#rrggbb`, quoted or not; also `#rgb`).
 pub fn parse_color(s: &str) -> Option<Rgb> {
-    let s = unquote(s.trim());
-    let hex = s.strip_prefix('#').unwrap_or(s);
-    if hex.len() != 6 {
-        return None;
-    }
-    let n = u32::from_str_radix(hex, 16).ok()?;
+    let n = abromux_plugin::color::parse_rgb(unquote(s.trim()))?;
     Some(Rgb((n >> 16) as u8, (n >> 8) as u8, n as u8))
 }
 

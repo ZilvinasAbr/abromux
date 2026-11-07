@@ -758,7 +758,7 @@ fn step<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
 /// `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`.
 fn color<'de, D: Deserializer<'de>>(d: D) -> Result<Rgba, D::Error> {
     let s = String::deserialize(d)?;
-    Rgba::try_from(s.as_str()).map_err(|_| {
+    abromux_plugin::color::parse(&s).ok_or_else(|| {
         serde::de::Error::custom(format!(
             "{s:?} isn't a color; use #rgb, #rgba, #rrggbb or #rrggbbaa"
         ))

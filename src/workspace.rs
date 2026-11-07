@@ -489,18 +489,8 @@ impl LogLevel {
     }
 }
 
-/// `#rgb` or `#rrggbb` (the `#` is optional).
-pub fn parse_color(s: &str) -> Option<u32> {
-    let h = s.strip_prefix('#').unwrap_or(s);
-    if !h.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-    match h.len() {
-        6 => u32::from_str_radix(h, 16).ok(),
-        3 => u32::from_str_radix(&h.chars().flat_map(|c| [c, c]).collect::<String>(), 16).ok(),
-        _ => None,
-    }
-}
+/// A workspace or group colour: `#rgb` or `#rrggbb` (the `#` is optional).
+pub use abromux_plugin::color::parse_rgb as parse_color;
 
 impl Workspace {
     /// Its panes, in layout order. Callers go through these rather than

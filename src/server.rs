@@ -1326,7 +1326,7 @@ impl AbroMux {
                     .to_string();
                 let color = str_param(p, "color")
                     .map(|c| {
-                        parse_color(c).with_context(|| format!("bad color {c:?} (use #rrggbb)"))
+                        parse_color(c).with_context(|| format!("bad color {c:?} (use #rgb or #rrggbb)"))
                     })
                     .transpose()?;
                 let icon = str_param(p, "icon").map(String::from);

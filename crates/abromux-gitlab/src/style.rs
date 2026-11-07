@@ -127,7 +127,7 @@ pub fn pipeline_icon(p: &crate::types::Pipeline, size: f32) -> Svg {
 
 /// `#1068bf` → a color; grey for anything else.
 pub fn hex(s: &str) -> Hsla {
-    u32::from_str_radix(s.trim_start_matches('#'), 16).map_or(c(0x737278), c)
+    abromux_plugin::color::parse_rgb(s).map_or(c(0x737278), c)
 }
 
 /// A label as GitLab 19.5 draws it: a pill in its color with its text
