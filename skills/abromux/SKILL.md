@@ -60,11 +60,38 @@ abromux read-screen --surface surface:7              # what's visible now
 abromux read-screen --surface surface:7 --scrollback --lines 200   # include scrollback, last 200 lines
 ```
 
-`send` without a trailing `\n` types text but doesn't run it. There is no wait-for-output command: poll `read-screen` with a short `sleep` between reads until the prompt or the line you expect appears, and give up after a reasonable time.
+`send` without a trailing `\n` types text but doesn't run it. There is no wait-for-output command: poll `read-screen` with a short `sleep` between reads until the prompt or the line you expect appears, and give up after a reasonable time. To know exactly when a command you sent finishes, chain a signal onto it and wait for that:
+
+```bash
+abromux send --surface surface:7 'cargo build; abromux wait-for -S build-7\n'
+abromux wait-for build-7 --timeout 600      # returns once the build is done (exit 1 on timeout)
+```
+
+`abromux read-selection --surface surface:7` prints what the user selected there (a terminal or a browser tab).
 
 Don't type into a terminal the user is working in, or one running another agent, unless the user asked you to. Check its title in `tree` first.
 
 Clean up what you started when you're done with it: `abromux close-surface --surface surface:7`. Leave long-running things the user wants to keep (dev servers) open and say which surface they're in.
+
+## Show the user a diff to review
+
+```bash
+abromux diff main...my-branch       # also X..Y, X (X to the working tree), or nothing (uncommitted changes)
+# OK surface:9 3f2a1c0b7d4e  main...my-branch in /path/to/repo  (comments start `claude`)
+```
+
+It opens the diff in a GitLab-style review tab beside you (Changes, Commits, comments on lines), with no GitLab involved. Run it again after changing things: the same diff reopens the same tab with its threads, and the tab follows edits and commits on its own.
+
+Each comment the user writes there starts a new agent (`--agent '<command>'`, default `claude`) in a terminal beside the tab, with a prompt holding the code and the comment. `--send-here` sends the comments to you instead: a line in your input telling you to read a prompt file. Either way, answer in the thread, so the user sees it next to the code:
+
+```bash
+abromux diff threads 3f2a --unresolved           # what's been said
+abromux diff reply 3f2a <thread> --resolve <<'EOF'
+Renamed it and updated the two callers.
+EOF
+```
+
+`--resolve` only when you made the change asked for; leave it off for answers and questions back.
 
 ## Report to the user
 
@@ -96,6 +123,8 @@ abromux move-surface surface:7 --workspace workspace:2   # move a tab; or --pane
 abromux split-off --surface surface:7 right  # a tab into its own pane beside; focus stays put
 abromux move-tab-to-new-workspace --surface surface:7 --title 'dev server'
 abromux list-notifications
+abromux mark-notification-read --workspace workspace:2   # or --id N, --all; dismiss-notification --id N | --all-read
+abromux tab-action --tab surface:7 close-others   # close-left/right, new-terminal-right, duplicate, rename <title>, mark-unread...
 abromux clear-history --surface surface:7    # like ⌘K
 abromux rpc <method> '<json>'            # raw socket call
 ```

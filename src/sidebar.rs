@@ -5,7 +5,7 @@
 //! (`settings::SidebarSettings`), cmux's names for the same things.
 
 use crate::{
-    AbroMux, Hints, SIDEBAR_WIDTH, TITLEBAR_H, hint_pill, one_line,
+    AbroMux, Hints, SIDEBAR_WIDTH, TITLEBAR_H, focus_selected, hint_pill, one_line,
     settings::{IndicatorStyle, Placement, Settings},
     shortcut_digit, terminal,
     theme::*,
@@ -14,12 +14,15 @@ use crate::{
 };
 use gpui::{prelude::*, *};
 use gpui_component::{
-    input::{Input, InputEvent, InputState, SelectAll},
+    input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
 };
 
 /// How far a group's workspaces sit in from the sidebar's edge.
 const GROUP_INDENT: f32 = 18.;
+/// A workspace title's line height (unzoomed), which its rename field
+/// matches so the row keeps its height while renaming.
+const TITLE_LINE: f32 = 20.;
 /// The most description lines a row shows.
 const DESCRIPTION_LINES: usize = 6;
 
@@ -445,8 +448,7 @@ impl AbroMux {
             },
         )
         .detach();
-        input.update(cx, |i, cx| i.focus(window, cx));
-        window.on_next_frame(|window, cx| window.dispatch_action(Box::new(SelectAll), cx));
+        focus_selected(&input, window, cx);
         self.describing = Some((id, input));
         cx.notify();
     }
@@ -497,8 +499,7 @@ impl AbroMux {
             },
         )
         .detach();
-        input.update(cx, |i, cx| i.focus(window, cx));
-        window.on_next_frame(|window, cx| window.dispatch_action(Box::new(SelectAll), cx));
+        focus_selected(&input, window, cx);
         self.renaming_group = Some((group, input));
         cx.notify();
     }
@@ -551,6 +552,7 @@ impl AbroMux {
         };
         let ws = &app.workspaces[index];
         let (color, group, described) = (ws.color, ws.group, ws.description.is_some());
+        let has_folder = ws.home.is_some();
         let n = app.workspaces.len();
         let groups: Vec<(usize, String)> =
             app.groups.iter().map(|g| (g.id, g.name.clone())).collect();
@@ -663,6 +665,12 @@ impl AbroMux {
                 .on_click(act(|t, i, _, cx| t.workspace_to_top(i, cx))),
         )
         .separator()
+        .when(has_folder, |m| {
+            m.item(
+                PopupMenuItem::new("Clean Up and Delete Folder…")
+                    .on_click(act(|t, i, w, cx| t.clean_up_folder(i, w, cx))),
+            )
+        })
         .item(
             PopupMenuItem::new("Close Workspace")
                 .on_click(act(|t, i, w, cx| t.request_close_workspace(i, w, cx))),
@@ -1254,8 +1262,7 @@ impl AbroMux {
                         Some(input) => div()
                             .flex_1()
                             .min_w_0()
-                            .h(px(20. * z))
-                            .my(px(-2.))
+                            .h(px(TITLE_LINE * z))
                             .mx(px(-5.))
                             .px(px(4.))
                             .flex()
@@ -1294,6 +1301,7 @@ impl AbroMux {
                                 }
                             })
                             .text_size(px(12.5 * z))
+                            .line_height(px(TITLE_LINE * z))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(fg)
                             .child(name.clone())

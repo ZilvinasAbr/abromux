@@ -1,0 +1,775 @@
+[
+  {
+    "assignee": {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    },
+    "assignees": [
+      {
+        "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+        "id": 2,
+        "locked": false,
+        "name": "Alice Author",
+        "public_email": null,
+        "state": "active",
+        "username": "alice",
+        "web_url": "http://localhost:8929/alice"
+      }
+    ],
+    "author": {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "bot": false,
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    },
+    "blocking_discussions_resolved": true,
+    "closed_at": null,
+    "closed_by": null,
+    "created_at": "2026-11-06T08:41:54.159Z",
+    "description": "More than GitLab shows in one diff.",
+    "detailed_merge_status": "mergeable",
+    "discussion_locked": null,
+    "downvotes": 0,
+    "draft": false,
+    "force_remove_source_branch": true,
+    "has_conflicts": false,
+    "id": 120,
+    "iid": 9,
+    "imported": false,
+    "imported_from": "none",
+    "labels": [],
+    "merge_after": null,
+    "merge_commit_sha": null,
+    "merge_status": "can_be_merged",
+    "merge_user": null,
+    "merge_when_pipeline_succeeds": false,
+    "merged_at": null,
+    "merged_by": null,
+    "milestone": null,
+    "prepared_at": "2026-11-06T08:41:56.658Z",
+    "project_id": 19,
+    "reference": "!9",
+    "references": {
+      "full": "alice/review-fixtures!9",
+      "relative": "!9",
+      "short": "!9"
+    },
+    "reviewers": [
+      {
+        "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+        "id": 3,
+        "locked": false,
+        "name": "Bob Reviewer",
+        "public_email": null,
+        "state": "active",
+        "username": "bob",
+        "web_url": "http://localhost:8929/bob"
+      }
+    ],
+    "sha": "9975d3390eb11716d867788e2b72643402d4f92f",
+    "should_remove_source_branch": null,
+    "source_branch": "huge",
+    "source_project_id": 19,
+    "squash": false,
+    "squash_commit_sha": null,
+    "squash_on_merge": false,
+    "state": "opened",
+    "target_branch": "main",
+    "target_project_id": 19,
+    "task_completion_status": {
+      "completed_count": 0,
+      "count": 0
+    },
+    "time_stats": {
+      "human_time_estimate": null,
+      "human_total_time_spent": null,
+      "time_estimate": 0,
+      "total_time_spent": 0
+    },
+    "title": "Vendor everything",
+    "updated_at": "2026-11-06T08:41:56.667Z",
+    "upvotes": 0,
+    "user_notes_count": 0,
+    "web_url": "http://localhost:8929/alice/review-fixtures/-/merge_requests/9",
+    "work_in_progress": false
+  },
+  {
+    "assignee": {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    },
+    "assignees": [
+      {
+        "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+        "id": 2,
+        "locked": false,
+        "name": "Alice Author",
+        "public_email": null,
+        "state": "active",
+        "username": "alice",
+        "web_url": "http://localhost:8929/alice"
+      }
+    ],
+    "author": {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "bot": false,
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    },
+    "blocking_discussions_resolved": true,
+    "closed_at": null,
+    "closed_by": null,
+    "created_at": "2026-11-06T08:41:54.023Z",
+    "description": "Lots of small files.",
+    "detailed_merge_status": "mergeable",
+    "discussion_locked": null,
+    "downvotes": 0,
+    "draft": false,
+    "force_remove_source_branch": true,
+    "has_conflicts": false,
+    "id": 119,
+    "iid": 8,
+    "imported": false,
+    "imported_from": "none",
+    "labels": [],
+    "merge_after": null,
+    "merge_commit_sha": null,
+    "merge_status": "can_be_merged",
+    "merge_user": null,
+    "merge_when_pipeline_succeeds": false,
+    "merged_at": null,
+    "merged_by": null,
+    "milestone": null,
+    "prepared_at": "2026-11-06T08:41:56.461Z",
+    "project_id": 19,
+    "reference": "!8",
+    "references": {
+      "full": "alice/review-fixtures!8",
+      "relative": "!8",
+      "short": "!8"
+    },
+    "reviewers": [
+      {
+        "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+        "id": 3,
+        "locked": false,
+        "name": "Bob Reviewer",
+        "public_email": null,
+        "state": "active",
+        "username": "bob",
+        "web_url": "http://localhost:8929/bob"
+      }
+    ],
+    "sha": "6b7d8b21402281ba78a73c24e1374f1f7df0bec8",
+    "should_remove_source_branch": null,
+    "source_branch": "many-files",
+    "source_project_id": 19,
+    "squash": false,
+    "squash_commit_sha": null,
+    "squash_on_merge": false,
+    "state": "opened",
+    "target_branch": "main",
+    "target_project_id": 19,
+    "task_completion_status": {
+      "completed_count": 0,
+      "count": 0
+    },
+    "time_stats": {
+      "human_time_estimate": null,
+      "human_total_time_spent": null,
+      "time_estimate": 0,
+      "total_time_spent": 0
+    },
+    "title": "Add 40 modules",
+    "updated_at": "2026-11-06T08:41:56.474Z",
+    "upvotes": 0,
+    "user_notes_count": 0,
+    "web_url": "http://localhost:8929/alice/review-fixtures/-/merge_requests/8",
+    "work_in_progress": false
+  },
+  {
+    "assignee": {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    },
+    "assignees": [
+      {
+        "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+        "id": 2,
+        "locked": false,
+        "name": "Alice Author",
+        "public_email": null,
+        "state": "active",
+        "username": "alice",
+        "web_url": "http://localhost:8929/alice"
+      }
+    ],
+    "author": {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "bot": false,
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    },
+    "blocking_discussions_resolved": true,
+    "closed_at": null,
+    "closed_by": null,
+    "created_at": "2026-11-06T08:41:52.455Z",
+    "description": "Real code to review: OSC 52 clipboard, safer ⌘-click, ⌘F in terminal-browser tabs.",
+    "detailed_merge_status": "mergeable",
+    "discussion_locked": null,
+    "downvotes": 0,
+    "draft": false,
+    "force_remove_source_branch": true,
+    "has_conflicts": false,
+    "id": 118,
+    "iid": 7,
+    "imported": false,
+    "imported_from": "none",
+    "labels": [],
+    "merge_after": null,
+    "merge_commit_sha": null,
+    "merge_status": "can_be_merged",
+    "merge_user": null,
+    "merge_when_pipeline_succeeds": false,
+    "merged_at": null,
+    "merged_by": null,
+    "milestone": null,
+    "prepared_at": "2026-11-06T08:41:53.333Z",
+    "project_id": 19,
+    "reference": "!7",
+    "references": {
+      "full": "alice/review-fixtures!7",
+      "relative": "!7",
+      "short": "!7"
+    },
+    "reviewers": [
+      {
+        "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+        "id": 3,
+        "locked": false,
+        "name": "Bob Reviewer",
+        "public_email": null,
+        "state": "active",
+        "username": "bob",
+        "web_url": "http://localhost:8929/bob"
+      }
+    ],
+    "sha": "67310c8c94f5e0bf94284cc510d9adeda6707c2a",
+    "should_remove_source_branch": null,
+    "source_branch": "abromux-0.18.3",
+    "source_project_id": 19,
+    "squash": false,
+    "squash_commit_sha": null,
+    "squash_on_merge": false,
+    "state": "opened",
+    "target_branch": "abromux-0.18.0",
+    "target_project_id": 19,
+    "task_completion_status": {
+      "completed_count": 0,
+      "count": 0
+    },
+    "time_stats": {
+      "human_time_estimate": null,
+      "human_total_time_spent": null,
+      "time_estimate": 0,
+      "total_time_spent": 0
+    },
+    "title": "abromux 0.18.1 to 0.18.3",
+    "updated_at": "2026-11-06T08:41:53.344Z",
+    "upvotes": 0,
+    "user_notes_count": 2,
+    "web_url": "http://localhost:8929/alice/review-fixtures/-/merge_requests/7",
+    "work_in_progress": false
+  },
+  {
+    "assignee": {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    },
+    "assignees": [
+      {
+        "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+        "id": 2,
+        "locked": false,
+        "name": "Alice Author",
+        "public_email": null,
+        "state": "active",
+        "username": "alice",
+        "web_url": "http://localhost:8929/alice"
+      }
+    ],
+    "author": {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "bot": false,
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    },
+    "blocking_discussions_resolved": true,
+    "closed_at": null,
+    "closed_by": null,
+    "created_at": "2026-11-06T08:41:45.924Z",
+    "description": "Makes the icon orange.",
+    "detailed_merge_status": "mergeable",
+    "discussion_locked": null,
+    "downvotes": 0,
+    "draft": false,
+    "force_remove_source_branch": true,
+    "has_conflicts": false,
+    "id": 115,
+    "iid": 4,
+    "imported": false,
+    "imported_from": "none",
+    "labels": [],
+    "merge_after": null,
+    "merge_commit_sha": null,
+    "merge_status": "can_be_merged",
+    "merge_user": null,
+    "merge_when_pipeline_succeeds": false,
+    "merged_at": null,
+    "merged_by": null,
+    "milestone": null,
+    "prepared_at": "2026-11-06T08:41:47.502Z",
+    "project_id": 19,
+    "reference": "!4",
+    "references": {
+      "full": "alice/review-fixtures!4",
+      "relative": "!4",
+      "short": "!4"
+    },
+    "reviewers": [
+      {
+        "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+        "id": 3,
+        "locked": false,
+        "name": "Bob Reviewer",
+        "public_email": null,
+        "state": "active",
+        "username": "bob",
+        "web_url": "http://localhost:8929/bob"
+      }
+    ],
+    "sha": "54c2df5771949a55bd168d8e3458d3d0859dee7b",
+    "should_remove_source_branch": null,
+    "source_branch": "new-icon",
+    "source_project_id": 19,
+    "squash": false,
+    "squash_commit_sha": null,
+    "squash_on_merge": false,
+    "state": "opened",
+    "target_branch": "main",
+    "target_project_id": 19,
+    "task_completion_status": {
+      "completed_count": 0,
+      "count": 0
+    },
+    "time_stats": {
+      "human_time_estimate": null,
+      "human_total_time_spent": null,
+      "time_estimate": 0,
+      "total_time_spent": 0
+    },
+    "title": "Warmer icon",
+    "updated_at": "2026-11-06T09:35:02.097Z",
+    "upvotes": 0,
+    "user_notes_count": 0,
+    "web_url": "http://localhost:8929/alice/review-fixtures/-/merge_requests/4",
+    "work_in_progress": false
+  },
+  {
+    "assignee": {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    },
+    "assignees": [
+      {
+        "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+        "id": 2,
+        "locked": false,
+        "name": "Alice Author",
+        "public_email": null,
+        "state": "active",
+        "username": "alice",
+        "web_url": "http://localhost:8929/alice"
+      }
+    ],
+    "author": {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "bot": false,
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    },
+    "blocking_discussions_resolved": true,
+    "closed_at": null,
+    "closed_by": null,
+    "created_at": "2026-11-06T08:41:45.762Z",
+    "description": "",
+    "detailed_merge_status": "mergeable",
+    "discussion_locked": null,
+    "downvotes": 0,
+    "draft": false,
+    "force_remove_source_branch": true,
+    "has_conflicts": false,
+    "id": 114,
+    "iid": 3,
+    "imported": false,
+    "imported_from": "none",
+    "labels": [
+      {
+        "archived": false,
+        "color": "#dd2b0e",
+        "description": null,
+        "description_html": "",
+        "id": 38,
+        "name": "bug",
+        "text_color": "#FFFFFF"
+      },
+      {
+        "archived": false,
+        "color": "#2da160",
+        "description": null,
+        "description_html": "",
+        "id": 40,
+        "name": "docs",
+        "text_color": "#FFFFFF"
+      }
+    ],
+    "merge_after": null,
+    "merge_commit_sha": null,
+    "merge_status": "can_be_merged",
+    "merge_user": null,
+    "merge_when_pipeline_succeeds": false,
+    "merged_at": null,
+    "merged_by": null,
+    "milestone": null,
+    "prepared_at": "2026-11-06T08:41:47.394Z",
+    "project_id": 19,
+    "reference": "!3",
+    "references": {
+      "full": "alice/review-fixtures!3",
+      "relative": "!3",
+      "short": "!3"
+    },
+    "reviewers": [
+      {
+        "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+        "id": 3,
+        "locked": false,
+        "name": "Bob Reviewer",
+        "public_email": null,
+        "state": "active",
+        "username": "bob",
+        "web_url": "http://localhost:8929/bob"
+      }
+    ],
+    "sha": "94a1f3befa698a606814912b132b7e1e883db784",
+    "should_remove_source_branch": null,
+    "source_branch": "fix-typo",
+    "source_project_id": 19,
+    "squash": false,
+    "squash_commit_sha": null,
+    "squash_on_merge": false,
+    "state": "opened",
+    "target_branch": "main",
+    "target_project_id": 19,
+    "task_completion_status": {
+      "completed_count": 0,
+      "count": 0
+    },
+    "time_stats": {
+      "human_time_estimate": null,
+      "human_total_time_spent": null,
+      "time_estimate": 0,
+      "total_time_spent": 0
+    },
+    "title": "Fix typo",
+    "updated_at": "2026-11-06T09:35:59.862Z",
+    "upvotes": 0,
+    "user_notes_count": 0,
+    "web_url": "http://localhost:8929/alice/review-fixtures/-/merge_requests/3",
+    "work_in_progress": false
+  },
+  {
+    "assignee": {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    },
+    "assignees": [
+      {
+        "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+        "id": 2,
+        "locked": false,
+        "name": "Alice Author",
+        "public_email": null,
+        "state": "active",
+        "username": "alice",
+        "web_url": "http://localhost:8929/alice"
+      }
+    ],
+    "author": {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "bot": false,
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    },
+    "blocking_discussions_resolved": true,
+    "closed_at": null,
+    "closed_by": null,
+    "created_at": "2026-11-06T08:41:45.593Z",
+    "description": "Touches 3000 lines.",
+    "detailed_merge_status": "draft_status",
+    "discussion_locked": null,
+    "downvotes": 0,
+    "draft": true,
+    "force_remove_source_branch": true,
+    "has_conflicts": false,
+    "id": 113,
+    "iid": 2,
+    "imported": false,
+    "imported_from": "none",
+    "labels": [],
+    "merge_after": null,
+    "merge_commit_sha": null,
+    "merge_status": "can_be_merged",
+    "merge_user": null,
+    "merge_when_pipeline_succeeds": false,
+    "merged_at": null,
+    "merged_by": null,
+    "milestone": null,
+    "prepared_at": "2026-11-06T08:41:46.559Z",
+    "project_id": 19,
+    "reference": "!2",
+    "references": {
+      "full": "alice/review-fixtures!2",
+      "relative": "!2",
+      "short": "!2"
+    },
+    "reviewers": [
+      {
+        "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+        "id": 3,
+        "locked": false,
+        "name": "Bob Reviewer",
+        "public_email": null,
+        "state": "active",
+        "username": "bob",
+        "web_url": "http://localhost:8929/bob"
+      }
+    ],
+    "sha": "34b3a563cd7cadb83a7d1f1e45e53de3f70c8251",
+    "should_remove_source_branch": null,
+    "source_branch": "big-refactor",
+    "source_project_id": 19,
+    "squash": false,
+    "squash_commit_sha": null,
+    "squash_on_merge": false,
+    "state": "opened",
+    "target_branch": "main",
+    "target_project_id": 19,
+    "task_completion_status": {
+      "completed_count": 0,
+      "count": 0
+    },
+    "time_stats": {
+      "human_time_estimate": null,
+      "human_total_time_spent": null,
+      "time_estimate": 0,
+      "total_time_spent": 0
+    },
+    "title": "Draft: big refactor",
+    "updated_at": "2026-11-06T09:17:22.068Z",
+    "upvotes": 0,
+    "user_notes_count": 0,
+    "web_url": "http://localhost:8929/alice/review-fixtures/-/merge_requests/2",
+    "work_in_progress": true
+  },
+  {
+    "assignee": {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    },
+    "assignees": [
+      {
+        "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+        "id": 2,
+        "locked": false,
+        "name": "Alice Author",
+        "public_email": null,
+        "state": "active",
+        "username": "alice",
+        "web_url": "http://localhost:8929/alice"
+      }
+    ],
+    "author": {
+      "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+      "bot": false,
+      "id": 2,
+      "locked": false,
+      "name": "Alice Author",
+      "public_email": null,
+      "state": "active",
+      "username": "alice",
+      "web_url": "http://localhost:8929/alice"
+    },
+    "blocking_discussions_resolved": true,
+    "closed_at": null,
+    "closed_by": null,
+    "created_at": "2026-11-06T08:41:42.317Z",
+    "description": "Adds a per-key limiter.\n\n- [x] limiter\n- [ ] metrics\n\n```rust\nlet l = Limiter::new(3);\n```",
+    "detailed_merge_status": "mergeable",
+    "discussion_locked": null,
+    "downvotes": 0,
+    "draft": false,
+    "force_remove_source_branch": true,
+    "has_conflicts": false,
+    "id": 112,
+    "iid": 1,
+    "imported": false,
+    "imported_from": "none",
+    "labels": [
+      {
+        "archived": false,
+        "color": "#1068bf",
+        "description": null,
+        "description_html": "",
+        "id": 37,
+        "name": "backend",
+        "text_color": "#FFFFFF"
+      },
+      {
+        "archived": false,
+        "color": "#e9be74",
+        "description": null,
+        "description_html": "",
+        "id": 39,
+        "name": "priority::high",
+        "text_color": "#1F1E24"
+      }
+    ],
+    "merge_after": null,
+    "merge_commit_sha": null,
+    "merge_status": "can_be_merged",
+    "merge_user": null,
+    "merge_when_pipeline_succeeds": false,
+    "merged_at": null,
+    "merged_by": null,
+    "milestone": null,
+    "prepared_at": "2026-11-06T08:41:43.104Z",
+    "project_id": 19,
+    "reference": "!1",
+    "references": {
+      "full": "alice/review-fixtures!1",
+      "relative": "!1",
+      "short": "!1"
+    },
+    "reviewers": [
+      {
+        "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+        "id": 3,
+        "locked": false,
+        "name": "Bob Reviewer",
+        "public_email": null,
+        "state": "active",
+        "username": "bob",
+        "web_url": "http://localhost:8929/bob"
+      }
+    ],
+    "sha": "5bcc787710b20242e6ad1b979ebec154db11b6a7",
+    "should_remove_source_branch": null,
+    "source_branch": "rate-limiter",
+    "source_project_id": 19,
+    "squash": false,
+    "squash_commit_sha": null,
+    "squash_on_merge": false,
+    "state": "opened",
+    "target_branch": "main",
+    "target_project_id": 19,
+    "task_completion_status": {
+      "completed_count": 1,
+      "count": 2
+    },
+    "time_stats": {
+      "human_time_estimate": null,
+      "human_total_time_spent": null,
+      "time_estimate": 0,
+      "total_time_spent": 0
+    },
+    "title": "Add rate limiter",
+    "updated_at": "2026-11-06T08:41:43.113Z",
+    "upvotes": 0,
+    "user_notes_count": 7,
+    "web_url": "http://localhost:8929/alice/review-fixtures/-/merge_requests/1",
+    "work_in_progress": false
+  }
+]

@@ -13,6 +13,7 @@ mod cli;
 mod cmux;
 mod config;
 mod folder;
+mod gitlab;
 mod cursor;
 mod debug;
 mod ghostty;
@@ -24,8 +25,11 @@ mod layout;
 mod link;
 mod menu;
 mod notification;
+mod notify_hook;
+mod menubar;
 mod osc99;
 mod palette;
+mod plugins;
 mod pty;
 mod quit;
 mod server;
@@ -57,7 +61,7 @@ use gpui_component::{
 use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -73,6 +77,7 @@ actions!(
         Quit,
         NewWorkspace,
         NewFolderWorkspace,
+        CleanUpWorkspaceFolder,
         CloseWorkspace,
         RenameWorkspace,
         NextWorkspace,
@@ -117,6 +122,8 @@ actions!(
         ToggleZoom,
         ToggleNotifications,
         JumpToUnread,
+        ToggleUnread,
+        MarkOldestUnreadAndJumpNext,
         CommandPalette,
         WorkspaceSwitcher,
         RenameTab,
@@ -136,7 +143,10 @@ actions!(
         Ungroup,
         ToggleGroup,
         ReopenSession,
-        ImportCmuxSession
+        ImportCmuxSession,
+        ToggleMergeRequests,
+        GoToMergeRequest,
+        RefreshMergeRequests
     ]
 );
 
@@ -151,6 +161,8 @@ const SIDEBAR_MAX: f32 = 480.;
 /// Height of the titlebar row the traffic lights sit in.
 const TITLEBAR_H: f32 = 38.;
 const TABBAR_H: f32 = 30.;
+/// How wide the area is that grabs a pane divider (drawn 1px wide).
+const DIVIDER_GRAB: f32 = 9.;
 /// The macOS window's corner radius (`-[NSWindow _cornerRadius]` on macOS 26).
 const WINDOW_RADIUS: f32 = 16.;
 /// How close to the pane area's outer edge a dragged tab splits the whole
@@ -195,6 +207,7 @@ impl AssetSource for Assets {
             "panel-left",
             "bell",
             "git-branch",
+            "git-pull-request",
             "folder",
             "search",
             "circle-x",
@@ -216,7 +229,7 @@ impl AssetSource for Assets {
             "triangle-alert",
             "power"
         );
-        Ok(bytes.map(Cow::Borrowed))
+        Ok(bytes.or_else(|| plugins::asset(path)).map(Cow::Borrowed))
     }
 
     fn list(&self, _: &str) -> Result<Vec<SharedString>> {
@@ -254,6 +267,8 @@ struct AbroMux {
     sidebar: bool,
     sidebar_width: f32,
     resizing_sidebar: bool,
+    /// The merge requests panel on the right (⌥⌘B, `crate::gitlab`).
+    mr_panel: bool,
     split_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     dragging: Option<(usize, Axis)>,
     /// Where a dragged tab would land: the pane under the cursor, the
@@ -275,8 +290,16 @@ struct AbroMux {
     next_notification: usize,
     /// The ⌘I list is showing.
     notifications_open: bool,
+    /// Surfaces marked unread with no unread notification (⌥⌘U, ⌃⌘U,
+    /// `mark-unread`), until you next look at them.
+    manual_unread: HashSet<EntityId>,
+    /// The surface you were looking at on the last render, so looking at
+    /// one marks it read once, not on every frame.
+    last_viewed: Option<EntityId>,
     /// Unread count last put on the dock icon.
     badge: usize,
+    /// What the menu-bar extra shows now, to rebuild it only on change.
+    menubar: Option<String>,
     /// The ⌘⇧P / ⌘P palette, while open.
     palette: Option<palette::Palette>,
     /// The session this launch restored (without scrollback), for ⌘⇧O,
@@ -317,6 +340,7 @@ impl AbroMux {
             sidebar: true,
             sidebar_width: SIDEBAR_WIDTH,
             resizing_sidebar: false,
+            mr_panel: false,
             split_bounds: Default::default(),
             dragging: None,
             tab_drop: None,
@@ -330,7 +354,10 @@ impl AbroMux {
             notifications: vec![],
             next_notification: 0,
             notifications_open: false,
+            manual_unread: HashSet::new(),
+            last_viewed: None,
             badge: 0,
+            menubar: None,
             palette: None,
             launch_session: None,
             naming: vec![],
@@ -345,6 +372,21 @@ impl AbroMux {
         })
         .detach();
         cx.observe(&update::entity(cx), |_, _, cx| cx.notify())
+            .detach();
+        let mut menubar_picks = menubar::init();
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(pick) = menubar_picks.next().await {
+                if this
+                    .update_in(cx, |this, window, cx| this.menubar_pick(pick, window, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+        // The merge requests panel follows the cache.
+        cx.observe(&gitlab::store(cx), |_, _, cx| cx.notify())
             .detach();
         let mut banner_clicks = banner::init();
         cx.spawn_in(window, async move |this, cx| {
@@ -369,6 +411,22 @@ impl AbroMux {
                 {
                     break;
                 }
+            }
+        })
+        .detach();
+        // Which projects and branches the workspaces have, for their merge
+        // requests, and which GitLab tabs show which (also while the window
+        // isn't drawing); cheap until something changed.
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                let synced = this.update_in(cx, |this, window, cx| {
+                    this.sync_mr_views(window, cx);
+                    this.sync_mr_workspaces(cx);
+                });
+                if synced.is_err() {
+                    break;
+                }
+                Timer::after(Duration::from_secs(10)).await;
             }
         })
         .detach();
@@ -592,6 +650,8 @@ impl AbroMux {
                 "ABROMUX_WORKSPACE_DIR".into(),
                 home.to_string_lossy().into_owned(),
             ));
+            // Compose stacks started here are the workspace's, for cleanup.
+            env.push(("COMPOSE_PROJECT_NAME".into(), folder::tag(&home)));
         }
         env.extend([
             ("ABROMUX_WORKSPACE_ID".into(), format!("workspace:{ws}")),
@@ -659,6 +719,36 @@ impl AbroMux {
         self.make_builtin_browser(url, window, cx)
     }
 
+    /// A tab of plugin `id` (src/plugins.rs), opened on `params`: what it
+    /// saved, or the socket's params, or `{}`.
+    fn make_plugin(
+        &mut self,
+        id: &str,
+        params: &serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Surface> {
+        let plugin = plugins::find(id).ok_or_else(|| anyhow::anyhow!("no plugin {id:?}"))?;
+        let tab = (plugin.open)(params, window, cx)?;
+        self.surface_ref(tab.entity_id());
+        Ok(Surface::Plugin(tab))
+    }
+
+    /// A link plugin `id` opens, as its new tab in the focused pane.
+    pub(crate) fn open_plugin_link(&mut self, id: &str, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match self.make_plugin(id, &serde_json::json!({ "url": url }), window, cx) {
+            Ok(s) => self.add_tab(s, window, cx),
+            Err(e) => window.push_notification(Notification::error(format!("{e:#}")), cx),
+        }
+    }
+
+    pub(crate) fn open_plugin(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match self.make_plugin(id, &serde_json::json!({}), window, cx) {
+            Ok(s) => self.add_tab(s, window, cx),
+            Err(e) => window.push_notification(Notification::error(format!("{e:#}")), cx),
+        }
+    }
+
     fn make_builtin_browser(
         &mut self,
         url: &str,
@@ -680,7 +770,9 @@ impl AbroMux {
 
     /// ⌘-click on a terminal link: web URLs open in a browser to the right
     /// of the terminal (a new tab there if that pane already shows one),
-    /// anything else with its default app.
+    /// local files and folders with their default app, and anything that
+    /// could run code only in Finder (see `link::local`). Other schemes do
+    /// nothing.
     fn open_link(
         &mut self,
         from: EntityId,
@@ -690,12 +782,14 @@ impl AbroMux {
     ) {
         let url = match target {
             link::Target::Url(u) if u.starts_with("http://") || u.starts_with("https://") => u,
-            link::Target::Url(u) => {
-                let _ = std::process::Command::new("/usr/bin/open").arg(u).spawn();
-                return;
-            }
-            link::Target::Path(p, _) => {
-                let _ = std::process::Command::new("/usr/bin/open").arg(p).spawn();
+            other => {
+                let mut open = std::process::Command::new("/usr/bin/open");
+                match link::local(&other) {
+                    Some(link::Local::Open(p)) => open.arg(p),
+                    Some(link::Local::Reveal(p)) => open.arg("-R").arg(p),
+                    None => return,
+                };
+                let _ = open.spawn();
                 return;
             }
         };
@@ -712,15 +806,25 @@ impl AbroMux {
         else {
             return;
         };
+        // A link a plugin shows itself (a GitLab merge request) opens as its
+        // tab, where a browser would: in a pane of those to the right.
+        let claimed = plugins::claiming(&url);
         let right = ws.root.neighbor(pane, Dir::Right).filter(|&r| {
             ws.root
                 .panes()
                 .into_iter()
                 .find(|p| p.id == r)
                 .and_then(|p| p.active_surface())
-                .is_some_and(|s| s.is_browser(cx))
+                .is_some_and(|s| match claimed {
+                    Some(p) => s.is_plugin(p.id),
+                    None => s.is_browser(cx),
+                })
         });
-        let surface = self.make_browser(&url, window, cx);
+        let surface = match claimed.map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx)) {
+            Some(Ok(s)) => s,
+            // It couldn't: the page, as before.
+            _ => self.make_browser(&url, window, cx),
+        };
         match right {
             Some(r) => self.add_tab_to(wi, r, surface, true, window, cx),
             None => {
@@ -747,7 +851,11 @@ impl AbroMux {
         }) else {
             return;
         };
-        let surface = self.make_browser(url, window, cx);
+        let claimed = plugins::claiming(url).map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx));
+        let surface = match claimed {
+            Some(Ok(s)) => s,
+            _ => self.make_browser(url, window, cx),
+        };
         self.add_tab_to(wi, pane, surface, focus, window, cx);
         cx.notify();
     }
@@ -800,13 +908,10 @@ impl AbroMux {
             pane.active -= 1;
         }
         if pane.tabs.is_empty() {
-            if !ws.root.remove(pane_id) {
+            if !ws.remove_pane(pane_id) {
                 // Last pane in the workspace: closing it closes the workspace.
                 self.close_workspace(wi, window, cx);
                 return;
-            }
-            if ws.focused_pane == pane_id {
-                ws.focused_pane = ws.root.panes()[0].id;
             }
         }
         self.focus_active(window, cx);
@@ -1002,6 +1107,79 @@ impl AbroMux {
         cx.notify();
     }
 
+    /// Right-click › Clean Up and Delete Folder…: a tab in workspace `wi`'s
+    /// folder running the cleanup agent (`automation.workspaceCleanupAgent`,
+    /// default `claude`) on `.abromux/cleanup.md`. The agent finds what the
+    /// workspace made, asks, removes it, and ends with `abromux folder
+    /// remove`. It runs in a shell, so the shell stays if it stops early.
+    pub(crate) fn clean_up_folder(&mut self, wi: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(home) = self.workspaces.get(wi).and_then(|w| w.home.clone()) else {
+            let note = Notification::warning("Only a workspace made with ⇧⌘I has a folder to clean up.")
+                .title("Not a workspace folder");
+            return window.push_notification(note, cx);
+        };
+        let ask = match folder::write_cleanup(&home) {
+            Ok(a) => a,
+            Err(e) => {
+                let note = Notification::error(format!("{}: {e}", home.display()))
+                    .title("Couldn't start the cleanup");
+                return window.push_notification(note, cx);
+            }
+        };
+        let agent = cx
+            .global::<settings::Settings>()
+            .automation
+            .workspace_cleanup_agent
+            .clone()
+            .filter(|a| !a.trim().is_empty())
+            .unwrap_or_else(|| "claude".into());
+        let id = self.workspaces[wi].id;
+        let s = self.make_terminal(Some(home.to_string_lossy().into_owned()), id, window, cx);
+        if let Surface::Terminal(t) = &s {
+            t.update(cx, |t, _| t.send(format!("{} '{ask}'\r", agent.trim()).as_bytes()));
+        }
+        self.select_workspace(wi, window, cx);
+        let pane = self.workspaces[wi].focused_pane;
+        self.add_tab_to(wi, pane, s, true, window, cx);
+    }
+
+    /// `abromux folder remove` from (maybe) one of workspace `id`'s own
+    /// shells: give it a moment to print, close the workspace, then delete
+    /// the folder off the main thread and say how it went.
+    pub(crate) fn remove_folder_later(
+        &mut self,
+        id: usize,
+        dir: std::path::PathBuf,
+        force: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(800))
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if let Some(i) = this.ws_index(id) {
+                    this.close_workspace(i, window, cx);
+                }
+            });
+            let d = dir.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { folder::remove(&d, force) })
+                .await;
+            let _ = this.update_in(cx, |_, window, cx| {
+                let note = match result {
+                    Ok(done) => Notification::success(done.join("\n")).title("Workspace folder removed"),
+                    Err(e) => Notification::error(format!("{}: {e}", dir.display()))
+                        .title("Couldn't remove the workspace folder"),
+                };
+                window.push_notification(note, cx);
+            });
+        })
+        .detach();
+    }
+
     /// Put `ws` at `index`, keeping the selected workspace selected.
     /// Returns where it went.
     fn insert_workspace(&mut self, index: usize, ws: Workspace) -> usize {
@@ -1022,10 +1200,11 @@ impl AbroMux {
         for p in ws.root.panes() {
             for s in &p.tabs {
                 self.surface_refs.remove(&s.entity_id());
-                self.notifications.retain(|n| n.surface != s.entity_id());
+                self.forget_notifications(s.entity_id());
                 match s {
                     Surface::Browser(b) => b.update(cx, |b, cx| b.set_shown(false, cx)),
                     Surface::Terminal(t) => t.update(cx, |t, _| t.close()),
+                    Surface::Plugin(_) => {}
                 }
             }
         }
@@ -1084,10 +1263,7 @@ impl AbroMux {
             },
         )
         .detach();
-        input.update(cx, |i, cx| i.focus(window, cx));
-        // Select the old name so typing replaces it; the input has to be
-        // rendered before it can take the action.
-        window.on_next_frame(|window, cx| window.dispatch_action(Box::new(SelectAll), cx));
+        focus_selected(&input, window, cx);
         self.renaming = Some((id, input));
         cx.notify();
     }
@@ -1123,8 +1299,7 @@ impl AbroMux {
             },
         )
         .detach();
-        input.update(cx, |i, cx| i.focus(window, cx));
-        window.on_next_frame(|window, cx| window.dispatch_action(Box::new(SelectAll), cx));
+        focus_selected(&input, window, cx);
         self.renaming_tab = Some((id, input));
         cx.notify();
     }
@@ -1818,26 +1993,44 @@ impl AbroMux {
                 let (id, axis) = (*id, *axis);
                 let horizontal = axis == Axis::Horizontal;
                 let bounds = self.split_bounds.clone();
+                // The 1px line, and a wider invisible grab area centered on
+                // it. That's drawn last (deferred), so the panes on both
+                // sides don't cover it, and it takes the clicks and cursor.
+                let grab = DIVIDER_GRAB;
                 let divider = div()
-                    .id(("divider", id))
                     .flex_none()
                     .bg(cx.global::<settings::Settings>().panes.divider_color)
-                    .when(horizontal, |s| s.w(px(1.)).h_full().cursor_col_resize())
-                    .when(!horizontal, |s| s.h(px(1.)).w_full().cursor_row_resize())
-                    .child(
-                        // Wider invisible grab area centered on the 1px line.
-                        div()
-                            .absolute()
-                            .when(horizontal, |s| s.left(px(-3.)).w(px(7.)).h_full())
-                            .when(!horizontal, |s| s.top(px(-3.)).h(px(7.)).w_full()),
-                    )
+                    .when(horizontal, |s| s.w(px(1.)).h_full())
+                    .when(!horizontal, |s| s.h(px(1.)).w_full())
                     .relative()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            this.dragging = Some((id, axis));
-                            cx.stop_propagation();
-                        }),
+                    .child(
+                        deferred(
+                            div()
+                                .id(("divider", id))
+                                .absolute()
+                                .when(horizontal, |s| {
+                                    s.top_0()
+                                        .left(px(-(grab - 1.) / 2.))
+                                        .w(px(grab))
+                                        .h_full()
+                                        .cursor_col_resize()
+                                })
+                                .when(!horizontal, |s| {
+                                    s.left_0()
+                                        .top(px(-(grab - 1.) / 2.))
+                                        .h(px(grab))
+                                        .w_full()
+                                        .cursor_row_resize()
+                                })
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.dragging = Some((id, axis));
+                                        cx.stop_propagation();
+                                    }),
+                                ),
+                        )
+                        .with_priority(1),
                     );
                 let (ca, cb) = if horizontal {
                     (
@@ -2124,45 +2317,12 @@ impl AbroMux {
                                     })),
                             )
                         })
-                        .child(icon_button(("pane-term", pane_id), "terminal").on_click(
-                            cx.listener(move |this, _, window, cx| {
-                                focus_pane(this, cx);
-                                let cwd = this.focused_cwd(cx);
-                                let ws = this.ws().id;
-                                let s = this.make_terminal(cwd, ws, window, cx);
-                                this.add_tab(s, window, cx);
-                            }),
-                        ))
-                        .child(
-                            icon_button(("pane-web", pane_id), "globe").on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    focus_pane(this, cx);
-                                    let s = this.make_browser(DEFAULT_URL, window, cx);
-                                    this.add_tab(s, window, cx);
-                                },
-                            )),
-                        )
-                        .child(
-                            icon_button(("pane-split-r", pane_id), "split-right").on_click(
-                                cx.listener(move |this, _, window, cx| {
-                                    focus_pane(this, cx);
-                                    this.split(Axis::Horizontal, false, window, cx);
-                                }),
-                            ),
-                        )
-                        .child(
-                            icon_button(("pane-split-d", pane_id), "split-down").on_click(
-                                cx.listener(move |this, _, window, cx| {
-                                    focus_pane(this, cx);
-                                    this.split(Axis::Vertical, false, window, cx);
-                                }),
-                            ),
-                        ),
                 );
 
         let content = match pane.active_surface() {
             Some(Surface::Terminal(t)) => t.clone().into_any_element(),
             Some(Surface::Browser(b)) => b.clone().into_any_element(),
+            Some(Surface::Plugin(p)) => p.view().into_any_element(),
             None => div().into_any_element(),
         };
         let browser = matches!(pane.active_surface(), Some(Surface::Browser(_)));
@@ -2257,7 +2417,7 @@ impl Render for AbroMux {
             ws.track_focus();
         }
         self.window_bounds = Some(window.window_bounds().get_bounds());
-        self.mark_viewed(window);
+        self.mark_viewed(window, cx);
         for ws in &mut self.workspaces {
             ws.zoomed();
         }
@@ -2266,6 +2426,7 @@ impl Render for AbroMux {
             self.ws_drop = None;
         }
         self.sync_webviews(cx);
+        self.sync_mr_views(window, cx);
         self.tick_spinner(cx);
         let notifications = self
             .notifications_open
@@ -2289,8 +2450,8 @@ impl Render for AbroMux {
         let rounded = !window.is_fullscreen();
         let corners = Corners {
             top_left: false,
-            top_right: rounded && self.sidebar,
-            bottom_right: rounded,
+            top_right: rounded && self.sidebar && !self.mr_panel,
+            bottom_right: rounded && !self.mr_panel,
             bottom_left: rounded && !self.sidebar,
         };
         let main = match ws
@@ -2306,6 +2467,7 @@ impl Render for AbroMux {
             None
         };
         let title = self.ws().name(cx);
+        let mr_panel = self.mr_panel.then(|| self.render_mr_panel(cx));
 
         div()
             .id("abromux")
@@ -2358,6 +2520,9 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &CloseWorkspace, window, cx| {
                 this.request_close_workspace(this.active, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &CleanUpWorkspaceFolder, window, cx| {
+                this.clean_up_folder(this.active, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &NewFolderWorkspace, window, cx| {
                 this.toggle_palette(palette::Mode::NewFolder, window, cx)
             }))
@@ -2409,6 +2574,16 @@ impl Render for AbroMux {
                 this.sidebar = !this.sidebar;
                 cx.notify()
             }))
+            .on_action(cx.listener(|this, _: &ToggleMergeRequests, _, cx| {
+                this.mr_panel = !this.mr_panel;
+                cx.notify()
+            }))
+            .on_action(cx.listener(|this, _: &GoToMergeRequest, window, cx| {
+                this.toggle_palette(palette::Mode::MergeRequests, window, cx)
+            }))
+            .on_action(|_: &RefreshMergeRequests, _, cx| {
+                gitlab::store(cx).update(cx, |s, cx| s.refresh_all(cx))
+            })
             .on_action(cx.listener(|this, _: &FocusAddressBar, window, cx| {
                 if let Some(Surface::Browser(b)) = this.ws().focused_surface() {
                     BrowserView::focus_address(b, window, cx);
@@ -2486,6 +2661,12 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &JumpToUnread, window, cx| {
                 this.jump_to_unread(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &ToggleUnread, _, cx| {
+                this.toggle_unread(cx);
+            }))
+            .on_action(cx.listener(|this, _: &MarkOldestUnreadAndJumpNext, window, cx| {
+                this.mark_oldest_and_jump_next(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &LastPane, window, cx| {
                 this.last_pane(window, cx);
             }))
@@ -2493,6 +2674,18 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &SwapRight, w, cx| this.swap_dir(Dir::Right, w, cx)))
             .on_action(cx.listener(|this, _: &SwapUp, w, cx| this.swap_dir(Dir::Up, w, cx)))
             .on_action(cx.listener(|this, _: &SwapDown, w, cx| this.swap_dir(Dir::Down, w, cx)))
+            .on_action(cx.listener(|this, a: &keymap::OpenPlugin, window, cx| {
+                this.open_plugin(&a.id, window, cx)
+            }))
+            .on_action(cx.listener(|_, a: &keymap::OpenPluginLink, window, cx| {
+                // Chosen from the palette, focus is going back to the pane
+                // just now: ask once that's done, or the pane keeps the keys.
+                if let Some(p) = plugins::find(&a.id) {
+                    cx.defer_in(window, move |this, window, cx| {
+                        this.toggle_palette(palette::Mode::OpenLink(p.id), window, cx)
+                    });
+                }
+            }))
             .on_action(cx.listener(|this, a: &keymap::RunCommand, window, cx| {
                 this.run_command(a.index, a.project.clone(), window, cx)
             }))
@@ -2629,6 +2822,7 @@ impl Render for AbroMux {
                             })
                     }),
             )
+            .children(mr_panel)
             .relative()
             .children(notifications)
             .children(updates)
@@ -2702,6 +2896,22 @@ pub(crate) fn one_line(s: &str) -> String {
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Focus a new rename field with its text selected, so typing replaces the
+/// old name. The selection waits for the field's focus event: that comes
+/// once it has been drawn, and before then an action sent to it goes
+/// nowhere (an `on_next_frame` runs before that frame is drawn).
+pub(crate) fn focus_selected(input: &Entity<InputState>, window: &mut Window, cx: &mut App) {
+    let done = std::rc::Rc::new(std::cell::Cell::new(false));
+    window
+        .subscribe(input, cx, move |_, ev: &InputEvent, window, cx| {
+            if matches!(ev, InputEvent::Focus) && !done.replace(true) {
+                window.dispatch_action(Box::new(SelectAll), cx);
+            }
+        })
+        .detach();
+    input.update(cx, |i, cx| i.focus(window, cx));
 }
 
 /// The ⌘/⌃ digit that selects item `index` of `count`: 1–8 for the first
@@ -2784,6 +2994,7 @@ fn run_app(cwd: Option<String>) {
         };
         cx.set_global(settings);
         update::init(cx);
+        gitlab::init(cx);
         cx.on_action(|_: &Quit, cx| {
             match cx.active_window().or_else(|| cx.windows().first().copied()) {
                 Some(w) => w
@@ -2866,6 +3077,7 @@ fn run_app(cwd: Option<String>) {
                     });
                 }
                 let view = cx.new(|cx| AbroMux::new(cwd, session, window, cx));
+                plugins::set_host(view.downgrade(), cx);
                 cx.new(|cx| Root::new(view, window, cx))
             },
         )

@@ -40,8 +40,13 @@ Commands:
   group by-folder                                            (group ungrouped workspaces that share a repo/folder)
   folder [path]                                              (the workspace folder this shell is in; ⇧⌘I makes one)
   folder add <path> [--branch <name>]                        (check a project out into it: a git worktree on ws/<folder>, else a copy)
-  folder list | all | repos | root                           (its checkouts; every workspace folder; git repos found
-                                                             under ~/repos, ~/src, ~/code...; where the folders live)
+  folder list | all [--closed] | repos | root                (its checkouts; every workspace folder, or those no open
+                                                             workspace has; git repos found under ~/repos, ~/src,
+                                                             ~/code...; where the folders live)
+  folder resources                                           (what it made outside the folder: recorded in
+                                                             .abromux/resources.md, and its labelled Docker resources)
+  folder remove [<path>] [--force]                           (remove its worktrees, delete the folder, close the workspace;
+                                                             refuses while there are changes or Docker leftovers)
   restore-session [--from <stable|nightly|nightly-<name>|cmux|path>]
                                                              (reopen the session this launch restored, or another one,
                                                              cmux's included; only workspaces not already open)
@@ -56,9 +61,24 @@ Commands:
   new-split <left|right|up|down> [--surface <ref>] [--workspace <ref>] [--type <terminal|browser>] [--url <url>] [--command <text>] [--focus <true|false>]
   list-pane-surfaces [--workspace <ref>] [--pane <ref>]
   new-surface [--type <terminal|browser>] [--pane <ref>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>]
+  gitlab [<merge request URL>] [--pane <ref>] [--focus <true|false>]   (a GitLab review tab; no URL: the list)
+  diff [<X..Y|X...Y|X>] [--cwd <dir>] [--title <text>] [--agent <command>] [--send-here | --send-to <surface>]
+       [--direction <dir> | --pane <ref>] [--focus <true|false>]
+                                                             (any git diff in the GitLab tab, beside this terminal;
+                                                             no range: uncommitted changes, X: X to the working tree.
+                                                             Each comment starts --agent (default claude, or
+                                                             $ABROMUX_DIFF_AGENT) in a terminal beside it, or with
+                                                             --send-here/--send-to goes to that agent instead)
+  diff list                                                  (local diff reviews, newest first)
+  diff threads <id> [--unresolved]                           (a review's comment threads)
+  diff reply <id> <thread> [--resolve] [--as <name>] [<text>]   (answer in a thread; no text: stdin)
   close-surface [--surface <ref>] [--workspace <ref>]
   focus-surface --surface <ref>
   rename-tab [--surface <ref>] [--workspace <ref>] [<title>]  (no title: back to the program's own)
+  tab-action [--tab <ref>] [--workspace <ref>] <action> [<title>] [--url <url>] [--focus <true|false>]
+                                                             (rename, clear-name, close-left, close-right, close-others,
+                                                             new-terminal-right, new-browser-right, duplicate,
+                                                             move-to-new-workspace, reload, mark-read, mark-unread)
   respawn-pane [--surface <ref>] [--workspace <ref>] [--command <text>]   (kill the shell and start a fresh one in its cwd)
   move-surface [--surface] <ref> [--pane <ref> | --workspace <ref>] [--index <n> | --before <ref> | --after <ref>] [--focus <true|false>]
                                                              (to another pane or workspace; default: the end of the
@@ -74,12 +94,15 @@ Commands:
   trigger-flash [--surface <ref>] [--workspace <ref>]        (flash the pane holding it, like ⌘⇧H)
   send [--surface <ref>] [--workspace <ref>] <text>          (\\n presses enter; also \\t \\e \\\\)
   send-key [--surface <ref>] [--workspace <ref>] <key>       (enter, tab, escape, up, ctrl-c, alt-b, ...)
-  read-screen [--surface <ref>] [--workspace <ref>] [--scrollback] [--lines <n>]
+  read-screen [--surface <ref>] [--workspace <ref>] [--scrollback] [--lines <n>] [--selection]
+  read-selection [--surface <ref>] [--workspace <ref>]       (the selected text, in a terminal or a page)
   capture-pane                                               (alias for read-screen)
   clear-history [--surface <ref>] [--workspace <ref>]        (clear screen and scrollback, like ⌘K)
   notify [--title <text>] [--subtitle <text>] [--body <text>] [--surface <ref>]   (rings that terminal's pane)
   list-notifications
   open-notification <id>                                     (select its terminal and mark it read)
+  dismiss-notification (--id <id> | --all-read)              (remove one, or every read one)
+  mark-notification-read (--id <id> | --workspace <ref> [--surface <ref>] | --all)
   jump-to-unread                                             (the newest unread notification, like ⌘⇧U)
   clear-notifications
   set-status <key> <value> [--icon <name>] [--color <#rrggbb>] [--workspace <ref>]   (a pill under the workspace in the sidebar)
@@ -90,9 +113,15 @@ Commands:
   log [--level <info|progress|success|warning|error>] [--source <name>] [--workspace <ref>] <message>
   list-log [--limit <n>] [--workspace <ref>]
   clear-log [--workspace <ref>]
+  wait-for [-S|--signal] <name> [--timeout <seconds>]        (wait until another script signals <name>; default 30s)
+  completion <zsh|bash|fish>                                 (a shell completion script: eval \"$(abromux completion zsh)\")
   open <path-or-url>...                                      (directories open workspaces, URLs open browser splits)
   focus-window [--window <ref>]                              (bring abromux to the front; there is one window)
   sidebar <toggle|show|hide>
+  mr list [mine|recent|workspace]                            (cached GitLab merge requests: the panel's, or one group)
+  mr open <url|group/project!iid>                            (in a tab of this workspace, from the cache, then refetched)
+  mr refresh [<url|group/project!iid>]                       (check now: everything, or refetch one)
+  mr panel [toggle|show|hide]                                (the merge requests panel on the right, ⌥⌘B)
   reload-config                                              (read the config file again, like ⌘⇧,)
   config path                                                (where abromux's config.json lives)
   config check [<file>]                                      (validate the config file; needs no running app)
@@ -112,6 +141,7 @@ Commands:
   browser back|forward|reload
   browser url|get-url
   browser eval <script>
+  browser zoom [in|out|reset|<factor>|<percent>%]            (no argument: print the page zoom)
 
   Automation (<sel> is a CSS selector or a ref like e3 from the last snapshot):
   browser snapshot [--interactive] [--compact] [--selector <sel>]   (accessibility tree with refs)
@@ -132,6 +162,9 @@ Commands:
 /// Flags that take no value.
 const SWITCHES: &[&str] = &[
     "json",
+    "resolve",
+    "send-here",
+    "unresolved",
     "scrollback",
     "all",
     "help",
@@ -140,6 +173,10 @@ const SWITCHES: &[&str] = &[
     "exact",
     "dry-run",
     "force",
+    "closed",
+    "all-read",
+    "selection",
+    "signal",
 ];
 
 struct Args {
@@ -168,6 +205,9 @@ fn parse(args: &[String]) -> Result<Args, String> {
             }
             None if a == "-h" => {
                 opts.insert("help".into(), json!(true));
+            }
+            None if a == "-S" => {
+                opts.insert("signal".into(), json!(true));
             }
             None => pos.push(a.clone()),
         }
@@ -209,6 +249,136 @@ pub fn run(argv: Vec<String>) -> i32 {
     }
 }
 
+/// `abromux diff …`: any git diff reviewed in the GitLab tab
+/// (`abromux_gitlab::local`). `list`, `threads` and `reply` work on files
+/// only, so an agent can answer without the app.
+fn diff_cmd(mut pos: Vec<String>, opts: Map<String, Value>, as_json: bool) -> Result<(), String> {
+    use abromux_gitlab::local;
+    local::init(crate::channel::support_dir().join("local-diffs"));
+    let text = |k: &str, opts: &Map<String, Value>| opts.get(k).and_then(Value::as_str).map(str::to_string);
+    let e = |e: anyhow::Error| format!("{e:#}");
+    match pos.first().map(String::as_str) {
+        Some("list" | "ls") => {
+            let all = local::all();
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&all).unwrap_or_default());
+                return Ok(());
+            }
+            if all.is_empty() {
+                println!("No local diff reviews (open one with `abromux diff`).");
+            }
+            for s in all {
+                let open = s.threads.iter().filter(|t| !t.resolved()).count();
+                println!("{}  {}  {}  ({} threads, {open} open)", s.id, s.repo, s.describe(), s.threads.len());
+            }
+            return Ok(());
+        }
+        Some("threads") => {
+            let id = local::find(pos.get(1).ok_or("diff threads: missing <id>")?).map_err(e)?;
+            let s = local::load(&id).map_err(e)?;
+            let unresolved = opts.contains_key("unresolved");
+            let threads: Vec<&local::Thread> = s.threads.iter().filter(|t| !unresolved || !t.resolved()).collect();
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&threads).unwrap_or_default());
+                return Ok(());
+            }
+            for t in threads {
+                let at = t.position().map_or("(the whole diff)".to_string(), |p| {
+                    let line = p.new_line.map_or_else(|| format!("old {}", p.old_line.unwrap_or(0)), |n| n.to_string());
+                    format!("{}:{line}", p.path())
+                });
+                println!("{}  {}  {at}", t.id, if t.resolved() { "resolved" } else { "open" });
+                for n in &t.notes {
+                    let mut lines = n.body.lines();
+                    println!("  {}: {}", n.author.name, lines.next().unwrap_or_default());
+                    for l in lines {
+                        println!("    {l}");
+                    }
+                }
+            }
+            return Ok(());
+        }
+        Some("reply") => {
+            let id = local::find(pos.get(1).ok_or("diff reply: missing <id>")?).map_err(e)?;
+            let thread = pos.get(2).ok_or("diff reply: missing <thread>")?.clone();
+            let mut body = pos[3..].join(" ");
+            if body.is_empty() && !std::io::stdin().is_terminal() {
+                use std::io::Read as _;
+                std::io::stdin().read_to_string(&mut body).map_err(|e| e.to_string())?;
+            }
+            let resolve = opts.contains_key("resolve");
+            if body.trim().is_empty() && !resolve {
+                return Err("diff reply: give the answer (as text, or on stdin)".into());
+            }
+            let t = local::reply(&id, &thread, &body, resolve, text("as", &opts).as_deref()).map_err(e)?;
+            println!("OK {id} {t}{}", if resolve { " resolved" } else { "" });
+            return Ok(());
+        }
+        _ => {}
+    }
+    // Open one: the range, from here (or --cwd).
+    let spec = if pos.is_empty() { String::new() } else { pos.remove(0) };
+    let cwd = match text("cwd", &opts) {
+        Some(c) => std::path::PathBuf::from(c),
+        None => std::env::current_dir().map_err(|e| e.to_string())?,
+    };
+    let caller = opts.get("caller").cloned();
+    let send_to = match (opts.contains_key("send_here"), text("send_to", &opts)) {
+        (_, Some(t)) => Some(Some(t)),
+        (true, None) => Some(Some(
+            caller.as_ref().and_then(|c| c["surface"].as_str()).map(str::to_string).ok_or("--send-here: not in an abromux terminal")?,
+        )),
+        // Asked again without either: comments start agents again.
+        (false, None) => Some(None),
+    };
+    let open = local::Open { title: text("title", &opts), agent: text("agent", &opts), send_to };
+    let id = local::create(&cwd, &spec, open).map_err(e)?;
+    let s = local::load(&id).map_err(e)?;
+    let host = local::host_of(&id);
+    let focus = opts.get("focus").cloned().unwrap_or(json!(true));
+    // Already open: that tab, fetched again.
+    let tree = ipc::call("workspace.tree", json!({ "all": true })).map_err(|e| e.to_string())?;
+    let existing = tree.as_array().into_iter().flatten().flat_map(|w| w["panes"].as_array().into_iter().flatten()).find_map(|p| {
+        p["surfaces"].as_array()?.iter().find(|t| t["state"]["local"] == json!(id)).and_then(|t| t["ref"].as_str().map(str::to_string))
+    });
+    let surface = match existing {
+        Some(r) => {
+            if focus != json!(false) {
+                ipc::call("surface.focus", json!({ "surface": r })).map_err(|e| e.to_string())?;
+            }
+            ipc::call("surface.plugin", json!({ "surface": r, "command": "refresh" })).map_err(|e| e.to_string())?;
+            r
+        }
+        None => {
+            let mut p = json!({
+                "type": "gitlab", "host": host, "project": local::PROJECT, "iid": local::IID,
+                "section": "changes", "focus": focus,
+            });
+            if let Some(c) = caller {
+                p["caller"] = c;
+            }
+            let v = match text("pane", &opts) {
+                Some(pane) => {
+                    p["pane"] = json!(pane);
+                    ipc::call("surface.create", p).map_err(|e| e.to_string())?
+                }
+                None => {
+                    p["direction"] = json!(text("direction", &opts).unwrap_or_else(|| "right".into()));
+                    ipc::call("surface.split", p).map_err(|e| e.to_string())?["surface"].clone()
+                }
+            };
+            v["ref"].as_str().unwrap_or_default().to_string()
+        }
+    };
+    if as_json {
+        println!("{}", json!({ "id": id, "surface": surface, "repo": s.repo, "diff": s.describe(), "agent": s.agent, "send_to": s.send_to }));
+    } else {
+        let to = s.send_to.as_ref().map_or_else(|| format!("start `{}`", s.agent), |t| format!("go to {t}"));
+        println!("OK {surface} {id}  {} in {}  (comments {to})", s.describe(), s.repo);
+    }
+    Ok(())
+}
+
 /// `abromux folder …`: workspace folders (⇧⌘I). Works on files and git only,
 /// so it runs without the app.
 fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), String> {
@@ -244,9 +414,104 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
                 println!("{}  {how}  from {}", c.path, c.source);
             }
         }
+        "resources" => {
+            let ws = current()?;
+            match std::fs::read_to_string(ws.join(folder::LEDGER)) {
+                Ok(text) if !text.trim().is_empty() => {
+                    println!("Recorded in {}:", folder::LEDGER);
+                    println!("{}", text.trim_end());
+                }
+                _ => println!("Nothing recorded in {}.", folder::LEDGER),
+            }
+            let tag = folder::tag(&ws);
+            match folder::docker_resources(&ws) {
+                Ok(found) if found.is_empty() => {
+                    println!("No Docker resources labelled abromux.workspace={tag} or in compose project {tag}.")
+                }
+                Ok(found) => {
+                    println!("Docker (labelled abromux.workspace={tag} or in compose project {tag}):");
+                    for line in found {
+                        println!("  {line}");
+                    }
+                }
+                Err(e) => println!("Docker not checked: {e}"),
+            }
+        }
+        "remove" => {
+            // A folder given by path (one whose workspace is closed), else this one.
+            let ws = match pos.first() {
+                Some(p) => {
+                    let p = Path::new(p).canonicalize().map_err(|e| format!("{p}: {e}"))?;
+                    folder::read_meta(&p)
+                        .map(|_| p.clone())
+                        .ok_or_else(|| format!("{}: not a workspace folder", p.display()))?
+                }
+                None => current()?,
+            };
+            let force = opts.get("force").is_some_and(|v| v != &Value::Bool(false));
+            if !force {
+                let mut problems = folder::blockers(&ws);
+                match folder::docker_resources(&ws) {
+                    Ok(left) if !left.is_empty() => problems.push(format!(
+                        "Docker resources are still there: {} (`abromux folder resources`)",
+                        left.join(", ")
+                    )),
+                    Ok(_) => {}
+                    Err(e) => eprintln!("abromux: Docker not checked for leftovers: {e}"),
+                }
+                if !problems.is_empty() {
+                    return Err(format!(
+                        "not removing {}; clean these up first, or --force:\n  {}",
+                        ws.display(),
+                        problems.join("\n  ")
+                    ));
+                }
+            }
+            // If the app has it open, the app closes the workspace and then
+            // deletes the folder: this shell (and an agent in it) may be
+            // one of its terminals.
+            if let Ok(r) = ipc::call(
+                "folder.remove",
+                json!({ "path": ws.to_string_lossy(), "force": force }),
+            ) && let Some(w) = r["workspace"].as_str()
+            {
+                println!(
+                    "OK closing {w} in a moment; {} then deletes {} and notifies when done",
+                    crate::channel::app_name(),
+                    ws.display()
+                );
+                return Ok(());
+            }
+            for line in folder::remove(&ws, force)? {
+                println!("{line}");
+            }
+            if std::env::current_dir().map_or(true, |d| d.starts_with(&ws)) {
+                println!("(this shell's folder is gone: cd elsewhere)");
+            }
+        }
         "all" => {
+            // Mark which ones the app has open, when it's running.
+            let open: Option<Vec<String>> = ipc::call("workspace.list", json!({})).ok().map(|v| {
+                v.as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|w| w["home"].as_str().map(String::from))
+                    .collect()
+            });
+            let closed_only = opts.contains_key("closed");
             for (dir, meta) in folder::list(&folder::root(&settings::load().unwrap_or_default())) {
-                println!("{}  {}  ({} checked out)", dir.display(), meta.name, meta.checkouts.len());
+                let is_open = open
+                    .as_ref()
+                    .map(|o| o.iter().any(|h| Path::new(h) == dir));
+                if closed_only && is_open != Some(false) {
+                    continue;
+                }
+                let mark = match is_open {
+                    Some(true) => "  open",
+                    Some(false) => "  closed",
+                    None => "",
+                };
+                println!("{}  {}  ({} checked out){mark}", dir.display(), meta.name, meta.checkouts.len());
             }
         }
         "repos" => {
@@ -254,7 +519,7 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
                 println!("{}", r.display());
             }
         }
-        s => return Err(format!("folder: unknown subcommand {s:?} (path, root, add, list, all, repos)")),
+        s => return Err(format!("folder: unknown subcommand {s:?} (path, root, add, list, all, repos, resources, remove)")),
     }
     Ok(())
 }
@@ -288,6 +553,21 @@ fn dispatch(
     mut opts: Map<String, Value>,
     as_json: bool,
 ) -> Result<(), String> {
+    // `mr <sub> [arg]`: the argument goes in by the subcommand's name.
+    let mut mr_sub = String::new();
+    if cmd == "mr" {
+        mr_sub = if pos.is_empty() { "list".into() } else { pos.remove(0) };
+        let name = match mr_sub.as_str() {
+            "list" | "ls" => "group",
+            "panel" => "state",
+            _ => "ref",
+        };
+        if let Some(arg) = pos.first() {
+            opts.insert(name.into(), json!(arg));
+        } else if name == "state" {
+            opts.insert(name.into(), json!("toggle"));
+        }
+    }
     let mut first = |name: &str, opts: &mut Map<String, Value>| -> Result<(), String> {
         if pos.is_empty() {
             return Err(format!("{cmd}: missing <{name}>"));
@@ -301,6 +581,7 @@ fn dispatch(
             return Ok(());
         }
         "folder" => return folder_cmd(pos, &opts),
+        "diff" => return diff_cmd(pos, opts, as_json),
         "ping" => ("system.ping", |v| v.as_str().unwrap_or_default().into()),
         "identify" => ("system.identify", pretty),
         "list-workspaces" => ("workspace.list", |v| lines(v, workspace_line)),
@@ -458,6 +739,14 @@ fn dispatch(
         }
         "list-pane-surfaces" => ("surface.list", |v| lines(v, surface_line)),
         "new-surface" => ("surface.create", |v| format!("OK {}", s(&v["ref"]))),
+        // A GitLab tab (the gitlab plugin), on a merge request's web URL or the list.
+        "gitlab" => {
+            if let Some(url) = pos.first() {
+                opts.insert("url".into(), json!(url));
+            }
+            opts.insert("type".into(), json!("gitlab"));
+            ("surface.create", |v| format!("OK {} {}", s(&v["ref"]), s(&v["title"])))
+        }
         "close-surface" => ("surface.close", |v| format!("OK {}", s(&v["closed"]))),
         "focus-surface" => ("surface.focus", |v| format!("OK {}", s(&v["ref"]))),
         "rename-tab" => {
@@ -533,6 +822,10 @@ fn dispatch(
             first("key", &mut opts)?;
             ("surface.send_key", |_| "OK".into())
         }
+        "read-selection" => ("surface.read_selection", |v| s(v)),
+        "read-screen" | "capture-pane" if opts.remove("selection").is_some() => {
+            ("surface.read_selection", |v| s(v))
+        }
         "read-screen" | "capture-pane" => {
             if let Some(Value::String(n)) = opts.get("lines") {
                 let n: u64 = n.parse().map_err(|_| "--lines needs a number")?;
@@ -565,6 +858,40 @@ fn dispatch(
             }
         }),
         "clear-notifications" => ("notification.clear", |_| "OK".into()),
+        "dismiss-notification" => {
+            if !opts.contains_key("id") && !pos.is_empty() {
+                opts.insert("id".into(), json!(pos.remove(0)));
+            }
+            ("notification.dismiss", |v| format!("OK dismissed {}", v["dismissed"]))
+        }
+        "mark-notification-read" => {
+            if !opts.contains_key("id") && !pos.is_empty() {
+                opts.insert("id".into(), json!(pos.remove(0)));
+            }
+            ("notification.mark_read", |v| format!("OK marked {}", v["marked"]))
+        }
+        "tab-action" => {
+            surface_aliases(&mut opts);
+            if !opts.contains_key("action") {
+                first("action", &mut opts)?;
+            }
+            if opts["action"] == "rename" && !opts.contains_key("title") && !pos.is_empty() {
+                opts.insert("title".into(), json!(pos.join(" ")));
+            }
+            ("surface.action", |v| {
+                let mut out = format!("OK {}", s(&v["ref"]));
+                if let Some(n) = v["closed"].as_u64() {
+                    out += &format!(" closed {n}");
+                }
+                out
+            })
+        }
+        "wait-for" => return wait_for(&pos, &opts),
+        "completion" | "completions" => {
+            let shell = pos.first().map(String::as_str).unwrap_or("zsh");
+            print!("{}", completion(shell)?);
+            return Ok(());
+        }
         "set-status" => {
             first("key", &mut opts)?;
             if pos.is_empty() {
@@ -626,6 +953,38 @@ fn dispatch(
             );
             ("app.sidebar", |v| format!("OK visible={}", v["visible"]))
         }
+        "mr" => match mr_sub.as_str() {
+            "list" | "ls" => ("mr.list", |v| {
+                lines(v, |m| {
+                    let pipeline = m["pipeline"]
+                        .as_str()
+                        .map(|p| format!("  [{p}]"))
+                        .unwrap_or_default();
+                    format!(
+                        "{:<40} {}{pipeline}  ({})",
+                        s(&m["ref"]),
+                        s(&m["title"]),
+                        m["groups"]
+                            .as_array()
+                            .map(|g| g.iter().map(s).collect::<Vec<_>>().join(","))
+                            .unwrap_or_default()
+                    )
+                })
+            }),
+            "open" | "show" => {
+                if !opts.contains_key("ref") {
+                    return Err("mr open: missing <url|group/project!iid>".into());
+                }
+                ("mr.open", |v| format!("OK {} {}", s(&v["ref"]), s(&v["surface"])))
+            }
+            "refresh" => ("mr.refresh", |_| "OK".into()),
+            "panel" => ("mr.panel", |v| format!("OK visible={}", v["visible"])),
+            s => {
+                return Err(format!(
+                    "mr: unknown subcommand {s:?} (list, open, refresh, panel)"
+                ));
+            }
+        },
         "quit" => ("app.quit", |_| "OK".into()),
         "reload-config" => ("app.reload_config", |v| format!("OK {}", s(&v["path"]))),
         "config" => return config(&pos),
@@ -666,6 +1025,179 @@ fn dispatch(
     };
     print_result(&call(method, opts)?, fmt, as_json);
     Ok(())
+}
+
+/// Where `wait-for` signals land: a file per name, as cmux does, so it works
+/// across processes without the app.
+fn signal_file(name: &str) -> std::path::PathBuf {
+    let safe: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' })
+        .collect();
+    std::env::temp_dir().join(format!("abromux-wait-for-{safe}.sig"))
+}
+
+/// `wait-for <name>` blocks until `wait-for -S <name>` runs (before or
+/// after), then consumes the signal. Each signal wakes one waiter.
+fn wait_for(pos: &[String], opts: &Map<String, Value>) -> Result<(), String> {
+    let name = pos.first().ok_or("wait-for: missing <name>")?;
+    let file = signal_file(name);
+    if opts.contains_key("signal") {
+        std::fs::write(&file, b"").map_err(|e| format!("{}: {e}", file.display()))?;
+        println!("OK");
+        return Ok(());
+    }
+    let secs: f64 = match opts.get("timeout") {
+        Some(Value::String(t)) => t
+            .parse()
+            .ok()
+            .filter(|t: &f64| t.is_finite() && *t >= 0.)
+            .ok_or("--timeout needs a number of seconds")?,
+        _ => 30.,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(secs);
+    loop {
+        // Removing it is the claim: of two waiters only one succeeds.
+        if std::fs::remove_file(&file).is_ok() {
+            println!("OK");
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!("wait-for timed out waiting for {name:?}"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Every command in `HELP`, with its subcommands (`browser zoom`,
+/// `group list`, ...).
+fn command_tree() -> Vec<(String, Vec<String>)> {
+    let mut out: Vec<(String, Vec<String>)> = vec![];
+    let mut add = |cmd: &str, sub: Option<&str>| {
+        let i = match out.iter().position(|(c, _)| c == cmd) {
+            Some(i) => i,
+            None => {
+                out.push((cmd.into(), vec![]));
+                out.len() - 1
+            }
+        };
+        if let Some(sub) = sub
+            && !out[i].1.iter().any(|s| s == sub)
+        {
+            out[i].1.push(sub.into());
+        }
+    };
+    let word = |w: &str| {
+        !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    };
+    for line in HELP.lines().skip_while(|l| !l.starts_with("Commands:")).skip(1) {
+        // Commands sit two spaces in; deeper lines continue the one above.
+        let Some(rest) = line.strip_prefix("  ").filter(|r| !r.starts_with(' ')) else {
+            continue;
+        };
+        let mut words = rest.split_whitespace();
+        let Some(first) = words.next() else { continue };
+        // `ping | version | identify`
+        if words.clone().next() == Some("|") {
+            for w in rest.split('|').map(str::trim).filter(|w| word(w)) {
+                add(w, None);
+            }
+            continue;
+        }
+        if !word(first) {
+            continue;
+        }
+        let second = words.next().filter(|w| !w.starts_with('[') && !w.starts_with('-') && !w.starts_with('<') && !w.starts_with('('));
+        match second {
+            // `group rename|color|collapse ...`, `skills show [...]`
+            Some(subs) if matches!(first, "group" | "folder" | "config" | "hooks" | "skills" | "browser" | "sidebar") => {
+                for sub in subs.split('|').filter(|w| word(w)) {
+                    add(first, Some(sub));
+                }
+            }
+            _ => add(first, None),
+        }
+    }
+    out
+}
+
+/// `completion <shell>`: a completion script for commands and subcommands.
+fn completion(shell: &str) -> Result<String, String> {
+    let tree = command_tree();
+    let commands: Vec<&str> = tree.iter().map(|(c, _)| c.as_str()).collect();
+    let subs = |join: &dyn Fn(&str, &str) -> String| {
+        tree.iter()
+            .filter(|(_, s)| !s.is_empty())
+            .map(|(c, s)| join(c, &s.join(" ")))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    Ok(match shell {
+        "zsh" => format!(
+            r#"#compdef abromux
+_abromux() {{
+  local -a cmds
+  cmds=({cmds})
+  if (( CURRENT == 2 )); then
+    _describe 'command' cmds
+    return
+  fi
+  local -a subs
+  case $words[2] in
+{cases}
+    *) _files; return ;;
+  esac
+  if (( CURRENT == 3 )); then
+    _describe 'subcommand' subs
+  else
+    _files
+  fi
+}}
+if [[ $zsh_eval_context[-1] == loadautofunc ]]; then
+  _abromux "$@"
+else
+  compdef _abromux abromux
+fi
+"#,
+            cmds = commands.join(" "),
+            cases = subs(&|c, s| format!("    {c}) subs=({s}) ;;")),
+        ),
+        "bash" => format!(
+            r#"_abromux() {{
+  local cur=${{COMP_WORDS[COMP_CWORD]}}
+  if [[ $COMP_CWORD -eq 1 ]]; then
+    COMPREPLY=($(compgen -W "{cmds}" -- "$cur"))
+    return
+  fi
+  if [[ $COMP_CWORD -eq 2 ]]; then
+    case ${{COMP_WORDS[1]}} in
+{cases}
+    esac
+  fi
+  COMPREPLY=($(compgen -f -- "$cur"))
+}}
+complete -o default -F _abromux abromux
+"#,
+            cmds = commands.join(" "),
+            cases = subs(&|c, s| format!(
+                r#"      {c}) COMPREPLY=($(compgen -W "{s}" -- "$cur")); return ;;"#
+            )),
+        ),
+        "fish" => {
+            let mut out = String::from("complete -c abromux -f\n");
+            for c in &commands {
+                out += &format!("complete -c abromux -n __fish_use_subcommand -a {c}\n");
+            }
+            for (c, s) in tree.iter().filter(|(_, s)| !s.is_empty()) {
+                out += &format!(
+                    "complete -c abromux -n '__fish_seen_subcommand_from {c}' -a '{}'\n",
+                    s.join(" ")
+                );
+            }
+            out
+        }
+        s => return Err(format!("completion: unknown shell {s:?} (zsh, bash or fish)")),
+    })
 }
 
 /// `config path`, `config check [<file>]`, `config project` and `config shortcuts`, which
@@ -748,6 +1280,15 @@ fn browser(
         "forward" => ("browser.forward", |_| "OK".into()),
         "reload" => ("browser.reload", |_| "OK".into()),
         "url" | "get-url" => ("browser.url", |v| s(&v["url"])),
+        "zoom" => {
+            if let Some(z) = pos.first() {
+                opts.insert("zoom".into(), json!(z));
+            }
+            ("browser.zoom", |v| {
+                let z = v["zoom"].as_f64().unwrap_or(1.);
+                format!("{}%", (z * 100.).round())
+            })
+        }
         "eval" => {
             if arg.is_empty() {
                 return Err("browser eval: missing <script>".into());
@@ -1149,6 +1690,51 @@ fn created(v: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_knows_commands_and_subcommands() {
+        let tree = command_tree();
+        let has = |c: &str| tree.iter().any(|(x, _)| x == c);
+        for c in [
+            "ping", "identify", "notify", "dismiss-notification", "mark-notification-read",
+            "tab-action", "read-selection", "wait-for", "completion", "browser", "rpc",
+        ] {
+            assert!(has(c), "{c} missing");
+        }
+        let subs = |c: &str| tree.iter().find(|(x, _)| x == c).unwrap().1.clone();
+        assert!(subs("browser").contains(&"zoom".to_string()));
+        assert!(subs("group").contains(&"by-folder".to_string()));
+        assert!(!has("Commands:") && !has("--surface"));
+        assert!(completion("tcsh").is_err());
+    }
+
+    #[test]
+    fn signal_files_are_safe_names() {
+        let f = signal_file("build/done ok");
+        assert_eq!(f.file_name().unwrap(), "abromux-wait-for-build_done_ok.sig");
+    }
+
+    #[test]
+    fn wait_for_takes_a_signal_once() {
+        let name = format!("test-{}", std::process::id());
+        let none = Map::new();
+        let mut quick = Map::new();
+        quick.insert("timeout".into(), json!("0.1"));
+        assert!(wait_for(std::slice::from_ref(&name), &quick).is_err());
+        let mut signal = Map::new();
+        signal.insert("signal".into(), json!(true));
+        wait_for(std::slice::from_ref(&name), &signal).unwrap();
+        wait_for(std::slice::from_ref(&name), &none).unwrap();
+        // Consumed: the next wait times out.
+        assert!(wait_for(&[name], &quick).is_err());
+    }
+
+    #[test]
+    fn short_signal_switch() {
+        let a = args(&["wait-for", "-S", "x"]);
+        assert_eq!(a.opts["signal"], json!(true));
+        assert_eq!(a.pos, ["wait-for", "x"]);
+    }
 
     fn args(a: &[&str]) -> Args {
         parse(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap()

@@ -1,0 +1,142 @@
+[
+  {
+    "id": "c4c58da77fc37b74a7e03b07307d896f9024f380",
+    "individual_note": true,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+          "id": 2,
+          "locked": false,
+          "name": "Alice Author",
+          "public_email": null,
+          "state": "active",
+          "username": "alice",
+          "web_url": "http://localhost:8929/alice"
+        },
+        "body": "requested review from @bob",
+        "commands_changes": {},
+        "confidential": false,
+        "created_at": "2026-11-06T08:41:45.620Z",
+        "id": 443,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 113,
+        "noteable_iid": 2,
+        "noteable_type": "MergeRequest",
+        "project_id": 19,
+        "resolvable": false,
+        "system": true,
+        "type": null,
+        "updated_at": "2026-11-06T08:41:45.621Z"
+      }
+    ],
+    "resolvable": false
+  },
+  {
+    "id": "aefd567bcf5eaf17d75e223bec448bf2a336db3a",
+    "individual_note": true,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+          "id": 2,
+          "locked": false,
+          "name": "Alice Author",
+          "public_email": null,
+          "state": "active",
+          "username": "alice",
+          "web_url": "http://localhost:8929/alice"
+        },
+        "body": "assigned to @alice",
+        "commands_changes": {},
+        "confidential": false,
+        "created_at": "2026-11-06T08:41:45.740Z",
+        "id": 444,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 113,
+        "noteable_iid": 2,
+        "noteable_type": "MergeRequest",
+        "project_id": 19,
+        "resolvable": false,
+        "system": true,
+        "type": null,
+        "updated_at": "2026-11-06T08:41:45.743Z"
+      }
+    ],
+    "resolvable": false
+  },
+  {
+    "id": "8468deac28ff4a21a4a63c6f297f80f1ab06042e",
+    "individual_note": true,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+          "id": 3,
+          "locked": false,
+          "name": "Bob Reviewer",
+          "public_email": null,
+          "state": "active",
+          "username": "bob",
+          "web_url": "http://localhost:8929/bob"
+        },
+        "body": "marked this merge request as **ready**",
+        "commands_changes": {},
+        "confidential": false,
+        "created_at": "2026-11-06T09:17:09.590Z",
+        "id": 512,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 113,
+        "noteable_iid": 2,
+        "noteable_type": "MergeRequest",
+        "project_id": 19,
+        "resolvable": false,
+        "system": true,
+        "type": null,
+        "updated_at": "2026-11-06T09:17:09.591Z"
+      }
+    ],
+    "resolvable": false
+  },
+  {
+    "id": "7187a1989ae1c63268490eaf4c71a6ff5c9ea30f",
+    "individual_note": true,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/25a2a844fdd9d5ab5129dc7a3d44b9539f7ce78441fe54425ad5cee3a67cd217?s=80&d=identicon",
+          "id": 3,
+          "locked": false,
+          "name": "Bob Reviewer",
+          "public_email": null,
+          "state": "active",
+          "username": "bob",
+          "web_url": "http://localhost:8929/bob"
+        },
+        "body": "marked this merge request as **draft**",
+        "commands_changes": {},
+        "confidential": false,
+        "created_at": "2026-11-06T09:17:22.100Z",
+        "id": 513,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 113,
+        "noteable_iid": 2,
+        "noteable_type": "MergeRequest",
+        "project_id": 19,
+        "resolvable": false,
+        "system": true,
+        "type": null,
+        "updated_at": "2026-11-06T09:17:22.101Z"
+      }
+    ],
+    "resolvable": false
+  }
+]

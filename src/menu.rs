@@ -5,7 +5,7 @@
 
 use crate::{
     About, CloseTab, CloseWorkspace, CommandPalette, EditDescription, FlashPane, FocusAddressBar,
-    FocusDown, FocusLeft, FocusRight, FocusUp, GroupByFolder, ImportCmuxSession, JumpToUnread,
+    FocusDown, FocusLeft, FocusRight, FocusUp, GroupByFolder, ImportCmuxSession, JumpToUnread, MarkOldestUnreadAndJumpNext, ToggleUnread,
     LastPane, MoveWorkspaceDown, MoveWorkspaceUp, NewBrowser, NewGroup, NewTerminal, NewWorkspace,
     NewFolderWorkspace, NextTab, NextWorkspace, OpenSettings, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab,
     RenameWorkspace, ReopenSession, SplitDown, SplitRight, ToggleGroup, ToggleNotifications,
@@ -106,6 +106,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Command Palette…", CommandPalette),
                 MenuItem::action("Go to Workspace…", WorkspaceSwitcher),
+                MenuItem::action("Go to Merge Request…", crate::GoToMergeRequest),
                 MenuItem::separator(),
                 MenuItem::action("Reopen Previous Session", ReopenSession),
                 MenuItem::action("Import cmux Session", ImportCmuxSession),
@@ -140,6 +141,7 @@ pub fn set_menus(cx: &mut App) {
             name: "View".into(),
             items: vec![
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
+                MenuItem::action("Toggle Merge Requests Panel", crate::ToggleMergeRequests),
                 MenuItem::action("Toggle Pane Zoom", ToggleZoom),
                 MenuItem::action("Flash Focused Pane", FlashPane),
                 MenuItem::separator(),
@@ -150,6 +152,9 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action("Back", browser::Back),
                 MenuItem::action("Forward", browser::Forward),
                 MenuItem::action("Reload Page", browser::Reload),
+                MenuItem::action("Zoom In", browser::ZoomIn),
+                MenuItem::action("Zoom Out", browser::ZoomOut),
+                MenuItem::action("Actual Size", browser::ActualSize),
                 MenuItem::action("Focus Address Bar", FocusAddressBar),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Developer Tools", browser::ToggleDevTools),
@@ -161,6 +166,8 @@ pub fn set_menus(cx: &mut App) {
             items: vec![
                 MenuItem::action("Show Notifications", ToggleNotifications),
                 MenuItem::action("Jump to Latest Unread", JumpToUnread),
+                MenuItem::action("Toggle Unread", ToggleUnread),
+                MenuItem::action("Mark as Oldest Unread and Jump to Next", MarkOldestUnreadAndJumpNext),
             ],
         },
         // gpui makes the menu named "Window" AppKit's windowsMenu, so macOS

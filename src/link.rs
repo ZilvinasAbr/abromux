@@ -122,6 +122,129 @@ fn trim_end(s: &str) -> &str {
     }
 }
 
+/// What ⌘-click does with a link that isn't a web page.
+#[derive(Debug, PartialEq)]
+pub enum Local {
+    /// A document or folder: open it with its default app.
+    Open(PathBuf),
+    /// Something that could run code if opened (an app, a script, an
+    /// installer, a bundle or anything in one): show it in Finder instead.
+    Reveal(PathBuf),
+}
+
+/// Extensions whose default app runs them, or that are bundles of code.
+/// Matched on every component, so nothing inside an `.app` opens either.
+const RUNS_CODE: &[&str] = &[
+    "app",
+    "appex",
+    "action",
+    "applescript",
+    "bundle",
+    "command",
+    "configprofile",
+    "dmg",
+    "fileloc",
+    "framework",
+    "inetloc",
+    "jar",
+    "kext",
+    "mdimporter",
+    "mobileconfig",
+    "mpkg",
+    "osax",
+    "pkg",
+    "plugin",
+    "prefpane",
+    "qlgenerator",
+    "saver",
+    "scpt",
+    "scptd",
+    "shortcut",
+    "terminal",
+    "tool",
+    "url",
+    "webloc",
+    "wflow",
+    "workflow",
+    "xpc",
+];
+
+/// Where a non-web link may lead. OSC 8 links name their target apart from
+/// the text shown, so a program could dress `file:///…/evil.app` or
+/// `x-scheme://…` up as an innocent URL: only local `file://` URLs and
+/// existing paths count, nothing else goes to `open`, and what could run
+/// code is only revealed.
+pub fn local(target: &Target) -> Option<Local> {
+    let path = match target {
+        Target::Path(p, _) => p.clone(),
+        Target::Url(u) => file_url_path(u)?,
+    };
+    if !path.is_absolute() {
+        return None;
+    }
+    // Judge where it really leads: `notes.txt` may be a link to an app.
+    let path = path.canonicalize().ok()?;
+    let meta = std::fs::metadata(&path).ok()?;
+    Some(if runs_code(&path, &meta) {
+        Local::Reveal(path)
+    } else {
+        Local::Open(path)
+    })
+}
+
+fn runs_code(path: &std::path::Path, meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let risky = path.components().any(|c| {
+        std::path::Path::new(c.as_os_str())
+            .extension()
+            .is_some_and(|e| RUNS_CODE.contains(&e.to_string_lossy().to_lowercase().as_str()))
+    });
+    // An executable file opens in Terminal and runs.
+    risky || (meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+/// The local path a `file://` URL names, percent-decoded. None for other
+/// schemes and for files on another host.
+fn file_url_path(url: &str) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let rest = url
+        .get(..7)
+        .filter(|s| s.eq_ignore_ascii_case("file://"))
+        .map(|_| &url[7..])?;
+    let slash = rest.find('/')?;
+    let host = &rest[..slash];
+    if !(host.is_empty() || host.eq_ignore_ascii_case("localhost") || is_this_host(host)) {
+        return None;
+    }
+    let path = rest[slash..].split(['?', '#']).next()?;
+    let mut bytes = Vec::with_capacity(path.len());
+    let mut it = path.bytes();
+    while let Some(b) = it.next() {
+        if b == b'%' {
+            let hex = [it.next()?, it.next()?];
+            bytes.push(u8::from_str_radix(std::str::from_utf8(&hex).ok()?, 16).ok()?);
+        } else {
+            bytes.push(b);
+        }
+    }
+    if bytes.contains(&0) {
+        return None;
+    }
+    Some(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+}
+
+/// Whether `host` is this Mac's name (shells put it in OSC 8 `file://` links).
+fn is_this_host(host: &str) -> bool {
+    let mut buf = [0u8; 256];
+    if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
+        return false;
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let name = String::from_utf8_lossy(&buf[..len]);
+    let short = |s: &str| s.split('.').next().unwrap_or_default().to_lowercase();
+    name.eq_ignore_ascii_case(host) || (!host.contains('.') && short(&name) == short(host))
+}
+
 /// `src/main.rs:12:5` → (`src/main.rs`, Some(12)).
 fn split_line(s: &str) -> (&str, Option<u32>) {
     let mut parts = s.splitn(3, ':');
@@ -185,6 +308,67 @@ mod tests {
                 Target::Path(PathBuf::from(here).join("Cargo.toml"), None)
             ))
         );
+    }
+
+    #[test]
+    fn only_local_files_open_and_code_is_only_revealed() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("abromux-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Evil.app/Contents")).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let doc = dir.join("notes 1.txt");
+        std::fs::write(&doc, "hi").unwrap();
+        let script = dir.join("build");
+        std::fs::write(&script, "#!/bin/sh").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cmd = dir.join("run.COMMAND");
+        std::fs::write(&cmd, "").unwrap();
+        let app = dir.join("Evil.app");
+        let alias = dir.join("readme.txt");
+        std::os::unix::fs::symlink(&app, &alias).unwrap();
+        let file_url = |p: &std::path::Path| format!("file://{}", p.display()).replace(' ', "%20");
+
+        let path = |p: &std::path::Path| local(&Target::Path(p.into(), None));
+        assert_eq!(path(&doc), Some(Local::Open(doc.clone())));
+        assert_eq!(path(&dir), Some(Local::Open(dir.clone())));
+        assert_eq!(path(&script), Some(Local::Reveal(script.clone())));
+        assert_eq!(path(&cmd), Some(Local::Reveal(cmd.clone())));
+        assert_eq!(path(&app), Some(Local::Reveal(app.clone())));
+        assert_eq!(
+            path(&app.join("Contents")),
+            Some(Local::Reveal(app.join("Contents")))
+        );
+        assert_eq!(
+            path(&alias),
+            Some(Local::Reveal(app.clone())),
+            "judged by where it leads"
+        );
+
+        let url = |u: &str| local(&Target::Url(u.into()));
+        assert_eq!(url(&file_url(&doc)), Some(Local::Open(doc.clone())));
+        assert_eq!(
+            url(&file_url(&doc).replacen("file://", "FILE://localhost", 1)),
+            Some(Local::Open(doc.clone()))
+        );
+        assert_eq!(url(&file_url(&app)), Some(Local::Reveal(app.clone())));
+        assert_eq!(
+            url(&file_url(&doc).replacen("file://", "file://elsewhere.example", 1)),
+            None
+        );
+        assert_eq!(url(&file_url(&dir.join("missing"))), None);
+        assert_eq!(url(&format!("{}%00", file_url(&doc))), None);
+        assert_eq!(url("file://relative/x"), None);
+        for other in [
+            "-aCalculator",
+            "vscode://file/etc/passwd",
+            "smb://host/share",
+            "mailto:x@y.z",
+            "x-apple.systempreferences:",
+        ] {
+            assert_eq!(url(other), None, "{other}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -1,0 +1,15 @@
+[
+  {
+    "a_mode": "0",
+    "b_mode": "100644",
+    "collapsed": false,
+    "deleted_file": false,
+    "diff": "@@ -0,0 +1 @@\n+# CHANGELOG.md\n",
+    "generated_file": false,
+    "new_file": true,
+    "new_path": "CHANGELOG.md",
+    "old_path": "CHANGELOG.md",
+    "renamed_file": false,
+    "too_large": false
+  }
+]

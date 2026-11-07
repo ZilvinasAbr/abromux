@@ -1,0 +1,107 @@
+[
+  {
+    "id": "d25ac5be9d73845af2c853dc44af807f901220ee",
+    "individual_note": true,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+          "id": 2,
+          "locked": false,
+          "name": "Alice Author",
+          "public_email": null,
+          "state": "active",
+          "username": "alice",
+          "web_url": "http://localhost:8929/alice"
+        },
+        "body": "requested review from @bob",
+        "commands_changes": {},
+        "confidential": false,
+        "created_at": "2026-11-06T08:41:46.095Z",
+        "id": 448,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 116,
+        "noteable_iid": 5,
+        "noteable_type": "MergeRequest",
+        "project_id": 19,
+        "resolvable": false,
+        "system": true,
+        "type": null,
+        "updated_at": "2026-11-06T08:41:46.096Z"
+      }
+    ],
+    "resolvable": false
+  },
+  {
+    "id": "727c58ef25750adb1eea0b2d4773d8ac37a34201",
+    "individual_note": true,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+          "id": 2,
+          "locked": false,
+          "name": "Alice Author",
+          "public_email": null,
+          "state": "active",
+          "username": "alice",
+          "web_url": "http://localhost:8929/alice"
+        },
+        "body": "assigned to @alice",
+        "commands_changes": {},
+        "confidential": false,
+        "created_at": "2026-11-06T08:41:47.093Z",
+        "id": 451,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 116,
+        "noteable_iid": 5,
+        "noteable_type": "MergeRequest",
+        "project_id": 19,
+        "resolvable": false,
+        "system": true,
+        "type": null,
+        "updated_at": "2026-11-06T08:41:47.095Z"
+      }
+    ],
+    "resolvable": false
+  },
+  {
+    "id": "ac64d125007f052bd0e0131d8cb4eed5cfad283f",
+    "individual_note": true,
+    "notes": [
+      {
+        "author": {
+          "avatar_url": "https://www.gravatar.com/avatar/69b1145a03334875161ea18c1373b5703aeeff144990a9f847867ff83ed5aaad?s=80&d=identicon",
+          "id": 2,
+          "locked": false,
+          "name": "Alice Author",
+          "public_email": null,
+          "state": "active",
+          "username": "alice",
+          "web_url": "http://localhost:8929/alice"
+        },
+        "body": "mentioned in commit d681978678e6bcd6852cffd2a368eb94bc1857b3",
+        "commands_changes": {},
+        "confidential": false,
+        "created_at": "2026-11-06T08:41:52.307Z",
+        "id": 453,
+        "imported": false,
+        "imported_from": "none",
+        "internal": false,
+        "noteable_id": 116,
+        "noteable_iid": 5,
+        "noteable_type": "MergeRequest",
+        "project_id": 19,
+        "resolvable": false,
+        "system": true,
+        "type": null,
+        "updated_at": "2026-11-06T08:41:52.308Z"
+      }
+    ],
+    "resolvable": false
+  }
+]

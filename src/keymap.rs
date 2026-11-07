@@ -50,6 +50,8 @@ pub const ACTIONS: &[Act] = {
         "newWorkspace", Some("New Workspace"), NewWorkspace, [(None, ["cmd-n"])];
         "newFolderWorkspace", Some("New Workspace Folder"), NewFolderWorkspace,
             [(None, ["cmd-shift-i"])];
+        "cleanUpWorkspaceFolder", Some("Clean Up and Delete Workspace Folder…"), CleanUpWorkspaceFolder,
+            [(None, ["cmd-shift-x"])];
         "renameWorkspace", Some("Rename Workspace…"), RenameWorkspace, [(None, ["cmd-shift-r"])];
         "editWorkspaceDescription", Some("Edit Workspace Description…"), EditDescription,
             [(None, ["alt-cmd-e"])];
@@ -96,8 +98,17 @@ pub const ACTIONS: &[Act] = {
         "flashPane", Some("Flash Focused Pane"), FlashPane, [(None, ["cmd-shift-h"])];
         "toggleZoom", Some("Toggle Pane Zoom"), ToggleZoom, [(None, ["cmd-shift-enter"])];
         "toggleSidebar", Some("Toggle Sidebar"), ToggleSidebar, [(None, ["cmd-b"])];
+        "toggleMergeRequests", Some("Toggle Merge Requests Panel"), ToggleMergeRequests,
+            [(None, ["alt-cmd-b"])];
+        "goToMergeRequest", Some("Go to Merge Request…"), GoToMergeRequest,
+            [(None, ["cmd-shift-m"])];
+        "refreshMergeRequests", Some("Refresh Merge Requests"), RefreshMergeRequests,
+            [(None, [])];
         "showNotifications", Some("Show Notifications"), ToggleNotifications, [(None, ["cmd-i"])];
         "jumpToUnread", Some("Jump to Latest Unread"), JumpToUnread, [(None, ["cmd-shift-u"])];
+        "toggleUnread", Some("Toggle Unread"), ToggleUnread, [(None, ["alt-cmd-u"])];
+        "markOldestUnreadAndJumpNext", Some("Mark as Oldest Unread and Jump to Next"),
+            MarkOldestUnreadAndJumpNext, [(None, ["ctrl-cmd-u"])];
         "commandPalette", None, CommandPalette, [(None, ["cmd-shift-p"])];
         "workspaceSwitcher", None, WorkspaceSwitcher, [(None, ["cmd-p"])];
         // ⌘⇧, arrives as cmd-<.
@@ -127,6 +138,9 @@ pub const ACTIONS: &[Act] = {
         "reloadPage", Some("Reload Page"), browser::Reload, [(B, ["cmd-r"])];
         "toggleDevTools", Some("Toggle Developer Tools"), browser::ToggleDevTools, [(B, ["alt-cmd-i"])];
         "showConsole", Some("Show JavaScript Console"), browser::ShowConsole, [(B, ["alt-cmd-c"])];
+        "zoomIn", Some("Zoom In"), browser::ZoomIn, [(B, ["cmd-=", "cmd-+"]), (BI, ["cmd-=", "cmd-+"])];
+        "zoomOut", Some("Zoom Out"), browser::ZoomOut, [(B, ["cmd--"]), (BI, ["cmd--"])];
+        "actualSize", Some("Actual Size"), browser::ActualSize, [(B, ["cmd-0"]), (BI, ["cmd-0"])];
         "quit", Some("Quit"), Quit, [(None, ["cmd-q"])];
         "workspace1", None, Ws1, [(None, ["cmd-1"])];
         "workspace2", None, Ws2, [(None, ["cmd-2"])];
@@ -151,6 +165,21 @@ pub const ACTIONS: &[Act] = {
 
 pub fn find(name: &str) -> Option<&'static Act> {
     ACTIONS.iter().find(|a| a.name == name)
+}
+
+/// Opens a new tab of plugin `id` (src/plugins.rs) in the focused pane.
+#[derive(Clone, PartialEq, serde::Deserialize, gpui::Action)]
+#[action(namespace = abromux, no_json)]
+pub struct OpenPlugin {
+    pub id: String,
+}
+
+/// Asks for a link plugin `id` opens (its `open_link` palette entry) and
+/// opens it in a new tab.
+#[derive(Clone, PartialEq, serde::Deserialize, gpui::Action)]
+#[action(namespace = abromux, no_json)]
+pub struct OpenPluginLink {
+    pub id: String,
 }
 
 /// Runs `"commands"[index]` of the config file, or of the project file

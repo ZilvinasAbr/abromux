@@ -1,6 +1,6 @@
 [package]
 name = "abromux"
-version = "0.15.0"
+version = "0.20.0"
 edition = "2024"
 description = "A cmux-style terminal and browser workspace app for macOS, built with Rust, GPUI and libghostty-vt"
 license = "MIT"
@@ -8,7 +8,17 @@ repository = "https://github.com/ZilvinasAbr/abromux"
 readme = "README.md"
 publish = false
 
+[workspace]
+members = ["crates/*"]
+
+[features]
+default = ["gitlab"]
+# Plugins (crates/): each adds a kind of tab, see src/plugins.rs
+gitlab = ["dep:abromux-gitlab"]
+
 [dependencies]
+abromux-plugin = { path = "crates/abromux-plugin" }
+abromux-gitlab = { path = "crates/abromux-gitlab", optional = true }
 gpui = { version = "=0.2.2", default-features = false, features = ["runtime_shaders"] }
 gpui-component = { version = "=0.5.1", features = ["webview"] }
 # WebKit inspector in release builds (⌥⌘I); same crate gpui-component uses

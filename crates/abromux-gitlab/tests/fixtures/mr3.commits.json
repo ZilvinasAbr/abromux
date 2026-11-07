@@ -1,0 +1,21 @@
+[
+  {
+    "author_email": "alice@example.test",
+    "author_name": "Alice",
+    "authored_date": "2026-11-06T10:41:25.000+02:00",
+    "committed_date": "2026-11-06T10:41:25.000+02:00",
+    "committer_email": "alice@example.test",
+    "committer_name": "Alice",
+    "created_at": "2026-11-06T10:41:25.000+02:00",
+    "extended_trailers": {},
+    "id": "94a1f3befa698a606814912b132b7e1e883db784",
+    "message": "Fix typo\n",
+    "parent_ids": [
+      "6cfe85e3f0eb99e9eee1912d16998c13c9427b2b"
+    ],
+    "short_id": "94a1f3be",
+    "title": "Fix typo",
+    "trailers": {},
+    "web_url": "http://localhost:8929/alice/review-fixtures/-/commit/94a1f3befa698a606814912b132b7e1e883db784"
+  }
+]

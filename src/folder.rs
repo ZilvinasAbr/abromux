@@ -37,7 +37,16 @@ pub struct Checkout {
     /// The worktree's branch; None for a copy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// `add` made the branch (it didn't exist before), so removing the
+    /// workspace may delete it once it's merged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub new_branch: bool,
 }
+
+/// Where agents write down what they made outside the folder, for cleanup.
+pub const LEDGER: &str = ".abromux/resources.md";
+/// The cleanup instructions, written when cleanup starts.
+pub const CLEANUP: &str = ".abromux/cleanup.md";
 
 const AGENTS_MD: &str = "\
 # AbroMux workspace
@@ -55,6 +64,60 @@ that isn't a git repo is copied. `abromux folder list` shows what is checked
 out; `abromux folder repos` lists git repos it knows of on this machine.
 
 Commit in the worktrees as usual: the commits land in the original repo.
+
+## Resources outside this folder
+
+When the workspace is done, everything made for it is removed, so keep track
+of what you make outside this folder:
+
+- `docker compose` stacks are named after this workspace already
+  (`$COMPOSE_PROJECT_NAME`); keep it, don't pass `-p` or set `name:`.
+- Give anything you `docker run` / `docker volume create` / `docker network
+  create` the label `--label abromux.workspace=$COMPOSE_PROJECT_NAME`.
+- Write anything else down in `.abromux/resources.md`, one line each: what
+  it is and the command that removes it (a database or user on a shared
+  server, a cloud bucket, a `brew services` entry, a launchd job, a
+  long-running process, a port forward…).
+
+`abromux folder resources` shows what has been recorded and found.
+";
+
+/// What the cleanup agent follows (right-click the workspace › Clean Up and
+/// Delete Folder…).
+const CLEANUP_MD: &str = "\
+# Clean up this workspace
+
+This workspace is finished. Remove everything that was made for it, then
+delete it. You are running inside its folder; the last step ends this session.
+
+1. Find what it made:
+   - `abromux folder resources`: what agents recorded in
+     `.abromux/resources.md`, and the Docker containers, volumes and
+     networks labelled for this workspace or in its compose project.
+   - `abromux folder list`: the projects checked out here (git worktrees, or
+     copies of folders that aren't repos).
+   - Anything else made or started for this workspace that wasn't recorded:
+     look at compose files, scripts, `.env` files and READMEs in the
+     checkouts for things they create (databases, buckets, queues, k8s
+     namespaces, images…) and check whether those exist now; processes still
+     running from this folder (`lsof -a -d cwd +D \"$PWD\"`, and
+     `ps -eo pid,command | grep -F \"$PWD\"`) and the ports they listen on.
+2. Check what would be lost: in each worktree, uncommitted changes and
+   commits not pushed or merged anywhere. Copies are deleted outright, so say
+   if one was changed.
+3. Show the user one list: what you'll remove, and what you'll keep and why.
+   Only remove what was made for this workspace. Anything shared with other
+   projects, or that was there before, stays (base images pulled from a
+   registry, a database server other things use). Wait for the user to agree.
+4. Remove it: stop the processes, `docker compose -p \"$COMPOSE_PROJECT_NAME\"
+   down -v --rmi local` for the compose project, `docker rm -f`, `docker
+   volume rm` and `docker network rm` for labelled leftovers, the commands
+   in `.abromux/resources.md`, and so on. Check that each one is gone.
+5. Last, run `abromux folder remove`. It removes the worktrees (keeping their
+   branches unless they're merged), deletes this folder and closes the
+   workspace, which ends this session, so tell the user what you did before
+   you run it. If it refuses, tell the user why and stop; don't add
+   `--force` unless they say so.
 ";
 
 /// The workspace folder `path` is in, if any: the nearest folder holding
@@ -245,6 +308,7 @@ pub fn add(ws: &Path, source: &Path, branch: Option<&str>) -> Result<Checkout, S
                 path: rel,
                 source: top.to_string_lossy().into_owned(),
                 branch: Some(branch),
+                new_branch: !exists,
             }
         }
         None => {
@@ -264,12 +328,133 @@ pub fn add(ws: &Path, source: &Path, branch: Option<&str>) -> Result<Checkout, S
                 path: rel,
                 source: source.to_string_lossy().into_owned(),
                 branch: None,
+                new_branch: false,
             }
         }
     };
     meta.checkouts.push(checkout.clone());
     write_meta(ws, &meta).map_err(|e| e.to_string())?;
     Ok(checkout)
+}
+
+/// The name Docker resources of workspace `ws` go by: its folder's name
+/// (`$COMPOSE_PROJECT_NAME` in its shells, the `abromux.workspace` label).
+/// Folder names are slugs, which compose accepts.
+pub fn tag(ws: &Path) -> String {
+    slug(&ws.file_name().unwrap_or_default().to_string_lossy())
+}
+
+/// Write the cleanup instructions into `ws`; returns the line to give the
+/// agent.
+pub fn write_cleanup(ws: &Path) -> std::io::Result<&'static str> {
+    std::fs::create_dir_all(ws.join(".abromux"))?;
+    std::fs::write(ws.join(CLEANUP), CLEANUP_MD)?;
+    Ok("Read .abromux/cleanup.md and follow it.")
+}
+
+/// Docker containers, volumes and networks of workspace `ws`: labelled
+/// `abromux.workspace=<tag>` or in compose project `<tag>`. One line each,
+/// like `container <name>  <image>  <status>`. Err when Docker isn't
+/// installed or isn't running.
+pub fn docker_resources(ws: &Path) -> Result<Vec<String>, String> {
+    let tag = tag(ws);
+    let kinds: [(&str, &[&str], &str); 3] = [
+        ("container", &["ps", "-a"], "{{.Names}}  {{.Image}}  {{.Status}}"),
+        ("volume", &["volume", "ls"], "{{.Name}}"),
+        ("network", &["network", "ls"], "{{.Name}}"),
+    ];
+    let mut out = vec![];
+    for (kind, cmd, format) in kinds {
+        for label in ["abromux.workspace", "com.docker.compose.project"] {
+            let res = Command::new("docker")
+                .args(cmd)
+                .args(["--filter", &format!("label={label}={tag}"), "--format", format])
+                .output()
+                .map_err(|e| format!("docker: {e}"))?;
+            if !res.status.success() {
+                return Err(String::from_utf8_lossy(&res.stderr).trim().to_string());
+            }
+            for line in String::from_utf8_lossy(&res.stdout).lines() {
+                let line = format!("{kind} {}", line.trim());
+                if !out.contains(&line) {
+                    out.push(line);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Worktrees in `ws` with uncommitted or untracked changes, which `remove`
+/// would lose: a line each.
+pub fn blockers(ws: &Path) -> Vec<String> {
+    let meta = read_meta(ws).unwrap_or_default();
+    meta.checkouts
+        .iter()
+        .filter(|c| c.branch.is_some())
+        .filter_map(|c| {
+            let status = git(&ws.join(&c.path), &["status", "--porcelain"]).ok()?;
+            let n = status.lines().count();
+            (n > 0).then(|| format!("{}: {n} uncommitted or untracked file(s)", c.path))
+        })
+        .collect()
+}
+
+/// Delete workspace folder `ws`: `git worktree remove` each worktree in its
+/// repo (and delete the branch `add` made for it if that's merged), then
+/// the folder. Without `force` it refuses while a worktree has changes
+/// ([`blockers`]). Returns what it did, a line each.
+pub fn remove(ws: &Path, force: bool) -> Result<Vec<String>, String> {
+    let meta =
+        read_meta(ws).ok_or_else(|| format!("{}: not a workspace folder", ws.display()))?;
+    let home = std::env::var("HOME").map(PathBuf::from).ok();
+    if ws.parent().is_none() || home.as_deref() == Some(ws) {
+        return Err(format!("{}: won't delete that", ws.display()));
+    }
+    if !force {
+        let b = blockers(ws);
+        if !b.is_empty() {
+            return Err(format!(
+                "work would be lost (commit it, or --force to drop it):\n  {}",
+                b.join("\n  ")
+            ));
+        }
+    }
+    let mut done = vec![];
+    for c in &meta.checkouts {
+        let path = ws.join(&c.path);
+        let Some(branch) = &c.branch else {
+            done.push(format!("{}: deleted (a copy of {})", c.path, c.source));
+            continue;
+        };
+        let src = Path::new(&c.source);
+        if !src.is_dir() {
+            done.push(format!("{}: {} is gone, deleted its files", c.path, c.source));
+            continue;
+        }
+        if path.exists() {
+            let path_s = path.to_string_lossy();
+            let mut args = vec!["worktree", "remove"];
+            if force {
+                args.push("--force");
+            }
+            args.push(&path_s);
+            git(src, &args).map_err(|e| format!("{}: {e}", c.path))?;
+        } else {
+            let _ = git(src, &["worktree", "prune"]);
+        }
+        let branch_note = if !c.new_branch {
+            format!("kept branch {branch} (it was there before)")
+        } else if git(src, &["branch", "-d", branch]).is_ok() {
+            format!("deleted branch {branch} (merged)")
+        } else {
+            format!("kept branch {branch} (not merged)")
+        };
+        done.push(format!("{}: removed the worktree from {}, {branch_note}", c.path, c.source));
+    }
+    std::fs::remove_dir_all(ws).map_err(|e| format!("{}: {e}", ws.display()))?;
+    done.push(format!("deleted {}", ws.display()));
+    Ok(done)
 }
 
 /// Every workspace folder, oldest first.
@@ -410,5 +595,82 @@ mod tests {
         // Once more: the branch is checked out already, so git says no.
         assert!(add(&ws, &repo, None).is_err());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A repo with one commit on `main`, under `base/name`.
+    fn repo(base: &Path, name: &str) -> PathBuf {
+        let repo = base.join(name);
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| git(&repo, args).unwrap();
+        run(&["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join(".gitignore"), "target/\n").unwrap();
+        run(&["add", ".gitignore"]);
+        run(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]);
+        repo
+    }
+
+    fn commit(dir: &Path, file: &str) {
+        std::fs::write(dir.join(file), "x").unwrap();
+        git(dir, &["add", file]).unwrap();
+        git(dir, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", file]).unwrap();
+    }
+
+    #[test]
+    fn remove_takes_worktrees_out_and_keeps_unmerged_branches() {
+        let base = tmp("remove");
+        let merged = repo(&base, "merged");
+        let unmerged = repo(&base, "unmerged");
+        let notes = base.join("notes");
+        std::fs::create_dir_all(&notes).unwrap();
+        let ws = create_in(&base.join("ws"), "Done").unwrap();
+        add(&ws, &merged, None).unwrap();
+        add(&ws, &unmerged, None).unwrap();
+        add(&ws, &notes, None).unwrap();
+        commit(&ws.join("unmerged"), "work");
+        // Build output git ignores doesn't hold it up.
+        std::fs::create_dir_all(ws.join("merged/target")).unwrap();
+        std::fs::write(ws.join("merged/target/out"), "x").unwrap();
+
+        // Untracked work blocks it, unless forced.
+        std::fs::write(ws.join("merged/new.txt"), "x").unwrap();
+        assert_eq!(blockers(&ws).len(), 1);
+        assert!(remove(&ws, false).unwrap_err().contains("merged: 1"));
+        assert!(ws.is_dir());
+        std::fs::remove_file(ws.join("merged/new.txt")).unwrap();
+
+        let done = remove(&ws, false).unwrap();
+        assert!(!ws.exists(), "{done:?}");
+        let has = |r: &Path, b: &str| git(r, &["rev-parse", "--verify", "--quiet", b]).is_ok();
+        assert!(!has(&merged, "refs/heads/ws/done"), "merged branch deleted");
+        assert!(has(&unmerged, "refs/heads/ws/done"), "unmerged branch kept");
+        assert_eq!(git(&unmerged, &["worktree", "list"]).unwrap().lines().count(), 1);
+        assert!(notes.is_dir(), "a copy's source stays");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn remove_keeps_a_branch_that_was_there_before() {
+        let base = tmp("remove-old");
+        let r = repo(&base, "r");
+        git(&r, &["branch", "feature"]).unwrap();
+        let ws = create_in(&base.join("ws"), "w").unwrap();
+        let c = add(&ws, &r, Some("feature")).unwrap();
+        assert!(!c.new_branch);
+        remove(&ws, false).unwrap();
+        assert!(git(&r, &["rev-parse", "--verify", "--quiet", "refs/heads/feature"]).is_ok());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn remove_refuses_a_folder_that_isnt_one() {
+        let base = tmp("remove-not");
+        assert!(remove(&base, true).is_err());
+        assert!(base.is_dir());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn tag_is_the_folder_name() {
+        assert_eq!(tag(Path::new("/x/ws/quiet-amber-falcon-2")), "quiet-amber-falcon-2");
     }
 }

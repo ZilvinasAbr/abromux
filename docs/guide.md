@@ -8,9 +8,12 @@ Everything AbroMux does, in detail. For a quick start, see the [README](../READM
 - **Browser panes** are native WKWebViews (wry, via `gpui-component`). Each has an address bar with back, forward and reload. Typing in the address bar suggests pages from your browsing history, ranked as in cmux (where the text matches, plus how recently, often and directly you've visited them). ↑/↓ pick one, Return opens it, Esc closes the list, ⇧⌫ deletes the highlighted entry, and ↓ on the page's own URL lists your most typed and recent ones. History is shared by all browser panes and kept in `browser-history.json` under Application Support. ⌘-click or middle-click on a link opens it in a new tab after the current one (⇧ to switch to it). Passkeys and security keys work in them once the app is signed with Apple's web-browser entitlement (see "Passkeys").
 - **Workspaces** sit in a left sidebar, cmux style. Each entry shows the name, the focused tab's title, the git branch and the cwd, plus whatever scripts report through the CLI: status pills (`set-status`), a progress bar (`set-progress`) and the newest `log` line.
 - **Coding agents** (Claude Code, Codex, Gemini CLI, Droid, Cursor CLI, OpenCode and Pi) show up in the sidebar once you've run `abromux hooks install`: a "Running" pill while the agent works and "Needs input" when it asks for permission (Cursor's hooks can't say when it asks). When it asks, or finishes a turn, its terminal gets a notification ("Codex: Asks to run …", "Claude Code: <the start of its reply>"). Their tabs show the agent's logo (Claude Code and Codex) or a robot.
-- **Notifications** come from terminal programs (OSC 9, OSC 99 and OSC 777, as Claude Code, Codex and others send them), from the bell, and from `abromux notify`. One you aren't looking at rings its pane, puts a dot on its tab and on its workspace, shows its text under the workspace in the sidebar, counts on the dock icon, and, while AbroMux is in the background, shows a macOS banner that takes you to it when clicked (banners need AbroMux.app; a `cargo run` build has the rest). It's read once you look at that terminal. ⌘I lists them all; ⌘⇧U jumps to the newest unread one.
+- **Notifications** come from terminal programs (OSC 9, OSC 99 and OSC 777, as Claude Code, Codex and others send them), from the bell, and from `abromux notify`. One you aren't looking at rings its pane, puts a dot on its tab and on its workspace, shows its text under the workspace in the sidebar, counts on the dock icon, and, while AbroMux is in the background, shows a macOS banner that takes you to it when clicked (banners need AbroMux.app; a `cargo run` build has the rest). It's read once you look at that terminal. ⌘I lists them all; ⌘⇧U jumps to the newest unread one. ⌥⌘U marks the terminal in front of you unread (or read), and ⌃⌘U sends its notification to the back of the queue and jumps to the next one, to work through a pile one at a time. A bell in the macOS menu bar shows the unread count and lists them. [Notification hooks](#notifications) can filter or change each one.
 - **Links** in terminal output underline while you hold ⌘ over them: URLs, OSC 8 hyperlinks, and paths to files that exist (relative ones from the shell's directory, `path:line` too). ⌘-click opens web links in a browser to the right of the terminal (a new tab there if that pane already shows one) and anything else with its default app.
+- **A merge requests panel** on the right (⌥⌘B) lists the workspace's, yours and the ones you opened lately; they're kept cached and fresh in the background, so any of them opens at once in a GitLab tab (see "GitLab merge requests").
 - **Panes** split right or down, and each pane has a tab bar of terminal and browser tabs. Drag a divider to resize. Drag a tab to reorder it, onto another pane's tab bar or middle to move it there, onto a pane's edge to split that pane, or onto the outer edge of the pane area to split the whole workspace (full width or height), or onto a workspace in the sidebar to move it into that workspace. A highlight shows where it will land. Move Tab to New Workspace (⌘⇧P) gives the focused tab a workspace of its own.
+
+- **GitLab merge requests** open in a tab that looks like GitLab's own review pages (see "GitLab reviews"): the list, the overview with its threads, commits, and the changes with a file tree, inline or side-by-side diffs, suggestions and image diffs. You can comment, reply, resolve threads, start threads on lines and approve.
 
 ## Build from source
 
@@ -50,6 +53,8 @@ scripts/nightly.sh --name zoom     # "AbroMux Nightly zoom.app" and `abromux-nig
 
 A named nightly (bundle id `dev.abromux.nightly.<name>`, support folder `abromux-nightly-<name>/`) runs beside the release and the shared nightly, so agents testing different branches don't replace each other's build.
 
+A nightly others can download: commit, then `scripts/bundle-app.sh --nightly --dist` builds a notarized `dist/AbroMux-Nightly-<version>.dmg`, published as a GitHub pre-release tagged `nightly-<commit>`. Pre-releases are never GitHub's "latest" release, so the release app's update check doesn't offer them.
+
 AbroMux Nightly runs next to AbroMux. It has a neon icon (`assets/app/abromux-nightly.svg`), its own name, the bundle id `dev.abromux.nightly` (so separate notification permissions and settings), and its own socket and session in `~/Library/Application Support/abromux-nightly/`. It's signed like the release but never notarized: `scripts/bundle-app.sh --nightly` is what `nightly.sh` calls, and it refuses `--dist`. The binary decides which one it is at runtime from the bundle it sits in (`src/channel.rs`); `cargo run` counts as the release. Install agent hooks from the release `abromux`, not `abromux-nightly`: hooks point at the binary you install them from, and do nothing once that app is gone.
 
 ## Updates
@@ -63,6 +68,37 @@ AbroMux checks for updates like cmux does (cmux uses Sparkle; AbroMux does the s
 Nothing downloads until you choose Install and Relaunch. **Check for Updates…** (in the AbroMux menu, the command palette, or Settings › App › Updates) checks right away and also tells you when you're already on the latest version. The palette's **Apply Update (If Available)** installs a found update, or checks if there isn't one yet. Turn the daily check off with `"app": { "automaticallyCheckForUpdates": false }` or the switch in Settings.
 
 The check time and a skipped version are kept in `update.json` in the support folder, and each step is written to `update.log` there. An app running from the disk image or from a folder you can't write to says so and won't install; move it into Applications first. Nightly builds only check: they come from `scripts/nightly.sh`, not from releases. To try the flow from a nightly, launch it with `ABROMUX_UPDATE_FROM=0.1.0` so it thinks it's on an old version (`ABROMUX_UPDATE_FEED` points the check at another releases API URL). `cargo test update::tests::live -- --ignored` downloads, verifies and swaps the real latest release in a scratch folder.
+
+## GitLab reviews
+
+A GitLab tab (⌘⇧P → New GitLab Tab) shows merge requests the way GitLab's web UI does, in its dark theme. It's built in as a plugin (`crates/abromux-gitlab`, the `gitlab` Cargo feature, on by default) and writes what a reviewer does: comments, replies, resolving, threads on lines and approvals. Merging and editing the merge request are still done in GitLab.
+
+- **Sign in** with the GitLab URL and a personal access token with the `api` scope (a `read_api` token works too, but then writing says the token needs `api`). The token is checked, then kept in your login Keychain (service `abromux-gitlab`, account = the URL). New GitLab tabs then open on that GitLab, so you sign in once. `ABROMUX_GITLAB_TOKEN` overrides it.
+- **The list** has the merge requests you're asked to review, the ones you created, and all you can see, open, merged, closed or all of them, with checklist progress, coloured labels, the target branch when it isn't the default, pipeline status, assignees and reviewers, resolved threads ("1 of 4") and Approved, Merged and Closed badges, newest first, and a filter.
+- **A merge request** has GitLab's header and tabs. Overview: the description, approvals, merge status, the activity (GitLab's own notes, comments, threads on the diff with the code around their line; resolved ones folded) and the sidebar (with each reviewer's review state, the issues it closes, time tracking and participants). `#12`, `!3` and `@name` in descriptions and comments link to GitLab, as there. Commits, by day, each with its pipeline's status. Pipelines: the merge request's pipelines, newest first. Changes: the file tree (with search: `limit`, `*.rs`, `src/*`), each file's diff with syntax highlighting and GitLab's word-level changes, threads under their lines, suggestions as "Suggested change", images old and new side by side, and "Viewed" marks that fold files.
+- **Changes tools**: Inline or Side-by-side; the arrows in a hunk header or at a file's end show unchanged lines (20 at a time, or all); "Compare main and latest version" picks other versions of the merge request to compare (an "added N commits" note's "Compare with previous version" does it too); a commit's title in Commits (or its sha in the activity) shows just that commit's changes, under its message, with Previous and Next; the file's header stays at the top while you read it. Large or generated files fold, with "View file" to see them in GitLab.
+- **Overview tools**: the pipeline of the latest push (and, once merged, the merge commit's), and the activity filtered to comments or history, oldest or newest first. The merge box says how far behind the target the source branch is, with "Rebase source branch", and for a blocked merge which check failed ("Mark as ready" for a draft). Code blocks in descriptions and comments are highlighted as in GitLab, with a copy button. Scrolled down, the header folds into one line.
+- **More Changes tools**: the file browser as a tree with folding folders or as a flat list; buttons to expand or collapse every file; "one file at a time", with Previous and Next file (`j`/`k` and `n`/`p` move between files in it); a click on a line number marks the line, as GitLab's line links do.
+- **Reviewing**: the comment box at the end of the Overview; under each thread a Reply box (Reply, Reply and resolve) and Resolve thread or Reopen thread; on a diff line, the speech bubble that shows on hover starts a thread there, and "Start another thread" under a thread starts one more on its line (on the latest version, inline or side by side); Approve or Revoke approval in the approvals box; 👍, 👎 and "Add reaction" under the description react, and a click on your own takes it back. Each write is sent to GitLab, then the page refreshes in place. An error shows above the page and keeps what you typed. While you type in a box, the keys below don't fire, and Esc closes the box.
+- **Keys**, as in GitLab: `j`/`]` and `k`/`[` for the next and previous file, `n` and `p` for the next and previous unresolved thread (also the arrows next to the thread count), `v` to mark the file you're reading Viewed and go on to the next one not viewed yet (the file you're on is outlined, its Viewed ringed; unmark with the checkbox), and `/` or `s` to search.
+- **The sidebar** edits as GitLab's does: Edit on Assignee, Reviewer and Labels opens a dropdown with a search, ticking people or labels, saved when it closes (a click outside, Edit again, or Esc); on GitLab's free tier, which takes one assignee and one reviewer, a pick replaces and saves at once. Milestone picks one of the project's open milestones. "assign yourself" when nobody is, and a label's × removes it. Label and milestone changes show in the activity as GitLab words them.
+- **Big merge requests** show every file. GitLab's diff stops at 1000 files and leaves out files over 200 KB; the rest are listed from GitLab's stats with their line counts, and each one's old and new text is fetched and diffed here when it scrolls into view (a few at a time), with a Retry if that fails. Lines longer than 5000 characters (minified files) are cut short, saying by how much. The file tree only draws the rows in view, so a thousand files scroll as smoothly as ten.
+- **Selecting text**: drag over a description or comment, or over code (diff lines, the overview's snippets, code blocks, suggestions), and ⌘C copies it. In the diff a selection keeps to its side, side by side, and one longer than the screen copies whole. Shift-click extends it; a click elsewhere drops it.
+- **It stays current**: the merge requests panel's cache checks the one on screen every 20 seconds and loads it again in place when it changed (see "GitLab merge requests"), and the tab itself fetches it again every two minutes (and on Refresh) unless that just happened, without losing your place, so new comments and pushes show up as on GitLab's page.
+- **The list** has GitLab's state tabs with their counts and its sort ("Created date", "Updated date", "Title", "Popularity", either way round).
+- **Projects**: the Projects tab lists the projects you're a member of, most recently active first, with each one's open merge requests; typing searches GitLab's projects. Pick one for its merge requests (with the state tabs, filter and sort), and "All projects" to go back.
+- **Search** (`/` or `s` anywhere in the tab, as on GitLab's pages): a search over the page finds merge requests on GitLab as you type, across every project you can see; `!12` finds those numbered 12 in the projects at hand, `group/project!12` that one, and a pasted link opens. With nothing typed it shows the list's merge requests. ↑ ↓ pick, Enter opens, Esc closes.
+- **Opening links**: ⌘⇧P → **Open GitLab Merge Request…** asks for a link (one already copied is filled in) and opens it in a new tab. a merge request's link pasted into the list's search box (or ⌘V anywhere on the tab) opens it; a project's merge requests link (`…/group/project/-/merge_requests`) lists them. ⌘-clicking either kind of link in a terminal, or opening one from a browser tab, opens it in a GitLab tab where the browser would have gone (in a GitLab pane to the right, if there is one).
+- **Speed**: what a page needs is fetched together, through one curl that runs the requests side by side over connections it keeps open (one multiplexed connection on HTTP/2), so a GitLab far away costs a round trip or two instead of one per request. The list shows as soon as the merge requests come, and approvals, threads, pipelines and branches fill in after. A merge request loaded before (in this tab or another, by the panel's background cache, or before a restart: what GitLab answered is kept on disk) shows its last copy at once while the fresh one loads, and so does a list. Members load a hundred at a time; the people pickers ask GitLab for the rest as you type.
+- **Opening one directly**: `abromux rpc surface.create '{"type":"gitlab","url":"https://gitlab.example.com/group/project/-/merge_requests/12"}'`. A tab comes back after a restart on the same page, with its Viewed marks.
+
+In a narrow pane the file tree and sidebar step aside; the button left of "Compare" brings the tree back. Developing the plugin against a GitLab in Docker is described in [`dev/gitlab/README.md`](../dev/gitlab/README.md).
+
+### Local diffs
+
+`abromux diff [<range>]` shows any git diff in the GitLab tab, as if it were a merge request, with no GitLab: like `hunk`, but in the review UI. `X...Y` diffs Y against where it forked from X, `X..Y` the two commits, `X` X against the working tree, and nothing the uncommitted changes (untracked files too). It opens beside the terminal it's run in (`--direction`, or `--pane` for a tab there); `--cwd` picks the repository and `--title` names it. The tab is answered from git and a small file of comment threads in `local-diffs/` under Application Support (`crates/abromux-gitlab/src/local.rs`), so Changes, Commits, expanding unchanged lines, threads on lines, replies, resolving and "Start a review" all work as for a merge request. The same diff asked for again reopens the same review and tab, and the tab reloads by itself when the threads, the revisions or the working tree change.
+
+Comments go to a coding agent instead of GitLab. A new thread (or a submitted review's threads, together, or a reply) writes a prompt with the repository, the diff, the code around the line and the thread, and starts the agent in a terminal beside the tab: `--agent '<command>'` (default `claude`, or `$ABROMUX_DIFF_AGENT`; the prompt is appended, or put where `{prompt}` or `{prompt_file}` is). With `--send-here` (or `--send-to surface:N`), comments go to that terminal's agent as one line pointing at the prompt instead. The agent makes the change or answers, then replies in the thread with `abromux diff reply <id> <thread> [--resolve]`, and the reply shows under the line. `abromux diff list` lists the reviews and `abromux diff threads <id>` prints one's threads.
 
 ## Passkeys
 
@@ -78,7 +114,7 @@ The first passkey request asks to let AbroMux use passkeys (System Settings › 
 
 ## Session restore
 
-Quitting saves the session to `~/Library/Application Support/abromux/session.json` (the layout is also saved every few seconds, so a crash loses little). The next launch restores the window frame, workspaces with their names, descriptions, colors and groups, the split layout and ratios, tabs and their names, each terminal's working directory and font size, browser pages with their back/forward history (saved on quit), and up to 2000 lines of each terminal's output (with colors). By default the shells themselves keep running while abromux is closed and come back exactly as they were (see [Persistence](#persistence)); what follows is how terminals come back when they couldn't be kept (after a reboot) or with `"persistence": "cmux-like"`. Then shells start fresh: running programs aren't kept alive. Coding agents' sessions are the exception. Run `abromux hooks install` once and abromux learns, through the agents' hooks, which session runs in which terminal (the same hooks feed the sidebar status and notifications; rerun `install` after updating abromux to pick up new hook events). On restore, it types the agent's resume command into that terminal's new shell: `claude --resume <id>` (with the same permission mode), `codex resume <id>`, `gemini --resume <id>`, `droid --resume <id>`, `cursor-agent --resume <id>`, `opencode --session <id>` or `pi --session <id>`. A Codex, OpenCode or Pi you had quit isn't resumed. The hooks go after any hooks already there and do nothing outside abromux: `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`), `~/.codex/hooks.json` (or `$CODEX_HOME`), `~/.gemini/settings.json`, `~/.factory/hooks.json` (or the `hooks` in `~/.factory/settings.json` when there's no hooks.json) and `~/.cursor/hooks.json`. OpenCode and Pi get a plugin file instead: `~/.config/opencode/plugins/abromux.js` and `~/.pi/agent/extensions/abromux.js`. Agents whose folder doesn't exist are skipped; `abromux hooks install gemini pi` does just those. Codex asks you once to review new hooks: trust them when it does. They point at the binary you ran `install` from, so run it from the installed app; `abromux hooks uninstall` removes them. `ABROMUX_NO_RESTORE=1` skips it; `ABROMUX_SESSION_PATH` uses another file. `ABROMUX_DEMO` and `ABROMUX_SCRIPT` runs don't touch the session unless `ABROMUX_SESSION_PATH` is set.
+Quitting saves the session to `~/Library/Application Support/abromux/session.json` (the layout is also saved every few seconds, so a crash loses little). The next launch restores the window frame, workspaces with their names, descriptions, colors and groups, the split layout and ratios, tabs and their names, each terminal's working directory and font size, browser pages with their back/forward history (saved on quit) and zoom, and up to 2000 lines of each terminal's output (with colors). By default the shells themselves keep running while abromux is closed and come back exactly as they were (see [Persistence](#persistence)); what follows is how terminals come back when they couldn't be kept (after a reboot) or with `"persistence": "cmux-like"`. Then shells start fresh: running programs aren't kept alive. Coding agents' sessions are the exception. Run `abromux hooks install` once and abromux learns, through the agents' hooks, which session runs in which terminal (the same hooks feed the sidebar status and notifications; rerun `install` after updating abromux to pick up new hook events). On restore, it types the agent's resume command into that terminal's new shell: `claude --resume <id>` (with the same permission mode), `codex resume <id>`, `gemini --resume <id>`, `droid --resume <id>`, `cursor-agent --resume <id>`, `opencode --session <id>` or `pi --session <id>`. A Codex, OpenCode or Pi you had quit isn't resumed. The hooks go after any hooks already there and do nothing outside abromux: `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`), `~/.codex/hooks.json` (or `$CODEX_HOME`), `~/.gemini/settings.json`, `~/.factory/hooks.json` (or the `hooks` in `~/.factory/settings.json` when there's no hooks.json) and `~/.cursor/hooks.json`. OpenCode and Pi get a plugin file instead: `~/.config/opencode/plugins/abromux.js` and `~/.pi/agent/extensions/abromux.js`. Agents whose folder doesn't exist are skipped; `abromux hooks install gemini pi` does just those. Codex asks you once to review new hooks: trust them when it does. They point at the binary you ran `install` from, so run it from the installed app; `abromux hooks uninstall` removes them. `ABROMUX_NO_RESTORE=1` skips it; `ABROMUX_SESSION_PATH` uses another file. `ABROMUX_DEMO` and `ABROMUX_SCRIPT` runs don't touch the session unless `ABROMUX_SESSION_PATH` is set.
 
 Reopen Previous Session (⌘⇧O, File menu, or `abromux restore-session`) brings back the workspaces of the session this launch restored that aren't open any more, such as ones you closed by mistake. Workspaces still open as they were are skipped, so it never doubles one. `abromux restore-session --from nightly` (or `stable`, or a file) adds another session's workspaces, for example after trying the nightly app; `abromux restore-session --export <file> [--force]` writes the current one to a file.
 
@@ -105,11 +141,58 @@ The folder holds `.abromux/workspace.json` (its name and what was checked out) a
 - `abromux folder add <path> [--branch <name>]` checks a project out into the folder: for a git repo, a worktree of the whole repo on a new branch `ws/<folder>` (or `--branch`, which may already exist if no other worktree has it); anything else is copied.
 - `abromux folder` prints the folder, `folder list` its checkouts, `folder all` every workspace folder, `folder repos` the git repos right under `~/repos`, `~/src`, `~/code`, `~/projects`, `~/dev` and `~/Developer`, and `folder root` where the folders live. They work from any shell inside a workspace folder and don't need the app.
 
-Closing the workspace keeps its folder. Nothing deletes folders or worktrees yet: remove a worktree with `git worktree remove` in the original repo.
+Closing the workspace keeps its folder.
+
+### Cleaning up
+
+⇧⌘X (or right-click a workspace with a folder › Clean Up and Delete Folder…) opens a tab in the folder running a cleanup agent: `claude 'Read .abromux/cleanup.md and follow it.'`. It looks for everything the workspace made outside its folder, checks for work that would be lost, shows you what it will remove and keep, and waits for you to agree. Then it removes those things and ends with `abromux folder remove`, which closes the workspace. Claude asks before each command as usual. Set `automation.workspaceCleanupAgent` for another agent CLI; the instruction is passed as its one argument.
+
+To make that findable, each folder's `AGENTS.md` asks agents to keep track of what they make:
+
+- Shells in the workspace get `COMPOSE_PROJECT_NAME=<folder>`, so `docker compose` stacks started there are the workspace's.
+- Containers, volumes and networks made with plain `docker` get `--label abromux.workspace=<folder>`.
+- Anything else (a database on a shared server, a cloud bucket, a `brew services` entry, a long-running process) is written down in `.abromux/resources.md`, with the command that removes it.
+
+`abromux folder resources` shows that list and the Docker resources it finds by label or compose project.
+
+`abromux folder remove [<path>] [--force]` does the deleting without an agent: `git worktree remove` for each worktree in its repo, then the folder. It deletes a `ws/<folder>` branch it made if that's merged, and keeps it otherwise (a branch passed to `--branch` that already existed always stays). It refuses while a worktree has uncommitted or untracked files, or Docker resources of the workspace are still there; `--force` goes ahead anyway. If AbroMux has the workspace open, the app closes it first and then deletes the folder, so it works from the workspace's own shell, and a notification says how it went. `abromux folder all --closed` lists folders no open workspace has, to remove by path.
+
+## GitLab merge requests
+
+⌥⌘B (View › Toggle Merge Requests Panel, or `abromux mr panel`) shows a panel on the window's right with three lists:
+
+- **This workspace**: open merge requests from the branches checked out in the selected workspace: each checkout in its folder (the branch it's on now, and the one `folder add` made) and each terminal's repo, where the `origin` remote is on your GitLab.
+- **Mine**: your open merge requests, plus the ones you're asked to review (Settings can drop those, or add ones assigned to you).
+- **Recently opened**: the ones you opened lately in GitLab tabs, newest first.
+
+Click one, or find any cached one with ⇧⌘M (File › Go to Merge Request…; paste a link or `group/project!12` to open one that isn't cached), and it opens in a [GitLab tab](#gitlab-reviews) in the focused pane, or the tab already showing it. It shows at once from the cache, and refreshes quietly.
+
+It uses the GitLab tab's sign-in: the GitLab you signed in to there and its token in the Keychain (`ABROMUX_GITLAB_TOKEN` overrides it). Settings › GitLab › Host picks another of those, e.g. when you've signed in to several.
+
+**What's cached.** A merge request stays cached while it's in one of the lists, or open in a GitLab tab. Merged and closed ones are dropped at once, unless a tab still shows them. Past `recentLimit` (50), the longest-unopened ones drop out of Recently opened. Of each, what its tab shows is loaded in the background, the way the tab loads it, and what GitLab answered is kept on disk: a tab opened on it (also after a restart) draws that at once, then refreshes. Diffs come whole, within limits: a file whose diff is bigger than `maxFileDiffKb` (1024), and every file past `maxMrDiffMb` (20) or `maxMrDiffFiles` (3000) of a merge request's diff, is listed with its line counts and fetched when it scrolls into view, as GitLab's own too-big files are. Past `cacheSizeMb` (500) on disk, the loads of recently opened ones you haven't opened for longest go first, then yours; they stay listed, and are loaded again when you open them.
+
+**Keeping it fresh.** A cheap GraphQL check asks about many merge requests in one request: their update time (comments change it), state, pipeline and head. Only when that shows a change is the merge request loaded again, and a tab showing it takes the new load in place. How often each is checked: on screen every `onScreenSeconds` (20); pipeline running every `runningPipelineSeconds` (30); yours, the workspaces' and the `frequentRecent` (10) most recently opened every `mineSeconds` (60); the other recent ones every `recentSeconds` (300). While the app is in the background, every interval is three times longer; coming back checks anything older than half a minute. Requests run one at a time in two lanes, so a big merge request loading in the background never holds up the one on screen.
+
+**Rate limits.** A 429 from GitLab pauses the panel's requests until its `Retry-After` and doubles all the intervals (to ×32 at most); running low on `RateLimit-Remaining` stretches them before it comes to that. After five minutes without either, they shrink by a fifth, back to normal. The more they're stretched, the less runs at all: background loads stop first, the merge request on screen last. The panel says when it's slowed down or paused.
+
+Everything is in `gitlab-cache/` under Application Support (`index.json` for the lists, `reviews/` for the loads); another host starts the lists afresh. All the values above are under `"gitlab"` in the config file and in Settings › GitLab:
+
+```json
+"gitlab": {
+  "host": "https://gitlab.example.com",
+  "includeReviewRequests": true, "includeAssigned": false,
+  "recentLimit": 50, "cacheSizeMb": 500,
+  "maxFileDiffKb": 1024, "maxMrDiffMb": 20, "maxMrDiffFiles": 3000,
+  "onScreenSeconds": 20, "runningPipelineSeconds": 30,
+  "mineSeconds": 60, "frequentRecent": 10, "recentSeconds": 300
+}
+```
+
+`abromux mr list [mine|recent|workspace]` prints the cache (`--json` for everything), `abromux mr open <url|group/project!iid>` opens one in the caller's workspace, and `abromux mr refresh [<ref>]` checks everything now, or loads one again.
 
 ## Settings window
 
-⌘, (or the app menu › Settings…) opens Settings: a page each for General, Sidebar, Workspace Colors, Panes, Keyboard Shortcuts and Commands, with a search field over all of them. It's a front end for the config file below, not a separate store. Each change writes just that key to `config.json` and applies at once. A setting put back to its default is removed from the file, and the rest of the file (other keys, their order, commands) stays as you wrote it. The undo arrow next to a setting resets it, and the one by a page's title resets the whole page.
+⌘, (or the app menu › Settings…) opens Settings: a page each for General, Sidebar, Workspace Colors, Panes, Keyboard Shortcuts, Commands and GitLab, with a search field over all of them. It's a front end for the config file below, not a separate store. Each change writes just that key to `config.json` and applies at once. A setting put back to its default is removed from the file, and the rest of the file (other keys, their order, commands) stays as you wrote it. The undo arrow next to a setting resets it, and the one by a page's title resets the whole page.
 
 On Keyboard Shortcuts, click a shortcut and press the new keys; Esc cancels. A shortcut needs ⌘, ⌃ or ⌥, unless it's a function key. If another action had that key, a toast says the new one takes it over. × removes a shortcut. Chords (`ctrl-a h`), per-context keys (`"when"`), workspace palette colors and commands are edited in the file; Settings shows them, and General › Config Files opens the file. If the file doesn't parse, Settings says why and saves nothing until it's fixed.
 
@@ -153,7 +236,7 @@ The palette (⌘⇧P) has **Persistence: abromux** and **Persistence: cmux-like*
 
 `engine` is `builtIn` (the default, the WebKit browser pane) or `terminalBrowser` (`"terminal-browser"` works too); Settings has it under General › Browser. With `terminalBrowser`, every new browser tab (⌘⇧L, the globe, ⌘-clicked links, `url` commands, layouts, `abromux new-surface --type browser`) is a terminal running `terminal-browser open --no-merge <url>` in your login shell, and closing the browser closes the tab. The tab shows a globe and the page's title, as a built-in one does: abromux asks terminal-browser's control socket (`~/.local/state/terminal-browser-*/instances/*.sock`) for the active tab's title and URL, matched to the tab by its tty.
 
-A terminal-browser tab takes the built-in browser's keys: ⌘L, ⌘R, ⌘[ / ⌘], ⌘F (find), ⌥⌘I (devtools), ⌥⌘C (console), ⌘= / ⌘- / ⌘0 (zoom), and ⌘A, ⌘C, ⌘X, ⌘Z, ⇧⌘Z in the page; abromux starts it with `--find-key`, `--devtools-key` and `--console-key` set to match. Window-level keys (⌘T, ⌘W, ⌘P, ⌘N, …) stay abromux's. ⌘-click opens a link in a new terminal-browser tab, the pointer follows the page (a hand over links), and the page gets key releases, focus and blur, and sideways scrolling.
+A terminal-browser tab takes the built-in browser's keys: ⌘L, ⌘R, ⌘[ / ⌘], ⌘= / ⌘- / ⌘0 (zoom), and ⌘A, ⌘C, ⌘X, ⌘Z, ⇧⌘Z in the page. ⌘F (find), ⌥⌘I (devtools) and ⌥⌘C (console) work as in the built-in browser: abromux sends terminal-browser the key it binds to the same command in its `shortcuts.json` (`~/.config/terminal-browser/`, or its settings with ⌃,), by default ⇧⌘F, ⇧⌘I and ⌥⌘J, read on each press. Its own keys work too, except ⇧⌘I, which is abromux's New Workspace Folder; F12 opens devtools. Window-level keys (⌘T, ⌘W, ⌘P, ⌘N, …) stay abromux's. ⌘-click opens a link in a new terminal-browser tab, the pointer follows the page (a hand over links), and the page gets key releases, focus and blur, and sideways scrolling.
 
 abromux looks for `terminal-browser` on PATH, in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`; if it isn't there, the tab falls back to the built-in browser with a warning. The setting applies to tabs opened after it changes; open ones stay as they are. A terminal-browser tab is restored as a browser tab on the page it last showed (its own back/forward history isn't kept). The `abromux browser` automation commands only drive built-in tabs, so `abromux browser open` always opens one (use `terminal-browser action` to drive a terminal-browser).
 
@@ -193,7 +276,7 @@ These use cmux's key names. Shown with their defaults:
     "colors": { "Red": "#C0392B", "Blue": "#1565C0" }
   },
   "workspaceGroups": { "newWorkspacePlacement": "afterCurrent" },
-  "automation": { "workspaceAutoNaming": false }
+  "automation": { "workspaceAutoNaming": false, "workspaceCleanupAgent": null }
 }
 ```
 
@@ -263,9 +346,39 @@ Reloading the config applies new shortcuts at once, in the menus too.
 
 ⌘⇧, (or ⌘⇧P → Reload Config, or `abromux reload-config`) reads the file again without a restart. If it doesn't parse, the current settings stay and a toast shows the error with its line and column, and it does the same at launch. `abromux config check [<file>]` validates a file without the app, and `abromux config path` prints where it's read from. The Ghostty config below is separate and is still read only at launch.
 
+### Notifications
+
+```json
+{
+  "notifications": {
+    "showInMenuBar": true,
+    "hooks": [
+      { "id": "no-banner-for-codex", "command": "jq 'if .notification.title == \"Codex\" then .effects.desktop = false else . end'" },
+      { "id": "speak", "command": "say \"$(jq -r .notification.body)\"", "timeoutSeconds": 10 }
+    ]
+  }
+}
+```
+
+`showInMenuBar` (on by default, as in cmux) puts a bell in the macOS menu bar with the unread count. Its menu lists the newest unread notifications (click one to go to it) and has Show Notifications, Jump to Latest Unread, Mark All Read and Clear All.
+
+`hooks` are cmux's notification hooks: shell commands each notification (not the bell) passes through, in order. A hook gets it as JSON on stdin and prints it back, changed or not:
+
+```json
+{
+  "version": 1,
+  "notification": { "id": 7, "workspaceId": "workspace:2", "surfaceId": "surface:5",
+                    "title": "Claude Code", "subtitle": "", "body": "Needs your input" },
+  "context": { "cwd": "/path/to/project", "hookId": "speak", "appFocused": false, "focusedPanel": false },
+  "effects": { "record": true, "markUnread": true, "desktop": true, "sound": true }
+}
+```
+
+`record: false` drops the notification, `markUnread: false` records it as read, `desktop: false` skips the macOS banner and `sound: false` its sound; a changed `title`, `subtitle` or `body` is what's shown. A hook that prints nothing changes nothing, so any command can be a hook. Hooks run in the background (the banner waits for them) in the workspace's directory, with `ABROMUX_WORKSPACE_ID`, `ABROMUX_SURFACE_ID` and `ABROMUX_SOCKET_PATH` set so they can call `abromux`. If one fails, takes longer than `timeoutSeconds` (default 20) or prints something that isn't JSON, the notification goes ahead as if there were no hooks and a toast says which hook failed. `"enabled": false` turns one off. Unlike cmux, only this file's hooks run, not a project's.
+
 ## Ghostty config
 
-Terminals read your Ghostty config: `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`), then `~/Library/Application Support/com.mitchellh.ghostty/config`, plus their `config-file` includes. abromux uses `theme` (from `~/.config/ghostty/themes` or Ghostty.app), `font-family`, `font-size`, `foreground`, `background`, `palette`, `cursor-color`, `cursor-text`, `cursor-style`, `selection-background`/`-foreground`, `keybind`s whose action is `text:`, `csi:` or `esc:`, and `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` (on by default, as in Ghostty: pasting text that could run commands, such as a newline when the program hasn't turned on bracketed paste, asks first; Enter pastes, Esc cancels). `copy-on-select = clipboard` copies a selection to the clipboard when you let go of the mouse (Ghostty's default `true` uses a selection pasteboard macOS doesn't have, so it does nothing here). `mouse-scroll-multiplier` scales scrolling, as one number or `precision:<n>,discrete:<n>` for the trackpad and the mouse wheel. `scrollbar = never` hides the overlay scrollbar. `shell-integration = none` turns off abromux's shell integration (below). Other keys are ignored for now. Changes apply to new terminals.
+Terminals read your Ghostty config: `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`), then `~/Library/Application Support/com.mitchellh.ghostty/config`, plus their `config-file` includes. abromux uses `theme` (from `~/.config/ghostty/themes` or Ghostty.app), `font-family`, `font-size`, `foreground`, `background`, `palette`, `cursor-color`, `cursor-text`, `cursor-style`, `selection-background`/`-foreground`, `keybind`s whose action is `text:`, `csi:` or `esc:`, and `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` (on by default, as in Ghostty: pasting text that could run commands, such as a newline when the program hasn't turned on bracketed paste, asks first; Enter pastes, Esc cancels). Programs can copy to the clipboard with OSC 52, as terminal-browser, Neovim and tmux do (`clipboard-write = deny` stops them; there's no prompt, so `ask` refuses too). `copy-on-select = clipboard` copies a selection to the clipboard when you let go of the mouse (Ghostty's default `true` uses a selection pasteboard macOS doesn't have, so it does nothing here). `mouse-scroll-multiplier` scales scrolling, as one number or `precision:<n>,discrete:<n>` for the trackpad and the mouse wheel. `scrollbar = never` hides the overlay scrollbar. `shell-integration = none` turns off abromux's shell integration (below). Other keys are ignored for now. Changes apply to new terminals.
 
 ## Shell integration
 
@@ -283,7 +396,10 @@ abromux new-split right --command 'cargo watch -x test'
 abromux send --surface surface:3 'ls -la\n'
 abromux send-key --surface surface:3 ctrl-c
 abromux read-screen --surface surface:3 --scrollback --lines 50
+abromux read-selection --surface surface:3  # the selected text (also read-screen --selection; works in a browser tab too)
 abromux rename-tab --surface surface:3 'dev server'   # no title: back to the program's own
+abromux tab-action --tab surface:3 close-right   # also close-left, close-others, new-terminal-right, new-browser-right,
+                                                 # duplicate, move-to-new-workspace, reload, rename, clear-name, mark-read, mark-unread
 abromux respawn-pane --surface surface:3 --command 'npm run dev'   # kill the shell, start a fresh one
 abromux last-pane                           # back to the pane focused before
 abromux swap-pane -L                        # swap the focused pane's tabs with the pane to its left
@@ -296,9 +412,13 @@ abromux zoom-pane                           # like ⌘⇧↩; on, off or toggle
 abromux trigger-flash --surface surface:3   # flash its pane, like ⌘⇧H
 abromux browser open https://example.com
 abromux browser eval 'document.title'
+abromux browser zoom 125%                   # or in, out, reset, 1.5; no argument prints it
 abromux notify --title 'Tests' --body 'all green'   # rings the pane it runs in
 abromux list-notifications
 abromux jump-to-unread
+abromux mark-notification-read --workspace workspace:2   # or --id 4, --all
+abromux dismiss-notification --all-read     # or --id 4
+abromux wait-for build-done --timeout 600   # blocks until another script runs: abromux wait-for -S build-done
 abromux set-status build compiling --color '#e0a84f'   # a pill under the workspace
 abromux set-progress 0.4 --label 'Building'
 abromux log --level error --source build 'Build failed'
@@ -327,6 +447,10 @@ There are also `dblclick`, `hover`, `focus`, `check`/`uncheck`, `type`, `press`,
 
 Coding agents running in abromux can learn this CLI from two agent skills in [`skills/`](../skills): `abromux` (splits, tabs, running and reading other terminals, sidebar status and notifications) and `abromux-browser` (the browser automation above). `abromux skills install` copies them into `~/.claude/skills` (or `$CLAUDE_CONFIG_DIR`) and, if Codex is set up, `~/.codex/skills` (or `$CODEX_HOME`). They're built into the binary, so rerun it after updating abromux; `abromux skills uninstall` removes them, and `abromux skills show [name]` prints one.
 
+`abromux completion zsh` (or `bash`, `fish`) prints a completion script for the commands and their subcommands: `eval "$(abromux completion zsh)"` in `~/.zshrc`, after `compinit`.
+
+`wait-for` works without the app, through a file per name in `$TMPDIR`, as cmux does: a signal sent before anyone waits is kept, and each one wakes a single waiter.
+
 Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each shell gets `ABROMUX_SOCKET_PATH`, `ABROMUX_WORKSPACE_ID` and `ABROMUX_SURFACE_ID`, so `abromux` run inside a pane acts on that pane by default (otherwise on what's focused). The wire format is one JSON object per line (`{"id":1,"method":"workspace.list","params":{}}`); `abromux rpc <method> [json]` sends one directly.
 
 ## Keyboard and mouse
@@ -335,6 +459,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 |---|---|---|
 | New workspace | `+` in sidebar header / footer | ⌘N |
 | New workspace folder | File › New Workspace Folder | ⇧⌘I |
+| Clean up and delete workspace folder | right-click → Clean Up and Delete Folder… | ⇧⌘X |
 | Rename workspace | double-click its name (Enter saves, Esc cancels) | ⌘⇧R |
 | Workspace description | right-click → Add Description… (Return saves, ⇧↩ new line) | ⌥⌘E |
 | Workspace color, group, move, close others | right-click the row | |
@@ -360,7 +485,9 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Command palette: every command that applies to the focused terminal or browser, with its shortcut | | ⌘⇧P, type to filter, ↑/↓ or ⌃N/⌃P, Enter runs, Esc closes |
 | Switch workspace by name | | ⌘P |
 | Notifications list | bell icon in the titlebar | ⌘I (Esc closes) |
-| Jump to newest unread notification | click it in the list | ⌘⇧U |
+| Jump to newest unread notification | click it in the list or the menu-bar bell | ⌘⇧U |
+| Mark the focused terminal unread, or read | | ⌥⌘U |
+| Mark it the oldest unread and jump to the next | | ⌃⌘U |
 | Open a link in a terminal | ⌘-click | |
 | Open a page link in a new tab | ⌘-click (⇧⌘-click to switch to it) | |
 | Toggle sidebar | sidebar icon | ⌘B |
@@ -374,6 +501,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Find in terminal (screen and scrollback) | | ⌘F, then ⌘G / ⇧⌘G or Enter / ⇧Enter, Esc to close; ⌘E finds the selection |
 | Find in page (browser) | | ⌘F, same keys as find in terminal |
 | Browser back / forward / reload | arrows and ↻ next to the address bar | ⌘[ / ⌘], ⌘R |
+| Browser zoom in / out / actual size (kept per tab, and across restarts) | View menu | ⌘= / ⌘-, ⌘0 |
 | Web inspector / JS console | | ⌥⌘I / ⌥⌘C |
 | Settings | app menu › Settings… | ⌘, |
 | Reload the config file | | ⌘⇧, |
@@ -420,6 +548,8 @@ History lives in `<git common dir>/abromux-perf/history.jsonl`, outside the tree
 - `src/main.rs`: the app shell (pane tab bars, splits, actions); `src/sidebar.rs`: the sidebar's rows, groups, menus and drag to reorder
 - `src/bench.rs`: `abromux bench-vt` and `abromux bench-kitty`, the headless parse benchmarks used by `scripts/perf.py`
 - `src/server.rs`: the control socket's method handlers; `src/cli.rs`: the `abromux` commands; `src/ipc.rs`: the shared wire format
+- `src/plugins.rs`: the plugins built in; `crates/abromux-plugin`: the interface a plugin's tab implements; `crates/abromux-gitlab`: the GitLab review tab
+- `dev/gitlab/`: a GitLab in Docker with review fixtures, and scripts to drive and screenshot the plugin (see its README)
 
 ## Known POC limits
 

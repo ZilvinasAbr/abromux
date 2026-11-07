@@ -1,0 +1,35 @@
+# Local GitLab CE for developing and testing the GitLab review plugin.
+# Start: docker compose -f dev/gitlab/compose.yml up -d   (first boot takes ~3-5 min)
+# Web:   http://localhost:8929   (root / GITLAB_ROOT_PASSWORD below)
+name: abromux-gitlab
+services:
+  gitlab:
+    # pinned: the version the plugin is developed and tested against
+    image: gitlab/gitlab-ce:19.5.3-ce.0
+    hostname: gitlab.local
+    restart: unless-stopped
+    shm_size: 256m
+    ports:
+      - "8929:8929"
+      - "2224:22"
+    environment:
+      GITLAB_ROOT_PASSWORD: "abromux-dev-Pa55"
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://localhost:8929'
+        gitlab_rails['gitlab_shell_ssh_port'] = 2224
+        # keep it light: this is a dev box, not production
+        puma['worker_processes'] = 0
+        sidekiq['concurrency'] = 5
+        prometheus_monitoring['enable'] = false
+        gitlab_rails['usage_ping_enabled'] = false
+        gitlab_kas['enable'] = false
+        registry['enable'] = false
+        gitlab_pages['enable'] = false
+    volumes:
+      - gitlab-config:/etc/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - gitlab-data:/var/opt/gitlab
+volumes:
+  gitlab-config:
+  gitlab-logs:
+  gitlab-data:

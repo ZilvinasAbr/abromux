@@ -70,6 +70,7 @@ pub fn convert(v: &Value) -> Result<Session, String> {
         sidebar_width: sidebar
             .and_then(|s| s["width"].as_f64())
             .map_or(crate::SIDEBAR_WIDTH, |w| w as f32),
+        mr_panel: false,
         workspaces,
         groups: vec![],
     })
@@ -202,6 +203,7 @@ fn tab(p: &Value, dir: &str) -> Option<TabState> {
                 url: str_of(b, "urlString").unwrap_or_default().to_string(),
                 history: str_of(b, "interactionState").map(str::to_string),
                 name,
+                zoom: None,
             })
         }
         _ => None,
@@ -411,6 +413,7 @@ mod tests {
                     url: "https://example.com".into(),
                     name: Some("Docs site".into()),
                     history: Some("AAAA".into()),
+                    zoom: None,
                 }]
             }
         );

@@ -36,13 +36,30 @@ actions!(
         SuggestNext,
         SuggestPrev,
         DismissSuggestions,
-        RemoveSuggestion
+        RemoveSuggestion,
+        ZoomIn,
+        ZoomOut,
+        ActualSize
     ]
 );
 
 /// Key context of the address bar, for its bindings in main.rs.
 pub const OMNIBAR: &str = "Omnibar";
 const MAX_SUGGESTIONS: usize = 8;
+
+/// Page zoom steps for ⌘= / ⌘-, Safari's.
+const ZOOM_LEVELS: [f64; 11] = [0.5, 0.75, 0.85, 1.0, 1.15, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+
+/// The zoom step after `zoom` going in or out, or `zoom` at either end.
+pub(crate) fn zoom_step(zoom: f64, zoom_in: bool) -> f64 {
+    const EPS: f64 = 0.001;
+    if zoom_in {
+        ZOOM_LEVELS.iter().copied().find(|&z| z > zoom + EPS)
+    } else {
+        ZOOM_LEVELS.iter().rev().copied().find(|&z| z < zoom - EPS)
+    }
+    .unwrap_or(zoom)
+}
 
 /// A toolbar button, indexing `BrowserView::nav_presses`.
 #[derive(Clone, Copy, PartialEq)]
@@ -103,6 +120,8 @@ pub struct BrowserView {
     native_shown: bool,
     /// The title the loading page set, for its history entry.
     load_title: Option<String>,
+    /// WKWebView's `pageZoom`, 1.0 at actual size.
+    zoom: f64,
 }
 
 impl EventEmitter<BrowserEvent> for BrowserView {}
@@ -286,6 +305,7 @@ impl BrowserView {
             selected: None,
             native_shown: true,
             load_title: None,
+            zoom: 1.0,
         }
     }
 
@@ -576,6 +596,18 @@ impl BrowserView {
             self.watch_loading(cx);
         }
         ok
+    }
+
+    pub fn zoom(&self) -> f64 {
+        self.zoom
+    }
+
+    /// Set the page zoom (⌘= / ⌘- / ⌘0), kept between the first and last step.
+    pub fn set_zoom(&mut self, zoom: f64, cx: &mut Context<Self>) {
+        let zoom = zoom.clamp(ZOOM_LEVELS[0], ZOOM_LEVELS[ZOOM_LEVELS.len() - 1]);
+        self.zoom = zoom;
+        let _: () = unsafe { msg_send![self.wk_webview(cx), setPageZoom: zoom] };
+        cx.notify();
     }
 
     fn stop(&self, cx: &App) {
@@ -905,6 +937,13 @@ impl Render for BrowserView {
                 cx.listener(|this, _: &ToggleDevTools, _, cx| this.show_inspector(false, cx)),
             )
             .on_action(cx.listener(|this, _: &ShowConsole, _, cx| this.show_inspector(true, cx)))
+            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
+                this.set_zoom(zoom_step(this.zoom, true), cx)
+            }))
+            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| {
+                this.set_zoom(zoom_step(this.zoom, false), cx)
+            }))
+            .on_action(cx.listener(|this, _: &ActualSize, _, cx| this.set_zoom(1.0, cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.find_step(true, cx)))
             .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.find_step(false, cx)))
@@ -1089,7 +1128,7 @@ pub fn normalize_url(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{safari_version, user_agent};
+    use super::{safari_version, user_agent, zoom_step};
 
     #[test]
     fn safari_version_keeps_installed_but_not_below_floor() {
@@ -1100,6 +1139,17 @@ mod tests {
         assert_eq!(safari_version(Some("18.5")), "26.6");
         assert_eq!(safari_version(Some("bogus")), "26.6");
         assert_eq!(safari_version(None), "26.6");
+    }
+
+    #[test]
+    fn zoom_steps_through_levels_and_stops_at_the_ends() {
+        assert_eq!(zoom_step(1.0, true), 1.15);
+        assert_eq!(zoom_step(1.0, false), 0.85);
+        assert_eq!(zoom_step(3.0, true), 3.0);
+        assert_eq!(zoom_step(0.5, false), 0.5);
+        // A zoom between steps (restored from elsewhere) goes to the next one.
+        assert_eq!(zoom_step(1.1, true), 1.15);
+        assert_eq!(zoom_step(1.1, false), 1.0);
     }
 
     #[test]

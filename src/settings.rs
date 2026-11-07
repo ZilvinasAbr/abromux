@@ -74,9 +74,68 @@ pub struct Settings {
     pub workspace_groups: WorkspaceGroups,
     pub automation: Automation,
     pub browser: BrowserSettings,
+    pub notifications: NotificationSettings,
+    pub gitlab: GitlabSettings,
 }
 
 impl Global for Settings {}
+
+/// The GitLab merge requests panel and cache (`crate::gitlab`).
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct GitlabSettings {
+    /// The GitLab the panel and cache use, e.g. `gitlab.example.com`. None:
+    /// the one signed in to in a GitLab tab. Its token is the tab's (the
+    /// Keychain). Workspace checkouts whose remote is elsewhere are left out.
+    pub host: Option<String>,
+    /// "Mine" also holds merge requests you're asked to review.
+    pub include_review_requests: bool,
+    /// "Mine" also holds merge requests assigned to you.
+    pub include_assigned: bool,
+    /// Merge requests you opened that stay cached, newest first.
+    pub recent_limit: u32,
+    /// Disk space for cached merge requests, in MB. Past it, the
+    /// longest-unopened ones' go first; they stay listed.
+    pub cache_size_mb: u32,
+    /// A file whose diff is bigger (KB) is fetched when it's shown.
+    pub max_file_diff_kb: u32,
+    /// Past this much of a merge request's diff (MB), files are fetched
+    /// when they're shown.
+    pub max_mr_diff_mb: u32,
+    /// …or after this many files.
+    pub max_mr_diff_files: u32,
+    /// How many of the most recently opened merge requests poll as often
+    /// as your own.
+    pub frequent_recent: u32,
+    /// Seconds between checks of a merge request on screen.
+    pub on_screen_seconds: u32,
+    /// …of one whose pipeline is running.
+    pub running_pipeline_seconds: u32,
+    /// …of yours, the workspaces' and the frequent recent ones.
+    pub mine_seconds: u32,
+    /// …of the other recent ones.
+    pub recent_seconds: u32,
+}
+
+impl Default for GitlabSettings {
+    fn default() -> Self {
+        Self {
+            host: None,
+            include_review_requests: true,
+            include_assigned: false,
+            recent_limit: 50,
+            cache_size_mb: 500,
+            max_file_diff_kb: 1024,
+            max_mr_diff_mb: 20,
+            max_mr_diff_files: 3000,
+            frequent_recent: 10,
+            on_screen_seconds: 20,
+            running_pipeline_seconds: 30,
+            mine_seconds: 60,
+            recent_seconds: 300,
+        }
+    }
+}
 
 /// How terminals come back after abromux quits. Applies to terminals opened
 /// after it's set; ones already running in the holder are taken back
@@ -409,6 +468,67 @@ pub struct Automation {
     /// Name a workspace from its agent's first prompt, summarised by that
     /// agent's own CLI (`claude -p`, `codex exec`). A name you give it wins.
     pub workspace_auto_naming: bool,
+    /// The agent CLI that cleans up a workspace folder (right-click › Clean
+    /// Up and Delete Folder…), run with the instruction as its one argument.
+    /// None is `claude`.
+    pub workspace_cleanup_agent: Option<String>,
+}
+
+/// cmux's `notifications` keys.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct NotificationSettings {
+    /// Commands each notification passes through, in order
+    /// (`crate::notify_hook`).
+    pub hooks: Vec<NotificationHook>,
+    /// The bell in the macOS menu bar (`crate::menubar`).
+    pub show_in_menu_bar: bool,
+}
+
+impl Default for NotificationSettings {
+    fn default() -> Self {
+        NotificationSettings {
+            hooks: vec![],
+            show_in_menu_bar: true,
+        }
+    }
+}
+
+/// One `notifications.hooks` entry: a shell command that gets the
+/// notification as JSON on stdin and may print it back changed.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct NotificationHook {
+    #[serde(deserialize_with = "non_blank")]
+    pub id: String,
+    #[serde(deserialize_with = "non_blank")]
+    pub command: String,
+    /// Default 20, as in cmux.
+    #[serde(default, deserialize_with = "positive")]
+    pub timeout_seconds: Option<f64>,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn non_blank<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let s = String::deserialize(d)?.trim().to_string();
+    if s.is_empty() {
+        return Err(serde::de::Error::custom("must not be blank"));
+    }
+    Ok(s)
+}
+
+fn positive<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
+    match Option::<f64>::deserialize(d)? {
+        Some(t) if !(t.is_finite() && t > 0.) => Err(serde::de::Error::custom(
+            "timeoutSeconds must be greater than 0",
+        )),
+        t => Ok(t),
+    }
 }
 
 /// The keys bound to an action or command.

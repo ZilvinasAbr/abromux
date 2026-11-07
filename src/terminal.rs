@@ -80,6 +80,11 @@ pub trait TerminalApp: Any {
     fn page_url(&self) -> Option<&str> {
         None
     }
+    /// The key to send the program in place of `ks`, if the app knows it by
+    /// another (terminal-browser's find is ⇧⌘F where abromux has ⌘F).
+    fn translate_key(&self, _ks: &Keystroke) -> Option<Keystroke> {
+        None
+    }
 }
 
 pub enum TerminalEvent {
@@ -411,6 +416,9 @@ impl TerminalView {
         for (title, body) in fx.notifications.into_iter().chain(kitty) {
             cx.emit(TerminalEvent::Notification { title, body });
         }
+        if let Some(text) = fx.clipboard {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
         self.run_search(cx);
         self.watch_hold(cx);
         self.dirty = true;
@@ -542,6 +550,11 @@ impl TerminalView {
         window.focus(&self.focus);
         cx.emit(TerminalEvent::Focused);
         self.paste_now(&format!("{} ", text.join(" ")), cx);
+    }
+
+    /// The selected text, if any (`read-selection`).
+    pub fn selection_text(&self) -> Option<String> {
+        self.term.selection_text()
     }
 
     pub fn copy(&self, cx: &mut App) -> bool {
@@ -680,6 +693,9 @@ impl TerminalView {
         if let Some(vt) = scrollback {
             self.term.write(vt.as_bytes());
             self.term.write(b"\x1b[0m\r\n");
+            // Old output: nothing it asks for (a reply, a clipboard write)
+            // is for now.
+            let _ = self.term.take_effects();
             self.dirty = true;
         }
         if let Some(size) = font_size {
@@ -1123,6 +1139,11 @@ impl TerminalView {
         if m.platform && !self.app.as_ref().is_some_and(|a| a.takes_cmd_keys()) {
             return false;
         }
+        let translated = self.app.as_ref().and_then(|a| a.translate_key(ks));
+        // A translated key's release would be for another key: don't owe one.
+        let owes_release = translated.is_none();
+        let ks = translated.as_ref().unwrap_or(ks);
+        let m = ks.modifiers;
         let Some((key, unshifted)) = map_key(&ks.key) else {
             return false;
         };
@@ -1140,7 +1161,10 @@ impl TerminalView {
             return false;
         }
         // Owe the program a release if it asked for them.
-        if self.term.kitty_flags() & KITTY_REPORT_EVENTS != 0 && !self.pressed.contains(&ks.key) {
+        if owes_release
+            && self.term.kitty_flags() & KITTY_REPORT_EVENTS != 0
+            && !self.pressed.contains(&ks.key)
+        {
             self.pressed.push(ks.key.clone());
         }
         self.input(&bytes, cx);
@@ -2361,6 +2385,7 @@ fn new_term(cols: u16, rows: u16, config: &Config) -> ghostty::Terminal {
 
 /// The config's colors and cursor on a new or restored terminal.
 fn configure(mut term: ghostty::Terminal, config: &Config) -> ghostty::Terminal {
+    term.set_clipboard_write(config.clipboard_write);
     term.set_colors(
         config.foreground,
         config.background,
