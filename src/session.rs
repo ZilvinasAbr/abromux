@@ -88,6 +88,11 @@ pub struct WorkspaceState {
     /// Its workspace folder (⇧⌘I).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<String>,
+    /// Its tracked links (`crate::links`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<crate::links::Link>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_links: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -264,6 +269,8 @@ impl AbroMux {
                 description: ws.description.clone(),
                 color: ws.color,
                 home: ws.home.as_ref().map(|h| h.to_string_lossy().into_owned()),
+                links: ws.links.clone(),
+                hidden_links: ws.hidden_links.clone(),
                 group: ws
                     .group
                     .and_then(|g| self.groups.iter().position(|x| x.id == g)),
@@ -505,6 +512,8 @@ impl AbroMux {
             ws.description = state.description;
             ws.color = state.color;
             ws.home = home;
+            ws.links = state.links;
+            ws.hidden_links = state.hidden_links;
             ws.group = state.group.and_then(|g| group_ids.get(g).copied());
             self.workspaces.push(ws);
             ids.push(Some(id));
@@ -826,6 +835,13 @@ mod tests {
                 color: Some(0x1565c0),
                 group: Some(0),
                 home: Some("/tmp/ws".into()),
+                links: vec![crate::links::Link {
+                    kind: crate::links::Kind::Jira,
+                    key: "PAY-1".into(),
+                    url: "https://acme.atlassian.net/browse/PAY-1".into(),
+                    title: Some("Refunds".into()),
+                }],
+                hidden_links: vec!["acme/api!3".into()],
                 focused: 1,
                 root: NodeState::Split {
                     vertical: false,

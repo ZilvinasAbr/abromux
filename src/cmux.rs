@@ -109,6 +109,8 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
         color: str_of(ws, "customColor").and_then(hex_color),
         group: None,
         home: None,
+        links: vec![],
+        hidden_links: vec![],
         focused: focused.unwrap_or(0),
         root,
     })

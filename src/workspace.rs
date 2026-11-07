@@ -403,6 +403,13 @@ pub struct Workspace {
     pub progress: Option<Progress>,
     /// `abromux log` entries, oldest first; the sidebar shows the newest.
     pub log: Vec<LogEntry>,
+    /// Its tracked links (`crate::links`), in the sidebar's order.
+    pub links: Vec<crate::links::Link>,
+    /// Keys of links untracked here, so they aren't tracked again when a
+    /// tab or its branches show them.
+    pub hidden_links: Vec<String>,
+    /// The pane its links open in, once one has.
+    pub link_pane: Option<usize>,
     /// The pane focused before this one, for `last-pane`, and the one
     /// `track_focus` last saw.
     prev_pane: Option<usize>,
@@ -492,6 +499,9 @@ impl Workspace {
             status: vec![],
             progress: None,
             log: vec![],
+            links: vec![],
+            hidden_links: vec![],
+            link_pane: None,
             prev_pane: None,
             seen_pane: focused_pane,
         }

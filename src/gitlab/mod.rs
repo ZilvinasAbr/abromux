@@ -25,7 +25,7 @@
 
 pub mod api;
 pub mod model;
-mod panel;
+pub mod panel;
 pub mod remote;
 pub mod throttle;
 

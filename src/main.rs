@@ -23,6 +23,7 @@ mod ipc;
 mod keymap;
 mod layout;
 mod link;
+mod links;
 mod menu;
 mod notification;
 mod notify_hook;
@@ -110,6 +111,17 @@ actions!(
         Tab7,
         Tab8,
         Tab9,
+        Link1,
+        Link2,
+        Link3,
+        Link4,
+        Link5,
+        Link6,
+        Link7,
+        Link8,
+        Link9,
+        TrackTab,
+        OpenAllLinks,
         FocusLeft,
         FocusRight,
         FocusUp,
@@ -175,6 +187,8 @@ const DROP_EDGE: f32 = 32.;
 enum Hints {
     Command,
     Control,
+    /// ⌥⌘: the selected workspace's links (`links.rs`).
+    Links,
 }
 
 struct Assets;
@@ -208,6 +222,8 @@ impl AssetSource for Assets {
             "bell",
             "git-branch",
             "git-pull-request",
+            "gitlab",
+            "jira",
             "folder",
             "search",
             "circle-x",
@@ -422,6 +438,7 @@ impl AbroMux {
                 let synced = this.update_in(cx, |this, window, cx| {
                     this.sync_mr_views(window, cx);
                     this.sync_mr_workspaces(cx);
+                    this.sync_links(cx);
                 });
                 if synced.is_err() {
                     break;
@@ -806,6 +823,11 @@ impl AbroMux {
         else {
             return;
         };
+        // A ticket or page this workspace has a tab for already: that tab.
+        if self.reuse_link_tab(wi, &url, window, cx) {
+            return;
+        }
+        let ws = &self.workspaces[wi];
         // A link a plugin shows itself (a GitLab merge request) opens as its
         // tab, where a browser would: in a pane of those to the right.
         let claimed = plugins::claiming(&url);
@@ -851,6 +873,9 @@ impl AbroMux {
         }) else {
             return;
         };
+        if focus && self.reuse_link_tab(wi, url, window, cx) {
+            return;
+        }
         let claimed = plugins::claiming(url).map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx));
         let surface = match claimed {
             Some(Ok(s)) => s,
@@ -1842,9 +1867,10 @@ impl AbroMux {
     /// Show hints after a lone ⌘ or ⌃ has been held for `HINT_DELAY`; any
     /// other modifier change hides them.
     fn modifiers_changed(&mut self, m: &Modifiers, window: &mut Window, cx: &mut Context<Self>) {
-        let want = match (m.platform, m.control, m.alt || m.shift || m.function) {
-            (true, false, false) => Some(Hints::Command),
-            (false, true, false) => Some(Hints::Control),
+        let want = match (m.platform, m.control, m.alt, m.shift || m.function) {
+            (true, false, false, false) => Some(Hints::Command),
+            (true, false, true, false) => Some(Hints::Links),
+            (false, true, false, false) => Some(Hints::Control),
             _ => None,
         };
         if want.is_some() && want == self.hints {
@@ -2610,6 +2636,20 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &Tab7, w, cx| this.select_tab(Some(6), w, cx)))
             .on_action(cx.listener(|this, _: &Tab8, w, cx| this.select_tab(Some(7), w, cx)))
             .on_action(cx.listener(|this, _: &Tab9, w, cx| this.select_tab(None, w, cx)))
+            .on_action(cx.listener(|this, _: &Link1, w, cx| this.show_link_at(0, w, cx)))
+            .on_action(cx.listener(|this, _: &Link2, w, cx| this.show_link_at(1, w, cx)))
+            .on_action(cx.listener(|this, _: &Link3, w, cx| this.show_link_at(2, w, cx)))
+            .on_action(cx.listener(|this, _: &Link4, w, cx| this.show_link_at(3, w, cx)))
+            .on_action(cx.listener(|this, _: &Link5, w, cx| this.show_link_at(4, w, cx)))
+            .on_action(cx.listener(|this, _: &Link6, w, cx| this.show_link_at(5, w, cx)))
+            .on_action(cx.listener(|this, _: &Link7, w, cx| this.show_link_at(6, w, cx)))
+            .on_action(cx.listener(|this, _: &Link8, w, cx| this.show_link_at(7, w, cx)))
+            .on_action(cx.listener(|this, _: &Link9, w, cx| this.show_link_at(8, w, cx)))
+            .on_action(cx.listener(|this, _: &TrackTab, w, cx| this.toggle_track_tab(w, cx)))
+            .on_action(cx.listener(|this, _: &OpenAllLinks, w, cx| {
+                let wi = this.active;
+                this.show_all_links(wi, w, cx);
+            }))
             .on_action(cx.listener(|this, _: &FocusLeft, w, cx| this.focus_dir(Dir::Left, w, cx)))
             .on_action(cx.listener(|this, _: &FocusRight, w, cx| this.focus_dir(Dir::Right, w, cx)))
             .on_action(cx.listener(|this, _: &FocusUp, w, cx| this.focus_dir(Dir::Up, w, cx)))
