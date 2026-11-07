@@ -1099,6 +1099,12 @@ impl GitLabView {
         }
     }
 
+    /// Whether there's a GitLab page to link to: not for a local diff
+    /// (`abromux diff`), whose merge request has no web URL.
+    pub(crate) fn has_web(&self) -> bool {
+        self.local_id().is_none() && self.review.ready().is_none_or(|r| !r.mr.web_url.is_empty())
+    }
+
     /// GitLab's own page for what the tab shows.
     fn web_url(&self) -> String {
         match (self.review.ready(), self.in_mr()) {
@@ -1632,7 +1638,7 @@ impl GitLabView {
                     d.child(div().flex_none().text_color(c(MUTED)).child(format!("@{}", me.username)))
                 })
             })
-            .child(
+            .when(self.has_web(), |d| d.child(
                 // Just the icon in a narrow pane.
                 // This page's link on GitLab, to paste anywhere. (Opening it
                 // here would only come back to this tab.)
@@ -1653,7 +1659,7 @@ impl GitLabView {
                         }));
                         cx.notify();
                     })),
-            )
+            ))
             .child(button("gl-refresh", "Refresh").flex_none().on_click(cx.listener(|v, _, _, cx| v.refresh(cx))))
     }
 

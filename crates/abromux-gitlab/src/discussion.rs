@@ -290,10 +290,12 @@ impl GitLabView {
                         .on_click(cx.listener(move |v, _, window, cx| v.open_reply(&id, window, cx))),
                 )
             })
-            .child(
-                button(format!("note-link-{}", d.id), "link", c(MUTED), "Copy link")
-                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))),
-            )
+            .when(self.has_web(), |el| {
+                el.child(
+                    button(format!("note-link-{}", d.id), "link", c(MUTED), "Copy link")
+                        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))),
+                )
+            })
     }
 
     /// A note: avatar (unless the timeline shows it already), header, body.
