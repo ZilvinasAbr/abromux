@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" viewBox="0 0 960 300" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#6c675f"/>
+    </marker>
+  </defs>
+  <rect width="960" height="300" rx="18" fill="#1b1a18"/>
+  <rect x="0.5" y="0.5" width="959" height="299" rx="17.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+
+  <text x="40" y="50" font-size="20" font-weight="700" fill="#f1ece4">One folder per piece of work</text>
+  <text x="40" y="74" font-size="13" fill="#8f8a80">Everything it made is cleaned up when the work is done</text>
+
+  <g font-size="13">
+    <!-- card 1 -->
+    <rect x="40" y="104" width="196" height="160" rx="12" fill="#242220" stroke="#34312d"/>
+    <circle cx="66" cy="132" r="13" fill="#d97757" fill-opacity="0.18"/>
+    <text x="66" y="137" text-anchor="middle" font-size="13" font-weight="700" fill="#eb9372">1</text>
+    <text x="88" y="137" font-weight="600" fill="#e8e3da">Make the folder</text>
+    <rect x="56" y="156" width="164" height="26" rx="6" fill="#1b1a18"/>
+    <text x="68" y="173" font-size="12" fill="#cfc9bf" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">⇧⌘I</text>
+    <text x="56" y="206" font-size="12" fill="#a59f95">A new workspace in its</text>
+    <text x="56" y="224" font-size="12" fill="#a59f95">own scoped folder, with</text>
+    <text x="56" y="242" font-size="12" fill="#a59f95">notes for your agents.</text>
+
+    <line x1="240" y1="184" x2="262" y2="184" stroke="#6c675f" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+    <!-- card 2 -->
+    <rect x="266" y="104" width="196" height="160" rx="12" fill="#242220" stroke="#34312d"/>
+    <circle cx="292" cy="132" r="13" fill="#d97757" fill-opacity="0.18"/>
+    <text x="292" y="137" text-anchor="middle" font-size="13" font-weight="700" fill="#eb9372">2</text>
+    <text x="314" y="137" font-weight="600" fill="#e8e3da">Check out repos</text>
+    <rect x="282" y="156" width="164" height="26" rx="6" fill="#1b1a18"/>
+    <text x="294" y="173" font-size="12" fill="#cfc9bf" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">folder add ~/api</text>
+    <text x="282" y="206" font-size="12" fill="#a59f95">A git worktree on</text>
+    <text x="282" y="224" font-size="12" fill="#a59f95"><tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#cfc9bf">ws/&lt;folder&gt;</tspan>. Your own</text>
+    <text x="282" y="242" font-size="12" fill="#a59f95">checkout isn't touched.</text>
+
+    <line x1="466" y1="184" x2="488" y2="184" stroke="#6c675f" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+    <!-- card 3 -->
+    <rect x="492" y="104" width="196" height="160" rx="12" fill="#242220" stroke="#34312d"/>
+    <circle cx="518" cy="132" r="13" fill="#d97757" fill-opacity="0.18"/>
+    <text x="518" y="137" text-anchor="middle" font-size="13" font-weight="700" fill="#eb9372">3</text>
+    <text x="540" y="137" font-weight="600" fill="#e8e3da">Let agents work</text>
+    <rect x="508" y="156" width="164" height="26" rx="6" fill="#1b1a18"/>
+    <text x="520" y="173" font-size="12" fill="#cfc9bf" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">link add PAY-1423</text>
+    <text x="508" y="206" font-size="12" fill="#a59f95">Status, notifications,</text>
+    <text x="508" y="224" font-size="12" fill="#a59f95">tickets and MRs show</text>
+    <text x="508" y="242" font-size="12" fill="#a59f95">in the sidebar.</text>
+
+    <line x1="692" y1="184" x2="714" y2="184" stroke="#6c675f" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+    <!-- card 4 -->
+    <rect x="718" y="104" width="202" height="160" rx="12" fill="#242220" stroke="#34312d"/>
+    <circle cx="744" cy="132" r="13" fill="#7fb37a" fill-opacity="0.18"/>
+    <text x="744" y="137" text-anchor="middle" font-size="13" font-weight="700" fill="#9ccb97">4</text>
+    <text x="766" y="137" font-weight="600" fill="#e8e3da">Clean up</text>
+    <rect x="734" y="156" width="170" height="26" rx="6" fill="#1b1a18"/>
+    <text x="746" y="173" font-size="12" fill="#cfc9bf" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">⇧⌘X · folder remove</text>
+    <text x="734" y="206" font-size="12" fill="#a59f95">Worktrees, merged branch,</text>
+    <text x="734" y="224" font-size="12" fill="#a59f95">Docker stacks and noted</text>
+    <text x="734" y="242" font-size="12" fill="#a59f95">resources go too.</text>
+  </g>
+</svg>
