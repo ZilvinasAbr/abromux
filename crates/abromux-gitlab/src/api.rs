@@ -11,6 +11,34 @@ use anyhow::{Context as _, bail};
 use serde::de::DeserializeOwned;
 use std::{io::Write as _, process::Command, sync::Arc};
 
+/// GitLab answered with an error status. Callers tell a rejected token, a
+/// missing page or a rate limit apart by [`status`](Self::status), never by
+/// the wording of the message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApiError {
+    pub status: u16,
+    message: String,
+}
+
+impl ApiError {
+    fn new(status: u16, message: String) -> Self {
+        ApiError { status, message }
+    }
+
+    /// The status GitLab gave, anywhere in `e`'s chain (contexts included).
+    pub fn status_of(e: &anyhow::Error) -> Option<u16> {
+        e.chain().find_map(|c| c.downcast_ref::<ApiError>()).map(|a| a.status)
+    }
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
 /// One HTTP response.
 #[derive(Clone, Debug, Default)]
 pub struct Response {
@@ -328,7 +356,9 @@ impl Client {
             .with_context(|| format!("{method} {url}"))?;
         let r = match r.status {
             // A read_api token can read but not write.
-            403 => bail!("GitLab didn't allow this (403): the token needs the api scope to comment or approve"),
+            403 => {
+                return Err(ApiError::new(403, "GitLab didn't allow this (403): the token needs the api scope to comment or approve".into()).into())
+            }
             _ => self.check(r, &url)?,
         };
         let body = if r.body.trim_ascii().is_empty() { b"null".as_slice() } else { &r.body };
@@ -338,10 +368,10 @@ impl Client {
     fn check(&self, r: Response, url: &str) -> anyhow::Result<Response> {
         match r.status {
             200..=299 => Ok(r),
-            401 => bail!("{} rejected the token (401): check it has the api scope (read_api to only read)", self.host),
-            403 => bail!("not allowed (403): {url}"),
-            404 => bail!("not found (404): {url}"),
-            s => bail!("GitLab answered {s} for {url}: {}", snippet(&r.body)),
+            401 => Err(ApiError::new(401, format!("{} rejected the token (401): check it has the api scope (read_api to only read)", self.host)).into()),
+            403 => Err(ApiError::new(403, format!("not allowed (403): {url}")).into()),
+            404 => Err(ApiError::new(404, format!("not found (404): {url}")).into()),
+            s => Err(ApiError::new(s, format!("GitLab answered {s} for {url}: {}", snippet(&r.body))).into()),
         }
     }
 
@@ -673,7 +703,7 @@ impl Client {
     pub fn raw_maybe(&self, project: u64, path: &str, sha: &str) -> anyhow::Result<Option<Vec<u8>>> {
         match self.raw_bytes(project, path, sha) {
             Ok(b) => Ok(Some(b)),
-            Err(e) if format!("{e:#}").contains("(404)") => Ok(None),
+            Err(e) if ApiError::status_of(&e) == Some(404) => Ok(None),
             Err(e) => Err(e),
         }
     }
@@ -1026,5 +1056,6 @@ mod tests {
         });
         let e = Client::new("http://gl.test", "t", t).current_user().unwrap_err();
         assert!(format!("{e:#}").contains("rejected the token"), "{e:#}");
+        assert_eq!(ApiError::status_of(&e), Some(401));
     }
 }

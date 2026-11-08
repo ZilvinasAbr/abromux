@@ -8,7 +8,7 @@
 
 use crate::{
     AbroMux, BrowserView, DEFAULT_URL,
-    agent::{Agent, Kind},
+    agent::{Agent, AgentEvent, Kind},
     browser::normalize_url,
     browser_auto, debug, ipc, one_line,
     status::{self, RUNNING, WARNING},
@@ -23,7 +23,7 @@ use futures::{
     future::{Either, LocalBoxFuture, select},
 };
 use gpui::{
-    App, AppContext as _, AsyncApp, Axis, Context, Entity, EntityId, Keystroke, Timer, Window,
+    App, AsyncApp, Axis, Context, Entity, EntityId, Keystroke, Timer, Window,
 };
 use serde_json::{Value, json};
 use std::{
@@ -33,7 +33,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-type Request = (Value, oneshot::Sender<Value>);
+type Request = (Value, oneshot::Sender<Value>, Hangup);
+
+/// Resolves once the connection a request came on has closed.
+pub(crate) type Hangup = futures::future::Shared<oneshot::Receiver<()>>;
 
 /// How long a page gets to answer one script.
 const SCRIPT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -197,12 +200,12 @@ pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> 
     });
 
     cx.spawn_in(window, async move |this, cx| {
-        while let Some((req, reply)) = rx.next().await {
+        while let Some((req, reply, gone)) = rx.next().await {
             let id = req.get("id").cloned().unwrap_or(Value::Null);
             let method = req["method"].as_str().unwrap_or_default().to_string();
             let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
             let Ok(out) = this.update_in(cx, |this, window, cx| {
-                let out = this.handle(&method, &params, window, cx);
+                let out = this.handle(&method, &params, &gone, window, cx);
                 this.refresh_unread(cx);
                 out
             }) else {
@@ -241,6 +244,9 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
+    // Dropped when this returns, which is when the connection closes.
+    let (_open, closed) = oneshot::channel::<()>();
+    let gone = closed.shared();
     for line in BufReader::new(stream).lines() {
         let Ok(line) = line else { return };
         if line.trim().is_empty() {
@@ -249,7 +255,7 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
         let resp = match serde_json::from_str::<Value>(&line) {
             Ok(req) => {
                 let (reply_tx, reply_rx) = oneshot::channel();
-                if tx.unbounded_send((req, reply_tx)).is_err() {
+                if tx.unbounded_send((req, reply_tx, gone.clone())).is_err() {
                     return;
                 }
                 futures::executor::block_on(reply_rx)
@@ -366,10 +372,12 @@ fn unescape(s: &str) -> String {
 }
 
 impl AbroMux {
+    /// One request; `gone` resolves when its caller has hung up.
     fn handle(
         &mut self,
         method: &str,
         p: &Value,
+        gone: &Hangup,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<Reply> {
@@ -411,7 +419,7 @@ impl AbroMux {
                 spec.check().map_err(anyhow::Error::msg)?;
                 let base = str_param(p, "cwd")
                     .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| std::env::var("HOME").unwrap_or_default().into());
+                    .unwrap_or_else(crate::paths::home);
                 let prev = self.workspaces.get(self.active).map(|w| w.id);
                 let name = str_param(p, "name").map(String::from);
                 let wi = self.open_layout(&spec, name, &base, window, cx);
@@ -481,7 +489,8 @@ impl AbroMux {
                     Some(wi) => {
                         let r = self.ws_ref(wi);
                         let id = self.workspaces[wi].id;
-                        self.remove_folder_later(id, path, bool_param(p, "force", false), window, cx);
+                        let gone = gone.clone();
+                        self.remove_folder_later(id, path, bool_param(p, "force", false), gone, window, cx);
                         json!({ "workspace": r })
                     }
                     None => json!({ "workspace": null }),
@@ -729,9 +738,7 @@ impl AbroMux {
                 let (wi, pane) = self.pane_target(p)?;
                 let ws = &self.workspaces[wi];
                 let pane = ws
-                    .root
                     .panes()
-                    .into_iter()
                     .find(|x| x.id == pane)
                     .context("no such pane")?;
                 json!(
@@ -856,9 +863,7 @@ impl AbroMux {
                 let at = match (&anchor, index) {
                     (Some(((_, _, a), after)), _) => {
                         let pane = self.workspaces[dwi]
-                            .root
                             .panes()
-                            .into_iter()
                             .find(|x| x.id == dpane);
                         let i = pane
                             .and_then(|x| {
@@ -1006,7 +1011,7 @@ impl AbroMux {
             // From `abromux hooks claude-event` (agent.rs).
             "agent.report" => {
                 let t = self.terminal_target(p)?;
-                let ended = str_param(p, "event") == Some("SessionEnd");
+                let ended = AgentEvent::of_report(p) == Some(AgentEvent::Ended);
                 let reported = Agent::from_report(p);
                 let has_mode = p.get("permission_mode").is_some_and(|m| !m.is_null());
                 t.update(cx, |t, _| match (ended, reported) {
@@ -1287,9 +1292,7 @@ impl AbroMux {
                             vec![self.surface_target(p)?.2.entity_id()]
                         } else {
                             self.workspaces[wi]
-                                .root
                                 .panes()
-                                .iter()
                                 .flat_map(|p| p.tabs.iter().map(|t| t.entity_id()))
                                 .collect()
                         };
@@ -1332,7 +1335,7 @@ impl AbroMux {
                     .to_string();
                 let color = str_param(p, "color")
                     .map(|c| {
-                        parse_color(c).with_context(|| format!("bad color {c:?} (use #rrggbb)"))
+                        parse_color(c).with_context(|| format!("bad color {c:?} (use #rgb or #rrggbb)"))
                     })
                     .transpose()?;
                 let icon = str_param(p, "icon").map(String::from);
@@ -1887,9 +1890,7 @@ impl AbroMux {
     /// The workspace and pane holding surface `id`.
     fn pane_of(&self, id: EntityId) -> Option<(usize, usize)> {
         self.workspaces.iter().enumerate().find_map(|(wi, ws)| {
-            ws.root
-                .panes()
-                .into_iter()
+            ws.panes()
                 .find(|p| p.tabs.iter().any(|t| t.entity_id() == id))
                 .map(|p| (wi, p.id))
         })
@@ -1913,9 +1914,7 @@ impl AbroMux {
         let tabs: Vec<(usize, Surface, bool)> = {
             let ws = &self.workspaces[wi];
             let pane = ws
-                .root
                 .panes()
-                .into_iter()
                 .find(|q| q.id == pane_id)
                 .context("no such pane")?;
             pane.tabs
@@ -2064,122 +2063,27 @@ impl AbroMux {
         let Some(kind) = str_param(p, "kind").and_then(Kind::parse) else {
             return;
         };
-        let (label, title) = (kind.label(), kind.title());
         if let Some(prompt) = str_param(p, "prompt") {
             self.auto_name(surface, kind, prompt.to_string(), cx);
         }
-        match str_param(p, "event").unwrap_or_default() {
-            "UserPromptSubmit" | "PostToolUse" => {
-                self.set_agent_status(surface, label, Some(("Running", RUNNING)), cx)
-            }
-            // Claude's Notification, Codex's PermissionRequest.
-            event @ ("Notification" | "PermissionRequest") => {
-                let message = str_param(p, "message")
-                    .map(String::from)
-                    .unwrap_or_else(|| format!("{label} needs your attention"));
-                // Claude also says so after a minute idle; Stop already did.
-                if event == "Notification"
-                    && (str_param(p, "notification_type") == Some("idle_prompt")
-                        || message.contains("waiting for your input"))
-                {
-                    return;
-                }
+        let Some(event) = AgentEvent::of_report(p) else {
+            return;
+        };
+        let (label, title) = (kind.label(), kind.title());
+        match event {
+            AgentEvent::Working => self.set_agent_status(surface, label, Some(("Running", RUNNING)), cx),
+            AgentEvent::NeedsInput(message) => {
+                let message = message.unwrap_or_else(|| format!("{label} needs your attention"));
                 self.set_agent_status(surface, label, Some(("Needs input", WARNING)), cx);
                 self.add_notification(surface, title.into(), message, false, window, cx);
             }
-            "Stop" => {
+            AgentEvent::Stopped(summary) => {
                 self.set_agent_status(surface, label, None, cx);
-                let body = str_param(p, "summary").unwrap_or("Finished").to_string();
+                let body = summary.unwrap_or_else(|| "Finished".into());
                 self.add_notification(surface, title.into(), body, false, window, cx);
             }
-            "SessionEnd" => self.set_agent_status(surface, label, None, cx),
-            _ => {}
+            AgentEvent::Ended => self.set_agent_status(surface, label, None, cx),
         }
-    }
-
-    /// Name the workspace of `surface` from what its agent is asked to do,
-    /// and keep renaming it as the work moves on, until you name it
-    /// yourself. On with `automation.workspaceAutoNaming`, and always for a
-    /// ⇧⌘I workspace still on its made-up name.
-    fn auto_name(
-        &mut self,
-        surface: gpui::EntityId,
-        kind: Kind,
-        prompt: String,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(ws) = self.workspaces.iter().find(|w| w.contains(surface)) else {
-            return;
-        };
-        let on = cx
-            .global::<crate::settings::Settings>()
-            .automation
-            .workspace_auto_naming;
-        if ws.custom_name.is_some() || !(on || ws.home.is_some()) {
-            return;
-        }
-        let (id, titled) = (ws.id, ws.auto_title.is_some());
-        let naming = self.naming.entry(id).or_default();
-        // "yes", "go on": nothing new to name it from, once it has a name.
-        let short = prompt.split_whitespace().count() < 4;
-        if naming.failed || (titled && !naming.prompts.is_empty() && short) {
-            return;
-        }
-        naming.add(prompt);
-        if naming.running {
-            naming.again = true;
-            return;
-        }
-        self.run_naming(id, kind, cx);
-    }
-
-    /// Ask `kind`'s CLI for a title from the prompts so far; once it
-    /// answers, again if more came meanwhile.
-    fn run_naming(&mut self, id: usize, kind: Kind, cx: &mut Context<Self>) {
-        let current = self
-            .ws_index(id)
-            .and_then(|i| self.workspaces[i].auto_title.clone());
-        let Some(naming) = self.naming.get_mut(&id) else {
-            return;
-        };
-        let current = current.filter(|_| naming.titled);
-        naming.running = true;
-        naming.again = false;
-        let prompts = naming.prompts.clone();
-        let task = cx.background_spawn(async move {
-            crate::agent::title_for(kind, &prompts, current.as_deref())
-        });
-        cx.spawn(async move |this, cx| {
-            let title = task.await;
-            this.update(cx, |this, cx| {
-                let Some(naming) = this.naming.get_mut(&id) else {
-                    return; // Renamed or cleared meanwhile.
-                };
-                naming.running = false;
-                let Some(t) = title else {
-                    // A CLI that fails isn't run again on every prompt.
-                    naming.failed = !naming.titled;
-                    return;
-                };
-                naming.titled = true;
-                let again = naming.again;
-                let Some(i) = this.ws_index(id) else {
-                    this.naming.remove(&id);
-                    return;
-                };
-                if this.workspaces[i].custom_name.is_some() {
-                    this.naming.remove(&id);
-                    return;
-                }
-                this.workspaces[i].auto_title = Some(one_line(&t));
-                cx.notify();
-                if again {
-                    this.run_naming(id, kind, cx);
-                }
-            })
-            .ok();
-        })
-        .detach();
     }
 
     /// `tab-action`: what the tab bar's right-click menu does, on one tab.
@@ -2193,9 +2097,7 @@ impl AbroMux {
         let (wi, pane, s) = self.surface_target(p)?;
         let id = s.entity_id();
         let tabs: Vec<EntityId> = self.workspaces[wi]
-            .root
             .panes()
-            .into_iter()
             .find(|x| x.id == pane)
             .map(|x| x.tabs.iter().map(|t| t.entity_id()).collect())
             .unwrap_or_default();
@@ -2252,14 +2154,14 @@ impl AbroMux {
                 let new = self.make_surface(wi, &q, window, cx)?;
                 let nid = new.entity_id();
                 let ws = &mut self.workspaces[wi];
-                let was = ws.root.pane_mut(pane).and_then(|x| x.active_surface().map(|s| s.entity_id()));
+                let was = ws.pane_mut(pane).and_then(|x| x.active_surface().map(|s| s.entity_id()));
                 if ws.insert_tab(pane, at + 1, new).is_err() {
                     bail!("pane:{pane} is gone");
                 }
                 if focus {
                     self.focus_surface(nid, cx);
                     self.select_workspace(wi, window, cx);
-                } else if let Some(x) = ws.root.pane_mut(pane)
+                } else if let Some(x) = ws.pane_mut(pane)
                     && let Some(i) = x.tabs.iter().position(|t| Some(t.entity_id()) == was)
                 {
                     // insert_tab made the new tab active; keep the old one.
@@ -2367,9 +2269,7 @@ impl AbroMux {
     ) -> anyhow::Result<(usize, usize, Surface)> {
         let all = |wi: usize| {
             let ws = &self.workspaces[wi];
-            ws.root
-                .panes()
-                .into_iter()
+            ws.panes()
                 .flat_map(|p| p.tabs.iter().map(move |t| (wi, p.id, t.clone())))
                 .collect::<Vec<_>>()
         };
@@ -2431,10 +2331,7 @@ impl AbroMux {
         ws.focused_surface()
             .and_then(browser)
             .or_else(|| {
-                ws.root
-                    .panes()
-                    .iter()
-                    .flat_map(|p| p.tabs.iter())
+                ws.surfaces()
                     .find_map(browser)
             })
             .context("no browser surface in this workspace (open one with `abromux browser open`)")
@@ -2449,15 +2346,13 @@ impl AbroMux {
         };
         match parse_sel(s, "pane")? {
             Sel::Ref(id) => self.workspaces.iter().enumerate().find_map(|(wi, w)| {
-                w.root
-                    .panes()
-                    .iter()
+                w.panes()
                     .any(|p| p.id == id)
                     .then_some((wi, id))
             }),
             Sel::Index(i) => {
                 let wi = self.workspace_target(p)?;
-                self.workspaces[wi].root.panes().get(i).map(|p| (wi, p.id))
+                self.workspaces[wi].panes().nth(i).map(|p| (wi, p.id))
             }
         }
         .with_context(|| format!("no pane {s}"))
@@ -2468,9 +2363,7 @@ impl AbroMux {
         if str_param(p, "surface").is_none() && str_param(p, "pane").is_some() {
             let (wi, pane) = self.pane_target(p)?;
             let s = self.workspaces[wi]
-                .root
                 .panes()
-                .into_iter()
                 .find(|x| x.id == pane)
                 .and_then(|x| x.active_surface())
                 .cloned()
@@ -2512,12 +2405,16 @@ impl AbroMux {
         if let Some(to) = &run.send_to {
             let t = self.terminal_target(&json!({ "surface": to }))?;
             let text = run.text.clone().unwrap_or_default();
-            t.update(cx, |t, cx| {
-                t.send(text.as_bytes());
+            let sent = t.update(cx, |t, cx| {
                 cx.notify();
+                t.submit(&text)
             });
-            // Enter on its own, after the text: an agent's input box takes
-            // a pasted line with its newline as a new line, not a send.
+            if sent {
+                return Ok(());
+            }
+            // No bracketed paste: Return on its own, a moment after the
+            // text, or a program reading it all at once takes it as a new
+            // line in what was typed.
             let t = t.downgrade();
             cx.spawn(async move |_, cx| {
                 cx.background_executor().timer(std::time::Duration::from_millis(150)).await;
@@ -2539,14 +2436,14 @@ impl AbroMux {
             s.set_custom_title(run.title.clone(), cx);
         }
         let new_id = s.entity_id();
-        let panes: Vec<usize> = self.workspaces[wi].root.panes().iter().map(|p| p.id).collect();
+        let panes: Vec<usize> = self.workspaces[wi].panes().map(|p| p.id).collect();
         let at = panes.iter().position(|p| *p == pane).unwrap_or(0);
         let other = panes.get(at + 1).or(at.checked_sub(1).and_then(|i| panes.get(i))).copied();
         match other {
             Some(o) => {
                 self.add_tab_to(wi, o, s, false, window, cx);
                 // Showing in its pane, but the focus stays on the plugin's tab.
-                if let Some(p) = self.workspaces[wi].root.pane_mut(o)
+                if let Some(p) = self.workspaces[wi].pane_mut(o)
                     && let Some(i) = p.tabs.iter().position(|t| t.entity_id() == new_id)
                 {
                     p.active = i;
@@ -2574,7 +2471,7 @@ impl AbroMux {
                 let cwd = str_param(p, "cwd")
                     .map(String::from)
                     .or_else(|| self.workspaces[wi].cwd(cx));
-                let s = self.make_terminal(cwd, self.workspaces[wi].id, window, cx);
+                let s = self.make_terminal(self.workspaces[wi].id, crate::TerminalOpts::cwd(cwd), window, cx);
                 if let (Some(cmd), Surface::Terminal(t)) = (str_param(p, "command"), &s) {
                     t.update(cx, |t, _| t.send(format!("{cmd}\r").as_bytes()));
                 }
@@ -2657,9 +2554,7 @@ impl AbroMux {
     }
 
     fn panes_json(&self, ws: &Workspace, cx: &App) -> Vec<Value> {
-        ws.root
-            .panes()
-            .iter()
+        ws.panes()
             .enumerate()
             .map(|(i, p)| {
                 json!({
@@ -2752,9 +2647,7 @@ impl AbroMux {
             "mark-read" => {
                 let ws = &self.workspaces[wi];
                 let ids: Vec<EntityId> = ws
-                    .root
                     .panes()
-                    .iter()
                     .flat_map(|p| p.tabs.iter().map(|t| t.entity_id()))
                     .collect();
                 for id in ids {
@@ -2794,7 +2687,7 @@ impl AbroMux {
             "unread": self.ws_unread(ws),
             "cwd": cwd,
             "branch": cwd.as_deref().and_then(git_branch),
-            "pane_count": ws.root.panes().len(),
+            "pane_count": ws.panes().count(),
             "description": ws.description,
             "color": ws.color.map(|c| format!("#{c:06x}")),
             "group": ws.group.map(|g| format!("group:{g}")),
@@ -2810,56 +2703,28 @@ impl AbroMux {
 }
 
 
-/// Auto-naming's state for one workspace ([`AbroMux::auto_name`]).
-#[derive(Default)]
-pub struct Naming {
-    /// Its agents' prompts, oldest first, cut to the latest
-    /// `PROMPT_CHARS` or so.
-    prompts: Vec<String>,
-    /// An agent CLI is making a title now.
-    running: bool,
-    /// More prompts came while it was.
-    again: bool,
-    /// It has named the workspace (so its name isn't the made-up one).
-    titled: bool,
-    /// Its first try failed: no more tries until the name is cleared.
-    failed: bool,
-}
-
-impl Naming {
-    fn add(&mut self, prompt: String) {
-        self.prompts.push(prompt);
-        let mut total = 0;
-        let keep = self
-            .prompts
-            .iter()
-            .rev()
-            .take_while(|p| {
-                total += p.chars().count();
-                total <= crate::agent::PROMPT_CHARS
-            })
-            .count()
-            .max(1);
-        let drop = self.prompts.len() - keep;
-        self.prompts.drain(..drop);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn naming_keeps_the_latest_prompts() {
-        let mut n = Naming::default();
-        let big = "x".repeat(crate::agent::PROMPT_CHARS - 10);
-        n.add("first".into());
-        n.add(big.clone());
-        n.add("latest".into());
-        assert_eq!(n.prompts, vec![big.clone(), "latest".to_string()]);
-        // One prompt is kept even when it's too long alone.
-        n.add("y".repeat(crate::agent::PROMPT_CHARS + 5));
-        assert_eq!(n.prompts.len(), 1);
+    fn hangup_waits_for_the_caller_to_close() {
+        let (app_end, caller) = UnixStream::pair().unwrap();
+        let (tx, mut rx) = mpsc::unbounded();
+        let served = std::thread::spawn(move || serve(app_end, tx));
+        let mut w = caller.try_clone().unwrap();
+        w.write_all(b"{\"id\":1,\"method\":\"system.ping\"}\n").unwrap();
+        let (_, reply, gone) = futures::executor::block_on(rx.next()).unwrap();
+        reply.send(ipc::ok(&json!(1), json!("pong"))).unwrap();
+        let mut line = String::new();
+        BufReader::new(&caller).read_line(&mut line).unwrap();
+        assert!(line.contains("pong"));
+        // Answered, but the caller is still connected.
+        assert!(gone.peek().is_none());
+        drop(w);
+        drop(caller);
+        served.join().unwrap();
+        assert!(futures::executor::block_on(gone).is_err(), "resolves (sender dropped)");
     }
 
     #[test]

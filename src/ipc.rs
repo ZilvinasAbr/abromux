@@ -31,15 +31,22 @@ pub fn err(id: &Value, error: impl std::fmt::Display) -> Value {
 
 /// One request/response round trip.
 pub fn call(method: &str, params: Value) -> anyhow::Result<Value> {
+    round_trip(method, params, None).map(|(v, _)| v)
+}
+
+/// `call`, keeping the connection open until the returned stream is
+/// dropped: the app can wait for that to know the caller is done (has
+/// printed what it got) before doing something that would end it.
+pub fn call_held(method: &str, params: Value) -> anyhow::Result<(Value, UnixStream)> {
     round_trip(method, params, None)
 }
 
 /// `call`, giving up after `timeout` (for hooks that mustn't stall their caller).
 pub fn call_timeout(method: &str, params: Value, timeout: Duration) -> anyhow::Result<Value> {
-    round_trip(method, params, Some(timeout))
+    round_trip(method, params, Some(timeout)).map(|(v, _)| v)
 }
 
-fn round_trip(method: &str, params: Value, timeout: Option<Duration>) -> anyhow::Result<Value> {
+fn round_trip(method: &str, params: Value, timeout: Option<Duration>) -> anyhow::Result<(Value, UnixStream)> {
     let path = socket_path();
     let stream = UnixStream::connect(&path)
         .map_err(|e| anyhow::anyhow!("abromux is not running ({}: {e})", path.display()))?;
@@ -50,11 +57,11 @@ fn round_trip(method: &str, params: Value, timeout: Option<Duration>) -> anyhow:
     line.push('\n');
     writer.write_all(line.as_bytes())?;
     let mut reply = String::new();
-    BufReader::new(stream).read_line(&mut reply)?;
+    BufReader::new(&stream).read_line(&mut reply)?;
     let reply: Value =
         serde_json::from_str(&reply).map_err(|e| anyhow::anyhow!("bad reply from abromux: {e}"))?;
     if reply["ok"].as_bool() == Some(true) {
-        Ok(reply["result"].clone())
+        Ok((reply["result"].clone(), stream))
     } else {
         anyhow::bail!("{}", reply["error"].as_str().unwrap_or("unknown error"))
     }

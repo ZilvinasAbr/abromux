@@ -27,7 +27,7 @@
 
 use crate::{
     AbroMux, browser,
-    workspace::{Node, Pane, Surface, Workspace},
+    workspace::{Node, Surface, Workspace},
 };
 use gpui::{Axis, Context, Window};
 use serde::Deserialize;
@@ -205,8 +205,7 @@ impl WorkspaceSpec {
 pub fn resolve(cwd: Option<&str>, base: &Path) -> PathBuf {
     let path = match cwd {
         None | Some("" | ".") => base.to_path_buf(),
-        Some("~") => home(),
-        Some(c) if c.starts_with("~/") => home().join(&c[2..]),
+        Some(c) if c == "~" || c.starts_with("~/") => crate::paths::expand_tilde(c),
         Some(c) => base.join(c),
     };
     // `app/../tests` as `tests`, as the shell would show it.
@@ -221,10 +220,6 @@ pub fn resolve(cwd: Option<&str>, base: &Path) -> PathBuf {
         }
     }
     out
-}
-
-fn home() -> PathBuf {
-    std::env::var("HOME").unwrap_or_else(|_| "/".into()).into()
 }
 
 impl AbroMux {
@@ -249,8 +244,16 @@ impl AbroMux {
         let id = self.next_ws;
         let mut focus = None;
         let mut setup = spec.setup.clone();
-        let root = self.build_layout(layout, id, &dir, spec, &mut setup, &mut focus, window, cx);
-        let panes: Vec<usize> = root.panes().iter().map(|p| p.id).collect();
+        // `check` keeps panes from being empty; if one were, it would
+        // collapse away, and with nothing left the workspace gets a shell.
+        let root = match self.build_layout(layout, id, &dir, spec, &mut setup, &mut focus, window, cx) {
+            Some(root) => root,
+            None => {
+                let t = self.make_terminal(id, crate::TerminalOpts::cwd(Some(dir.to_string_lossy().into_owned())), window, cx);
+                self.leaf_node(vec![t], 0).expect("one tab")
+            }
+        };
+        let panes: Vec<usize> = root.panes().map(|p| p.id).collect();
         let focused = focus.unwrap_or(panes[0]);
         let name = spec.name.clone().or(name);
         let mut ws = Workspace::new(id, name, root, focused);
@@ -278,38 +281,34 @@ impl AbroMux {
         focus: &mut Option<usize>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Node {
+    ) -> Option<Node> {
         match node {
             LayoutNode::Pane { pane } => {
-                let id = self.pane_id();
-                let mut active = 0;
+                // The first surface asking for focus, in this pane if no
+                // earlier pane had one.
+                let wants = pane.surfaces.iter().position(|s| s.focus).filter(|_| focus.is_none());
                 let tabs = pane
                     .surfaces
                     .iter()
-                    .enumerate()
-                    .map(|(i, s)| {
-                        if s.focus && focus.is_none() {
-                            *focus = Some(id);
-                            active = i;
-                        }
-                        self.build_surface(s, ws, dir, spec, setup, window, cx)
-                    })
+                    .map(|s| self.build_surface(s, ws, dir, spec, setup, window, cx))
                     .collect();
-                Node::Leaf(Pane { id, tabs, active })
+                let node = self.leaf_node(tabs, wants.unwrap_or(0))?;
+                if wants.is_some()
+                    && let Node::Leaf(p) = &node
+                {
+                    *focus = Some(p.id);
+                }
+                Some(node)
             }
             LayoutNode::Split(s) => {
                 let [a, b] = &*s.children;
                 let a = self.build_layout(a, ws, dir, spec, setup, focus, window, cx);
                 let b = self.build_layout(b, ws, dir, spec, setup, focus, window, cx);
-                Node::Split {
-                    id: self.id(),
-                    axis: match s.direction {
-                        Direction::Horizontal => Axis::Horizontal,
-                        Direction::Vertical => Axis::Vertical,
-                    },
-                    ratio: s.split.clamp(0.1, 0.9),
-                    children: Box::new([a, b]),
-                }
+                let axis = match s.direction {
+                    Direction::Horizontal => Axis::Horizontal,
+                    Direction::Vertical => Axis::Vertical,
+                };
+                self.split_node(axis, s.split, a, b)
             }
         }
     }
@@ -340,7 +339,7 @@ impl AbroMux {
                     .chain(&s.env)
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
-                let surface = self.make_terminal_with(cwd, ws, env, window, cx);
+                let surface = self.make_terminal(ws, crate::TerminalOpts { cwd, env, ..Default::default() }, window, cx);
                 if let Surface::Terminal(t) = &surface {
                     // The shell reads these once it starts.
                     let text: String = setup
@@ -420,7 +419,7 @@ mod tests {
     #[test]
     fn resolves_cwds() {
         let base = Path::new("/p");
-        let home = home();
+        let home = crate::paths::home();
         assert_eq!(resolve(None, base), base);
         assert_eq!(resolve(Some("."), base), base);
         assert_eq!(resolve(Some("./app"), base), Path::new("/p/app"));

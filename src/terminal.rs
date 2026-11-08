@@ -2,6 +2,7 @@
 //! drawn cell-by-cell with gpui.
 
 use crate::{
+    find_bar::{FindBar, Step},
     agent::{self, Agent, Kind},
     config::{Config, CursorStyle as ConfigCursor},
     ghostty::{
@@ -16,7 +17,7 @@ use crate::{
 use crate::pty::{Feed, Opened, Pty};
 use futures::{StreamExt, channel::mpsc};
 use gpui::{prelude::*, *};
-use gpui_component::input::{self, Input, InputEvent, InputState};
+use gpui_component::input::{self, InputEvent, InputState};
 use portable_pty::PtySize;
 use std::any::Any;
 use std::collections::HashMap;
@@ -173,11 +174,8 @@ pub struct TerminalView {
     /// Whether the shell reports its cwd itself (OSC 7); if not, it's polled.
     osc7: bool,
     cwd_checked: std::time::Instant,
-    /// The find bar's input, kept after closing so ⌘F brings the last search back.
-    find_input: Option<Entity<InputState>>,
-    find_open: bool,
-    /// Match count and selected index (from the newest), for the find bar.
-    find_count: (usize, Option<usize>),
+    /// The ⌘F bar; its count's index is from the newest match.
+    find: FindBar,
     /// A task is stepping the search through scrollback.
     searching: bool,
     /// The coding agent running here, as its hooks last reported it.
@@ -227,7 +225,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Self {
         let (cols, rows) = (80, 24);
-        let cwd = cwd.unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+        let cwd = cwd.unwrap_or_else(|| crate::paths::home().to_string_lossy().into_owned());
         let (opened, feed) =
             spawn_shell(&cwd, &env, command.as_deref(), (cols, rows), 0, attach, cx);
         let focus = cx.focus_handle();
@@ -276,9 +274,7 @@ impl TerminalView {
             scroll_accum: 0.,
             osc7: false,
             cwd_checked: std::time::Instant::now(),
-            find_input: None,
-            find_open: false,
-            find_count: (0, None),
+            find: FindBar::default(),
             searching: false,
             agent: None,
             osc99: Default::default(),
@@ -369,8 +365,8 @@ impl TerminalView {
         self.selecting = None;
         self.link = None;
         self.pending_paste = None;
-        self.find_open = false;
-        self.find_count = (0, None);
+        self.find.open = false;
+        self.find.count = (0, None);
         self.osc99 = Default::default();
         self.dirty = true;
         cx.emit(TerminalEvent::Respawned);
@@ -461,6 +457,24 @@ impl TerminalView {
         if !bytes.is_empty() {
             self.pty.write(bytes);
         }
+    }
+
+    /// Give the program `text` to send, as if pasted and then Return was
+    /// pressed. With bracketed paste on (agents' input boxes ask for it)
+    /// the Return is outside the paste, so it sends; the paste skips the
+    /// paste protection prompt, as abromux is the one typing. Returns false
+    /// when the program has no bracketed paste: then it can't tell a
+    /// Return right after the text from one in it, and the caller sends
+    /// the Return itself a moment later.
+    pub fn submit(&mut self, text: &str) -> bool {
+        if !self.term.bracketed_paste() {
+            self.send(text.as_bytes());
+            return false;
+        }
+        let mut bytes = self.term.encode_paste(text);
+        bytes.push(b'\r');
+        self.send(&bytes);
+        true
     }
 
     /// Closing its tab: end the shell, which a held one wouldn't on its own
@@ -753,7 +767,7 @@ impl TerminalView {
 
     /// ⌘F: show the find bar (or focus it) with its last search.
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let input = match &self.find_input {
+        let input = match &self.find.input {
             Some(input) => input.clone(),
             None => {
                 let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find"));
@@ -766,18 +780,19 @@ impl TerminalView {
                             this.term.set_search(&needle);
                             this.run_search(cx);
                         }
-                        InputEvent::PressEnter { .. } => this.find_step(true, cx),
+                        // Return steps up, to older output, like ⌘G.
+                        InputEvent::PressEnter { .. } => this.find_step(Step::Up, cx),
                         InputEvent::Focus => cx.emit(TerminalEvent::Focused),
                         _ => {}
                     },
                 )
                 .detach();
-                self.find_input = Some(input.clone());
+                self.find.input = Some(input.clone());
                 input
             }
         };
-        if !self.find_open {
-            self.find_open = true;
+        if !self.find.open {
+            self.find.open = true;
             let needle = input.read(cx).value();
             self.term.set_search(&needle);
             self.run_search(cx);
@@ -795,7 +810,7 @@ impl TerminalView {
         };
         let text = text.lines().next().unwrap_or_default().to_string();
         self.open_find(window, cx);
-        if let Some(input) = &self.find_input {
+        if let Some(input) = &self.find.input {
             input.update(cx, |i, cx| i.set_value(text.clone(), window, cx));
         }
         self.term.set_search(&text);
@@ -803,8 +818,7 @@ impl TerminalView {
     }
 
     fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.find_open = false;
-        self.find_count = (0, None);
+        self.find.close();
         self.term.end_search();
         self.dirty = true;
         window.focus(&self.focus);
@@ -812,12 +826,12 @@ impl TerminalView {
     }
 
     /// ⌘G / ⇧⌘G: select the next match up (older) or down the screen.
-    fn find_step(&mut self, older: bool, cx: &mut Context<Self>) {
-        if !self.find_open {
+    fn find_step(&mut self, step: Step, cx: &mut Context<Self>) {
+        if !self.find.open {
             return;
         }
-        self.term.search_select(older);
-        self.find_count = self.term.search_count();
+        self.term.search_select(step == Step::Up);
+        self.find.count = self.term.search_count();
         self.dirty = true;
         cx.notify();
     }
@@ -872,15 +886,15 @@ impl TerminalView {
     /// Step the search until it has caught up with the terminal, a slice at
     /// a time so a long scrollback doesn't stall the UI.
     fn run_search(&mut self, cx: &mut Context<Self>) {
-        if !self.find_open || self.searching {
+        if !self.find.open || self.searching {
             return;
         }
         self.searching = true;
         cx.spawn(async move |this, cx| {
             loop {
                 let done = this.update(cx, |this, cx| {
-                    let done = !this.find_open || this.term.search_step();
-                    this.find_count = this.term.search_count();
+                    let done = !this.find.open || this.term.search_step();
+                    this.find.count = this.term.search_count();
                     this.searching = !done;
                     this.dirty = true;
                     cx.notify();
@@ -897,57 +911,22 @@ impl TerminalView {
         .detach();
     }
 
+    /// The find bar, floating over the terminal's top right corner.
     fn render_find_bar(&self, input: Entity<InputState>, cx: &mut Context<Self>) -> Stateful<Div> {
-        let count = match self.find_count {
-            (total, Some(i)) => format!("{}/{total}", i + 1),
-            (total, None) => format!("-/{total}"),
-        };
-        div()
-            .id("find-bar")
-            .key_context("FindBar")
+        self.find
+            .render(&input, Self::find_step, Self::close_find, cx)
             .absolute()
             .top(px(PADDING))
             .right(px(PADDING * 2.))
             .w(px(300.))
-            .h(px(32.))
-            .px_2()
-            .flex()
-            .items_center()
-            .gap_1()
             .rounded(px(8.))
-            .bg(rgb(TABBAR_BG))
             .border_1()
             .border_color(rgb(BORDER))
             .shadow_md()
             .cursor_default()
-            .text_size(px(12.))
-            .text_color(rgb(TEXT))
             // Keep clicks from reaching the terminal (selection, mouse reports).
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-            .on_action(
-                cx.listener(|this, _: &input::Escape, window, cx| this.close_find(window, cx)),
-            )
-            .child(icon("search"))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(Input::new(&input).appearance(false).text_size(px(12.))),
-            )
-            .child(div().flex_none().text_color(rgb(MUTED)).child(count))
-            .child(
-                icon_button("find-up", "chevron-up")
-                    .on_click(cx.listener(|this, _, _, cx| this.find_step(true, cx))),
-            )
-            .child(
-                icon_button("find-down", "chevron-down")
-                    .on_click(cx.listener(|this, _, _, cx| this.find_step(false, cx))),
-            )
-            .child(
-                icon_button("find-close", "x")
-                    .on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))),
-            )
     }
 
     /// The paste protection prompt, over the top of the terminal.
@@ -1616,18 +1595,14 @@ impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.hook_focus(window, cx);
         let bg = self.frame.background;
-        let find_bar = self
-            .find_input
-            .clone()
-            .filter(|_| self.find_open)
-            .map(|input| self.render_find_bar(input, cx));
+        let find_bar = self.find.shown().map(|input| self.render_find_bar(input, cx));
         let paste_prompt = self
             .pending_paste
             .as_deref()
             .map(|text| self.render_paste_prompt(text, cx));
         let scrollbar = self.render_scrollbar(cx);
         // The find bar sits where the lock would.
-        let lock = (!self.find_open && self.password_input()).then(|| {
+        let lock = (!self.find.open && self.password_input()).then(|| {
             div()
                 .absolute()
                 .top(px(PADDING))
@@ -1672,8 +1647,9 @@ impl Render for TerminalView {
             .on_drop(cx.listener(Self::drop_paths))
             .drag_over::<ExternalPaths>(|s, _, _, _| s.bg(rgba(0x1f6fe522)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
-            .on_action(cx.listener(|this, _: &FindNext, _, cx| this.find_step(true, cx)))
-            .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.find_step(false, cx)))
+            // In a terminal "next" is the next older match, up the screen.
+            .on_action(cx.listener(|this, _: &FindNext, _, cx| this.find_step(Step::Up, cx)))
+            .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.find_step(Step::Down, cx)))
             .on_action(cx.listener(|this, _: &UseSelectionForFind, window, cx| {
                 this.find_selection(window, cx)
             }))

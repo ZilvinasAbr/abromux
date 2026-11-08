@@ -758,7 +758,7 @@ fn step<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
 /// `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`.
 fn color<'de, D: Deserializer<'de>>(d: D) -> Result<Rgba, D::Error> {
     let s = String::deserialize(d)?;
-    Rgba::try_from(s.as_str()).map_err(|_| {
+    abromux_plugin::color::parse(&s).ok_or_else(|| {
         serde::de::Error::custom(format!(
             "{s:?} isn't a color; use #rgb, #rgba, #rrggbb or #rrggbbaa"
         ))
@@ -825,12 +825,7 @@ pub fn error_notification(e: String) -> Notification {
 }
 
 pub fn path() -> PathBuf {
-    let xdg = std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config")
-        });
-    xdg.join("abromux/config.json")
+    crate::paths::xdg_config().join("abromux/config.json")
 }
 
 /// The settings in the config file, or the defaults if there is none.

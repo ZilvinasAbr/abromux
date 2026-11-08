@@ -32,7 +32,21 @@ pub enum Load<T> {
     Idle,
     Loading,
     Ready(T),
-    Failed(String),
+    Failed(Failure),
+}
+
+/// Why a load failed: the message to show, and whether GitLab turned the
+/// token down (so the alert offers to sign in again).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Failure {
+    pub text: String,
+    pub rejected: bool,
+}
+
+impl Failure {
+    pub fn of(e: &anyhow::Error) -> Self {
+        Failure { text: format!("{e:#}"), rejected: crate::api::ApiError::status_of(e) == Some(401) }
+    }
 }
 
 impl<T> Load<T> {
@@ -45,7 +59,7 @@ impl<T> Load<T> {
         }
     }
 
-    fn error(&self) -> Option<&str> {
+    fn error(&self) -> Option<&Failure> {
         match self {
             Load::Failed(e) => Some(e),
             _ => None,
@@ -513,7 +527,7 @@ impl GitLabView {
                             v.avatars.want(mrs.iter().map(|m| &m.author), cx, |v| &mut v.avatars);
                             Load::Ready(mrs)
                         }
-                        Err(e) => Load::Failed(format!("{e:#}")),
+                        Err(e) => Load::Failed(Failure::of(&e)),
                     };
                     cx.notify();
                 })
@@ -664,7 +678,7 @@ impl GitLabView {
                     // A quiet refresh that fails keeps what's showing.
                     Err(_) if quiet => cx.notify(),
                     Err(e) => {
-                        v.review = Load::Failed(format!("{e:#}"));
+                        v.review = Load::Failed(Failure::of(&e));
                         v.rebuild_rows(cx);
                     }
                 }
@@ -1173,7 +1187,7 @@ impl GitLabView {
             this.update(cx, |v, cx| {
                 // Only if it's still the one asked for.
                 if v.compare == compare {
-                    v.compared = got.map_or_else(|e| Load::Failed(format!("{e:#}")), |r| Load::Ready(Rc::new(r)));
+                    v.compared = got.map_or_else(|e| Load::Failed(Failure::of(&e)), |r| Load::Ready(Rc::new(r)));
                     v.rebuild_rows(cx);
                     v.fetch_pictures(cx);
                 }
@@ -1189,7 +1203,7 @@ impl GitLabView {
         }
         match &self.compared {
             Load::Ready(_) => None,
-            Load::Failed(e) => Some(Some(e)),
+            Load::Failed(e) => Some(Some(&e.text)),
             _ => Some(None),
         }
     }
@@ -1263,10 +1277,10 @@ impl Tab for GitLabView {
             "page": page,
             "me": self.me.as_ref().map(|u| &u.username),
             "sign_in_error": self.sign_in_error,
-            "list": { "load": self.list.name(), "error": self.list.error(), "items": list },
+            "list": { "load": self.list.name(), "error": self.list.error().map(|e| &e.text), "items": list },
             "review": {
                 "load": self.review.name(),
-                "error": self.review.error(),
+                "error": self.review.error().map(|e| &e.text),
                 "summary": r.map(|r| r.summary()),
             },
             "changes": {
@@ -1291,7 +1305,7 @@ impl Tab for GitLabView {
             },
             "projects": {
                 "load": self.projects.name(),
-                "error": self.projects.error(),
+                "error": self.projects.error().map(|e| &e.text),
                 "items": self.projects.ready().map(|ps| ps.iter().map(|p| json!({ "path": p.path_with_namespace, "open": self.project_counts.get(&p.id) })).collect::<Vec<_>>()),
             },
         })
@@ -1734,7 +1748,7 @@ impl GitLabView {
             .into_any_element()
     }
 
-    fn status_line(&self, load: &str, error: Option<&str>, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn status_line(&self, load: &str, error: Option<&Failure>, cx: &mut Context<Self>) -> Option<AnyElement> {
         match (load, error) {
             ("loading", _) => Some(spinner("gl-loading").into_any_element()),
             (_, Some(e)) => Some(self.alert(e, cx).into_any_element()),
@@ -1743,8 +1757,8 @@ impl GitLabView {
     }
 
     /// GitLab's danger alert, with what can be done about the error.
-    fn alert(&self, error: &str, cx: &mut Context<Self>) -> Div {
-        let rejected = error.contains("(401)");
+    fn alert(&self, error: &Failure, cx: &mut Context<Self>) -> Div {
+        let rejected = error.rejected;
         div().p_4().child(
             div()
                 .flex()
@@ -1768,7 +1782,7 @@ impl GitLabView {
                                 .text_color(c(TEXT))
                                 .child(if rejected { "GitLab didn't accept the token" } else { "Couldn't load this" }),
                         )
-                        .child(div().text_color(c(TEXT)).child(error.to_string()))
+                        .child(div().text_color(c(TEXT)).child(error.text.clone()))
                         .child(
                             div()
                                 .flex()

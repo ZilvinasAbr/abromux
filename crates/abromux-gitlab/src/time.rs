@@ -27,10 +27,9 @@ pub fn parse(iso: &str) -> Option<i64> {
     Some(t)
 }
 
-/// `secs` since the epoch as GitLab writes times: `2026-11-05T19:36:28.000Z`.
-pub fn iso(secs: i64) -> String {
-    // Civil from days (Howard Hinnant's algorithm), `parse` backwards.
-    let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
+/// Year, month (1–12) and day of `days` since the epoch: civil from days
+/// (Howard Hinnant's algorithm), `parse` backwards.
+fn civil(days: i64) -> (i64, i64, i64) {
     let z = days + 719468;
     let era = z.div_euclid(146097);
     let doe = z - era * 146097;
@@ -40,6 +39,13 @@ pub fn iso(secs: i64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    (y, m, d)
+}
+
+/// `secs` since the epoch as GitLab writes times: `2026-11-05T19:36:28.000Z`.
+pub fn iso(secs: i64) -> String {
+    let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
+    let (y, m, d) = civil(days);
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.000Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
@@ -64,21 +70,22 @@ pub fn ago(iso: &str, now: i64) -> String {
     }
 }
 
+/// `secs` of age in the short form lists use: "now", "5m", "3h", "2d".
+pub fn ago_short(secs: i64) -> String {
+    match secs.max(0) {
+        s if s < 60 => "now".into(),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86400),
+    }
+}
+
 /// GitLab's hover text for a time, in UTC: `Nov 5, 2026, 7:36 PM UTC`.
 pub fn exact(iso: &str) -> String {
     let Some(t) = parse(iso) else { return iso.to_string() };
     let days = t.div_euclid(86400);
     let secs = t.rem_euclid(86400);
-    // Civil from days (Howard Hinnant's algorithm).
-    let z = days + 719468;
-    let era = z.div_euclid(146097);
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    let (y, m, d) = civil(days);
     const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     let (h, mi) = (secs / 3600, secs % 3600 / 60);
     let (h12, ampm) = match h {
@@ -122,6 +129,9 @@ mod tests {
         assert_eq!(ago("2026-11-05T19:36:28Z", t + 3 * 86400), "3 days ago");
         assert_eq!(ago("2026-11-05T19:36:28Z", t + 14 * 86400), "2 weeks ago");
         assert_eq!(ago("junk", t), "junk");
+        assert_eq!([ago_short(5), ago_short(120), ago_short(7200), ago_short(200_000)], ["now", "2m", "2h", "2d"]);
+        assert_eq!(parse("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse("nope"), None);
         assert_eq!(day("2026-11-05T19:36:28Z"), "Nov 05, 2026");
         assert_eq!(exact("2026-11-05T19:36:28.973Z"), "Nov 5, 2026, 7:36 PM UTC");
         assert_eq!(exact("2026-11-06T00:05:00+02:00"), "Nov 5, 2026, 10:05 PM UTC");

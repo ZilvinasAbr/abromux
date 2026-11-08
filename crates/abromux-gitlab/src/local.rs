@@ -25,7 +25,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
-    process::Command,
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
@@ -594,18 +593,7 @@ fn short(sha: &str) -> &str {
 // ---- git ---------------------------------------------------------------------------
 
 pub fn git(repo: &Path, args: &[&str]) -> anyhow::Result<Vec<u8>> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["-c", "core.quotePath=false", "-c", "color.ui=false"])
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()
-        .context("running git")?;
-    if !out.status.success() {
-        bail!("git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
-    }
-    Ok(out.stdout)
+    abromux_plugin::git::run(repo, args).map_err(|e| anyhow::anyhow!("git {}: {e}", args.join(" ")))
 }
 
 fn git_text(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
@@ -846,11 +834,8 @@ fn me() -> Person {
     static ME: OnceLock<Person> = OnceLock::new();
     ME.get_or_init(|| {
         let username = std::env::var("USER").unwrap_or_else(|_| "you".into());
-        let name = Command::new("git")
-            .args(["config", "user.name"])
-            .output()
+        let name = abromux_plugin::git::text(Path::new("."), &["config", "user.name"])
             .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| username.clone());
         Person { id: ME_ID, username, name }

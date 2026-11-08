@@ -20,8 +20,7 @@ use std::path::PathBuf;
 /// cmux's own session file (the release app's), or the copy it keeps of
 /// the one before if that's all there is.
 pub fn session_path() -> PathBuf {
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    let dir = home.join("Library/Application Support/cmux");
+    let dir = crate::paths::home().join("Library/Application Support/cmux");
     let current = dir.join("session-com.cmuxterm.app.json");
     let previous = dir.join("session-com.cmuxterm.app-previous.json");
     if !current.exists() && previous.exists() {
@@ -106,7 +105,7 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
         name: title.clone().filter(|_| by_user),
         auto_name: title.filter(|_| !by_user),
         description: str_of(ws, "customDescription").map(str::to_string),
-        color: str_of(ws, "customColor").and_then(hex_color),
+        color: str_of(ws, "customColor").and_then(crate::workspace::parse_color),
         group: None,
         home: None,
         links: vec![],
@@ -116,11 +115,6 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
     })
 }
 
-/// `#rrggbb` as abromux keeps colors.
-fn hex_color(s: &str) -> Option<u32> {
-    let h = s.strip_prefix('#').unwrap_or(s);
-    (h.len() == 6).then(|| u32::from_str_radix(h, 16).ok())?
-}
 
 /// A layout node. `panes` counts panes in tree order, so `focused` can say
 /// which one holds the focused panel.

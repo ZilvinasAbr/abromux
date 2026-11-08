@@ -499,16 +499,20 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
             // If the app has it open, the app closes the workspace and then
             // deletes the folder: this shell (and an agent in it) may be
             // one of its terminals.
-            if let Ok(r) = ipc::call(
+            // The app waits for this connection to close before closing the
+            // workspace, so this is printed before the shell goes.
+            if let Ok((r, conn)) = ipc::call_held(
                 "folder.remove",
                 json!({ "path": ws.to_string_lossy(), "force": force }),
             ) && let Some(w) = r["workspace"].as_str()
             {
                 println!(
-                    "OK closing {w} in a moment; {} then deletes {} and notifies when done",
+                    "OK closing {w}; {} then deletes {} and notifies when done",
                     crate::channel::app_name(),
                     ws.display()
                 );
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                drop(conn);
                 return Ok(());
             }
             for line in folder::remove(&ws, force)? {

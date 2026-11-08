@@ -11,7 +11,7 @@ use crate::{
     select::Group,
     review::{File, Review},
     style::*,
-    view::{GitLabView, Load},
+    view::{Failure, GitLabView, Load},
 };
 use gpui::{prelude::*, *};
 use std::collections::BTreeMap;
@@ -1276,7 +1276,7 @@ impl GitLabView {
                         (Some(s), None) | (None, Some(s)) => side(s, None),
                         (None, None) => div(),
                     },
-                    Some(Load::Failed(e)) => div().text_color(c(RED)).child(e.clone()),
+                    Some(Load::Failed(e)) => div().text_color(c(RED)).child(e.text.clone()),
                     _ => spinner("gl-picture-loading").py_0(),
                 };
                 card(div().flex().justify_center().px_4().py_4().bg(c(CARD)).child(body)).into_any_element()
@@ -1862,7 +1862,7 @@ impl GitLabView {
                     })
                     .await;
                 this.update(cx, |v, cx| {
-                    v.pictures.insert(fi, got.map_or_else(|e| Load::Failed(format!("{e:#}")), Load::Ready));
+                    v.pictures.insert(fi, got.map_or_else(|e| Load::Failed(Failure::of(&e)), Load::Ready));
                     cx.notify();
                 })
                 .ok();
@@ -1938,7 +1938,7 @@ impl GitLabView {
                 })
                 .await;
             this.update(cx, |v, cx| {
-                v.contents.insert(fi, got.map_or_else(|e| Load::Failed(format!("{e:#}")), |t| Load::Ready(std::rc::Rc::new(t))));
+                v.contents.insert(fi, got.map_or_else(|e| Load::Failed(Failure::of(&e)), |t| Load::Ready(std::rc::Rc::new(t))));
                 v.rebuild_rows(cx);
             })
             .ok();

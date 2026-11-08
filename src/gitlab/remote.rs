@@ -5,7 +5,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// `(host, group/project)` of a git remote URL.
 pub fn parse_remote(url: &str) -> Option<(String, String)> {
@@ -34,16 +33,7 @@ pub fn host_name(setting: &str) -> String {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-        .filter(|s| !s.is_empty())
+    abromux_plugin::git::text(dir, args).ok().filter(|s| !s.is_empty())
 }
 
 /// One place to look: a directory, and a branch it was made on.
@@ -73,7 +63,10 @@ pub fn discover(places: &[Place], host: &str) -> Vec<(String, Vec<String>)> {
         }
         let branches = found.entry(project).or_default();
         let current = fresh
-            .then(|| git(top, &["branch", "--show-current"]))
+            .then(|| match crate::workspace::git_head(&top.to_string_lossy()) {
+                Some(crate::workspace::Head::Branch(b)) => Some(b),
+                _ => None,
+            })
             .flatten();
         for b in current.into_iter().chain(p.branch.clone()) {
             if !branches.contains(&b) {

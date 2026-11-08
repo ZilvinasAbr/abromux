@@ -29,11 +29,7 @@ fn installed(text: &str) -> String {
 
 /// Each agent's skills folder that exists or can be made, with its name.
 fn roots() -> anyhow::Result<Vec<(&'static str, PathBuf)>> {
-    let home = || {
-        std::env::var("HOME")
-            .map(PathBuf::from)
-            .context("HOME isn't set")
-    };
+    let home = || crate::paths::home_var().context("HOME isn't set");
     let claude = match std::env::var("CLAUDE_CONFIG_DIR") {
         Ok(dir) => PathBuf::from(dir),
         Err(_) => home()?.join(".claude"),

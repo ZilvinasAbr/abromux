@@ -116,15 +116,9 @@ const DEFAULT_KEYBINDS: &[(&str, &str)] = &[
 
 impl Config {
     pub fn load() -> Self {
-        let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-        let xdg = std::env::var("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| home.join(".config"));
+        let xdg = crate::paths::xdg_config();
         let mut entries = vec![];
-        for path in [
-            xdg.join("ghostty/config"),
-            home.join("Library/Application Support/com.mitchellh.ghostty/config"),
-        ] {
+        for path in crate::paths::ghostty_configs() {
             read_file(&path, &mut entries, 0);
         }
         let mut theme = vec![];
@@ -306,13 +300,9 @@ fn unquote(s: &str) -> &str {
         .unwrap_or(s)
 }
 
+/// A Ghostty colour value (`#rrggbb`, quoted or not; also `#rgb`).
 pub fn parse_color(s: &str) -> Option<Rgb> {
-    let s = unquote(s.trim());
-    let hex = s.strip_prefix('#').unwrap_or(s);
-    if hex.len() != 6 {
-        return None;
-    }
-    let n = u32::from_str_radix(hex, 16).ok()?;
+    let n = abromux_plugin::color::parse_rgb(unquote(s.trim()))?;
     Some(Rgb((n >> 16) as u8, (n >> 8) as u8, n as u8))
 }
 

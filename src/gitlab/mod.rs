@@ -1017,59 +1017,14 @@ fn updated(m: &Mr) -> &str {
 
 // ---- dates --------------------------------------------------------------
 
-/// Seconds since the epoch of GitLab's `2026-11-06T10:20:30.123Z` (or
-/// `+02:00` at the end).
-pub fn parse_time(s: &str) -> Option<i64> {
-    let b = s.as_bytes();
-    if b.len() < 19 {
-        return None;
-    }
-    let num = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
-    let (y, mo, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
-    let (h, mi, sec) = (num(11..13)?, num(14..16)?, num(17..19)?);
-    // Days from civil (Howard Hinnant).
-    let y2 = if mo <= 2 { y - 1 } else { y };
-    let era = y2.div_euclid(400);
-    let yoe = y2 - era * 400;
-    let doy = (153 * (mo + if mo > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468;
-    let mut t = days * 86400 + h * 3600 + mi * 60 + sec;
-    let tail = &s[19..];
-    let tz = tail.trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
-    if let Some(off) = tz.strip_prefix('+').or_else(|| tz.strip_prefix('-')) {
-        let sign = if tz.starts_with('+') { 1 } else { -1 };
-        let oh = off.get(0..2)?.parse::<i64>().ok()?;
-        let om = off.get(3..5).and_then(|m| m.parse::<i64>().ok()).unwrap_or(0);
-        t -= sign * (oh * 3600 + om * 60);
-    }
-    Some(t)
-}
-
-/// "just now", "5m ago", "3h ago", "2d ago".
-pub fn ago(secs: i64) -> String {
-    let d = (now_secs() as i64 - secs).max(0);
-    match d {
-        0..60 => "just now".into(),
-        60..3600 => format!("{}m ago", d / 60),
-        3600..86400 => format!("{}h ago", d / 3600),
-        _ => format!("{}d ago", d / 86400),
-    }
-}
-
+/// "just now", "5m ago", "3h ago", "2d ago" for GitLab's time `s` ("" if
+/// it isn't one).
 pub fn ago_iso(s: &str) -> String {
-    parse_time(s).map(ago).unwrap_or_default()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_times() {
-        assert_eq!(parse_time("1970-01-01T00:00:00Z"), Some(0));
-        assert_eq!(parse_time("2026-11-06T10:20:30.123Z"), Some(1793960430));
-        assert_eq!(parse_time("2026-11-06T12:20:30+02:00"), Some(1793960430));
-        assert_eq!(parse_time("nope"), None);
+    let Some(t) = abromux_gitlab::time::parse(s) else {
+        return String::new();
+    };
+    match abromux_gitlab::time::ago_short(now_secs() as i64 - t).as_str() {
+        "now" => "just now".into(),
+        a => format!("{a} ago"),
     }
 }

@@ -7,6 +7,9 @@
 //! ([`Plugin::open`]), and reports them over the control socket
 //! ([`Tab::state`]). The plugin never sees abromux's own types.
 
+pub mod color;
+pub mod git;
+
 use gpui::{AnyView, App, Entity, EntityId, FocusHandle, Focusable, Render, Window};
 use serde_json::Value;
 use std::{cell::RefCell, rc::Rc};

@@ -14,7 +14,7 @@
 use crate::{
     AbroMux,
     agent::Agent,
-    workspace::{Group, Node, Pane, Surface, Workspace},
+    workspace::{Group, Node, Surface, Workspace},
 };
 use gpui::{App, Axis, Bounds, Context, Pixels, Window, point, px, size};
 use gpui_component::WindowExt;
@@ -165,7 +165,7 @@ pub fn path() -> Option<PathBuf> {
     if std::env::var("ABROMUX_DEMO").is_ok() || std::env::var("ABROMUX_SCRIPT").is_ok() {
         return None;
     }
-    std::env::var("HOME").ok()?;
+    crate::paths::home_var()?;
     Some(crate::channel::support_dir().join("session.json"))
 }
 
@@ -210,9 +210,7 @@ pub fn source(from: &str) -> PathBuf {
     if let Some(p) = named_source(from) {
         return p;
     }
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    from.strip_prefix("~/")
-        .map_or_else(|| from.into(), |rest| home.join(rest))
+    crate::paths::expand_tilde(from)
 }
 
 /// The session a `--from` name stands for, None for a file path.
@@ -275,9 +273,7 @@ impl AbroMux {
                     .group
                     .and_then(|g| self.groups.iter().position(|x| x.id == g)),
                 focused: ws
-                    .root
                     .panes()
-                    .iter()
                     .position(|p| p.id == ws.focused_pane)
                     .unwrap_or(0),
                 root: node_state(&ws.root, scrollback, &self.surface_refs, cx),
@@ -501,7 +497,7 @@ impl AbroMux {
                 ids.push(None);
                 continue;
             };
-            let panes: Vec<usize> = root.panes().iter().map(|p| p.id).collect();
+            let panes: Vec<usize> = root.panes().map(|p| p.id).collect();
             let focused_pane = panes
                 .get(state.focused)
                 .or(panes.first())
@@ -529,20 +525,13 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Node> {
-        Some(match state {
+        match state {
             NodeState::Pane { active, tabs } => {
                 let tabs: Vec<Surface> = tabs
                     .into_iter()
                     .map(|t| self.build_tab(t, ws, window, cx))
                     .collect();
-                if tabs.is_empty() {
-                    return None;
-                }
-                Node::Leaf(Pane {
-                    id: self.pane_id(),
-                    active: active.min(tabs.len() - 1),
-                    tabs,
-                })
+                self.leaf_node(tabs, active)
             }
             NodeState::Split {
                 vertical,
@@ -550,25 +539,12 @@ impl AbroMux {
                 children,
             } => {
                 let [a, b] = *children;
-                // A side that came back empty collapses into the other.
-                match (
-                    self.build_node(a, ws, window, cx),
-                    self.build_node(b, ws, window, cx),
-                ) {
-                    (Some(a), Some(b)) => Node::Split {
-                        id: self.id(),
-                        axis: if vertical {
-                            Axis::Vertical
-                        } else {
-                            Axis::Horizontal
-                        },
-                        ratio: ratio.clamp(0.1, 0.9),
-                        children: Box::new([a, b]),
-                    },
-                    (a, b) => a.or(b)?,
-                }
+                let a = self.build_node(a, ws, window, cx);
+                let b = self.build_node(b, ws, window, cx);
+                let axis = if vertical { Axis::Vertical } else { Axis::Horizontal };
+                self.split_node(axis, ratio, a, b)
             }
-        })
+        }
     }
 
     fn build_tab(
@@ -589,8 +565,9 @@ impl AbroMux {
                 surface,
             } => {
                 let cwd = std::path::Path::new(&cwd).is_dir().then_some(cwd);
-                let attach = surface.zip(held.as_deref());
-                let s = self.make_terminal_full(cwd, ws, vec![], None, attach, window, cx);
+                let attach = surface.zip(held);
+                let opts = crate::TerminalOpts { cwd, attach, ..Default::default() };
+                let s = self.make_terminal(ws, opts, window, cx);
                 if let Surface::Terminal(t) = &s {
                     t.update(cx, |t, cx| {
                         if t.attached {
@@ -650,7 +627,7 @@ impl AbroMux {
                 // the pane, with a terminal that says why.
                 Err(e) => {
                     eprintln!("restoring a {plugin} tab: {e:#}");
-                    let s = self.make_terminal_full(None, ws, vec![], None, None, window, cx);
+                    let s = self.make_terminal(ws, crate::TerminalOpts::default(), window, cx);
                     (s, Some(format!("{plugin} (not restored)")))
                 }
             },

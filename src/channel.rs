@@ -76,24 +76,23 @@ pub fn support_dir_named(channel: &str) -> Option<PathBuf> {
 /// `ws-nightly-<name>`, so channels keep apart. No space in it: shells and
 /// agents trip on those.
 pub fn workspaces_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let home = crate::paths::home();
     let dir = match flavor() {
         None => "ws".into(),
         Some("") => "ws-nightly".into(),
         Some(name) => format!("ws-nightly-{name}"),
     };
-    PathBuf::from(home).join(".abromux").join(dir)
+    home.join(".abromux").join(dir)
 }
 
 fn support_dir_of(flavor: Option<&str>) -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let home = crate::paths::home();
     let dir = match flavor {
         None => "abromux".into(),
         Some("") => "abromux-nightly".into(),
         Some(name) => format!("abromux-nightly-{name}"),
     };
-    PathBuf::from(home)
-        .join("Library/Application Support")
+    home.join("Library/Application Support")
         .join(dir)
 }
 

@@ -18,6 +18,7 @@ mod gitlab;
 mod cursor;
 mod debug;
 mod downloads;
+mod find_bar;
 mod ghostty;
 mod hold;
 mod icon;
@@ -31,7 +32,9 @@ mod menu;
 mod notification;
 mod notify_hook;
 mod menubar;
+mod naming;
 mod osc99;
+mod paths;
 mod palette;
 mod plugins;
 mod pty;
@@ -258,6 +261,25 @@ impl AssetSource for Assets {
     }
 }
 
+/// How a new terminal starts: [`Default`] is a shell in the default folder.
+#[derive(Default)]
+struct TerminalOpts {
+    cwd: Option<String>,
+    /// Extra environment for the shell.
+    env: Vec<(String, String)>,
+    /// Run this instead of a shell session.
+    command: Option<String>,
+    /// Take back a terminal the holder kept from the last session: its
+    /// surface number and holder id.
+    attach: Option<(usize, String)>,
+}
+
+impl TerminalOpts {
+    fn cwd(cwd: Option<String>) -> Self {
+        TerminalOpts { cwd, ..Default::default() }
+    }
+}
+
 struct AbroMux {
     workspaces: Vec<Workspace>,
     active: usize,
@@ -326,9 +348,9 @@ struct AbroMux {
     /// The session this launch restored (without scrollback), for ⌘⇧O,
     /// with the id each of its workspaces was built as.
     launch_session: Option<(session::Session, Vec<Option<usize>>)>,
-    /// Auto-naming's state per workspace (`server::auto_name`); clearing a
+    /// Auto-naming's state per workspace (`naming.rs`); clearing a
     /// workspace's name starts it over.
-    naming: HashMap<usize, server::Naming>,
+    naming: HashMap<usize, naming::Naming>,
     /// A task is redrawing the window while Claude's logo turns somewhere.
     spinning: bool,
 }
@@ -472,9 +494,7 @@ impl AbroMux {
     fn follow_page_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let hit = self
             .ws()
-            .root
             .panes()
-            .into_iter()
             .filter_map(|p| p.active_surface())
             .find_map(|s| match s {
                 Surface::Browser(b) if b.read(cx).page_has_focus(cx) => Some(b.clone()),
@@ -509,7 +529,7 @@ impl AbroMux {
         let repo = env!("CARGO_MANIFEST_DIR").to_string();
         send(self.ws().focused_surface(), "ls -la\r", cx);
         self.split(Axis::Horizontal, true, window, cx);
-        let first = self.ws().root.panes()[0].id;
+        let first = self.ws().panes().next().unwrap().id;
         self.workspaces[self.active].focused_pane = first;
         self.split(Axis::Vertical, false, window, cx);
         send(
@@ -578,7 +598,7 @@ impl AbroMux {
     /// the next launch (`TerminalView::freeze`).
     fn freeze_held(&mut self, cx: &mut Context<Self>) {
         for ws in &self.workspaces {
-            for p in ws.root.panes() {
+            for p in ws.panes() {
                 for s in &p.tabs {
                     if let Surface::Terminal(t) = s {
                         t.update(cx, |t, _| t.freeze());
@@ -599,6 +619,28 @@ impl AbroMux {
         self.next_pane
     }
 
+    /// A new pane holding `tabs`, showing tab `active`. None without tabs.
+    /// Layouts and restored sessions build their trees from this and
+    /// [`split_node`](Self::split_node).
+    fn leaf_node(&mut self, tabs: Vec<Surface>, active: usize) -> Option<Node> {
+        let active = active.min(tabs.len().checked_sub(1)?);
+        Some(Node::Leaf(Pane { id: self.pane_id(), tabs, active }))
+    }
+
+    /// `a` and `b` side by side along `axis`, `a` taking `ratio` (kept to
+    /// 0.1–0.9). A side that came out empty collapses into the other.
+    fn split_node(&mut self, axis: Axis, ratio: f32, a: Option<Node>, b: Option<Node>) -> Option<Node> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(Node::Split {
+                id: self.id(),
+                axis,
+                ratio: ratio.clamp(0.1, 0.9),
+                children: Box::new([a, b]),
+            }),
+            (a, b) => a.or(b),
+        }
+    }
+
     // ---- surfaces -------------------------------------------------------
 
     fn surface_ref(&mut self, id: EntityId) -> usize {
@@ -608,59 +650,20 @@ impl AbroMux {
         r
     }
 
-    /// A shell in `cwd`; `ws` is the owning workspace's id (exported to the
-    /// shell so `abromux` run inside it targets its own workspace and surface).
+    /// A new terminal tab, as `opts` says; `ws` is the owning workspace's
+    /// id (exported to the shell so `abromux` run inside it targets its own
+    /// workspace and surface). A terminal the holder kept from the last
+    /// session (`opts.attach`) keeps its surface number, which its shell's
+    /// `ABROMUX_SURFACE_ID` still names.
     fn make_terminal(
         &mut self,
-        cwd: Option<String>,
         ws: usize,
+        opts: TerminalOpts,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Surface {
-        self.make_terminal_with(cwd, ws, vec![], window, cx)
-    }
-
-    /// `make_terminal` with extra environment variables for the shell.
-    fn make_terminal_with(
-        &mut self,
-        cwd: Option<String>,
-        ws: usize,
-        env: Vec<(String, String)>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Surface {
-        self.make_terminal_running(cwd, ws, env, None, window, cx)
-    }
-
-    /// `make_terminal_with` whose shell runs `command` instead of a session.
-    fn make_terminal_running(
-        &mut self,
-        cwd: Option<String>,
-        ws: usize,
-        env: Vec<(String, String)>,
-        command: Option<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Surface {
-        self.make_terminal_full(cwd, ws, env, command, None, window, cx)
-    }
-
-    /// `make_terminal_running` that can take back a terminal the holder kept
-    /// from the last session: `(its surface number, its holder id)`. The shell
-    /// kept the `ABROMUX_SURFACE_ID` it started with, so the surface keeps that
-    /// number.
-    #[allow(clippy::too_many_arguments)]
-    fn make_terminal_full(
-        &mut self,
-        cwd: Option<String>,
-        ws: usize,
-        mut env: Vec<(String, String)>,
-        command: Option<String>,
-        attach: Option<(usize, &str)>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Surface {
-        let surface = attach.map_or(self.next_surface + 1, |(n, _)| n);
+        let TerminalOpts { cwd, mut env, command, attach } = opts;
+        let surface = attach.as_ref().map_or(self.next_surface + 1, |(n, _)| *n);
         let home = self
             .workspaces
             .iter()
@@ -685,7 +688,8 @@ impl AbroMux {
                 path.to_string_lossy().into_owned(),
             ));
         }
-        let term = cx.new(|cx| TerminalView::new(cwd, env, command, attach.map(|(_, a)| a), cx));
+        let held = attach.as_ref().map(|(_, a)| a.as_str());
+        let term = cx.new(|cx| TerminalView::new(cwd, env, command, held, cx));
         // Its env names `surface` even when the shell is a new one; restore
         // reserved the numbers the last session used, so it's free.
         self.surface_refs.insert(term.entity_id(), surface);
@@ -723,7 +727,8 @@ impl AbroMux {
             match terminal_browser::command(url) {
                 Some(cmd) => {
                     let ws = self.workspaces.get(self.active).map_or(0, |w| w.id);
-                    let s = self.make_terminal_running(None, ws, vec![], Some(cmd), window, cx);
+                    let opts = TerminalOpts { command: Some(cmd), ..Default::default() };
+                    let s = self.make_terminal(ws, opts, window, cx);
                     if let Surface::Terminal(t) = &s {
                         terminal_browser::attach(t, url, cx);
                     }
@@ -828,9 +833,7 @@ impl AbroMux {
         };
         let ws = &self.workspaces[wi];
         let Some(pane) = ws
-            .root
             .panes()
-            .into_iter()
             .find(|p| p.tabs.iter().any(|s| s.entity_id() == from))
             .map(|p| p.id)
         else {
@@ -845,9 +848,7 @@ impl AbroMux {
         // tab, where a browser would: in a pane of those to the right.
         let claimed = plugins::claiming(&url);
         let right = ws.root.neighbor(pane, Dir::Right).filter(|&r| {
-            ws.root
-                .panes()
-                .into_iter()
+            ws.panes()
                 .find(|p| p.id == r)
                 .and_then(|p| p.active_surface())
                 .is_some_and(|s| match claimed {
@@ -878,9 +879,7 @@ impl AbroMux {
         cx: &mut Context<Self>,
     ) {
         let Some((wi, pane)) = self.workspaces.iter().enumerate().find_map(|(wi, ws)| {
-            ws.root
-                .panes()
-                .into_iter()
+            ws.panes()
                 .find(|p| p.tabs.iter().any(|s| s.entity_id() == from))
                 .map(|p| (wi, p.id))
         }) else {
@@ -901,7 +900,7 @@ impl AbroMux {
     /// Make the pane containing `id` the focused pane (and select its tab).
     fn focus_surface(&mut self, id: EntityId, cx: &mut Context<Self>) {
         for (wi, ws) in self.workspaces.iter_mut().enumerate() {
-            let hit = ws.root.panes().iter().find_map(|p| {
+            let hit = ws.panes().find_map(|p| {
                 p.tabs
                     .iter()
                     .position(|s| s.entity_id() == id)
@@ -909,7 +908,7 @@ impl AbroMux {
             });
             if let Some((pane, tab)) = hit {
                 ws.focused_pane = pane;
-                if let Some(p) = ws.root.pane_mut(pane) {
+                if let Some(p) = ws.pane_mut(pane) {
                     p.active = tab;
                 }
                 if wi == self.active {
@@ -929,13 +928,11 @@ impl AbroMux {
         let ws = &mut self.workspaces[wi];
         self.surface_refs.remove(&id);
         let pane_id = ws
-            .root
             .panes()
-            .iter()
             .find(|p| p.tabs.iter().any(|s| s.entity_id() == id))
             .map(|p| p.id)
             .unwrap();
-        let pane = ws.root.pane_mut(pane_id).unwrap();
+        let pane = ws.pane_mut(pane_id).unwrap();
         let idx = pane.tabs.iter().position(|s| s.entity_id() == id).unwrap();
         if let Surface::Terminal(t) = pane.tabs.remove(idx) {
             t.update(cx, |t, _| t.close());
@@ -986,7 +983,7 @@ impl AbroMux {
             let ws = &self.workspaces[wi];
             let (pane, _, _) = ws.tab_position(id).unwrap();
             let cwd = ws.cwd(cx);
-            let term = self.make_terminal(cwd, ws.id, window, cx);
+            let term = self.make_terminal(ws.id, TerminalOpts::cwd(cwd), window, cx);
             self.add_tab_to(wi, pane, term, true, window, cx);
         }
         self.close_surface(id, window, cx)
@@ -1000,7 +997,7 @@ impl AbroMux {
         cx: &mut Context<Self>,
     ) {
         let claude = self.workspaces.iter().any(|ws| {
-            ws.root.panes().iter().any(|p| {
+            ws.panes().any(|p| {
                 p.tabs
                     .iter()
                     .any(|s| s.entity_id() == id && surface_has_claude(s, cx))
@@ -1040,9 +1037,7 @@ impl AbroMux {
             return;
         };
         let claude = ws
-            .root
             .panes()
-            .iter()
             .any(|p| p.tabs.iter().any(|s| surface_has_claude(s, cx)));
         if !claude {
             return self.close_workspace(index, window, cx);
@@ -1102,7 +1097,7 @@ impl AbroMux {
     ) -> usize {
         self.next_ws += 1;
         let id = self.next_ws;
-        let surface = self.make_terminal(cwd, id, window, cx);
+        let surface = self.make_terminal(id, TerminalOpts::cwd(cwd), window, cx);
         let pane = Pane {
             id: self.pane_id(),
             tabs: vec![surface],
@@ -1184,7 +1179,7 @@ impl AbroMux {
             .filter(|a| !a.trim().is_empty())
             .unwrap_or_else(|| "claude".into());
         let id = self.workspaces[wi].id;
-        let s = self.make_terminal(Some(home.to_string_lossy().into_owned()), id, window, cx);
+        let s = self.make_terminal(id, TerminalOpts::cwd(Some(home.to_string_lossy().into_owned())), window, cx);
         if let Surface::Terminal(t) = &s {
             t.update(cx, |t, _| t.send(format!("{} '{ask}'\r", agent.trim()).as_bytes()));
         }
@@ -1194,20 +1189,23 @@ impl AbroMux {
     }
 
     /// `abromux folder remove` from (maybe) one of workspace `id`'s own
-    /// shells: give it a moment to print, close the workspace, then delete
-    /// the folder off the main thread and say how it went.
+    /// shells: once it has printed and hung up (`gone`), close the
+    /// workspace, then delete the folder off the main thread and say how it
+    /// went.
     pub(crate) fn remove_folder_later(
         &mut self,
         id: usize,
         dir: std::path::PathBuf,
         force: bool,
+        gone: server::Hangup,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(800))
-                .await;
+            // A caller that keeps the connection open doesn't hold this up
+            // for long.
+            let limit = cx.background_executor().timer(Duration::from_secs(10));
+            futures::future::select(gone, limit).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if let Some(i) = this.ws_index(id) {
                     this.close_workspace(i, window, cx);
@@ -1247,7 +1245,7 @@ impl AbroMux {
         }
         let ws = self.workspaces.remove(index);
         // Hide any webviews before they drop so nothing lingers on screen.
-        for p in ws.root.panes() {
+        for p in ws.panes() {
             for s in &p.tabs {
                 self.surface_refs.remove(&s.entity_id());
                 self.forget_notifications(s.entity_id());
@@ -1357,8 +1355,7 @@ impl AbroMux {
     fn find_tab(&self, id: EntityId) -> Option<Surface> {
         self.workspaces
             .iter()
-            .flat_map(|w| w.root.panes())
-            .flat_map(|p| p.tabs.iter())
+            .flat_map(|w| w.surfaces())
             .find(|s| s.entity_id() == id)
             .cloned()
     }
@@ -1397,7 +1394,7 @@ impl AbroMux {
         cx: &mut Context<Self>,
     ) {
         let ws = &mut self.workspaces[wi];
-        let Some(pane) = ws.root.pane_mut(pane_id) else {
+        let Some(pane) = ws.pane_mut(pane_id) else {
             return;
         };
         let at = (pane.active + 1).min(pane.tabs.len());
@@ -1418,7 +1415,7 @@ impl AbroMux {
         } else {
             let cwd = self.focused_cwd(cx);
             let ws = self.ws().id;
-            self.make_terminal(cwd, ws, window, cx)
+            self.make_terminal(ws, TerminalOpts::cwd(cwd), window, cx)
         };
         let pane = self.ws().focused_pane;
         self.split_pane(self.active, pane, axis, false, surface, true, window, cx);
@@ -1507,7 +1504,7 @@ impl AbroMux {
         .filter(|&(_, d)| d < DROP_EDGE)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(dir, _)| dir)
-        .filter(|&dir| ws.root.panes().len() > 1 && ws.accepts(id, TabDrop::Edge(dir)));
+        .filter(|&dir| ws.panes().count() > 1 && ws.accepts(id, TabDrop::Edge(dir)));
         let target = if let Some(dir) = edge {
             Some((TabDrop::Edge(dir), half(m, dir)))
         } else {
@@ -1542,7 +1539,7 @@ impl AbroMux {
 
     fn cycle_tab(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         let ws = &mut self.workspaces[self.active];
-        if let Some(p) = ws.root.pane_mut(ws.focused_pane)
+        if let Some(p) = ws.pane_mut(ws.focused_pane)
             && !p.tabs.is_empty()
         {
             p.active = (p.active as isize + delta).rem_euclid(p.tabs.len() as isize) as usize;
@@ -1554,7 +1551,7 @@ impl AbroMux {
     /// ⌃1–8 select that tab of the focused pane, ⌃9 the last one.
     fn select_tab(&mut self, index: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
         let ws = &mut self.workspaces[self.active];
-        let Some(p) = ws.root.pane_mut(ws.focused_pane) else {
+        let Some(p) = ws.pane_mut(ws.focused_pane) else {
             return;
         };
         let i = index.unwrap_or(p.tabs.len().saturating_sub(1));
@@ -1667,7 +1664,7 @@ impl AbroMux {
                 .position(|w| w.custom_name.as_deref() == Some(name.as_str()));
             let base = base
                 .or_else(|| self.focused_cwd(cx).map(Into::into))
-                .unwrap_or_else(|| std::env::var("HOME").unwrap_or_default().into());
+                .unwrap_or_else(crate::paths::home);
             let Some(i) = open else {
                 self.open_layout(spec, Some(name), &base, window, cx);
                 return;
@@ -1717,7 +1714,7 @@ impl AbroMux {
             _ => {
                 let cwd = self.focused_cwd(cx);
                 let ws = self.ws().id;
-                let s = self.make_terminal(cwd, ws, window, cx);
+                let s = self.make_terminal(ws, TerminalOpts::cwd(cwd), window, cx);
                 let Surface::Terminal(t) = &s else { return };
                 let t = t.clone();
                 self.add_tab(s, window, cx);
@@ -1937,7 +1934,7 @@ impl AbroMux {
             // get the mouse.
             || cx.has_active_drag();
         for (wi, ws) in self.workspaces.iter().enumerate() {
-            for p in ws.root.panes() {
+            for p in ws.panes() {
                 for (ti, s) in p.tabs.iter().enumerate() {
                     if let Surface::Browser(b) = s {
                         let shown = wi == self.active && ti == p.active && ws.shows(p.id);
@@ -2206,7 +2203,7 @@ impl AbroMux {
                     cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
                         let ws = &mut this.workspaces[this.active];
                         ws.focused_pane = pane_id;
-                        if let Some(p) = ws.root.pane_mut(pane_id) {
+                        if let Some(p) = ws.pane_mut(pane_id) {
                             p.active = ti;
                         }
                         if ev.click_count >= 2 {
@@ -2499,7 +2496,7 @@ impl Render for AbroMux {
         );
         let toasts = Root::render_notification_layer(window, cx);
         let ws = self.ws();
-        let multi = ws.root.panes().len() > 1;
+        let multi = ws.panes().count() > 1;
         // The pane area's corners that are the window's: the top ones sit
         // under the titlebar row when the sidebar is hidden, the left ones
         // next to the sidebar when it's shown. Full screen has none.
@@ -2512,7 +2509,7 @@ impl Render for AbroMux {
         };
         let main = match ws
             .zoom
-            .and_then(|z| ws.root.panes().into_iter().find(|p| p.id == z))
+            .and_then(|z| ws.panes().find(|p| p.id == z))
         {
             Some(p) => self.render_pane(p, multi, corners, cx),
             None => self.render_node(&ws.root, multi, corners, cx),
@@ -2597,7 +2594,7 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &NewTerminal, window, cx| {
                 let cwd = this.focused_cwd(cx);
                 let ws = this.ws().id;
-                let s = this.make_terminal(cwd, ws, window, cx);
+                let s = this.make_terminal(ws, TerminalOpts::cwd(cwd), window, cx);
                 this.add_tab(s, window, cx)
             }))
             .on_action(cx.listener(|this, _: &NewBrowser, window, cx| {
@@ -2616,7 +2613,7 @@ impl Render for AbroMux {
                         .global::<settings::Settings>()
                         .app
                         .keep_workspace_open_when_closing_last_surface;
-                    let last = this.ws().root.panes().iter().map(|p| p.tabs.len()).sum::<usize>() == 1;
+                    let last = this.ws().panes().map(|p| p.tabs.len()).sum::<usize>() == 1;
                     if keep && last {
                         this.request_replace_last_surface(id, window, cx)
                     } else {

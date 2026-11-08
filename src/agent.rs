@@ -174,9 +174,7 @@ impl Kind {
 
     /// The agent's config folder, if it's set up here.
     fn dir(self) -> anyhow::Result<Option<PathBuf>> {
-        let home = std::env::var("HOME")
-            .map(PathBuf::from)
-            .context("HOME isn't set")?;
+        let home = crate::paths::home_var().context("HOME isn't set")?;
         let env = |var: &str| std::env::var_os(var).map(PathBuf::from);
         let dir = match self {
             // Created if missing: Claude Code is the main one.
@@ -190,9 +188,7 @@ impl Kind {
             Kind::Droid => home.join(".factory"),
             Kind::Cursor => home.join(".cursor"),
             Kind::OpenCode => env("OPENCODE_CONFIG_DIR").unwrap_or_else(|| {
-                env("XDG_CONFIG_HOME")
-                    .unwrap_or(home.join(".config"))
-                    .join("opencode")
+                crate::paths::xdg_config().join("opencode")
             }),
             Kind::Pi => env("PI_CODING_AGENT_DIR").unwrap_or(home.join(".pi/agent")),
         };
@@ -524,6 +520,44 @@ fn normalize(kind: Kind, payload: &Value) -> Option<Value> {
         }
     }
     Some(p)
+}
+
+/// What an `agent.report` means for the agent's tab, from its params
+/// (Claude Code's event names, which [`normalize`] maps every agent onto).
+#[derive(Clone, Debug, PartialEq)]
+pub enum AgentEvent {
+    /// A prompt went in, or a tool ran.
+    Working,
+    /// It waits for you; what it said, if anything.
+    NeedsInput(Option<String>),
+    /// It finished; its summary, if any.
+    Stopped(Option<String>),
+    Ended,
+}
+
+impl AgentEvent {
+    /// None for an event that changes nothing: one we don't use, or Claude's
+    /// reminder after a minute idle (its Stop already told you).
+    pub fn of_report(p: &Value) -> Option<AgentEvent> {
+        let s = |k: &str| p.get(k).and_then(Value::as_str);
+        Some(match s("event")? {
+            "UserPromptSubmit" | "PostToolUse" => AgentEvent::Working,
+            // Claude's Notification, Codex's PermissionRequest.
+            event @ ("Notification" | "PermissionRequest") => {
+                let message = s("message").map(String::from);
+                // Older Claude versions send no notification_type.
+                let idle = s("notification_type") == Some("idle_prompt")
+                    || message.as_deref().is_some_and(|m| m.contains("waiting for your input"));
+                if event == "Notification" && idle {
+                    return None;
+                }
+                AgentEvent::NeedsInput(message)
+            }
+            "Stop" => AgentEvent::Stopped(s("summary").map(String::from)),
+            "SessionEnd" => AgentEvent::Ended,
+            _ => return None,
+        })
+    }
 }
 
 /// `agent.report`'s params for a hook payload.
@@ -922,6 +956,21 @@ fn write(path: &Path, text: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decodes_reports() {
+        let ev = |v: Value| AgentEvent::of_report(&v);
+        assert_eq!(ev(json!({ "event": "PostToolUse" })), Some(AgentEvent::Working));
+        assert_eq!(ev(json!({ "event": "Stop", "summary": "Done" })), Some(AgentEvent::Stopped(Some("Done".into()))));
+        assert_eq!(
+            ev(json!({ "event": "PermissionRequest", "message": "Asks to run ls" })),
+            Some(AgentEvent::NeedsInput(Some("Asks to run ls".into())))
+        );
+        assert_eq!(ev(json!({ "event": "Notification", "notification_type": "idle_prompt", "message": "x" })), None);
+        assert_eq!(ev(json!({ "event": "Notification", "message": "Claude is waiting for your input" })), None);
+        assert_eq!(ev(json!({ "event": "SessionStart" })), None);
+        assert_eq!(ev(json!({ "event": "SessionEnd" })), Some(AgentEvent::Ended));
+    }
 
     #[test]
     fn titles() {

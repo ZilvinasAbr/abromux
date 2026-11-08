@@ -72,9 +72,7 @@ impl AbroMux {
     ) -> anyhow::Result<()> {
         let src = self.workspace_of(id).context("no such surface")?;
         if !self.workspaces[dest]
-            .root
             .panes()
-            .iter()
             .any(|p| p.id == pane)
         {
             bail!("pane:{pane} isn't in that workspace");
@@ -137,9 +135,7 @@ impl AbroMux {
     ) -> anyhow::Result<usize> {
         let src = self.workspace_of(id).context("no such surface")?;
         if self.workspaces[src]
-            .root
             .panes()
-            .iter()
             .map(|p| p.tabs.len())
             .sum::<usize>()
             == 1

@@ -193,8 +193,7 @@ impl AbroMux {
     fn surface_title(&self, surface: EntityId, cx: &App) -> Option<String> {
         self.workspaces
             .iter()
-            .flat_map(|w| w.root.panes())
-            .flat_map(|p| p.tabs.iter())
+            .flat_map(|w| w.surfaces())
             .find(|s| s.entity_id() == surface)
             .map(|s| s.title(cx))
     }
@@ -650,12 +649,7 @@ fn banner_title(title: &str) -> &str {
 
 /// "now", "5m", "3h", "2d".
 fn ago(d: Duration) -> String {
-    match d.as_secs() {
-        s if s < 60 => "now".into(),
-        s if s < 3600 => format!("{}m", s / 60),
-        s if s < 86400 => format!("{}h", s / 3600),
-        s => format!("{}d", s / 86400),
-    }
+    abromux_gitlab::time::ago_short(d.as_secs() as i64)
 }
 
 #[cfg(test)]

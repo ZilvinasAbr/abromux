@@ -38,7 +38,7 @@ pub fn command(url: &str) -> Option<String> {
 /// `terminal-browser` on PATH or where its installer puts it; an app
 /// opened from the Dock has only the system's PATH.
 fn find() -> Option<PathBuf> {
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let home = crate::paths::home();
     std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
         .unwrap_or_default()
@@ -82,7 +82,7 @@ fn instance_dirs() -> Vec<PathBuf> {
         .or_else(|| std::env::var_os("XDG_STATE_HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/state")
+            crate::paths::home().join(".local/state")
         });
     let Ok(entries) = std::fs::read_dir(&base) else {
         return vec![];
@@ -195,10 +195,7 @@ const COMMANDS: &[(&str, &str, &[&str])] = &[
 fn shortcuts_file() -> PathBuf {
     let abs = |v: &str| std::env::var_os(v).map(PathBuf::from).filter(|p| p.is_absolute());
     abs("TERMINAL_BROWSER_CONFIG_DIR")
-        .or_else(|| abs("XDG_CONFIG_HOME").map(|d| d.join("terminal-browser")))
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/terminal-browser")
-        })
+        .unwrap_or_else(|| crate::paths::xdg_config().join("terminal-browser"))
         .join("shortcuts.json")
 }
 
