@@ -8,7 +8,7 @@
 #               clean and doesn't touch your live cmux (see the README of the
 #               results). Its socket must allow outside callers
 #               (automation.socketControlMode = "allowAll" in cmux.json).
-#   CMUX_SOCK   that copy's socket (default ~/.local/state/cmux/cmux-$UID.sock)
+#   CMUX_SOCK   that copy's socket (default ~/.local/state/cmux/cmux.sock)
 #   RUNS        startup runs (default 5)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -25,14 +25,25 @@ now() { python3 -c 'import time; print(time.time())'; }
 case $APP in
   abromux)
     BIN=${ABROMUX_BIN:-$PWD/target/release/abromux}
-    export ABROMUX_SOCKET_PATH=${ABROMUX_SOCKET_PATH:-/tmp/abromux-bench.sock}
+    # Run from inside abromux, the shell has ABROMUX_SOCKET_PATH and
+    # ABROMUX_SURFACE_ID of the live app: drop them all, or the CLI below
+    # would drive that app instead of the one being measured.
+    for v in ${!ABROMUX_@}; do unset "$v"; done
+    export ABROMUX_SOCKET_PATH=/tmp/abromux-bench.sock
     export ABROMUX_SESSION_PATH="$OUT/abromux-session.json"
+    # Its own shell holder, not the installed app's (an unbundled binary
+    # would otherwise use the release app's hold.sock).
+    export ABROMUX_HOLD_SOCKET=/tmp/abromux-bench-hold.sock
     cli() { "$BIN" "$@"; }
     # Same window size as a fresh cmux (1000x700) and Ghostty's default
     # font size (13), so both grids match.
     export XDG_CONFIG_HOME="$OUT/xdg"
     mkdir -p "$XDG_CONFIG_HOME/ghostty"
     echo "font-size = 13" > "$XDG_CONFIG_HOME/ghostty/config"
+    # Shells end with the app, as in cmux, so every startup run starts a
+    # fresh shell instead of reattaching a held one.
+    mkdir -p "$XDG_CONFIG_HOME/abromux"
+    echo '{"persistence": "cmux-like"}' > "$XDG_CONFIG_HOME/abromux/config.json"
     launch() {
       cat > "$ABROMUX_SESSION_PATH" <<JSON
 {"version":1,"window":{"x":364,"y":200,"width":1000,"height":700},"active":0,"workspaces":[{"root":{"kind":"pane","tabs":[{"kind":"terminal","cwd":"$HOME"}]}}]}
@@ -42,8 +53,11 @@ JSON
     pid() { pgrep -f "^$BIN\$" | head -1; }
     ;;
   cmux)
-    CMUX_APP=${CMUX_APP:?set CMUX_APP to a cmux.app copy}
-    SOCK=${CMUX_SOCK:-$HOME/.local/state/cmux/cmux-$UID.sock}
+    app=${CMUX_APP:?set CMUX_APP to a cmux.app copy}
+    SOCK=${CMUX_SOCK:-$HOME/.local/state/cmux/cmux.sock}
+    # Same for a shell inside cmux (CMUX_SOCKET_PATH, CMUX_SURFACE_ID, ...).
+    for v in ${!CMUX_@}; do unset "$v"; done
+    CMUX_APP=$app
     export CMUX_QUIET=1
     cli() { /Applications/cmux.app/Contents/Resources/bin/cmux --socket "$SOCK" "$@"; }
     launch() { "$CMUX_APP/Contents/MacOS/cmux" >/dev/null 2>&1 & }
@@ -95,6 +109,8 @@ fi
 
 # ---- 1. startup --------------------------------------------------------
 quit_app
+# pid() matches by binary path, so a second copy would be measured instead.
+if [ -n "$(pid || true)" ]; then echo "another $APP from the same binary is running; quit it first"; exit 1; fi
 say "# $APP"
 for r in $(seq 1 "$RUNS"); do
   t0=$(now)

@@ -1,32 +1,47 @@
 # abromux vs cmux: performance
 
-Measured 2026-10-24 on an Apple M1 Pro with 16 GB of RAM, running macOS 27.0.1. The contenders were abromux (release build, before the rename from its working name) and cmux 0.64.25. Both apps were run by [`scripts/bench.sh`](../scripts/bench.sh) and driven through their CLIs, which use the same command names.
+Measured 2026-11-08 on an Apple M1 Pro with 16 GB of RAM, running macOS 27.0.1. The contenders were abromux 0.22.1 (clean release build of `main`) and cmux 0.65.2.2 (the notarized release, freshly downloaded). Both apps were run by [`scripts/bench.sh`](../scripts/bench.sh) and driven through their CLIs, which use the same command names.
 
 ## Results
 
 | | abromux | cmux | |
 |---|---:|---:|---|
-| Startup: launch → control socket answers | **~240 ms** | ~570 ms | median of 5 runs; first runs 248 / 907 ms |
-| Startup: launch → shell prompt on screen | **~1.04 s** | ~2.22 s | includes shell startup (`zsh -l` / `login` + cmux shell integration) |
-| Memory, idle, 1 terminal | **72 MB** | 201 MB | `footprint` of the main process; shells excluded |
-| Memory per extra terminal | **~0.4 MB** | ~4.0 MB | 10 new workspaces, background ones not visible |
-| Idle CPU, 1 terminal | **0.0 %** | 1.7 % | 30 s average |
-| Idle CPU, 11 terminals | **0.0 %** | 1.7 % | |
-| Throughput: plain ASCII (29.5 MB) | 126 MB/s | **155 MB/s** | median of 3 |
-| Throughput: truecolor SGR on every word (29.9 MB) | **113 MB/s** | 54 MB/s | |
-| Throughput: CJK + emoji (18.7 MB) | 136 MB/s | **153 MB/s** | |
-| App CPU time for the whole throughput run | **2.4 s** | 5.3 s | 9 cats, ~234 MB total |
-| Memory after throughput | **96 MB** | 262 MB | |
+| Startup: launch → control socket answers | **~320 ms** | ~560 ms | median of 5 runs; first runs 393 / 558 ms |
+| Startup: launch → shell prompt on screen | **~400 ms** | ~1.50 s | includes shell startup (`zsh -l` / `login` + cmux shell integration) |
+| Memory, idle, 1 terminal | **99 MB** | 228 MB | `footprint` of the main process; shells excluded |
+| Memory per extra terminal | **~0.7 MB** | (fell 32 MB) | 10 new workspaces, background ones not visible |
+| Idle CPU, 1 terminal | **0.9 %** | 3.1 % | 30 s average |
+| Idle CPU, 11 terminals | **1.0 %** | 3.5 % | |
+| Throughput: plain ASCII (29.5 MB) | 168 MB/s | **203 MB/s** | median of 3 |
+| Throughput: truecolor SGR on every word (29.9 MB) | **168 MB/s** | 56 MB/s | |
+| Throughput: CJK + emoji (18.7 MB) | **188 MB/s** | 185 MB/s | |
+| App CPU time for the whole throughput run | **1.9 s** | 4.9 s | 9 cats, ~234 MB total |
+| Memory after throughput | **144 MB** | 201 MB | |
 
 Overall:
 
-- abromux starts about twice as fast, uses about a third of the memory, and is idle when idle.
-- On throughput the two are close for plain and wide-character text: cmux is about 20% faster.
-- On heavily colored output abromux is about 2× faster and spent less than half the CPU over the whole throughput run.
+- abromux reaches a prompt almost 4× sooner, answers its socket about 1.7× sooner, and uses less than half the memory.
+- On throughput the two are even for wide-character text, and cmux is about 20% faster on plain ASCII.
+- On heavily colored output abromux is 3× faster, and it spent less than half the CPU over the whole throughput run.
+- cmux's footprint *fell* while 10 workspaces were added (228 → 196 MB), so its per-terminal cost couldn't be read off this run.
+
+### Since the last run (2026-10-24: abromux at its initial commit, cmux 0.64.25)
+
+| | abromux then → now | cmux then → now |
+|---|---:|---:|
+| Socket answers | 240 → 320 ms | 570 → 560 ms |
+| Shell prompt | 1.04 s → 400 ms | 2.22 → 1.50 s |
+| Idle memory | 72 → 99 MB | 201 → 228 MB |
+| Idle CPU, 1 terminal | 0.0 → 0.9 % | 1.7 → 3.1 % |
+| Plain / colored / CJK | 126 / 113 / 136 → 168 / 168 / 188 MB/s | 155 / 54 / 153 → 203 / 56 / 185 MB/s |
+
+- abromux got faster at parsing across the board. It got heavier at rest: 27 MB more memory, 80 ms slower to answer its socket, and it no longer idles at 0%. That rest cost hasn't been traced yet. Candidates are the features added since, such as the GitLab panel's background refresh, the browser and Markdown tabs, and agent-named workspaces.
+- cmux is faster to a prompt and on plain and wide text, but costs more memory and idle CPU than before.
 
 ## How it was measured
 
-- **A clean cmux.** I ran a copy of `cmux.app` with its own bundle ID (`com.cmuxterm.app.bench`, ad-hoc signed). It has separate settings, session and socket, so it started with one workspace and left the everyday cmux instance alone. Its socket was opened to outside callers for the run (`automation.socketControlMode = "allowAll"` in `cmux.json`), then the setting was reverted.
+- **A clean cmux.** I ran a copy of `cmux.app`, taken from the release DMG, with its own bundle ID (`com.cmuxterm.app.bench`, ad-hoc signed). It has separate settings, session and socket, so it started with one workspace and left the everyday cmux instance alone. Saved state from earlier bench runs was moved aside first, otherwise the copy restores that session. Its socket was opened to outside callers for the run (`automation.socketControlMode = "allowAll"` in `cmux.json`), then the setting was reverted.
+- **A clean abromux.** The release binary ran with its own control socket, session file, shell holder and config folder. Shells were set to end with the app (`"persistence": "cmux-like"`), as in cmux, so each startup run starts a fresh shell instead of reattaching a held one.
 - **Same conditions for both.**
   - Screen unlocked, display kept awake (`caffeinate -d`).
   - Each app was brought to the front before every measurement (`focus-window`).
@@ -47,16 +62,14 @@ Overall:
   - a full libghostty renderer per surface
 
   These numbers say abromux's core is lean. They don't say abromux would stay this lean with the same features.
-- **abromux idles at 0% partly because it does less.** It has no cursor blink, no polling of git or ports, and no background services.
+- **abromux's low idle CPU is partly because it does less.** It has no cursor blink and no polling of git or ports.
 - **Background terminals aren't rendered in abromux,** so they cost almost nothing. cmux keeps a renderer per surface.
 - **Rendering cost per frame and input latency weren't measured.** Measuring them needs frame timing inside each app, or a camera-based tool like Typometer.
 - **The cmux copy was ad-hoc re-signed.** That shouldn't change performance, but it isn't the notarized build.
 
-## A real abromux weakness found along the way
+## Throttled when hidden (fixed)
 
-abromux parses terminal output on the app's main thread. When its window was covered or the screen was locked, macOS throttled it (App Nap and occlusion). Throughput then dropped to **15–19 MB/s**, about 8× slower, in two separate runs. Terminals in that state also never got laid out: they stayed at the default 80×24.
-
-cmux wasn't measured in that state. Ghostty-based terminals parse on an I/O thread and are generally unaffected. The fix for abromux is to parse off the main thread, or at least opt out of App Nap while output is flowing (`NSProcessInfo beginActivityWithOptions:`).
+The first run found that abromux parsed output about 8× slower (15–19 MB/s) when its window was covered or the screen was locked. macOS was App Napping it, because the parsing happens on the main thread. Since d860f4f, abromux holds an `NSProcessInfo` activity while a terminal prints, so macOS doesn't throttle it. The hidden case wasn't re-measured in this run.
 
 ## Reproducing
 
@@ -65,6 +78,7 @@ cargo build --release
 # abromux
 scripts/bench.sh abromux /tmp/bench
 # cmux: copy the app with its own bundle id first
+# (and move ~/Library/Application Support/cmux/session-com.cmuxterm.app.bench*.json aside)
 ditto /Applications/cmux.app /tmp/cmux-bench.app
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.cmuxterm.app.bench" /tmp/cmux-bench.app/Contents/Info.plist
 codesign --force --deep -s - /tmp/cmux-bench.app
@@ -73,4 +87,4 @@ codesign --force --deep -s - /tmp/cmux-bench.app
 CMUX_APP=/tmp/cmux-bench.app scripts/bench.sh cmux /tmp/bench
 ```
 
-Keep the Mac unlocked and leave it alone while the runs go. Each run takes about 6 minutes.
+Keep the Mac unlocked and leave it alone while the runs go. Each run takes about 6 minutes. It's safe to run from a terminal inside abromux or cmux: the script drops the inherited `ABROMUX_*` / `CMUX_*` variables so it only drives the app it launched. It also refuses to start while another copy of the same binary is running.
