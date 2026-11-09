@@ -624,6 +624,50 @@ impl Client {
         Ok(())
     }
 
+    /// The emoji reactions on each comment of the merge request, by note id
+    /// (only notes with some). REST has them per note only, so one GraphQL
+    /// query a hundred notes. By the project's id, as [`Self::allows_multiple`].
+    pub fn note_awards(&self, project: u64, iid: u64) -> anyhow::Result<std::collections::HashMap<u64, Vec<AwardEmoji>>> {
+        let url = format!("{}/api/graphql", self.host);
+        let mut out = std::collections::HashMap::new();
+        let mut after = String::new();
+        // A thousand comments is plenty; past that, the rest go without.
+        for _ in 0..10 {
+            let q = format!(
+                "{{ projects(ids: [\"gid://gitlab/Project/{project}\"]) {{ nodes {{ mergeRequest(iid: \"{iid}\") {{ \
+                 notes(first: 100{after}) {{ pageInfo {{ hasNextPage endCursor }} \
+                 nodes {{ id awardEmoji {{ nodes {{ name user {{ id username name avatarUrl }} }} }} }} }} }} }} }} }}"
+            );
+            let r = self.transport.send("POST", &url, &self.token, serde_json::json!({ "query": q }).to_string().as_bytes())?;
+            let v: serde_json::Value = decode(&r.body, &url)?;
+            let notes = &v["data"]["projects"]["nodes"][0]["mergeRequest"]["notes"];
+            let nodes = notes["nodes"].as_array().context("no notes in GitLab's answer")?;
+            out.extend(nodes.iter().filter_map(note_awards_of));
+            match notes["pageInfo"]["endCursor"].as_str().filter(|_| notes["pageInfo"]["hasNextPage"].as_bool() == Some(true)) {
+                Some(cursor) => after = format!(", after: {cursor:?}"),
+                None => break,
+            }
+        }
+        Ok(out)
+    }
+
+    /// React to comment `note` with `name`.
+    pub fn note_award(&self, project: u64, iid: u64, note: u64, name: &str) -> anyhow::Result<()> {
+        let path = format!("projects/{project}/merge_requests/{iid}/notes/{note}/award_emoji");
+        let _: serde_json::Value = self.write("POST", &path, serde_json::json!({ "name": name }))?;
+        Ok(())
+    }
+
+    /// Take back user `me`'s `name` on comment `note`. GraphQL doesn't give
+    /// a reaction's id, so this looks it up first.
+    pub fn note_unaward(&self, project: u64, iid: u64, note: u64, name: &str, me: u64) -> anyhow::Result<()> {
+        let path = format!("projects/{project}/merge_requests/{iid}/notes/{note}/award_emoji");
+        let all: Vec<AwardEmoji> = self.get_all(&path)?;
+        let a = all.iter().find(|a| a.name == name && a.user.id == me).context("that reaction is gone already")?;
+        let _: serde_json::Value = self.write("DELETE", &format!("{path}/{}", a.id), serde_json::json!({}))?;
+        Ok(())
+    }
+
     /// Rebase the source branch onto the target, as GitLab's "Rebase source
     /// branch" does. GitLab answers at once and rebases in the background.
     pub fn rebase(&self, project: u64, iid: u64) -> anyhow::Result<()> {
@@ -880,6 +924,30 @@ pub fn parse_mr_url(url: &str) -> Option<(String, String, u64)> {
     (!project.is_empty()).then(|| (format!("{scheme}://{authority}"), project.to_string(), iid))
 }
 
+/// One GraphQL note's reactions, `(note id, them)`, if it has some. Its
+/// ids are global ("gid://gitlab/DiffNote/12"): the number is the REST id.
+fn note_awards_of(n: &serde_json::Value) -> Option<(u64, Vec<AwardEmoji>)> {
+    let gid = |v: &serde_json::Value| v.as_str()?.rsplit('/').next()?.parse::<u64>().ok();
+    let awards: Vec<AwardEmoji> = n["awardEmoji"]["nodes"]
+        .as_array()?
+        .iter()
+        .filter_map(|a| {
+            let u = &a["user"];
+            Some(AwardEmoji {
+                id: 0,
+                name: a["name"].as_str()?.to_string(),
+                user: User {
+                    id: gid(&u["id"])?,
+                    username: u["username"].as_str().unwrap_or_default().to_string(),
+                    name: u["name"].as_str().unwrap_or_default().to_string(),
+                    avatar_url: u["avatarUrl"].as_str().map(str::to_string),
+                },
+            })
+        })
+        .collect();
+    (!awards.is_empty()).then_some((gid(&n["id"])?, awards))
+}
+
 fn decode<T: DeserializeOwned>(body: &[u8], path: &str) -> anyhow::Result<T> {
     serde_json::from_slice(body)
         .with_context(|| format!("unexpected response to {path}: {}", snippet(body)))
@@ -1057,5 +1125,45 @@ mod tests {
         let e = Client::new("http://gl.test", "t", t).current_user().unwrap_err();
         assert!(format!("{e:#}").contains("rejected the token"), "{e:#}");
         assert_eq!(ApiError::status_of(&e), Some(401));
+    }
+
+    /// Answers each GraphQL query by the first page that has no `after`,
+    /// then the next: as GitLab pages a connection.
+    struct Pages(Mutex<Vec<String>>);
+
+    impl Transport for Pages {
+        fn get(&self, url: &str, _: &str) -> anyhow::Result<Response> {
+            bail!("no GET {url}")
+        }
+        fn send(&self, method: &str, url: &str, _: &str, body: &[u8]) -> anyhow::Result<Response> {
+            assert_eq!((method, url), ("POST", "http://gl.test/api/graphql"));
+            let q = String::from_utf8_lossy(body).to_string();
+            self.0.lock().unwrap().push(q.clone());
+            let page = if q.contains("after") {
+                r#"{"data":{"projects":{"nodes":[{"mergeRequest":{"notes":{"pageInfo":{"hasNextPage":false,"endCursor":null},
+                   "nodes":[{"id":"gid://gitlab/DiffNote/7","awardEmoji":{"nodes":[{"name":"eyes","user":{"id":"gid://gitlab/User/3","username":"carol","name":"Carol","avatarUrl":null}}]}}]}}}]}}}"#
+            } else {
+                r#"{"data":{"projects":{"nodes":[{"mergeRequest":{"notes":{"pageInfo":{"hasNextPage":true,"endCursor":"abc"},
+                   "nodes":[{"id":"gid://gitlab/Note/5","awardEmoji":{"nodes":[{"name":"thumbsup","user":{"id":"gid://gitlab/User/2","username":"bob","name":"Bob"}},
+                                                                           {"name":"tada","user":{"id":"gid://gitlab/User/3","username":"carol","name":"Carol"}}]}},
+                            {"id":"gid://gitlab/Note/6","awardEmoji":{"nodes":[]}}]}}}]}}}"#
+            };
+            Ok(ok(page, None))
+        }
+    }
+
+    #[test]
+    fn note_awards_by_note_across_pages() {
+        let t = Arc::new(Pages(Mutex::new(vec![])));
+        let got = Client::new("http://gl.test", "t", t.clone()).note_awards(4, 9).unwrap();
+        let names = |id: u64| got[&id].iter().map(|a| format!("{}:{}", a.user.username, a.name)).collect::<Vec<_>>();
+        assert_eq!(names(5), ["bob:thumbsup", "carol:tada"]);
+        assert_eq!(got[&5][0].user.id, 2);
+        assert_eq!(names(7), ["carol:eyes"], "a diff note, from the second page");
+        assert!(!got.contains_key(&6), "no reactions, no entry");
+        let asked = t.0.lock().unwrap();
+        assert_eq!(asked.len(), 2);
+        assert!(asked[0].contains(r#"gid://gitlab/Project/4"#) && asked[0].contains(r#"iid: \"9\""#));
+        assert!(asked[1].contains(r#"after: \"abc\""#), "{}", asked[1]);
     }
 }

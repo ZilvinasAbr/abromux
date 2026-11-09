@@ -77,6 +77,7 @@ So the list below reads in context:
 - [x] **OSC 9 / 99 / 777 desktop notifications** from terminal programs.
 - [x] **Unread ring on the pane** and lit-up tabs.
 - [x] **Notifications panel**: ⌘I lists pending notifications.
+- [x] **Reorder on notification**: a workspace with a new notification moves to the top. *(`app.reorderOnNotification`, on by default as in cmux; within its group for a grouped workspace; `"agentActivity"` behaves as `"notifications"`)*
 - [x] **Jump to the latest unread**: ⌘⇧U. Also ⌥⌘U to toggle unread, and ⌃⌘U to mark one as oldest and move to the next.
 - [x] **Native macOS notifications**: banners, dock badge, menu-bar item, sounds, and suppression while the app is focused. *(partial: banners only from AbroMux.app; the menu-bar item (`notifications.showInMenuBar`) has the unread list and actions, not cmux's search or task manager)*
 - [x] **CLI**: `notify`, `list-notifications`, `dismiss-notification`, `mark-notification-read`, `open-notification`, `jump-to-unread`, `clear-notifications`.

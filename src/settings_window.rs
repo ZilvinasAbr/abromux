@@ -764,6 +764,13 @@ fn general_page() -> Page {
                         &["app", "keepWorkspaceOpenWhenClosingLastSurface"],
                         |s| s.app.keep_workspace_open_when_closing_last_surface,
                     ),
+                    switch(
+                        "Reorder on notification",
+                        "Move a workspace to the top of the sidebar (or of its group) \
+                         when it gets a notification you aren't looking at.",
+                        &["app", "reorderOnNotification"],
+                        |s| s.app.reorder_on_notification,
+                    ),
                     folder_row(
                         "Workspace folders",
                         "Where ⇧⌘I makes a workspace's own folder.",
