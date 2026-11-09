@@ -66,6 +66,15 @@ fn comment_reply_resolve_approve() {
     c.unaward(p, iid, tada.id).unwrap();
     assert!(c.awards(p, iid).unwrap().is_empty());
 
+    // The same on a comment: GraphQL reads them, by note.
+    c.note_award(p, iid, note.id, "eyes").unwrap();
+    let r = load_review(&c, p, iid).unwrap();
+    let on = &r.note_awards[&note.id];
+    assert!(on.iter().any(|a| a.name == "eyes" && a.user.username == "bob"), "bob's 👀 on the comment: {on:?}");
+    let bob = on.iter().find(|a| a.user.username == "bob").unwrap().user.id;
+    c.note_unaward(p, iid, note.id, "eyes", bob).unwrap();
+    assert!(!load_review(&c, p, iid).unwrap().note_awards.contains_key(&note.id));
+
     // Leave !3 as it was.
     for id in [reply.id, d.notes[0].id, note.id, held_note] {
         let url = format!("http://localhost:8929/api/v4/projects/{p}/merge_requests/{iid}/notes/{id}");

@@ -312,6 +312,16 @@ impl GitLabView {
     ) -> Div {
         let mr_author = self.mr_author_id();
         let body = self.markdown(("note", n.id as usize), &n.body, &n.suggestions, path, window, cx);
+        // GitLab's "Add reaction" first among a note's buttons; a local diff
+        // has no reactions.
+        let react = (self.me.is_some() && !self.is_local() && !n.system && self.review.ready().is_some_and(|r| r.mr.state != "locked"))
+            .then(|| self.add_reaction(crate::mr::AwardOn::Note(n.id), cx));
+        let actions = match (react, actions) {
+            (None, a) => a,
+            (Some(r), None) => Some(div().flex().items_center().ml_1().child(r)),
+            (Some(r), Some(a)) => Some(div().flex().items_center().ml_1().child(r).child(a.ml_0())),
+        };
+        let awards = if self.is_local() { None } else { self.note_awards(n.id, cx) };
         div()
             .flex()
             .gap_2()
@@ -326,7 +336,8 @@ impl GitLabView {
                     .flex_col()
                     .gap_1()
                     .child(self.note_header(&n.author, &n.created_at, mr_author, actions))
-                    .child(body),
+                    .child(body)
+                    .children(awards),
             )
     }
 

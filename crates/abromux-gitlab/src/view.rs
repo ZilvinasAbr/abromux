@@ -94,6 +94,11 @@ pub struct GitLabView {
     pub(crate) show_tree: Option<bool>,
     /// The file browser as a flat list of paths (GitLab's list mode).
     pub(crate) tree_flat: bool,
+    /// The file tree's width, dragged at its right edge (`changes::TREE_W`
+    /// at first, then the last width any tab was dragged to).
+    pub(crate) tree_width: Pixels,
+    /// Dragging the tree's edge: where the drag started and the width then.
+    pub(crate) tree_resize: Option<(Pixels, Pixels)>,
     /// Folders folded in the file tree, by path.
     pub(crate) folded_dirs: HashSet<String>,
     /// The file tree's scroll, and the file it last scrolled to.
@@ -166,7 +171,7 @@ pub struct GitLabView {
     pub(crate) boxes: crate::edit::Boxes,
     pub(crate) busy: Option<crate::edit::Write>,
     /// The Overview's "Add reaction" picker is open.
-    pub(crate) emoji_picker: bool,
+    pub(crate) emoji_picker: Option<crate::mr::AwardOn>,
     pub(crate) write_error: Option<String>,
     pub(crate) replying: Option<String>,
     pub(crate) commenting: Option<crate::edit::LineKey>,
@@ -241,7 +246,7 @@ impl GitLabView {
         let mut v = Self {
             boxes,
             busy: None,
-            emoji_picker: false,
+            emoji_picker: None,
             write_error: None,
             replying: None,
             commenting: None,
@@ -294,6 +299,8 @@ impl GitLabView {
             folded: HashMap::new(),
             show_tree: None,
             tree_flat: false,
+            tree_width: crate::changes::last_tree_width(),
+            tree_resize: None,
             folded_dirs: HashSet::new(),
             tree_scroll: UniformListScrollHandle::new(),
             tree_active: Default::default(),
@@ -1353,6 +1360,8 @@ impl Tab for GitLabView {
                 self.set_single(on, cx);
             }
             "tree_list" => self.tree_flat = args.get("on").and_then(Value::as_bool).unwrap_or(true),
+            // The file tree's width in pixels; without one, the default.
+            "tree_width" => self.set_tree_width(num_arg("width").map_or(crate::changes::TREE_W, |w| px(w as f32))),
             "parallel" => self.set_parallel(args.get("on").and_then(Value::as_bool).unwrap_or(true), cx),
             // The file browser's search, or on the list page the list's filter.
             "search" => {
@@ -1464,10 +1473,15 @@ impl Tab for GitLabView {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);
                 self.set_approved(approve, window, cx);
             }
-            // React with {name} (thumbsup, tada), or take yours back.
-            "award" => self.toggle_award(str_arg("name").context("missing name")?, window, cx),
+            // React with {name} (thumbsup, tada), or take yours back: on the
+            // merge request, or with {note} (its id) on that comment.
+            "award" => {
+                let on = num_arg("note").map_or(crate::mr::AwardOn::Mr, crate::mr::AwardOn::Note);
+                self.toggle_award(on, str_arg("name").context("missing name")?, window, cx)
+            }
             "emoji_picker" => {
-                self.emoji_picker = args.get("open").and_then(Value::as_bool) != Some(false);
+                let on = num_arg("note").map_or(crate::mr::AwardOn::Mr, crate::mr::AwardOn::Note);
+                self.emoji_picker = (args.get("open").and_then(Value::as_bool) != Some(false)).then_some(on);
                 cx.notify();
             }
             // A new thread on a line: {path, new} or {path, old} (a removed line).
@@ -2151,13 +2165,19 @@ impl Render for GitLabView {
                             // to the next up, which macOS sends here even off
                             // the window), as gpui-component's text does.
                             if phase == DispatchPhase::Bubble {
-                                moved.update(cx, |v, cx| v.follow(ev.position, cx)).ok();
+                                moved.update(cx, |v, cx| {
+                                    v.resize_tree(ev.position, cx);
+                                    v.follow(ev.position, cx)
+                                }).ok();
                             }
                         });
                         let up = this.clone();
                         window.on_mouse_event(move |ev: &MouseUpEvent, phase, _, cx| {
                             if phase == DispatchPhase::Bubble && ev.button == MouseButton::Left {
-                                up.update(cx, |v, cx| v.end_selection(cx)).ok();
+                                up.update(cx, |v, cx| {
+                                    v.tree_resize = None;
+                                    v.end_selection(cx)
+                                }).ok();
                             }
                         });
                     },

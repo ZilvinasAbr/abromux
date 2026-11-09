@@ -7,7 +7,7 @@
 //! GitLab has. A failure says why above the overview and keeps what was
 //! typed.
 
-use crate::{api::Client, style::*, types::DiffRefs, view::GitLabView};
+use crate::{api::Client, mr::AwardOn, style::*, types::DiffRefs, view::GitLabView};
 use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputState};
 
@@ -211,23 +211,41 @@ impl GitLabView {
         self.write(Write::Approve, move |c, p, iid| c.approve(p, iid, approve), |_, _, _| {}, window, cx);
     }
 
-    /// GitLab's reaction toggle: take back mine of `name`, or add it.
-    pub(crate) fn toggle_award(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+    /// GitLab's reaction toggle, on the merge request or a comment: take
+    /// back mine of `name`, or add it.
+    pub(crate) fn toggle_award(&mut self, on: AwardOn, name: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(r) = self.review.ready() else { return };
         let me = self.me.as_ref().map(|u| u.id);
-        let mine = r.awards.iter().find(|a| a.name == name && Some(a.user.id) == me).map(|a| a.id);
         let name = name.to_string();
-        self.emoji_picker = false;
-        self.write(
-            Write::Award,
-            move |c, p, iid| match mine {
-                Some(id) => c.unaward(p, iid, id),
-                None => c.award(p, iid, &name),
-            },
-            |_, _, _| {},
-            window,
-            cx,
-        );
+        self.emoji_picker = None;
+        match on {
+            AwardOn::Mr => {
+                let mine = r.awards.iter().find(|a| a.name == name && Some(a.user.id) == me).map(|a| a.id);
+                self.write(
+                    Write::Award,
+                    move |c, p, iid| match mine {
+                        Some(id) => c.unaward(p, iid, id),
+                        None => c.award(p, iid, &name),
+                    },
+                    |_, _, _| {},
+                    window,
+                    cx,
+                );
+            }
+            AwardOn::Note(note) => {
+                let mine = r.note_awards.get(&note).is_some_and(|aw| aw.iter().any(|a| a.name == name && Some(a.user.id) == me));
+                self.write(
+                    Write::Award,
+                    move |c, p, iid| match (mine, me) {
+                        (true, Some(me)) => c.note_unaward(p, iid, note, &name, me),
+                        _ => c.note_award(p, iid, note, &name),
+                    },
+                    |_, _, _| {},
+                    window,
+                    cx,
+                );
+            }
+        }
     }
 
     pub(crate) fn rebase(&mut self, window: &mut Window, cx: &mut Context<Self>) {

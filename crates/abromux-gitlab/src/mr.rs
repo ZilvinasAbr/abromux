@@ -8,7 +8,7 @@ use crate::{
     review::{File, Review},
     style::*,
     time,
-    types::{Discussion, Note, User},
+    types::{AwardEmoji, Discussion, Note, User},
     view::GitLabView,
 };
 use gpui::{prelude::*, *};
@@ -75,26 +75,50 @@ fn pushed(body: &str) -> (Vec<String>, Option<(String, u64)>) {
 
 impl GitLabView {
     /// GitLab's emoji row under the description: 👍 and 👎 always, then
-    /// each other reaction, yours highlighted, a click toggling yours; and
-    /// the "Add reaction" picker.
+    /// each other reaction, and the "Add reaction" picker.
     fn awards(&self, r: &Review, cx: &mut Context<Self>) -> Div {
+        let open = r.mr.state != "locked";
+        // A merge request fetched without the award list still has its votes.
+        let votes = |name: &str| match name {
+            "thumbsup" => r.mr.upvotes as usize,
+            "thumbsdown" => r.mr.downvotes as usize,
+            _ => 0,
+        };
+        let pills = self.award_pills(AwardOn::Mr, &r.awards, &["thumbsup", "thumbsdown"], &votes, open, cx);
+        div().flex().flex_wrap().gap_2().children(pills).when(open, |d| d.child(self.add_reaction(AwardOn::Mr, cx)))
+    }
+
+    /// A comment's reactions, under its text; none, nothing.
+    pub(crate) fn note_awards(&self, note: u64, cx: &mut Context<Self>) -> Option<Div> {
+        let r = self.review.ready()?;
+        let awards = r.note_awards.get(&note).filter(|a| !a.is_empty())?;
+        let open = r.mr.state != "locked" && self.me.is_some();
+        let pills = self.award_pills(AwardOn::Note(note), awards, &[], &|_| 0, open, cx);
+        Some(div().flex().flex_wrap().gap_2().pt_1().children(pills))
+    }
+
+    /// A pill for each emoji in `awards` (after `always`, shown even at 0):
+    /// the emoji and how many, yours highlighted, a click toggling yours.
+    fn award_pills(
+        &self,
+        on: AwardOn,
+        awards: &[AwardEmoji],
+        always: &[&'static str],
+        fallback: &dyn Fn(&str) -> usize,
+        open: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<Stateful<Div>> {
         let me = self.me.as_ref().map(|u| u.id);
-        let mut names: Vec<&str> = vec!["thumbsup", "thumbsdown"];
-        for a in &r.awards {
+        let mut names: Vec<&str> = always.to_vec();
+        for a in awards {
             if !names.contains(&a.name.as_str()) {
                 names.push(&a.name);
             }
         }
-        let open = r.mr.state != "locked";
         let pill = |name: &str, cx: &mut Context<Self>| {
-            let who: Vec<&str> = r.awards.iter().filter(|a| a.name == name).map(|a| a.user.name.as_str()).collect();
-            // A merge request fetched without the award list still has its votes.
-            let n = match name {
-                "thumbsup" if who.is_empty() => r.mr.upvotes as usize,
-                "thumbsdown" if who.is_empty() => r.mr.downvotes as usize,
-                _ => who.len(),
-            };
-            let mine = r.awards.iter().any(|a| a.name == name && Some(a.user.id) == me);
+            let who: Vec<&str> = awards.iter().filter(|a| a.name == name).map(|a| a.user.name.as_str()).collect();
+            let n = if who.is_empty() { fallback(name) } else { who.len() };
+            let mine = awards.iter().any(|a| a.name == name && Some(a.user.id) == me);
             let tip = match who.len() {
                 0 => String::new(),
                 1 => format!("{} reacted with :{name}:", who[0]),
@@ -103,11 +127,11 @@ impl GitLabView {
             let emoji = crate::emoji::of(name).map_or_else(|| format!(":{name}:"), str::to_string);
             let name = name.to_string();
             div()
-                .id(SharedString::from(format!("gl-award-{name}")))
+                .id(SharedString::from(format!("gl-award-{}{name}", on.key())))
                 .flex()
                 .items_center()
                 .gap_2()
-                .h(px(32.))
+                .h(px(if on == AwardOn::Mr { 32. } else { 28. }))
                 .px_3()
                 .rounded(px(8.))
                 .border_1()
@@ -124,13 +148,19 @@ impl GitLabView {
                 .child(emoji)
                 .child(n.to_string())
                 .when(!tip.is_empty(), |d| d.tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx)))
-                .when(open, |d| d.on_click(cx.listener(move |v, _, window, cx| v.toggle_award(&name, window, cx))))
+                .when(open, |d| d.on_click(cx.listener(move |v, _, window, cx| v.toggle_award(on, &name, window, cx))))
         };
-        let pills: Vec<_> = names.iter().map(|n| pill(n, cx)).collect();
-        let picker = self.emoji_picker.then(|| {
+        names.iter().map(|n| pill(n, cx)).collect()
+    }
+
+    /// GitLab's "Add reaction" button, and its picker while open. On a
+    /// comment it sits at the header's right, so the picker opens leftward.
+    pub(crate) fn add_reaction(&self, on: AwardOn, cx: &mut Context<Self>) -> Div {
+        let note = on != AwardOn::Mr;
+        let picker = (self.emoji_picker == Some(on)).then(|| {
             let choice = |(name, emoji): (&'static str, &'static str), cx: &mut Context<Self>| {
                 div()
-                    .id(SharedString::from(format!("gl-pick-{name}")))
+                    .id(SharedString::from(format!("gl-pick-{}{name}", on.key())))
                     .size(px(32.))
                     .flex()
                     .items_center()
@@ -140,15 +170,15 @@ impl GitLabView {
                     .cursor_pointer()
                     .hover(|s| s.bg(c(RAISED)))
                     .child(emoji)
-                    .on_click(cx.listener(move |v, _, window, cx| v.toggle_award(name, window, cx)))
+                    .on_click(cx.listener(move |v, _, window, cx| v.toggle_award(on, name, window, cx)))
             };
             let choices: Vec<_> = crate::emoji::picks().map(|p| choice(p, cx)).collect();
             deferred(
                 div()
-                    .id("gl-emoji-picker")
+                    .id(SharedString::from(format!("gl-emoji-picker{}", on.key())))
                     .absolute()
-                    .top(px(36.))
-                    .left_0()
+                    .top(px(if note { 32. } else { 36. }))
+                    .map(|d| if note { d.right_0() } else { d.left_0() })
                     .w(px(8. * 32. + 16. + 2.))
                     .p_2()
                     .flex()
@@ -160,35 +190,52 @@ impl GitLabView {
                     .shadow_lg()
                     .occlude()
                     .on_mouse_down_out(cx.listener(|v, _, _, cx| {
-                        v.emoji_picker = false;
+                        v.emoji_picker = None;
                         cx.notify();
                     }))
                     .children(choices),
             )
             .with_priority(1)
         });
-        let add = div()
-            .relative()
-            .child(
-                div()
-                    .id("gl-add-reaction")
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(32.))
-                    .rounded(px(8.))
-                    .bg(ca(0x89888d66))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(ca(0x89888d99)))
-                    .child(icon("smile-plus", 16., c(TEXT)))
-                    .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("Add reaction").build(window, cx))
-                    .on_click(cx.listener(|v, _, _, cx| {
-                        v.emoji_picker = !v.emoji_picker;
-                        cx.notify();
-                    })),
-            )
-            .children(picker);
-        div().flex().flex_wrap().gap_2().children(pills).when(open, |d| d.child(add))
+        let button = div()
+            .id(SharedString::from(format!("gl-add-reaction{}", on.key())))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(if note { 6. } else { 8. }))
+            .cursor_pointer()
+            .hover(|s| s.bg(ca(0x89888d99)))
+            .map(|d| {
+                if note {
+                    d.size(px(28.)).child(icon("smile-plus", 16., c(MUTED)))
+                } else {
+                    d.size(px(32.)).bg(ca(0x89888d66)).child(icon("smile-plus", 16., c(TEXT)))
+                }
+            })
+            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("Add reaction").build(window, cx))
+            .on_click(cx.listener(move |v, _, _, cx| {
+                v.emoji_picker = if v.emoji_picker == Some(on) { None } else { Some(on) };
+                cx.notify();
+            }));
+        div().relative().child(button).children(picker)
+    }
+}
+
+/// What a reaction is on: the merge request, or one of its comments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AwardOn {
+    Mr,
+    Note(u64),
+}
+
+impl AwardOn {
+    /// Its part of an element id: nothing for the merge request's (so those
+    /// stay as they were), `note-12-` for a comment's.
+    fn key(self) -> String {
+        match self {
+            AwardOn::Mr => String::new(),
+            AwardOn::Note(id) => format!("note-{id}-"),
+        }
     }
 }
 

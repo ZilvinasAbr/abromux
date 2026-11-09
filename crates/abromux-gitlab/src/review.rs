@@ -42,6 +42,9 @@ pub struct Review {
     pub milestones: Vec<Milestone>,
     /// Emoji reactions on the merge request.
     pub awards: Vec<AwardEmoji>,
+    /// Emoji reactions on comments, by note id (only GraphQL tells; the
+    /// reactions' own ids aren't known).
+    pub note_awards: std::collections::HashMap<u64, Vec<AwardEmoji>>,
     /// The merge request's pipelines, newest first, for each commit's status.
     pub pipelines: Vec<Pipeline>,
     /// Merged: the pipeline on the merge (or squash) commit.
@@ -199,6 +202,7 @@ impl Review {
             labels: vec![],
             milestones: vec![],
             awards: vec![],
+            note_awards: Default::default(),
             pipelines: vec![],
             merge_pipeline: None,
             review_states: Default::default(),

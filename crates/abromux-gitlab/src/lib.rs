@@ -281,8 +281,9 @@ pub fn load_review(c: &api::Client, project: u64, iid: u64) -> anyhow::Result<re
     // GraphQL (several reviewers?) beside it.
     let mrp = |s: &str| format!("projects/{project}/merge_requests/{iid}{s}");
     let pp = |s: &str| format!("projects/{project}/{s}");
-    let multiple = std::thread::scope(|s| {
+    let (multiple, note_awards) = std::thread::scope(|s| {
         let multiple = s.spawn(|| c.allows_multiple(project, iid));
+        let note_awards = s.spawn(|| c.note_awards(project, iid));
         c.prefetch([
         mrp("?include_diverged_commits_count=true"),
         first_page(&mrp("/diffs")),
@@ -302,10 +303,13 @@ pub fn load_review(c: &api::Client, project: u64, iid: u64) -> anyhow::Result<re
         first_page(&mrp("/resource_label_events")),
         first_page(&mrp("/resource_milestone_events")),
         ]);
-        multiple.join().ok().and_then(Result::ok)
+        (multiple.join().ok().and_then(Result::ok), note_awards.join().ok().and_then(Result::ok))
     });
     lap("batch");
-    let r = load_prefetched(c, project, iid, multiple, &lap);
+    let r = load_prefetched(c, project, iid, multiple, &lap).map(|mut r| {
+        r.note_awards = note_awards.unwrap_or_default();
+        r
+    });
     lap("done");
     c.forget_prefetched();
     r

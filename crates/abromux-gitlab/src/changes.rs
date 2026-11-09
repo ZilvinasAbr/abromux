@@ -15,6 +15,30 @@ use crate::{
 };
 use gpui::{prelude::*, *};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// The file tree's width until its edge is dragged, as GitLab's.
+pub const TREE_W: Pixels = px(320.);
+/// How narrow the tree can get, and how much room it leaves the diff.
+const TREE_MIN: f32 = 200.;
+const DIFF_MIN: f32 = 400.;
+/// The width the tree was last dragged to, in any tab, for the next tab
+/// opened (0: never dragged).
+static LAST_TREE_W: AtomicU32 = AtomicU32::new(0);
+
+pub fn last_tree_width() -> Pixels {
+    match LAST_TREE_W.load(Ordering::Relaxed) {
+        0 => TREE_W,
+        w => px(f32::from_bits(w)),
+    }
+}
+
+/// `w` kept between the tree's least width and what leaves the diff room
+/// in a tab `tab` wide.
+fn clamp_tree_width(w: Pixels, tab: Pixels) -> Pixels {
+    let max = (f32::from(tab) - DIFF_MIN).max(TREE_MIN);
+    px(f32::from(w).clamp(TREE_MIN, max))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Row {
@@ -423,7 +447,7 @@ impl GitLabView {
                     .flex_1()
                     .min_h(px(0.))
                     .flex()
-                    .when(self.tree_shown(), |d| d.child(self.file_tree(r, cx)))
+                    .when(self.tree_shown(), |d| d.child(self.file_tree(r, cx)).child(self.tree_edge(cx)))
                     .child(
                         div()
                             .flex_1()
@@ -852,6 +876,48 @@ impl GitLabView {
             .child(button("gl-tree-tree", "tree", false, cx))
     }
 
+    pub(crate) fn set_tree_width(&mut self, w: Pixels) {
+        self.tree_width = clamp_tree_width(w, self.width.get());
+        LAST_TREE_W.store(f32::from(self.tree_width).to_bits(), Ordering::Relaxed);
+    }
+
+    /// While the tree's edge is dragged: its width follows the pointer.
+    pub(crate) fn resize_tree(&mut self, p: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some((x0, w0)) = self.tree_resize else { return };
+        self.set_tree_width(w0 + (p.x - x0));
+        cx.notify();
+    }
+
+    /// The grab area on the tree's right edge: drag to resize, double-click
+    /// for the default width.
+    fn tree_edge(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let dragging = self.tree_resize.is_some();
+        div().relative().h_full().w(px(1.)).flex_none().when(dragging, |d| d.bg(c(LINK))).child(
+            div()
+                .id("gl-tree-edge")
+                .absolute()
+                .top_0()
+                .left(px(-3.))
+                .w(px(7.))
+                .h_full()
+                .cursor_col_resize()
+                .hover(|s| s.bg(ca(0x428fdc66)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|v, ev: &MouseDownEvent, _, cx| {
+                        if ev.click_count >= 2 {
+                            v.tree_resize = None;
+                            v.set_tree_width(TREE_W);
+                        } else {
+                            v.tree_resize = Some((ev.position.x, v.tree_width));
+                        }
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                ),
+        )
+    }
+
     fn file_tree(&self, r: &Review, cx: &mut Context<Self>) -> Div {
         let active = self.current_file();
         let query = self.tree_search.read(cx).value().to_string();
@@ -879,7 +945,8 @@ impl GitLabView {
             }
         }
         div()
-            .w(px(320.))
+            // A narrower tab than when it was dragged still leaves the diff room.
+            .w(clamp_tree_width(self.tree_width, self.width.get()))
             .flex_none()
             .h_full()
             .flex()
@@ -2076,7 +2143,16 @@ fn tree_guides(depth: usize) -> impl Iterator<Item = Div> {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: gpui's `test` macro would shadow `#[test]`.
-    use super::{Row, Shape, TreeItem, rows, tree, tree_folded};
+    use super::{Row, Shape, TreeItem, clamp_tree_width, rows, tree, tree_folded};
+    use gpui::px;
+
+    #[test]
+    fn tree_width_leaves_the_diff_room() {
+        assert_eq!(clamp_tree_width(px(500.), px(1400.)), px(500.));
+        assert_eq!(clamp_tree_width(px(50.), px(1400.)), px(200.), "not narrower than 200");
+        assert_eq!(clamp_tree_width(px(1300.), px(1400.)), px(1000.), "400 left for the diff");
+        assert_eq!(clamp_tree_width(px(500.), px(500.)), px(200.), "a narrow tab: the least");
+    }
     use crate::{review::Review, types::*};
 
     fn review() -> Review {

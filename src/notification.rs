@@ -99,7 +99,8 @@ impl AbroMux {
             .into_iter()
             .filter(|h| h.enabled)
             .collect();
-        if !bell && !hooks.is_empty() {
+        let hooked = !bell && !hooks.is_empty();
+        if hooked {
             self.run_hooks(id, surface, &title, &body, viewing, hooks, window, cx);
         } else if !bell && !window.is_window_active() {
             banner::post(id, banner_title(&title), &body, true);
@@ -115,9 +116,28 @@ impl AbroMux {
         });
         let excess = self.notifications.len().saturating_sub(KEEP);
         self.notifications.drain(..excess);
+        // With hooks, they decide first whether it stays unread.
+        if !viewing && !hooked {
+            self.lift_notified(surface, cx);
+        }
         self.refresh_unread(cx);
         cx.notify();
         Some(id)
+    }
+
+    /// `app.reorderOnNotification`: the workspace of `surface`, which just
+    /// got an unread notification, to the top of the sidebar (of its group,
+    /// for one in a group), as cmux does.
+    fn lift_notified(&mut self, surface: EntityId, cx: &mut Context<Self>) {
+        let on = cx
+            .try_global::<crate::settings::Settings>()
+            .is_none_or(|s| s.app.reorder_on_notification);
+        if let Some(i) = on
+            .then(|| self.workspaces.iter().position(|w| w.contains(surface)))
+            .flatten()
+        {
+            self.workspace_to_top(i, cx);
+        }
     }
 
     /// Pass notification `id` through `notifications.hooks` off the main
@@ -184,6 +204,11 @@ impl AbroMux {
         if !out.effects.mark_unread {
             n.read = true;
         }
+        if !n.read {
+            let surface = n.surface;
+            self.lift_notified(surface, cx);
+        }
+        let n = &self.notifications[i];
         if out.effects.desktop && !window.is_window_active() {
             banner::post(id, banner_title(&n.title), &n.body, out.effects.sound);
         }

@@ -206,6 +206,30 @@ pub struct AppSettings {
     /// ⌘W on a workspace's last tab opens a fresh terminal in its place
     /// instead of closing the workspace.
     pub keep_workspace_open_when_closing_last_surface: bool,
+    /// Move a workspace to the top when it gets a notification you aren't
+    /// looking at: cmux's `true`/`"notifications"`, or `false`/`"off"`.
+    /// cmux's `"agentActivity"` is taken as `"notifications"`.
+    #[serde(deserialize_with = "reorder")]
+    pub reorder_on_notification: bool,
+}
+
+fn reorder<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum V {
+        Flag(bool),
+        Mode(String),
+    }
+    match V::deserialize(d)? {
+        V::Flag(b) => Ok(b),
+        V::Mode(m) => match m.as_str() {
+            "off" => Ok(false),
+            "notifications" | "agentActivity" => Ok(true),
+            other => Err(serde::de::Error::custom(format!(
+                "reorderOnNotification: expected true, false, \"off\", \"notifications\" or \"agentActivity\", got \"{other}\""
+            ))),
+        },
+    }
 }
 
 impl Default for AppSettings {
@@ -216,6 +240,7 @@ impl Default for AppSettings {
             automatically_check_for_updates: true,
             workspace_folders_directory: None,
             keep_workspace_open_when_closing_last_surface: false,
+            reorder_on_notification: true,
         }
     }
 }
@@ -1211,6 +1236,7 @@ mod tests {
         assert!(!s.app.workspace_inherit_working_directory);
         assert!(s.app.keep_workspace_open_when_closing_last_surface);
         assert!(!AppSettings::default().keep_workspace_open_when_closing_last_surface);
+        assert!(AppSettings::default().reorder_on_notification, "on, as in cmux");
         assert_eq!(s.app.new_workspace_placement, Placement::AfterCurrent);
         assert_eq!(s.sidebar.font_size, 14.);
         assert!(s.sidebar.hide_all_details && s.sidebar.show_log);
@@ -1238,6 +1264,13 @@ mod tests {
             err(r#"{"workspaceColors": {"indicatorStyle": "wash"}}"#).contains("unknown variant")
         );
         assert!(err(r#"{"workspaceColors": {"colors": {"X": "blue"}}}"#).contains("isn't #rrggbb"));
+        // cmux takes a flag or a mode.
+        let reorder = |v: &str| parse(&format!(r#"{{"app": {{"reorderOnNotification": {v}}}}}"#)).map(|s| s.app.reorder_on_notification);
+        assert!(!reorder("false").unwrap());
+        assert!(!reorder(r#""off""#).unwrap());
+        assert!(reorder(r#""notifications""#).unwrap());
+        assert!(reorder(r#""agentActivity""#).unwrap());
+        assert!(reorder(r#""sometimes""#).is_err());
     }
 
     #[test]
