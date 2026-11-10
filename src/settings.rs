@@ -94,6 +94,12 @@ pub struct JiraSettings {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct GitlabSettings {
+    /// GitLab in abromux at all: its tabs for merge request links, the
+    /// merge requests panel and its background cache, and the workspaces'
+    /// merge requests in the sidebar. Off: merge request links are web
+    /// pages like any other, and nothing asks GitLab anything. Local diffs
+    /// (`abromux diff`) work either way.
+    pub enabled: bool,
     /// The GitLab the panel and cache use, e.g. `gitlab.example.com`. None:
     /// the one signed in to in a GitLab tab. Its token is the tab's (the
     /// Keychain). Workspace checkouts whose remote is elsewhere are left out.
@@ -130,6 +136,7 @@ pub struct GitlabSettings {
 impl Default for GitlabSettings {
     fn default() -> Self {
         Self {
+            enabled: true,
             host: None,
             include_review_requests: true,
             include_assigned: false,

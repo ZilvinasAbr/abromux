@@ -77,6 +77,7 @@ Clean up what you started when you're done with it: `abromux close-surface --sur
 
 ```bash
 abromux diff main...my-branch       # also X..Y, X (X to the working tree), or nothing (uncommitted changes)
+abromux diff --since-fork           # the branch's commits and uncommitted work, since the default branch
 # OK surface:9 3f2a1c0b7d4e  main...my-branch in /path/to/repo  (comments start `claude`)
 ```
 

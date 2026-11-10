@@ -12,7 +12,7 @@ impl Global for Shell {}
 /// Answer plugins' requests (`abromux_plugin::Host`) with `view`.
 pub fn set_host(view: WeakEntity<crate::AbroMux>, cx: &mut App) {
     cx.set_global(Shell(view));
-    cx.set_global(abromux_plugin::Host { open_url, run_terminal });
+    cx.set_global(abromux_plugin::Host { open_url, run_terminal, jira });
 }
 
 /// A plugin's command in a terminal (a local diff's agents): deferred, as
@@ -28,9 +28,20 @@ fn run_terminal(run: abromux_plugin::Run, window: &mut Window, cx: &mut App) {
     });
 }
 
-/// The plugin that shows `url` itself, if one does.
-pub fn claiming(url: &str) -> Option<&'static Plugin> {
-    all().iter().find(|p| (p.claims)(url))
+/// The Jira a plugin's ticket keys link to (`links::jira_base`).
+fn jira(cx: &App) -> Option<String> {
+    let view = cx.try_global::<Shell>().and_then(|s| s.0.upgrade())?;
+    view.read(cx).jira_base(cx)
+}
+
+/// Plugin `id` is in use: GitLab's can be turned off (`gitlab.enabled`).
+pub fn enabled(id: &str, cx: &App) -> bool {
+    id != "gitlab" || cx.global::<crate::settings::Settings>().gitlab.enabled
+}
+
+/// The plugin that shows `url` itself, if one that's in use does.
+pub fn claiming(url: &str, cx: &App) -> Option<&'static Plugin> {
+    all().iter().find(|p| enabled(p.id, cx) && (p.claims)(url))
 }
 
 /// A plugin's link: in a browser beside the focused tab, as a terminal's

@@ -28,11 +28,17 @@ impl AbroMux {
         if ws.custom_name.is_some() || !(on || ws.home.is_some()) {
             return;
         }
-        let (id, titled) = (ws.id, ws.auto_title.is_some());
+        // Still on the name its folder was made with: nothing has named it yet.
+        let made_up = ws
+            .home
+            .as_deref()
+            .and_then(|h| h.file_name())
+            .is_some_and(|f| ws.auto_title.as_deref() == f.to_str());
+        let (id, titled) = (ws.id, ws.auto_title.is_some() && !made_up);
         let naming = self.naming.entry(id).or_default();
         // "yes", "go on": nothing new to name it from, once it has a name.
         let short = prompt.split_whitespace().count() < 4;
-        if naming.failed || (titled && !naming.prompts.is_empty() && short) {
+        if naming.gave_up() || (titled && !naming.prompts.is_empty() && short) {
             return;
         }
         naming.add(prompt);
@@ -67,11 +73,15 @@ impl AbroMux {
                 };
                 naming.running = false;
                 let Some(t) = title else {
-                    // A CLI that fails isn't run again on every prompt.
-                    naming.failed = !naming.titled;
+                    // A CLI that failed (a timeout, a rate limit, not signed
+                    // in) is tried again on a later prompt, a few times,
+                    // then only now and then.
+                    naming.failures += 1;
+                    naming.failed_at = Some(std::time::Instant::now());
                     return;
                 };
                 naming.titled = true;
+                naming.failures = 0;
                 let again = naming.again;
                 let Some(i) = this.ws_index(id) else {
                     this.naming.remove(&id);
@@ -106,11 +116,22 @@ pub struct Naming {
     again: bool,
     /// It has named the workspace (so its name isn't the made-up one).
     titled: bool,
-    /// Its first try failed: no more tries until the name is cleared.
-    failed: bool,
+    /// Tries in a row that failed, and when the last one did.
+    failures: u32,
+    failed_at: Option<std::time::Instant>,
 }
 
+/// After this many failed tries in a row, the next one waits `RETRY_AFTER`.
+const TRIES: u32 = 3;
+const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(600);
+
 impl Naming {
+    /// Its tries keep failing: no more for a while (a CLI that isn't
+    /// installed isn't run on every prompt).
+    fn gave_up(&self) -> bool {
+        self.failures >= TRIES && self.failed_at.is_some_and(|t| t.elapsed() < RETRY_AFTER)
+    }
+
     fn add(&mut self, prompt: String) {
         self.prompts.push(prompt);
         let mut total = 0;
@@ -145,6 +166,20 @@ mod tests {
         // One prompt is kept even when it's too long alone.
         n.add("y".repeat(crate::agent::PROMPT_CHARS + 5));
         assert_eq!(n.prompts.len(), 1);
+    }
+
+    #[test]
+    fn a_failed_try_is_tried_again_a_few_times() {
+        let mut n = Naming::default();
+        assert!(!n.gave_up());
+        n.failures = TRIES - 1;
+        n.failed_at = Some(std::time::Instant::now());
+        assert!(!n.gave_up(), "one failure doesn't stop the naming");
+        n.failures = TRIES;
+        assert!(n.gave_up());
+        // Later, it gets another go.
+        n.failed_at = std::time::Instant::now().checked_sub(RETRY_AFTER);
+        assert!(!n.gave_up());
     }
 
 }

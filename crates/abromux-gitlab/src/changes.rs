@@ -14,11 +14,13 @@ use crate::{
     view::{Failure, GitLabView, Load},
 };
 use gpui::{prelude::*, *};
+#[allow(unused_imports)]
+use crate::style::px;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// The file tree's width until its edge is dragged, as GitLab's.
-pub const TREE_W: Pixels = px(320.);
+pub const TREE_W: Pixels = gpui::px(320.);
 /// How narrow the tree can get, and how much room it leaves the diff.
 const TREE_MIN: f32 = 200.;
 const DIFF_MIN: f32 = 400.;
@@ -29,15 +31,16 @@ static LAST_TREE_W: AtomicU32 = AtomicU32::new(0);
 pub fn last_tree_width() -> Pixels {
     match LAST_TREE_W.load(Ordering::Relaxed) {
         0 => TREE_W,
-        w => px(f32::from_bits(w)),
+        w => gpui::px(f32::from_bits(w)),
     }
 }
 
 /// `w` kept between the tree's least width and what leaves the diff room
-/// in a tab `tab` wide.
+/// in a tab `tab` wide. Tree widths are at GitLab's size, before the tab's
+/// zoom; `tab` is as measured.
 fn clamp_tree_width(w: Pixels, tab: Pixels) -> Pixels {
-    let max = (f32::from(tab) - DIFF_MIN).max(TREE_MIN);
-    px(f32::from(w).clamp(TREE_MIN, max))
+    let max = (f32::from(tab) / zoom() - DIFF_MIN).max(TREE_MIN);
+    gpui::px(f32::from(w).clamp(TREE_MIN, max))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -884,7 +887,7 @@ impl GitLabView {
     /// While the tree's edge is dragged: its width follows the pointer.
     pub(crate) fn resize_tree(&mut self, p: Point<Pixels>, cx: &mut Context<Self>) {
         let Some((x0, w0)) = self.tree_resize else { return };
-        self.set_tree_width(w0 + (p.x - x0));
+        self.set_tree_width(w0 + (p.x - x0) / zoom());
         cx.notify();
     }
 
@@ -946,7 +949,7 @@ impl GitLabView {
         }
         div()
             // A narrower tab than when it was dragged still leaves the diff room.
-            .w(clamp_tree_width(self.tree_width, self.width.get()))
+            .w(clamp_tree_width(self.tree_width, self.width.get()) * zoom())
             .flex_none()
             .h_full()
             .flex()

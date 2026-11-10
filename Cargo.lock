@@ -37,6 +37,8 @@ dependencies = [
  "gpui",
  "gpui-component",
  "image",
+ "markdown",
+ "regex",
  "serde",
  "serde_json",
  "similar",

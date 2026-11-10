@@ -62,10 +62,12 @@ Commands:
   list-pane-surfaces [--workspace <ref>] [--pane <ref>]
   new-surface [--type <terminal|browser>] [--pane <ref>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>]
   gitlab [<merge request URL>] [--pane <ref>] [--focus <true|false>]   (a GitLab review tab; no URL: the list)
-  diff [<X..Y|X...Y|X>] [--cwd <dir>] [--title <text>] [--agent <command>] [--send-here | --send-to <surface>]
-       [--direction <dir> | --pane <ref>] [--focus <true|false>]
+  diff [<X..Y|X...Y|X> | --merge-base <X> | --since-fork] [--cwd <dir>] [--title <text>] [--agent <command>]
+       [--send-here | --send-to <surface>] [--direction <dir> | --pane <ref>] [--focus <true|false>]
                                                              (any git diff in the GitLab tab, beside this terminal;
-                                                             no range: uncommitted changes, X: X to the working tree.
+                                                             no range: uncommitted changes, X: X to the working tree,
+                                                             --merge-base X: the working tree against where it forked
+                                                             from X, --since-fork: that for the default branch.
                                                              Each comment starts --agent (default claude, or
                                                              $ABROMUX_DIFF_AGENT) in a terminal beside it, or with
                                                              --send-here/--send-to goes to that agent instead)
@@ -203,6 +205,7 @@ const SWITCHES: &[&str] = &[
     "all-read",
     "selection",
     "signal",
+    "since-fork",
     "clear",
     "secure",
     "http-only",
@@ -346,10 +349,16 @@ fn diff_cmd(mut pos: Vec<String>, opts: Map<String, Value>, as_json: bool) -> Re
         _ => {}
     }
     // Open one: the range, from here (or --cwd).
-    let spec = if pos.is_empty() { String::new() } else { pos.remove(0) };
     let cwd = match text("cwd", &opts) {
         Some(c) => std::path::PathBuf::from(c),
         None => std::env::current_dir().map_err(|e| e.to_string())?,
+    };
+    // `--merge-base X`, as git diff's; `--since-fork`: from the default branch.
+    let spec = match (text("merge_base", &opts), opts.contains_key("since_fork")) {
+        (Some(base), _) => format!("--merge-base {base}"),
+        (None, true) => local::work_spec(&cwd),
+        (None, false) if pos.is_empty() => String::new(),
+        (None, false) => pos.remove(0),
     };
     let caller = opts.get("caller").cloned();
     let send_to = match (opts.contains_key("send_here"), text("send_to", &opts)) {

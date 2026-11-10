@@ -13,6 +13,8 @@ use crate::{
     view::{Failure, GitLabView, Load},
 };
 use gpui::{prelude::*, *};
+#[allow(unused_imports)]
+use crate::style::px;
 use gpui_component::input::{Input, InputEvent, InputState};
 
 /// The search over the tab, while it's open.

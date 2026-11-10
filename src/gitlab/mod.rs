@@ -306,6 +306,10 @@ fn spawn_lane(lane: Lane, mut wake: mpsc::UnboundedReceiver<()>, cx: &mut App) {
             let job = cx
                 .update(|cx| {
                     let gs = settings(cx).clone();
+                    // Turned off: nothing is asked of GitLab.
+                    if !gs.enabled {
+                        return None;
+                    }
                     store(cx).update(cx, |s, _| {
                         let snap = s.snap()?;
                         s.next_job(lane, &gs, Instant::now()).map(|j| (j, snap))
@@ -373,6 +377,10 @@ impl Store {
     /// Look up the host and token again, now and then: signing in in a tab,
     /// or `gitlab.host` changing, starts (or switches) the cache.
     fn look_up_who(&mut self, cx: &mut Context<Self>) {
+        // Turned off: the Keychain isn't asked either.
+        if !settings(cx).enabled {
+            return;
+        }
         let setting = settings(cx).host.clone();
         let wanted = setting.as_deref().map(base_url).map(|h| cache::host_key(&h));
         let switched = wanted.as_ref().is_some_and(|h| *h != self.host);
@@ -930,6 +938,9 @@ impl Store {
     /// once per `mineSeconds`.
     pub fn set_workspaces(&mut self, places: HashMap<usize, Vec<Place>>, cx: &mut Context<Self>) {
         let s = settings(cx).clone();
+        if !s.enabled {
+            return;
+        }
         let stale = self
             .found_at
             .is_none_or(|t| t.elapsed() >= Duration::from_secs(s.mine_seconds.max(15) as u64));

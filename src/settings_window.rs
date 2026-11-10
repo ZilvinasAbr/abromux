@@ -1116,6 +1116,18 @@ fn gitlab_page(fields: &[(Key, Entity<InputState>)]) -> Page {
         ),
         groups: vec![
             group(
+                "GitLab",
+                [switch(
+                    "Use GitLab",
+                    "Merge request links open in GitLab tabs, the merge requests panel and \
+                     its background checks run, and workspaces list their merge requests. \
+                     Off: those links are web pages like any other and nothing asks GitLab \
+                     anything. Local diffs (abromux diff) work either way.",
+                    &["gitlab", "enabled"],
+                    |s| s.gitlab.enabled,
+                )],
+            ),
+            group(
                 "Connection",
                 [
                     text_row(

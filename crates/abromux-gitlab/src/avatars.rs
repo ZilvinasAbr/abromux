@@ -4,6 +4,8 @@
 
 use crate::{style::*, types::User};
 use gpui::{prelude::*, *};
+#[allow(unused_imports)]
+use crate::style::px;
 use std::{collections::HashMap, process::Command, sync::Arc};
 
 enum Slot {

@@ -4,6 +4,129 @@
 use crate::highlight::Tok;
 use gpui::{prelude::*, *};
 
+/// How much bigger than GitLab's own sizes the tab is drawn (⌘= / ⌘- /
+/// ⌘0), for every GitLab tab, kept across restarts in the cache's folder.
+static ZOOM: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The zoom levels ⌘= and ⌘- step through, as a browser's.
+pub const ZOOMS: [f32; 13] = [0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+
+fn zoom_file() -> Option<std::path::PathBuf> {
+    Some(crate::cache::root()?.join("zoom"))
+}
+
+pub fn zoom() -> f32 {
+    use std::sync::atomic::Ordering::Relaxed;
+    match ZOOM.load(Relaxed) {
+        // Not read yet: what was saved, else GitLab's size.
+        0 => {
+            let saved = zoom_file()
+                .and_then(|f| std::fs::read_to_string(f).ok())
+                .and_then(|t| t.trim().parse::<f32>().ok())
+                .filter(|z| (ZOOMS[0]..=ZOOMS[ZOOMS.len() - 1]).contains(z))
+                .unwrap_or(1.0);
+            ZOOM.store(saved.to_bits(), Relaxed);
+            saved
+        }
+        bits => f32::from_bits(bits),
+    }
+}
+
+/// Draw every GitLab tab at `z` times GitLab's sizes (within `ZOOMS`).
+pub fn set_zoom(z: f32) {
+    let z = z.clamp(ZOOMS[0], ZOOMS[ZOOMS.len() - 1]);
+    ZOOM.store(z.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    if let Some(f) = zoom_file() {
+        let _ = std::fs::write(f, format!("{z}\n"));
+    }
+}
+
+/// The zoom level after `z`, a step in (`up`) or out.
+pub fn zoom_step(z: f32, up: bool) -> f32 {
+    let next = if up {
+        ZOOMS.iter().copied().find(|s| *s > z + 0.001)
+    } else {
+        ZOOMS.iter().rev().copied().find(|s| *s < z - 0.001)
+    };
+    next.unwrap_or(z)
+}
+
+/// Pixels at the tab's zoom: every size in the plugin goes through this,
+/// so the whole tab scales together. (It shadows gpui's `px`; a size that
+/// must not scale, like a measured one, is `gpui::px`.)
+pub fn px(v: f32) -> Pixels {
+    gpui::px(v * zoom())
+}
+
+/// Draws `child` with rems scaled too (`gap_2`, `px_4`, gpui-component's
+/// text fields and markdown), as `px` scales the rest.
+pub struct Zoomed {
+    child: AnyElement,
+    rem: Pixels,
+}
+
+impl Zoomed {
+    pub fn new(child: impl IntoElement, window: &Window) -> Self {
+        Self { child: child.into_any_element(), rem: window.rem_size() * zoom() }
+    }
+}
+
+impl IntoElement for Zoomed {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for Zoomed {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (window.with_rem_size(Some(self.rem), |window| self.child.request_layout(window, cx)), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        window.with_rem_size(Some(self.rem), |window| self.child.prepaint(window, cx));
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        window.with_rem_size(Some(self.rem), |window| self.child.paint(window, cx));
+    }
+}
+
 pub fn c(hex: u32) -> Hsla {
     rgb(hex).into()
 }
@@ -67,7 +190,22 @@ pub fn md_style() -> gpui_component::text::TextViewStyle {
         .border_color(c(BORDER))
         .rounded(px(4.))
         .p(px(12.));
-    gpui_component::text::TextViewStyle { code_block, is_dark: true, ..Default::default() }
+    // GitLab's headings: 1.75, 1.5 and 1.25 times the text, then the text's size.
+    let heading = |level: u8, base: Pixels| {
+        base * match level {
+            1 => 1.75,
+            2 => 1.5,
+            3 => 1.25,
+            _ => 1.0,
+        }
+    };
+    gpui_component::text::TextViewStyle {
+        code_block,
+        is_dark: true,
+        heading_base_font_size: px(14.),
+        heading_font_size: Some(std::sync::Arc::new(heading)),
+        ..Default::default()
+    }
 }
 
 pub fn token(t: Tok) -> Hsla {
@@ -79,6 +217,8 @@ pub fn token(t: Tok) -> Hsla {
         Tok::Function => 0x81a2be,
         Tok::Namespace => 0xf0c674,
         Tok::Operator | Tok::Macro | Tok::Heading => 0x8abeb7,
+        Tok::Variable => 0xcc6666,
+        Tok::Type => 0xf0c674,
     })
 }
 

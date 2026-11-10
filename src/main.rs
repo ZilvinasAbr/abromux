@@ -164,7 +164,8 @@ actions!(
         ImportCmuxSession,
         ToggleMergeRequests,
         GoToMergeRequest,
-        RefreshMergeRequests
+        RefreshMergeRequests,
+        ReviewChanges
     ]
 );
 
@@ -770,7 +771,112 @@ impl AbroMux {
         }
     }
 
+    /// GitLab is in use (`gitlab.enabled`); if not, say so and how to
+    /// change that.
+    pub(crate) fn gitlab_on(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let on = plugins::enabled("gitlab", cx);
+        if !on {
+            let note = Notification::info("Turn it on in Settings › GitLab › Use GitLab.").title("GitLab is turned off");
+            window.push_notification(note, cx);
+        }
+        on
+    }
+
+    /// ⌥⌘D (File › Review Changes): the diff of the repository being worked
+    /// in, in a review tab beside the focused pane (`abromux diff`, without
+    /// typing it or asking an agent to). The focused tab's repository, else
+    /// each of the workspace folder's checkouts; for each, the branch's work
+    /// since it forked from the default branch, committed or not.
+    pub(crate) fn review_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use abromux_gitlab::local;
+        let wi = self.active;
+        let ws = &self.workspaces[wi];
+        let top = |dir: &std::path::Path| {
+            local::git(dir, &["rev-parse", "--show-toplevel"])
+                .ok()
+                .map(|o| std::path::PathBuf::from(String::from_utf8_lossy(&o).trim()))
+        };
+        let mut repos: Vec<std::path::PathBuf> = vec![];
+        if let Some(t) = ws.focused_surface().and_then(|s| s.cwd(cx)).and_then(|c| top(std::path::Path::new(&c))) {
+            repos.push(t);
+        }
+        if repos.is_empty() {
+            let places = gitlab::remote::places(ws.home.as_deref(), &ws.surfaces().filter_map(|s| s.cwd(cx)).collect::<Vec<_>>());
+            for p in places {
+                if let Some(t) = top(&p.dir)
+                    && !repos.contains(&t)
+                {
+                    repos.push(t);
+                }
+            }
+        }
+        if repos.is_empty() {
+            let note = Notification::warning("No tab of this workspace is in a git repository.").title("Nothing to review");
+            return window.push_notification(note, cx);
+        }
+        for repo in repos {
+            let made = local::create(&repo, &local::work_spec(&repo), local::Open::default());
+            let id = match made {
+                Ok(id) => id,
+                Err(e) => {
+                    let note = Notification::error(format!("{}: {e:#}", repo.display())).title("Couldn't open the diff");
+                    window.push_notification(note, cx);
+                    continue;
+                }
+            };
+            // The tab already showing it comes forward, fetched again.
+            let open = self.workspaces[wi].surfaces().find_map(|s| match s {
+                Surface::Plugin(t) if t.state(cx)["local"] == serde_json::json!(id) => Some(t.clone()),
+                _ => None,
+            });
+            if let Some(tab) = open {
+                let _ = tab.command("refresh", &serde_json::json!({}), window, cx);
+                self.focus_surface(tab.entity_id(), cx);
+                self.focus_active(window, cx);
+                continue;
+            }
+            let params = serde_json::json!({
+                "host": local::host_of(&id), "project": local::PROJECT, "iid": local::IID, "section": "changes",
+            });
+            let surface = match self.make_plugin("gitlab", &params, window, cx) {
+                Ok(s) => s,
+                Err(e) => {
+                    window.push_notification(Notification::error(format!("{e:#}")), cx);
+                    continue;
+                }
+            };
+            // Beside the focused pane: in the pane to its right if that one
+            // shows a review or a page, else a new one there.
+            let ws = &self.workspaces[wi];
+            let pane = ws.focused_pane;
+            let right = ws.root.neighbor(pane, Dir::Right).filter(|&r| {
+                ws.panes()
+                    .find(|p| p.id == r)
+                    .and_then(|p| p.active_surface())
+                    .is_some_and(|s| s.is_plugin("gitlab") || s.is_browser(cx))
+            });
+            match right {
+                Some(r) => self.add_tab_to(wi, r, surface, true, window, cx),
+                None => {
+                    self.split_pane(wi, pane, Axis::Horizontal, false, surface, true, window, cx);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// View › Zoom In / Out / Actual Size on a plugin's tab (a GitLab
+    /// tab's own ⌘= / ⌘- / ⌘0 do the same).
+    fn zoom_plugin(&mut self, by: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(Surface::Plugin(t)) = self.ws().focused_surface().cloned() {
+            let _ = t.command("zoom", &serde_json::json!({ "by": by }), window, cx);
+        }
+    }
+
     pub(crate) fn open_plugin(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if id == "gitlab" && !self.gitlab_on(window, cx) {
+            return;
+        }
         match self.make_plugin(id, &serde_json::json!({}), window, cx) {
             Ok(s) => self.add_tab(s, window, cx),
             Err(e) => window.push_notification(Notification::error(format!("{e:#}")), cx),
@@ -846,7 +952,7 @@ impl AbroMux {
         let ws = &self.workspaces[wi];
         // A link a plugin shows itself (a GitLab merge request) opens as its
         // tab, where a browser would: in a pane of those to the right.
-        let claimed = plugins::claiming(&url);
+        let claimed = plugins::claiming(&url, cx);
         let right = ws.root.neighbor(pane, Dir::Right).filter(|&r| {
             ws.panes()
                 .find(|p| p.id == r)
@@ -888,7 +994,7 @@ impl AbroMux {
         if focus && self.reuse_link_tab(wi, url, window, cx) {
             return;
         }
-        let claimed = plugins::claiming(url).map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx));
+        let claimed = plugins::claiming(url, cx).map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx));
         let surface = match claimed {
             Some(Ok(s)) => s,
             _ => self.make_browser(url, window, cx),
@@ -2520,7 +2626,7 @@ impl Render for AbroMux {
             None
         };
         let title = self.ws().name(cx);
-        let mr_panel = self.mr_panel.then(|| self.render_mr_panel(cx));
+        let mr_panel = (self.mr_panel && plugins::enabled("gitlab", cx)).then(|| self.render_mr_panel(cx));
 
         div()
             .id("abromux")
@@ -2627,16 +2733,27 @@ impl Render for AbroMux {
                 this.sidebar = !this.sidebar;
                 cx.notify()
             }))
-            .on_action(cx.listener(|this, _: &ToggleMergeRequests, _, cx| {
-                this.mr_panel = !this.mr_panel;
-                cx.notify()
+            .on_action(cx.listener(|this, _: &ToggleMergeRequests, window, cx| {
+                if this.gitlab_on(window, cx) {
+                    this.mr_panel = !this.mr_panel;
+                    cx.notify()
+                }
             }))
             .on_action(cx.listener(|this, _: &GoToMergeRequest, window, cx| {
-                this.toggle_palette(palette::Mode::MergeRequests, window, cx)
+                if this.gitlab_on(window, cx) {
+                    this.toggle_palette(palette::Mode::MergeRequests, window, cx)
+                }
             }))
-            .on_action(|_: &RefreshMergeRequests, _, cx| {
-                gitlab::store(cx).update(cx, |s, cx| s.refresh_all(cx))
-            })
+            .on_action(cx.listener(|this, _: &RefreshMergeRequests, window, cx| {
+                if this.gitlab_on(window, cx) {
+                    gitlab::store(cx).update(cx, |s, cx| s.refresh_all(cx))
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ReviewChanges, window, cx| this.review_changes(window, cx)))
+            // Reached when no browser took them: a plugin's tab has the focus.
+            .on_action(cx.listener(|this, _: &browser::ZoomIn, window, cx| this.zoom_plugin("in", window, cx)))
+            .on_action(cx.listener(|this, _: &browser::ZoomOut, window, cx| this.zoom_plugin("out", window, cx)))
+            .on_action(cx.listener(|this, _: &browser::ActualSize, window, cx| this.zoom_plugin("reset", window, cx)))
             .on_action(cx.listener(|this, _: &FocusAddressBar, window, cx| {
                 if let Some(Surface::Browser(b)) = this.ws().focused_surface() {
                     BrowserView::focus_address(b, window, cx);
@@ -2747,7 +2864,7 @@ impl Render for AbroMux {
             .on_action(cx.listener(|_, a: &keymap::OpenPluginLink, window, cx| {
                 // Chosen from the palette, focus is going back to the pane
                 // just now: ask once that's done, or the pane keeps the keys.
-                if let Some(p) = plugins::find(&a.id) {
+                if let Some(p) = plugins::find(&a.id).filter(|p| plugins::enabled(p.id, cx)) {
                     cx.defer_in(window, move |this, window, cx| {
                         this.toggle_palette(palette::Mode::OpenLink(p.id), window, cx)
                     });
