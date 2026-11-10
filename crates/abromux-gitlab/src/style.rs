@@ -219,6 +219,8 @@ pub fn token(t: Tok) -> Hsla {
         Tok::Operator | Tok::Macro | Tok::Heading => 0x8abeb7,
         Tok::Variable => 0xcc6666,
         Tok::Type => 0xf0c674,
+        Tok::Tag => 0xcc6666,
+        Tok::Attribute => 0xde935f,
     })
 }
 

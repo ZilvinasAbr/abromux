@@ -1,9 +1,12 @@
 //! Syntax highlighting for diff lines, the way GitLab's web UI does it: a
 //! regex-style lexer (GitLab uses Rouge), not a parser, so tokens match
 //! what reviewers see there. Lines are lexed one at a time; only block
-//! comments carry over to the next line.
+//! comments carry over to the next line. The web's languages, with more
+//! to carry over, are in `web`.
 
 use std::ops::Range;
+
+mod web;
 
 /// Rouge's token classes that GitLab's dark theme colors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +28,10 @@ pub enum Tok {
     Variable,
     /// A class or type name: `Request`, YAML's `!tag`.
     Type,
+    /// An HTML or JSX tag's name, a CSS selector's element, a JSON key.
+    Tag,
+    /// An HTML attribute, a CSS class, id or pseudo-class.
+    Attribute,
 }
 
 pub type Spans = Vec<(Range<usize>, Tok)>;
@@ -46,6 +53,8 @@ struct Lang {
     yaml: bool,
     /// PHP: `$variables`, class names, `#[Attributes]`, keywords in any case.
     php: bool,
+    /// Lexed by `web`.
+    web: Option<web::Kind>,
 }
 
 const RUST: Lang = Lang {
@@ -64,6 +73,7 @@ const RUST: Lang = Lang {
     plain: false,
     yaml: false,
     php: false,
+    web: None,
 };
 
 const C_LIKE: Lang = Lang {
@@ -85,6 +95,7 @@ const C_LIKE: Lang = Lang {
     plain: false,
     yaml: false,
     php: false,
+    web: None,
 };
 
 const HASH: Lang = Lang {
@@ -104,6 +115,7 @@ const HASH: Lang = Lang {
     plain: false,
     yaml: false,
     php: false,
+    web: None,
 };
 
 const PLAIN: Lang = Lang {
@@ -117,6 +129,7 @@ const PLAIN: Lang = Lang {
     plain: true,
     yaml: false,
     php: false,
+    web: None,
 };
 
 const MARKDOWN: Lang = Lang {
@@ -130,6 +143,22 @@ const YAML: Lang = Lang {
     plain: false,
     ..PLAIN
 };
+
+const fn web(kind: web::Kind) -> Lang {
+    Lang {
+        web: Some(kind),
+        plain: false,
+        ..PLAIN
+    }
+}
+
+const JS: Lang = web(web::Kind::Script { ts: false, jsx: true });
+const TS: Lang = web(web::Kind::Script { ts: true, jsx: false });
+const TSX: Lang = web(web::Kind::Script { ts: true, jsx: true });
+const CSS: Lang = web(web::Kind::Css { scss: false });
+const SCSS: Lang = web(web::Kind::Css { scss: true });
+const JSON: Lang = web(web::Kind::Json);
+const MARKUP: Lang = web(web::Kind::Markup);
 
 const PHP: Lang = Lang {
     keywords: &[
@@ -152,6 +181,7 @@ const PHP: Lang = Lang {
     plain: false,
     yaml: false,
     php: true,
+    web: None,
 };
 
 fn lang_for(path: &str) -> &'static Lang {
@@ -159,9 +189,16 @@ fn lang_for(path: &str) -> &'static Lang {
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
     match ext.as_deref() {
         Some("rs") => &RUST,
+        Some("js" | "jsx" | "mjs" | "cjs") => &JS,
+        Some("ts" | "mts" | "cts") => &TS,
+        Some("tsx") => &TSX,
+        Some("css") => &CSS,
+        Some("scss" | "sass" | "less") => &SCSS,
+        Some("json" | "jsonc" | "json5" | "webmanifest" | "geojson" | "babelrc" | "swcrc") => &JSON,
+        Some("lock") if name == "composer.lock" => &JSON,
+        Some("html" | "htm" | "xhtml" | "vue" | "svelte" | "xml" | "svg") => &MARKUP,
         Some(
-            "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "go" | "java" | "kt" | "c" | "h" | "cc" | "cpp"
-            | "hpp" | "cs" | "swift" | "scala" | "dart" | "css" | "scss" | "json" | "vue",
+            "go" | "java" | "kt" | "c" | "h" | "cc" | "cpp" | "hpp" | "cs" | "swift" | "scala" | "dart",
         ) => &C_LIKE,
         Some("php" | "phtml" | "php5" | "php7" | "php8" | "phpt") => &PHP,
         Some("yml" | "yaml") => &YAML,
@@ -186,17 +223,23 @@ fn lang_for(path: &str) -> &'static Lang {
 pub struct Highlighter {
     lang: &'static Lang,
     in_block: bool,
+    web: Option<web::Lexer>,
 }
 
 impl Highlighter {
     pub fn new(path: &str) -> Self {
+        let lang = lang_for(path);
         Self {
-            lang: lang_for(path),
+            lang,
             in_block: false,
+            web: lang.web.map(web::Lexer::new),
         }
     }
 
     pub fn line(&mut self, text: &str) -> Spans {
+        if let Some(w) = &mut self.web {
+            return w.line(text);
+        }
         let lang = self.lang;
         let mut out: Spans = vec![];
         if lang.plain {
