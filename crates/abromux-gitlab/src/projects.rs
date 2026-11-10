@@ -11,6 +11,8 @@ use crate::{
     view::{Failure, GitLabView, Load},
 };
 use gpui::{prelude::*, *};
+#[allow(unused_imports)]
+use crate::style::px;
 
 /// How many projects get their open merge requests counted (one short
 /// request each, all in one batch).

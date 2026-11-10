@@ -157,3 +157,23 @@ fn sending_to_a_terminal_types_one_line() {
     assert!(l.command.is_none());
     assert!(!l.text.unwrap().contains('\n'));
 }
+
+#[test]
+fn the_branchs_work_is_what_to_review_by_default() {
+    init();
+    let d = repo();
+    // On `feature`, a commit past `main`: everything since the fork, with
+    // what isn't committed yet.
+    assert_eq!(local::work_spec(&d.0), "--merge-base main");
+    std::fs::write(d.0.join("new.txt"), "hi\n").unwrap();
+    let id = local::create(&d.0, &local::work_spec(&d.0), local::Open::default()).unwrap();
+    let s = local::load(&id).unwrap();
+    assert_eq!(s.describe(), "changes since main");
+    let r = load_review(&client(&id), local::PROJECT, local::IID).unwrap();
+    let paths: Vec<&str> = r.files.iter().map(|f| f.path()).collect();
+    assert!(paths.contains(&"a.rs") && paths.contains(&"gone.txt") && paths.contains(&"new.txt"), "{paths:?}");
+    assert_eq!(r.commits.len(), 1);
+    // On the default branch itself: the uncommitted changes.
+    git(&d.0, &["checkout", "-q", "main"]);
+    assert_eq!(local::work_spec(&d.0), "");
+}

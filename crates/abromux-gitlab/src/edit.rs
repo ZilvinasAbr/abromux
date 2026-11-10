@@ -9,6 +9,8 @@
 
 use crate::{api::Client, mr::AwardOn, style::*, types::DiffRefs, view::GitLabView};
 use gpui::{prelude::*, *};
+#[allow(unused_imports)]
+use crate::style::px;
 use gpui_component::input::{Input, InputState};
 
 /// A line a new thread goes on: (file index, old line, new line).
@@ -387,7 +389,7 @@ impl GitLabView {
                     .border_1()
                     .border_color(c(BORDER))
                     .bg(c(CARD))
-                    .child(Input::new(&self.boxes.comment).appearance(false))
+                    .child(self.mention_input(crate::mention::Field::Comment, Input::new(&self.boxes.comment).appearance(false), cx))
                     .child(
                         div()
                             .flex()
@@ -464,7 +466,7 @@ impl GitLabView {
                     .border_1()
                     .border_color(c(0x1068bf))
                     .bg(c(BG))
-                    .child(Input::new(&self.boxes.reply).appearance(false)),
+                    .child(self.mention_input(crate::mention::Field::Reply, Input::new(&self.boxes.reply).appearance(false), cx)),
             )
             .child(
                 div()
@@ -507,7 +509,7 @@ impl GitLabView {
                     .border_1()
                     .border_color(c(0x1068bf))
                     .bg(c(CARD))
-                    .child(Input::new(&self.boxes.line).appearance(false)),
+                    .child(self.mention_input(crate::mention::Field::Line, Input::new(&self.boxes.line).appearance(false), cx)),
             )
             .child(
                 div()

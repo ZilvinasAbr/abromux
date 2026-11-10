@@ -224,6 +224,11 @@ fn dir() -> Option<PathBuf> {
     DIR.get().map(|d| d.join("reviews"))
 }
 
+/// The cache's folder (`gitlab-cache/`), once `init` has set it.
+pub(crate) fn root() -> Option<PathBuf> {
+    DIR.get().cloned()
+}
+
 fn file(host: &str, project: u64, iid: u64) -> Option<PathBuf> {
     let h: String = host_key(host)
         .chars()

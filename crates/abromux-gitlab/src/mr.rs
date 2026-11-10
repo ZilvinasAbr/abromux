@@ -12,6 +12,8 @@ use crate::{
     view::GitLabView,
 };
 use gpui::{prelude::*, *};
+#[allow(unused_imports)]
+use crate::style::px;
 use std::rc::Rc;
 
 /// GitLab's activity filter.
@@ -296,6 +298,28 @@ impl GitLabView {
         self.review.ready().map_or(0, |r| r.mr.author.id)
     }
 
+    /// A title with the Jira tickets it names as links, as GitLab's Jira
+    /// integration shows them (when abromux knows the Jira: `jira.host`).
+    pub(crate) fn linked_title(&self, id: &'static str, title: &str, cx: &App) -> AnyElement {
+        let keys: Vec<(std::ops::Range<usize>, String)> = abromux_plugin::jira_keys(title)
+            .into_iter()
+            .filter_map(|r| Some((r.clone(), abromux_plugin::jira_url(&title[r], cx)?)))
+            .collect();
+        if keys.is_empty() {
+            return SharedString::from(title.to_string()).into_any_element();
+        }
+        let link = HighlightStyle { color: Some(c(LINK)), ..Default::default() };
+        let text = StyledText::new(title.to_string()).with_highlights(keys.iter().map(|(r, _)| (r.clone(), link)));
+        let ranges: Vec<_> = keys.iter().map(|(r, _)| r.clone()).collect();
+        InteractiveText::new(id, text)
+            .on_click(ranges, move |i, window, cx| {
+                if let Some((_, url)) = keys.get(i) {
+                    abromux_plugin::open_url(url, window, cx);
+                }
+            })
+            .into_any_element()
+    }
+
     /// Title, status line and tabs.
     pub(crate) fn mr_header(&self, r: &Review, cx: &mut Context<Self>) -> Div {
         let m = &r.mr;
@@ -360,7 +384,7 @@ impl GitLabView {
                                 .truncate()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(c(HEADING))
-                                .child(m.title.clone()),
+                                .child(self.linked_title("gl-title-folded", &m.title, cx)),
                         )
                         .child(branch(&m.source_branch, mono.clone()).flex_none())
                         .child(div().flex_none().child(if local { "against" } else { "into" }))
@@ -388,7 +412,7 @@ impl GitLabView {
                     .line_height(px(37.5))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(c(HEADING))
-                    .child(m.title.clone()),
+                    .child(self.linked_title("gl-title", &m.title, cx)),
             )
             .child(
                 div()

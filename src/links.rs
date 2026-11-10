@@ -86,19 +86,7 @@ impl Link {
     }
 }
 
-/// `PAY-1423`: a project key (a capital letter, then capitals, digits or
-/// `_`) and a number.
-pub fn is_jira_key(s: &str) -> bool {
-    let Some((project, n)) = s.split_once('-') else {
-        return false;
-    };
-    let mut c = project.chars();
-    c.next().is_some_and(|f| f.is_ascii_uppercase())
-        && project.len() >= 2
-        && c.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-        && !n.is_empty()
-        && n.chars().all(|c| c.is_ascii_digit())
-}
+pub use abromux_plugin::is_jira_key;
 
 fn is_web(s: &str) -> bool {
     s.starts_with("https://") || s.starts_with("http://")
@@ -232,6 +220,52 @@ pub fn clean_title(kind: Kind, key: &str, title: &str) -> Option<String> {
     (!t.is_empty() && t != key && !is_web(t)).then(|| t.to_string())
 }
 
+/// A merge request's title as the sidebar shows it: without GitLab's draft
+/// marker (`Draft:`, `[Draft]`, `WIP:`) and the ticket it starts with
+/// (`PAY-1423: `, `[PAY-1423] `), which get their own places. Gives the
+/// title, whether it's a draft, and the ticket.
+pub fn mr_title(title: &str) -> (String, bool, Option<String>) {
+    let mut t = title.trim();
+    let mut draft = false;
+    loop {
+        let lower = t.to_ascii_lowercase();
+        let marker = ["draft:", "[draft]", "(draft)", "draft ", "wip:", "[wip]"]
+            .iter()
+            .find(|m| lower.starts_with(**m));
+        match marker {
+            Some(m) => {
+                draft = true;
+                t = t[m.len()..].trim_start();
+            }
+            None => break,
+        }
+    }
+    // The ticket: bare or in brackets, then `:`, `-`, `|` or a space.
+    let (inner, bracketed) = match t.strip_prefix('[').or_else(|| t.strip_prefix('(')) {
+        Some(rest) => (rest, true),
+        None => (t, false),
+    };
+    let end = inner
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+        .unwrap_or(inner.len());
+    let key = &inner[..end];
+    let mut ticket = None;
+    if is_jira_key(key) {
+        let mut rest = &inner[end..];
+        let closed = !bracketed || rest.starts_with([']', ')']);
+        if bracketed && closed {
+            rest = &rest[1..];
+        }
+        let rest = rest.trim_start_matches([':', '-', '|', '–', '—', ' ']);
+        // A title that is only the ticket stays as it is.
+        if closed && !rest.is_empty() {
+            ticket = Some(key.to_string());
+            t = rest;
+        }
+    }
+    (t.to_string(), draft, ticket)
+}
+
 // ---- in the app ------------------------------------------------------------
 
 use crate::{
@@ -293,7 +327,8 @@ impl AbroMux {
         let ws = &self.workspaces[wi];
         let st = gitlab::store(cx).read(cx);
         let mut out = ws.links.clone();
-        for k in st.pinned.get(&ws.id).into_iter().flatten() {
+        let gitlab_on = crate::plugins::enabled("gitlab", cx);
+        for k in st.pinned.get(&ws.id).into_iter().flatten().filter(|_| gitlab_on) {
             let key = k.reference();
             if !ws.hidden_links.contains(&key) && !out.iter().any(|l| l.key == key) {
                 out.push(Link {
@@ -499,7 +534,7 @@ impl AbroMux {
             return Some(id.1);
         }
         let surface = match link.kind {
-            Kind::Mr => self
+            Kind::Mr if crate::plugins::enabled("gitlab", cx) => self
                 .make_plugin("gitlab", &serde_json::json!({ "url": link.url }), window, cx)
                 .unwrap_or_else(|_| self.make_browser(&link.url, window, cx)),
             _ => self.make_browser(&link.url, window, cx),
@@ -598,30 +633,75 @@ impl AbroMux {
                     let wi = this.active;
                     this.show_link(wi, &open, true, window, cx);
                 }))
+                .tooltip({
+                    let full: SharedString = match l.label() {
+                        Some(t) => format!("{} · {t}", l.key).into(),
+                        None => l.key.clone().into(),
+                    };
+                    move |window, cx| gpui_component::tooltip::Tooltip::new(full.clone()).build(window, cx)
+                })
                 .child(
                     icon(l.kind.icon())
                         .size(px(12. * z))
                         .text_color(l.kind.color().map_or(fg, rgb)),
                 )
-                .child(
-                    div()
-                        .flex_none()
-                        .max_w(px(130. * z))
-                        .truncate()
-                        .text_size(px(11. * z))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(fg)
-                        .child(l.short_key()),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(11. * z))
-                        .text_color(rgb(MUTED))
-                        .children(l.label().map(str::to_string)),
-                )
+                .map(|d| match (l.kind, l.label()) {
+                    // A merge request: what it's about first, then a draft's
+                    // mark and its number.
+                    (Kind::Mr, Some(title)) => {
+                        let (title, draft, _) = mr_title(title);
+                        d.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(11. * z))
+                                .text_color(fg)
+                                .child(title),
+                        )
+                        .when(draft, |d| {
+                            d.child(
+                                div()
+                                    .flex_none()
+                                    .px(px(4.))
+                                    .rounded(px(3.))
+                                    .bg(rgba(0xffffff14))
+                                    .text_size(px(9.5 * z))
+                                    .text_color(rgb(MUTED))
+                                    .child("Draft"),
+                            )
+                        })
+                        .child(
+                            div()
+                                .flex_none()
+                                .max_w(px(90. * z))
+                                .truncate()
+                                .text_size(px(10. * z))
+                                .text_color(rgb(MUTED))
+                                .child(l.short_key()),
+                        )
+                    }
+                    _ => d
+                        .child(
+                            div()
+                                .flex_none()
+                                .max_w(px(130. * z))
+                                .truncate()
+                                .text_size(px(11. * z))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(fg)
+                                .child(l.short_key()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(11. * z))
+                                .text_color(rgb(MUTED))
+                                .children(l.label().map(str::to_string)),
+                        ),
+                })
                 .when(hints && i < DIGITS, |d| d.child(hint_pill(format!("⌥⌘{}", i + 1))))
                 .when(!hints, |d| {
                     d.child(
@@ -730,6 +810,22 @@ mod tests {
             Some("Fix rounding")
         );
         assert_eq!(clean_title(Kind::Web, "x", "https://x.com"), None);
+    }
+
+    #[test]
+    fn merge_request_titles() {
+        let t = |s: &str| super::mr_title(s);
+        assert_eq!(t("Draft: PAY-1423 Refund fails"), ("Refund fails".into(), true, Some("PAY-1423".into())));
+        assert_eq!(t("[PAY-1423] Refund fails"), ("Refund fails".into(), false, Some("PAY-1423".into())));
+        assert_eq!(t("PAY-1423: Refund fails"), ("Refund fails".into(), false, Some("PAY-1423".into())));
+        assert_eq!(t("Draft: Resolve \"PAY-1 x\""), ("Resolve \"PAY-1 x\"".into(), true, None));
+        assert_eq!(t("[Draft] WIP: Fix rounding"), ("Fix rounding".into(), true, None));
+        assert_eq!(t("PAY-1423 - Refund – fails"), ("Refund – fails".into(), false, Some("PAY-1423".into())));
+        // Not tickets, and a title that's only one.
+        assert_eq!(t("UTF-8 everywhere"), ("everywhere".into(), false, Some("UTF-8".into())));
+        assert_eq!(t("PAY-1423"), ("PAY-1423".into(), false, None));
+        assert_eq!(t("Drafting the plan"), ("Drafting the plan".into(), false, None));
+        assert_eq!(t("[PAY-1423 Refund"), ("[PAY-1423 Refund".into(), false, None));
     }
 
     #[test]

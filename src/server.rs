@@ -2494,7 +2494,15 @@ impl AbroMux {
                 anyhow::ensure!(path.exists(), "no such file: {}", path.display());
                 self.make_builtin_browser(&crate::markdown::url_for(path), window, cx)
             }
-            t if crate::plugins::find(t).is_some() => self.make_plugin(t, p, window, cx)?,
+            t if crate::plugins::find(t).is_some() => {
+                // GitLab turned off: its tab still shows local diffs.
+                let local = str_param(p, "host").is_some_and(abromux_gitlab::local::is_local);
+                anyhow::ensure!(
+                    crate::plugins::enabled(t, cx) || local,
+                    "GitLab is turned off (\"gitlab\": {{ \"enabled\": false }} in the config file)"
+                );
+                self.make_plugin(t, p, window, cx)?
+            }
             t => {
                 let mut kinds = vec!["terminal", "browser", "markdown"];
                 kinds.extend(crate::plugins::all().iter().map(|p| p.id));
