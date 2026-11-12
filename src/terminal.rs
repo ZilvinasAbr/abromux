@@ -142,6 +142,10 @@ pub struct TerminalView {
     /// sends are sharp on Retina screens.
     cell_px: (u32, u32),
     scale: f32,
+    /// Device pixels per point to tell the program, instead of the window's
+    /// scale factor, for one that can't follow a change of it (see
+    /// `terminal_browser::SCALE`).
+    pub pixel_scale: Option<f32>,
     /// Textures of the Kitty images on screen, by (generation, source rect).
     images: HashMap<(u64, [u32; 4]), Arc<RenderImage>>,
     /// Textures no longer on screen, freed at the next paint.
@@ -261,6 +265,7 @@ impl TerminalView {
             cell: size(px(8.), px(16.)),
             cell_px: (0, 0),
             scale: 1.,
+            pixel_scale: None,
             images: HashMap::new(),
             stale_images: Vec::new(),
             window: None,
@@ -1837,7 +1842,7 @@ impl Element for TerminalElement {
         let (frame, marked, images, image_scale) = self.view.update(cx, |v, cx| {
             v.bounds = bounds;
             v.cell = cell;
-            v.scale = window.scale_factor();
+            v.scale = v.pixel_scale.unwrap_or_else(|| window.scale_factor());
             v.window = Some(window.window_handle());
             v.resize(cols, rows);
             v.animate(cx);

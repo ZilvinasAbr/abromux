@@ -17,15 +17,27 @@ use std::{
     time::Duration,
 };
 
+/// Device pixels per point a terminal-browser tab is told, whatever screen
+/// its window is on. terminal-browser turns the pixel size abromux reports
+/// into the page's CSS size by a display scale it takes once, at start, from
+/// the screen under the mouse; it never takes it again. With the window's own
+/// scale factor, a tab started with the mouse on another screen, or whose
+/// window then moved to a screen of another scale (a display plugged in or
+/// out), showed pages twice or half their size at 100%, and its own zoom,
+/// which follows a change in cell size, drifted too. So both sides use this
+/// one fixed scale: pages are sharp on Retina and the right size everywhere.
+pub const SCALE: f32 = 2.;
+
 /// The shell command that opens `url` in terminal-browser, filling the
 /// terminal it runs in, or None if it isn't installed. `--no-merge` keeps it
 /// from joining a neighbouring one as a tab: each abromux tab is one browser.
 /// abromux shows kitty graphics, so terminal-browser needn't ask. Its keys
 /// (find, devtools, console, …) are its own, set in its `shortcuts.json`.
+/// `PIXEL_DISPLAY_SCALE` is [`SCALE`], which `attach` reports pixels at.
 pub fn command(url: &str) -> Option<String> {
     let bin = find()?;
     let mut cmd = format!(
-        "TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK=1 exec {} open --no-merge",
+        "TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK=1 PIXEL_DISPLAY_SCALE={SCALE} exec {} open --no-merge",
         shell_quote(&bin.to_string_lossy())
     );
     if !url.is_empty() && url != "about:blank" {
@@ -144,6 +156,7 @@ fn find_page(tty: &Path, known: Option<&Path>) -> Option<(PathBuf, Page)> {
 /// browser tab on the page it shows.
 pub fn attach(term: &Entity<TerminalView>, url: &str, cx: &mut gpui::App) {
     term.update(cx, |t, _| {
+        t.pixel_scale = Some(SCALE);
         t.app = Some(Box::new(Tab {
             url: url.into(),
             title: String::new(),
