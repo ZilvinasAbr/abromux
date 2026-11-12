@@ -229,6 +229,12 @@ pub fn apply(settings: &Settings, cx: &mut App) {
     bindings.extend(crate::terminal_browser::KEYS.iter().map(|k| {
         KeyBinding::new(k, gpui::NoAction, Some(crate::terminal_browser::KEY_CONTEXT))
     }));
+    // ⌘R reloads its page, as in a browser tab, never Rename Tab.
+    bindings.push(KeyBinding::new(
+        "cmd-r",
+        crate::browser::Reload,
+        Some(crate::terminal_browser::KEY_CONTEXT),
+    ));
     cx.clear_key_bindings();
     cx.bind_keys(bindings);
 }

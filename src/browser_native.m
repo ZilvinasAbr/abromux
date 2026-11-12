@@ -443,3 +443,25 @@ void abx_page_shortcuts_install(void) {
                                             }];
     });
 }
+
+typedef bool (*ABXOpenURLFn)(const char *url);
+
+/// gpui opens links with -[NSWorkspace openURL:], and gpui-component's
+/// markdown calls it on a click with no way to say otherwise. So (once)
+/// route every call through `hook` first: true from it means abromux took
+/// the URL (to show in a browser tab) and the system browser isn't asked.
+void abx_open_url_hook_install(ABXOpenURLFn hook) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+      SEL sel = @selector(openURL:);
+      Method m = class_getInstanceMethod(NSWorkspace.class, sel);
+      if (!m) return;
+      BOOL (*orig)(id, SEL, NSURL *) = (void *)method_getImplementation(m);
+      id block = ^BOOL(id me, NSURL *url) {
+        const char *s = url.absoluteString.UTF8String;
+        if (s && hook(s)) return YES;
+        return orig(me, sel, url);
+      };
+      method_setImplementation(m, imp_implementationWithBlock(block));
+    });
+}

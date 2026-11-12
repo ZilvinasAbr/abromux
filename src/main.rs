@@ -228,6 +228,7 @@ impl AssetSource for Assets {
             "panel-left",
             "bell",
             "git-branch",
+            "corner-down-right",
             "git-pull-request",
             "gitlab",
             "jira",

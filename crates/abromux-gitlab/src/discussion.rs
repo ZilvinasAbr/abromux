@@ -361,7 +361,13 @@ impl GitLabView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let mut out = div().flex().flex_col().gap_3().text_color(c(TEXT));
+        // Its links open in abromux's browser, not the system's.
+        let mut out = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .text_color(c(TEXT))
+            .capture_any_mouse_up(|_, window, cx| abromux_plugin::catch_opened_urls(window, cx));
         let web = self.review.ready().map(|r| r.mr.web_url.clone()).unwrap_or_default();
         let project = web.split("/-/").next().unwrap_or_default().to_string();
         let host = self.host();

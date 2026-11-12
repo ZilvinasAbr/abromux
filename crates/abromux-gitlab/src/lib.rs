@@ -59,7 +59,10 @@ macro_rules! icons {
     };
 }
 
-static ASSETS: [(&str, &[u8]); 31] = icons!(
+static ASSETS: [(&str, &[u8]); 34] = icons!(
+    "layers",
+    "file-diff",
+    "arrow-right",
     "comment-lines",
     "sort-desc",
     "sort-asc",
@@ -325,6 +328,25 @@ fn load_prefetched(
     lap: &dyn Fn(&str),
 ) -> anyhow::Result<review::Review> {
     let mr = c.merge_request(project, iid)?;
+    // The stack it's in, from GraphQL beside the rest: a round trip a level.
+    let full = mr.references.full.split('!').next().unwrap_or_default().to_string();
+    let (source, target) = (mr.source_branch.clone(), mr.target_branch.clone());
+    std::thread::scope(|s| {
+        let stack = s.spawn(|| c.merge_request_stack(&full, iid, &source, &target));
+        let mut r = load_rest(c, project, iid, mr, multiple, lap)?;
+        r.stack = stack.join().ok().and_then(Result::ok).unwrap_or_default();
+        Ok(r)
+    })
+}
+
+fn load_rest(
+    c: &api::Client,
+    project: u64,
+    iid: u64,
+    mr: types::MergeRequest,
+    multiple: Option<(bool, bool)>,
+    lap: &dyn Fn(&str),
+) -> anyhow::Result<review::Review> {
     let diffs = c.diffs(project, iid)?;
     let mut r = review::Review::build(
         mr,

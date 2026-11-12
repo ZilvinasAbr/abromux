@@ -187,6 +187,8 @@ pub struct GitLabView {
     pub(crate) activity: crate::mr::ActivityFilter,
     pub(crate) newest_first: bool,
     pub(crate) activity_menu: bool,
+    /// The header's "Stacked merge requests" dropdown is open.
+    pub(crate) stack_menu: bool,
     /// The list's sort dropdown is open.
     sort_menu: bool,
     /// Writing (edit.rs): the text fields, a write under way, the last
@@ -318,6 +320,7 @@ impl GitLabView {
             activity: Default::default(),
             newest_first: false,
             activity_menu: false,
+            stack_menu: false,
             sort_menu: false,
             loc,
             focus: cx.focus_handle(),
@@ -1034,9 +1037,10 @@ impl GitLabView {
             return;
         }
         // Escape closes an open menu first, as in GitLab.
-        if k.key == "escape" && (self.menu.is_some() || self.activity_menu) {
+        if k.key == "escape" && (self.menu.is_some() || self.activity_menu || self.stack_menu) {
             self.menu = None;
             self.activity_menu = false;
+            self.stack_menu = false;
             cx.notify();
             cx.stop_propagation();
             return;
@@ -1336,6 +1340,9 @@ impl Tab for GitLabView {
                 "load": self.review.name(),
                 "error": self.review.error().map(|e| &e.text),
                 "summary": r.map(|r| r.summary()),
+                // GitLab's "Stacked merge requests", bottom first, and its dropdown.
+                "stack": r.map(|r| r.stack.iter().map(|m| json!({ "iid": m.iid, "title": m.title, "files": m.files, "additions": m.additions, "deletions": m.deletions })).collect::<Vec<_>>()),
+                "stack_menu": self.stack_menu,
             },
             "changes": {
                 "rows": self.rows.len(),
