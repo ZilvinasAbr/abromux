@@ -104,9 +104,12 @@ impl GitLabView {
         self.save_side(fields, window, cx);
     }
 
-    /// PUT the merge request's `fields`, then fetch it again.
+    /// PUT the merge request's `fields` (shown at once), then fetch it again.
     pub(crate) fn save_side(&mut self, fields: serde_json::Value, window: &mut Window, cx: &mut Context<Self>) {
-        self.write(crate::edit::Write::Sidebar, move |c, p, iid| c.update(p, iid, fields).map(|_| ()), |_, _, _| {}, window, cx);
+        // Who the picker found by searching GitLab, for the ids it names.
+        let people = self.people_found.as_ref().map(|(_, p)| p.clone()).unwrap_or_default();
+        let patch = crate::optimistic::Patch::Fields { fields: fields.clone(), people };
+        self.write(crate::edit::Write::Sidebar, Some(patch), move |c, p, iid| c.update(p, iid, fields).map(|_| ()), |_, _, _| {}, window, cx);
     }
 
     /// Tick or untick a person or a label in the open dropdown; pick a

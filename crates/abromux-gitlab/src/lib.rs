@@ -21,6 +21,7 @@ mod emoji;
 pub mod highlight;
 pub mod local;
 mod mr;
+mod optimistic;
 mod search;
 mod projects;
 mod select;

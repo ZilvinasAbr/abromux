@@ -184,6 +184,7 @@ pub struct GitLabView {
     /// one's error, the thread being replied to, the line being commented on.
     pub(crate) boxes: crate::edit::Boxes,
     pub(crate) busy: Option<crate::edit::Write>,
+    pub(crate) writes: crate::edit::Writes,
     /// The Overview's "Add reaction" picker is open.
     pub(crate) emoji_picker: Option<crate::mr::AwardOn>,
     pub(crate) write_error: Option<String>,
@@ -260,6 +261,7 @@ impl GitLabView {
         let mut v = Self {
             boxes,
             busy: None,
+            writes: Default::default(),
             emoji_picker: None,
             write_error: None,
             replying: None,
@@ -641,8 +643,7 @@ impl GitLabView {
             if let Some((r, serial)) = seen {
                 self.loc.project = Some(r.mr.project_id);
                 self.review_serial = serial;
-                self.review = Load::Ready(r);
-                self.rebuild_rows(cx);
+                self.set_review(r, None, cx);
             } else if let Target::Id(p, iid) = target
                 && !crate::local::is_local(&host)
             {
@@ -655,7 +656,7 @@ impl GitLabView {
         });
         let quiet = quiet && self.review.ready().is_some();
         if !quiet {
-            self.review = Load::Loading;
+            self.clear_review(Load::Loading);
         }
         self.refreshing = true;
         self._review_task = Some(cx.spawn(async move |this, cx| {
@@ -680,12 +681,12 @@ impl GitLabView {
                         let r = Rc::new(r);
                         crate::cache::put(cx, &v.host(), r.clone(), started, bytes, false);
                         let serial = crate::cache::shared(cx).map_or(0, |s| s.serial());
-                        v.show_review(r, serial, cx);
+                        v.show_review(r, serial, started, cx);
                     }
                     // A quiet refresh that fails keeps what's showing.
                     Err(_) if quiet => cx.notify(),
                     Err(e) => {
-                        v.review = Load::Failed(Failure::of(&e));
+                        v.clear_review(Load::Failed(Failure::of(&e)));
                         v.rebuild_rows(cx);
                     }
                 }
@@ -710,9 +711,7 @@ impl GitLabView {
                     let serial = crate::cache::shared(cx).map_or(0, |s| s.serial());
                     v.loc.project = Some(project);
                     v.review_serial = serial;
-                    v.review = Load::Ready(r);
-                    v.rebuild_rows(cx);
-                    cx.notify();
+                    v.set_review(r, None, cx);
                 }
             })
             .ok();
@@ -722,19 +721,19 @@ impl GitLabView {
     /// A newer load of the merge request showing, from `cache::Shared`
     /// (another tab's, or abromux's poller's): in place, as a quiet refresh.
     fn adopt_shared(&mut self, cx: &mut Context<Self>) {
-        let Some(shown) = self.review.ready() else { return };
+        let Some(shown) = self.fetched_review() else { return };
         let Some(e) = crate::cache::shared(cx).and_then(|s| s.get(self.loc.host(), shown.mr.project_id, shown.mr.iid)) else {
             return;
         };
         if e.serial <= self.review_serial || Rc::ptr_eq(&e.review, shown) || e.replayed {
             return;
         }
-        let (r, serial) = (e.review.clone(), e.serial);
-        self.show_review(r, serial, cx);
+        let (r, serial, fetched) = (e.review.clone(), e.serial, e.fetched);
+        self.show_review(r, serial, fetched, cx);
     }
 
-    /// `r`, newly loaded, in place of what's showing.
-    fn show_review(&mut self, r: Rc<Review>, serial: u64, cx: &mut Context<Self>) {
+    /// `r`, newly loaded (fetched at `fetched`), in place of what's showing.
+    fn show_review(&mut self, r: Rc<Review>, serial: u64, fetched: std::time::Instant, cx: &mut Context<Self>) {
         self.loc.project = Some(r.mr.project_id);
         self.loc.iid = Some(r.mr.iid);
         self.pending_path = None;
@@ -757,8 +756,7 @@ impl GitLabView {
         if self.recent.len() > 8 {
             self.recent.remove(0);
         }
-        self.review = Load::Ready(r);
-        self.rebuild_rows(cx);
+        self.set_review(r, Some(fetched), cx);
         self.fetch_pictures(cx);
     }
 
@@ -834,7 +832,7 @@ impl GitLabView {
         self.loc.iid = None;
         self.loc.viewed.clear();
         self.current = None;
-        self.review = Load::Idle;
+        self.clear_review(Load::Idle);
         self._review_task = None;
         self.rows.clear();
         self.diff_list.reset(0);
@@ -1091,7 +1089,7 @@ impl GitLabView {
                 let changed = last.as_ref().is_some_and(|l| *l != sig);
                 last = Some(sig);
                 let alive = this.update(cx, |v, cx| {
-                    if changed && v.busy.is_none() {
+                    if changed && v.busy.is_none() && !v.writes.any() {
                         v.refresh_quietly(cx);
                     }
                 });

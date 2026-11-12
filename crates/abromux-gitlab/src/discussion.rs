@@ -266,7 +266,8 @@ impl GitLabView {
                 .child(icon(name, 16., color))
                 .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip).build(window, cx))
         };
-        let writes = self.me.is_some();
+        // Made here and not yet GitLab's: nothing to do to it yet.
+        let writes = self.me.is_some() && !crate::optimistic::is_pending_thread(&d.id);
         let resolved = d.resolved();
         let link = format!("{}#note_{}", self.review.ready().map_or("", |r| r.mr.web_url.as_str()), first.id);
         div()
@@ -314,7 +315,8 @@ impl GitLabView {
         let body = self.markdown(("note", n.id as usize), &n.body, &n.suggestions, path, window, cx);
         // GitLab's "Add reaction" first among a note's buttons; a local diff
         // has no reactions.
-        let react = (self.me.is_some() && !self.is_local() && !n.system && self.review.ready().is_some_and(|r| r.mr.state != "locked"))
+        let pending = crate::optimistic::is_pending_note(n.id);
+        let react = (self.me.is_some() && !pending && !self.is_local() && !n.system && self.review.ready().is_some_and(|r| r.mr.state != "locked"))
             .then(|| self.add_reaction(crate::mr::AwardOn::Note(n.id), cx));
         let actions = match (react, actions) {
             (None, a) => a,
@@ -327,6 +329,8 @@ impl GitLabView {
             .gap_2()
             .px_4()
             .py_3()
+            // Faded until GitLab has it.
+            .when(pending, |d| d.opacity(0.6))
             .when(avatar, |d| d.child(self.avatars.of(&n.author, 24.)))
             .child(
                 div()

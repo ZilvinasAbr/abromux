@@ -2,20 +2,31 @@
 //! request, replies in threads, resolving and reopening threads, new
 //! threads on a line of the diff, and approving.
 //!
-//! Each write runs in the background; when it lands the review is fetched
-//! again quietly (as the two-minute poll does), so what's shown is what
-//! GitLab has. A failure says why above the overview and keeps what was
-//! typed.
+//! Each write shows what it will do at once (`optimistic`), and queues to
+//! run in the background, in order; when the queue empties the review is
+//! fetched again quietly (as the two-minute poll does), so what's shown is
+//! what GitLab has. A failure takes its effect back, says why above the
+//! overview and puts what was typed back in its box.
 
-use crate::{api::Client, mr::AwardOn, style::*, types::DiffRefs, view::GitLabView};
+use crate::{
+    api::Client,
+    mr::AwardOn,
+    optimistic::{Patch, is_pending_note, is_pending_thread},
+    review::Review,
+    style::*,
+    types::DiffRefs,
+    view::{GitLabView, Load},
+};
+use std::rc::Rc;
 use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputState};
 
 /// A line a new thread goes on: (file index, old line, new line).
 pub type LineKey = (usize, Option<u32>, Option<u32>);
 
-/// Which write is under way. One runs at a time, and only its own button
-/// says so ("Approving…"): a reply being sent mustn't make Approve flicker.
+/// Which write is under way. One runs at a time, the rest queue; most show
+/// their effect at once (optimistic.rs), and only those that can't say so
+/// on their own button ("Submitting…").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Write {
     Comment,
@@ -69,6 +80,16 @@ impl Boxes {
     }
 }
 
+/// A write that failed: what was typed back in its box, unless something
+/// new is being typed there.
+fn put_back(b: &Entity<InputState>, text: &str, window: &mut Window, cx: &mut App) {
+    b.update(cx, |b, cx| {
+        if b.value().trim().is_empty() {
+            b.set_value(text.to_string(), window, cx);
+        }
+    });
+}
+
 /// GitLab's primary (blue) button.
 pub fn primary(id: impl Into<ElementId>, label: &'static str, enabled: bool) -> Stateful<Div> {
     div()
@@ -100,27 +121,126 @@ pub fn secondary(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div>
         .child(label)
 }
 
+type Run = Box<dyn FnOnce(&Client, u64, u64) -> anyhow::Result<()> + Send>;
+type Undo = Box<dyn FnOnce(&mut GitLabView, &mut Window, &mut Context<GitLabView>)>;
+
+/// A write waiting its turn, or under way: they run one at a time, in the
+/// order made, so "approve, then revoke" reaches GitLab in that order.
+struct Job {
+    what: Write,
+    n: u64,
+    mr: (u64, u64),
+    f: Run,
+    failed: Undo,
+}
+
+/// A write's patch, shown from when it's made until a review fetched after
+/// it `landed` is in (or it fails).
+struct Shown {
+    n: u64,
+    mr: (u64, u64),
+    patch: Patch,
+    landed: Option<std::time::Instant>,
+}
+
+/// The writes of a tab: queued, and showing ahead of GitLab.
+#[derive(Default)]
+pub struct Writes {
+    queue: std::collections::VecDeque<Job>,
+    shown: Vec<Shown>,
+    next: u64,
+    /// The review as GitLab last sent it, before any patch.
+    base: Option<Rc<Review>>,
+}
+
+impl Writes {
+    /// Something is queued or under way.
+    pub fn any(&self) -> bool {
+        !self.queue.is_empty()
+    }
+}
+
 impl GitLabView {
-    /// Run `f` against GitLab in the background (for the open merge
-    /// request: its project and iid), then `done` and a quiet refresh; or
-    /// keep everything and show the error.
+    /// Show `r` as GitLab sent it, fetched at `fetched`: the patches of
+    /// writes that landed before then are in it now, the rest go on top.
+    pub(crate) fn set_review(&mut self, r: Rc<Review>, fetched: Option<std::time::Instant>, cx: &mut Context<Self>) {
+        if let Some(at) = fetched {
+            let key = (r.mr.project_id, r.mr.iid);
+            self.writes.shown.retain(|s| s.mr != key || s.landed.is_none_or(|l| l > at));
+        }
+        self.writes.base = Some(r);
+        self.present(cx);
+    }
+
+    /// The review on screen gone (loading another, failed, back to the list).
+    pub(crate) fn clear_review(&mut self, to: Load<Rc<Review>>) {
+        self.writes.base = None;
+        self.review = to;
+    }
+
+    /// The last review GitLab sent, with the writes not yet in it on top.
+    fn present(&mut self, cx: &mut Context<Self>) {
+        let Some(base) = self.writes.base.clone() else { return };
+        let key = (base.mr.project_id, base.mr.iid);
+        let mut on: Vec<&Shown> = self.writes.shown.iter().filter(|s| s.mr == key).collect();
+        let shown = match (&self.me, on.is_empty()) {
+            (Some(me), false) => {
+                on.sort_by_key(|s| s.n);
+                let mut r = (*base).clone();
+                for s in on {
+                    s.patch.apply(&mut r, me, s.n);
+                }
+                Rc::new(r)
+            }
+            _ => base,
+        };
+        self.review = Load::Ready(shown);
+        self.rebuild_rows(cx);
+        cx.notify();
+    }
+
+    /// The review as GitLab last sent it (no writes on top).
+    pub(crate) fn fetched_review(&self) -> Option<&Rc<Review>> {
+        self.writes.base.as_ref()
+    }
+
+    /// Queue `f` against GitLab (for the open merge request: its project
+    /// and iid), showing `patch` at once. When the queue empties the review
+    /// is fetched again quietly, so what's shown is what GitLab has. A
+    /// failure takes the patch back, says why above the overview, and runs
+    /// `failed` (to put back what was typed).
     pub(crate) fn write(
         &mut self,
         what: Write,
+        patch: Option<Patch>,
         f: impl FnOnce(&Client, u64, u64) -> anyhow::Result<()> + Send + 'static,
-        done: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+        failed: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (Some(c), Some(p), Some(iid)) = (self.client.clone(), self.loc.project, self.loc.iid) else {
+        let (Some(_), Some(p), Some(iid)) = (self.client.as_ref(), self.loc.project, self.loc.iid) else {
             return;
         };
+        self.writes.next += 1;
+        let n = self.writes.next;
+        self.write_error = None;
+        if let Some(patch) = patch {
+            self.writes.shown.push(Shown { n, mr: (p, iid), patch, landed: None });
+            self.present(cx);
+        }
+        self.writes.queue.push_back(Job { what, n, mr: (p, iid), f: Box::new(f), failed: Box::new(failed) });
+        self.pump(window, cx);
+        cx.notify();
+    }
+
+    /// Start the next queued write, unless one is under way.
+    fn pump(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy.is_some() {
             return;
         }
+        let Some(c) = self.client.clone() else { return };
+        let Some(Job { what, n, mr: (p, iid), f, failed }) = self.writes.queue.pop_front() else { return };
         self.busy = Some(what);
-        self.write_error = None;
-        cx.notify();
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let got = cx.background_spawn(async move { f(&c, p, iid) }).await;
@@ -129,12 +249,23 @@ impl GitLabView {
                     v.busy = None;
                     match got {
                         Ok(()) => {
-                            done(v, window, cx);
-                            v.refresh_quietly(cx);
+                            if let Some(s) = v.writes.shown.iter_mut().find(|s| s.n == n) {
+                                s.landed = Some(std::time::Instant::now());
+                            }
                             v.start_agents(window, cx);
                         }
-                        Err(e) => v.write_error = Some(format!("{e:#}")),
+                        Err(e) => {
+                            v.writes.shown.retain(|s| s.n != n);
+                            v.write_error = Some(format!("{e:#}"));
+                            failed(v, window, cx);
+                            v.present(cx);
+                        }
                     }
+                    // The last of a burst: what GitLab has now.
+                    if v.writes.queue.is_empty() && (v.loc.project, v.loc.iid) == (Some(p), Some(iid)) {
+                        v.refresh_quietly(cx);
+                    }
+                    v.pump(window, cx);
                     cx.notify();
                 });
             });
@@ -144,16 +275,20 @@ impl GitLabView {
 
     // ---- the actions, also behind socket commands ------------------------
 
-    /// Post the Overview's comment box.
+    /// Post the Overview's comment box: it shows in the activity at once,
+    /// and comes back to the box if GitLab turns it down.
     pub(crate) fn post_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let body = self.boxes.comment.read(cx).value().trim().to_string();
         if body.is_empty() {
             return;
         }
+        self.boxes.comment.update(cx, |b, cx| b.set_value("", window, cx));
+        let back = body.clone();
         self.write(
             Write::Comment,
+            Some(Patch::Comment { body: body.clone() }),
             move |c, p, iid| c.comment(p, iid, &body).map(|_| ()),
-            |v, window, cx| v.boxes.comment.update(cx, |b, cx| b.set_value("", window, cx)),
+            move |v, window, cx| put_back(&v.boxes.comment, &back, window, cx),
             window,
             cx,
         );
@@ -161,6 +296,9 @@ impl GitLabView {
 
     /// Open the reply box under thread `id` (closing any other).
     pub(crate) fn open_reply(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if is_pending_thread(id) {
+            return;
+        }
         if self.replying.as_deref() != Some(id) {
             self.boxes.reply.update(cx, |b, cx| b.set_value("", window, cx));
         }
@@ -183,8 +321,12 @@ impl GitLabView {
         if body.is_empty() {
             return;
         }
+        self.boxes.reply.update(cx, |b, cx| b.set_value("", window, cx));
+        self.replying = None;
+        let (thread, back) = (id.clone(), body.clone());
         self.write(
             Write::Reply,
+            Some(Patch::Reply { thread: id.clone(), body: body.clone(), resolve }),
             move |c, p, iid| {
                 c.reply(p, iid, &id, &body)?;
                 if resolve {
@@ -192,23 +334,37 @@ impl GitLabView {
                 }
                 Ok(())
             },
-            |v, window, cx| {
-                v.boxes.reply.update(cx, |b, cx| b.set_value("", window, cx));
-                v.replying = None;
+            // The reply box open on the thread again, with the text.
+            move |v, window, cx| {
+                if v.replying.is_none() || v.replying.as_deref() == Some(thread.as_str()) {
+                    v.replying = Some(thread);
+                    put_back(&v.boxes.reply, &back, window, cx);
+                }
             },
+            window,
+            cx,
+        );
+        self.rebuild_rows(cx);
+    }
+
+    /// Resolve, or reopen, thread `id`.
+    pub(crate) fn set_resolved(&mut self, id: &str, resolved: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if is_pending_thread(id) {
+            return;
+        }
+        let id = id.to_string();
+        self.write(
+            Write::Resolve,
+            Some(Patch::Resolve { thread: id.clone(), resolved }),
+            move |c, p, iid| c.resolve(p, iid, &id, resolved).map(|_| ()),
+            |_, _, _| {},
             window,
             cx,
         );
     }
 
-    /// Resolve, or reopen, thread `id`.
-    pub(crate) fn set_resolved(&mut self, id: &str, resolved: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let id = id.to_string();
-        self.write(Write::Resolve, move |c, p, iid| c.resolve(p, iid, &id, resolved).map(|_| ()), |_, _, _| {}, window, cx);
-    }
-
     pub(crate) fn set_approved(&mut self, approve: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.write(Write::Approve, move |c, p, iid| c.approve(p, iid, approve), |_, _, _| {}, window, cx);
+        self.write(Write::Approve, Some(Patch::Approve { approve }), move |c, p, iid| c.approve(p, iid, approve), |_, _, _| {}, window, cx);
     }
 
     /// GitLab's reaction toggle, on the merge request or a comment: take
@@ -223,7 +379,14 @@ impl GitLabView {
                 let mine = r.awards.iter().find(|a| a.name == name && Some(a.user.id) == me).map(|a| a.id);
                 self.write(
                     Write::Award,
+                    Some(Patch::Award { name: name.clone(), add: mine.is_none() }),
                     move |c, p, iid| match mine {
+                        // Added here and not yet back from GitLab: its id is
+                        // GitLab's to tell (it's in by now: writes go in order).
+                        Some(id) if is_pending_note(id) => {
+                            let a = c.awards(p, iid)?.into_iter().find(|a| a.name == name && Some(a.user.id) == me);
+                            a.map_or(Ok(()), |a| c.unaward(p, iid, a.id))
+                        }
                         Some(id) => c.unaward(p, iid, id),
                         None => c.award(p, iid, &name),
                     },
@@ -233,9 +396,13 @@ impl GitLabView {
                 );
             }
             AwardOn::Note(note) => {
+                if is_pending_note(note) {
+                    return;
+                }
                 let mine = r.note_awards.get(&note).is_some_and(|aw| aw.iter().any(|a| a.name == name && Some(a.user.id) == me));
                 self.write(
                     Write::Award,
+                    Some(Patch::NoteAward { note, name: name.clone(), add: !mine }),
                     move |c, p, iid| match (mine, me) {
                         (true, Some(me)) => c.note_unaward(p, iid, note, &name, me),
                         _ => c.note_award(p, iid, note, &name),
@@ -249,7 +416,7 @@ impl GitLabView {
     }
 
     pub(crate) fn rebase(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.write(Write::Rebase, |c, p, iid| c.rebase(p, iid), |_, _, _| {}, window, cx);
+        self.write(Write::Rebase, None, |c, p, iid| c.rebase(p, iid), |_, _, _| {}, window, cx);
     }
 
     /// Open the new-thread box under a line of the diff.
@@ -279,8 +446,17 @@ impl GitLabView {
             return;
         }
         let (old_path, new_path) = (f.meta.old_path.clone(), f.meta.new_path.clone());
+        self.boxes.line.update(cx, |b, cx| b.set_value("", window, cx));
+        self.commenting = None;
+        let back = body.clone();
+        let patch = if draft {
+            Patch::Draft { body: body.clone() }
+        } else {
+            Patch::LineComment { file: fi, old, new, body: body.clone() }
+        };
         self.write(
             if draft { Write::LineDraft } else { Write::LineComment },
+            Some(patch),
             move |c, p, iid| {
                 let refs: DiffRefs = refs;
                 if draft {
@@ -289,19 +465,25 @@ impl GitLabView {
                     c.line_comment(p, iid, &refs, &old_path, &new_path, old, new, &body).map(|_| ())
                 }
             },
-            |v, window, cx| {
-                v.boxes.line.update(cx, |b, cx| b.set_value("", window, cx));
-                v.commenting = None;
+            // The box open on the line again, with the text.
+            move |v, window, cx| {
+                if v.commenting.is_none() || v.commenting == Some((fi, old, new)) {
+                    v.commenting = Some((fi, old, new));
+                    put_back(&v.boxes.line, &back, window, cx);
+                    v.rebuild_rows(cx);
+                }
             },
             window,
             cx,
         );
+        self.rebuild_rows(cx);
     }
 
     /// Submit your review: its pending comments become threads.
     pub(crate) fn submit_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.write(
             Write::SubmitReview,
+            None,
             |c, p, iid| {
                 let pending: Vec<String> = c.draft_notes(p, iid)?.into_iter().map(|d| d.note).collect();
                 c.publish_drafts(p, iid)?;
@@ -366,8 +548,8 @@ impl GitLabView {
     /// GitLab's comment form at the end of the Overview.
     pub(crate) fn comment_form(&self, cx: &mut Context<Self>) -> Div {
         let empty = self.boxes.comment.read(cx).value().trim().is_empty();
-        let (label, live) = busy_label(self.busy, Write::Comment, "Comment", "Commenting…");
-        let enabled = !empty && live;
+        // It shows at once (optimistic.rs): nothing to wait for.
+        let (label, enabled) = ("Comment", !empty);
         div()
             .flex()
             .gap_3()
@@ -405,8 +587,12 @@ impl GitLabView {
     /// Under a thread: the reply placeholder (or the open reply box) and
     /// "Resolve thread" / "Reopen thread", as GitLab has them.
     pub(crate) fn reply_bar(&self, id: &str, resolvable: bool, resolved: bool, cx: &mut Context<Self>) -> Div {
+        // Made here, not yet GitLab's: nothing to reply to or resolve yet.
+        if is_pending_thread(id) {
+            return div().px_4().py_3().border_t_1().border_color(c(RAISED)).bg(c(CARD)).text_color(c(MUTED)).child("Sending…");
+        }
         let open = self.replying.as_deref() == Some(id);
-        let (reply_label, live) = busy_label(self.busy, Write::Reply, "Reply", "Replying…");
+        let reply_label = "Reply";
         let resolve_button = resolvable.then(|| {
             let thread = id.to_string();
             secondary(
@@ -447,7 +633,7 @@ impl GitLabView {
                 .children(resolve_button);
         }
         let empty = self.boxes.reply.read(cx).value().trim().is_empty();
-        let enabled = !empty && live;
+        let enabled = !empty;
         div()
             .flex()
             .flex_col()
@@ -489,8 +675,8 @@ impl GitLabView {
     /// The new-thread box under a line of the diff.
     pub(crate) fn line_form(&self, cx: &mut Context<Self>) -> Div {
         let empty = self.boxes.line.read(cx).value().trim().is_empty();
-        let (send_label, live) = busy_label(self.busy, Write::LineComment, "Add comment now", "Adding…");
-        let enabled = !empty && live && self.busy != Some(Write::LineDraft);
+        let send_label = "Add comment now";
+        let enabled = !empty;
         div()
             .flex()
             .flex_col()
@@ -539,8 +725,7 @@ impl GitLabView {
             secondary("gl-unapprove", "Revoke approval")
                 .on_click(cx.listener(|v, _, window, cx| v.set_approved(false, window, cx)))
         } else {
-            let (label, live) = busy_label(self.busy, Write::Approve, "Approve", "Approving…");
-            primary("gl-approve", label, live)
+            primary("gl-approve", "Approve", true)
                 .on_click(cx.listener(|v, _, window, cx| v.set_approved(true, window, cx)))
         }
     }
