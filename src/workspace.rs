@@ -403,6 +403,9 @@ pub struct Workspace {
     /// A name `automation.workspaceAutoNaming` made from its agent's
     /// first prompt; `custom_name` wins over it.
     pub auto_title: Option<String>,
+    /// The terminal (its surface ref) of the first agent to run here: only
+    /// it names the workspace, so later agents leave the name alone.
+    pub name_surface: Option<usize>,
     /// Shown under the name (⌥⌘E, `workspace-action set-description`).
     pub description: Option<String>,
     /// `#rrggbb`, from cmux's palette or any.
@@ -517,6 +520,7 @@ impl Workspace {
             id,
             custom_name,
             auto_title: None,
+            name_surface: None,
             description: None,
             color: None,
             group: None,

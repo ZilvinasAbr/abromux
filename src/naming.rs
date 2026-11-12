@@ -2,8 +2,16 @@
 //! still on its made-up name is named from what its agent is asked to do,
 //! by that agent's own CLI (`agent::title_for`), and renamed as the work
 //! moves on, until you name it yourself.
+//!
+//! Only the first agent to run in a workspace names it ([`claim_naming`]):
+//! later ones, in other terminals, leave the name alone. Claude Code titles
+//! its own terminal, so a Claude workspace takes that title as it changes
+//! ([`name_from_title`]); other agents are asked for one by their CLI.
+//!
+//! [`claim_naming`]: AbroMux::claim_naming
+//! [`name_from_title`]: AbroMux::name_from_title
 
-use crate::{AbroMux, agent::Kind, one_line};
+use crate::{AbroMux, agent::Kind, one_line, workspace::Surface};
 use gpui::{AppContext as _, Context};
 
 impl AbroMux {
@@ -28,6 +36,11 @@ impl AbroMux {
         if ws.custom_name.is_some() || !(on || ws.home.is_some()) {
             return;
         }
+        // Another agent names this workspace, or Claude Code titles its
+        // terminal itself ([`Self::name_from_title`]).
+        if !self.names_workspace(surface) || kind == Kind::Claude {
+            return;
+        }
         // Still on the name its folder was made with: nothing has named it yet.
         let made_up = ws
             .home
@@ -47,6 +60,74 @@ impl AbroMux {
             return;
         }
         self.run_naming(id, kind, cx);
+    }
+
+    /// Auto-naming is on for the workspace holding `surface`, and it isn't
+    /// named by hand.
+    fn naming_on(&self, surface: gpui::EntityId, cx: &Context<Self>) -> Option<usize> {
+        let i = self.workspaces.iter().position(|w| w.contains(surface))?;
+        let on = cx
+            .global::<crate::settings::Settings>()
+            .automation
+            .workspace_auto_naming;
+        let ws = &self.workspaces[i];
+        (ws.custom_name.is_none() && (on || ws.home.is_some())).then_some(i)
+    }
+
+    /// `surface` is the terminal whose agent names its workspace.
+    fn names_workspace(&self, surface: gpui::EntityId) -> bool {
+        let Some(ws) = self.workspaces.iter().find(|w| w.contains(surface)) else {
+            return false;
+        };
+        ws.name_surface.is_some() && ws.name_surface == self.surface_refs.get(&surface).copied()
+    }
+
+    /// An agent reported in from terminal `surface`: if it's the first in its
+    /// workspace, it names the workspace from now on.
+    pub(crate) fn claim_naming(&mut self, surface: gpui::EntityId, cx: &mut Context<Self>) {
+        let Some(i) = self.naming_on(surface, cx) else {
+            return;
+        };
+        if self.workspaces[i].name_surface.is_some() {
+            return;
+        }
+        let Some(r) = self.surface_refs.get(&surface).copied() else {
+            return;
+        };
+        let has_agent = self.workspaces[i].surfaces().any(|s| match s {
+            Surface::Terminal(t) => t.entity_id() == surface && t.read(cx).agent.is_some(),
+            _ => false,
+        });
+        if has_agent {
+            self.workspaces[i].name_surface = Some(r);
+            self.name_from_title(surface, cx);
+        }
+    }
+
+    /// Terminal `surface`'s title changed: if Claude Code, the workspace's
+    /// naming agent, set it, it's the workspace's name.
+    pub(crate) fn name_from_title(&mut self, surface: gpui::EntityId, cx: &mut Context<Self>) {
+        if !self.names_workspace(surface) {
+            return;
+        }
+        let Some(i) = self.naming_on(surface, cx) else {
+            return;
+        };
+        let title = self.workspaces[i].surfaces().find_map(|s| match s {
+            Surface::Terminal(t) if t.entity_id() == surface => {
+                let t = t.read(cx);
+                t.has_claude().then(|| agent_title(t.shown_title())).flatten()
+            }
+            _ => None,
+        });
+        let Some(title) = title else {
+            return;
+        };
+        let ws = &mut self.workspaces[i];
+        if ws.auto_title.as_deref() != Some(title.as_str()) {
+            ws.auto_title = Some(title);
+            cx.notify();
+        }
     }
 
     /// Ask `kind`'s CLI for a title from the prompts so far; once it
@@ -102,6 +183,13 @@ impl AbroMux {
         .detach();
     }
 
+}
+
+/// A title Claude Code set on its terminal, as a workspace name: None for
+/// its placeholder before it has made one from the session.
+fn agent_title(shown: &str) -> Option<String> {
+    let t = one_line(shown.trim());
+    (!t.is_empty() && t != "Claude Code").then_some(t)
 }
 
 /// Auto-naming's state for one workspace ([`AbroMux::auto_name`]).
@@ -180,6 +268,13 @@ mod tests {
         // Later, it gets another go.
         n.failed_at = std::time::Instant::now().checked_sub(RETRY_AFTER);
         assert!(!n.gave_up());
+    }
+
+    #[test]
+    fn agent_titles() {
+        assert_eq!(agent_title("Abromux workspace name").as_deref(), Some("Abromux workspace name"));
+        assert_eq!(agent_title("  Claude Code "), None);
+        assert_eq!(agent_title(""), None);
     }
 
 }

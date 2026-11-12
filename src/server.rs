@@ -2063,6 +2063,7 @@ impl AbroMux {
         let Some(kind) = str_param(p, "kind").and_then(Kind::parse) else {
             return;
         };
+        self.claim_naming(surface, cx);
         if let Some(prompt) = str_param(p, "prompt") {
             self.auto_name(surface, kind, prompt.to_string(), cx);
         }
@@ -2617,6 +2618,7 @@ impl AbroMux {
             "clear-name" => {
                 ws.custom_name = None;
                 ws.auto_title = None;
+                ws.name_surface = None;
                 self.naming.remove(&id);
             }
             "set-description" => {

@@ -78,6 +78,9 @@ pub struct WorkspaceState {
     pub root: NodeState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_name: Option<String>,
+    /// [`crate::workspace::Workspace::name_surface`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_surface: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -264,6 +267,7 @@ impl AbroMux {
             .map(|ws| WorkspaceState {
                 name: ws.custom_name.clone(),
                 auto_name: ws.auto_title.clone(),
+                name_surface: ws.name_surface,
                 description: ws.description.clone(),
                 color: ws.color,
                 home: ws.home.as_ref().map(|h| h.to_string_lossy().into_owned()),
@@ -505,6 +509,7 @@ impl AbroMux {
                 .unwrap_or(0);
             let mut ws = Workspace::new(id, state.name, root, focused_pane);
             ws.auto_title = state.auto_name;
+            ws.name_surface = state.name_surface;
             ws.description = state.description;
             ws.color = state.color;
             ws.home = home;
@@ -813,6 +818,7 @@ mod tests {
             workspaces: vec![WorkspaceState {
                 name: Some("api".into()),
                 auto_name: None,
+                name_surface: None,
                 description: Some("Ship it\n- build".into()),
                 color: Some(0x1565c0),
                 group: Some(0),
