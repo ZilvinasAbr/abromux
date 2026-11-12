@@ -707,7 +707,10 @@ impl AbroMux {
                 TerminalEvent::Notification { title, body } => {
                     this.add_notification(id, title.clone(), body.clone(), false, window, cx);
                 }
-                TerminalEvent::TitleChanged => cx.notify(),
+                TerminalEvent::TitleChanged => {
+                    this.name_from_title(id, cx);
+                    cx.notify();
+                }
                 TerminalEvent::Respawned => {
                     // Status pills described what ran in the old shell.
                     this.forget_status(id);
@@ -1399,6 +1402,7 @@ impl AbroMux {
                             // Back to following the terminal's title.
                             ws.custom_name = None;
                             ws.auto_title = None;
+                            ws.name_surface = None;
                             this.naming.remove(&id);
                         } else if name != ws.name(cx) {
                             ws.custom_name = Some(name);
