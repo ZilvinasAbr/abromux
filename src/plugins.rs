@@ -13,6 +13,8 @@ impl Global for Shell {}
 pub fn set_host(view: WeakEntity<crate::AbroMux>, cx: &mut App) {
     cx.set_global(Shell(view));
     cx.set_global(abromux_plugin::Host { open_url, run_terminal, jira });
+    // Links gpui-component's markdown opens go to a tab, see catch_opened_urls.
+    crate::browser_native::open_url_hook_install();
 }
 
 /// A plugin's command in a terminal (a local diff's agents): deferred, as

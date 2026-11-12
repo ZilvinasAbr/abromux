@@ -86,6 +86,15 @@ pub trait TerminalApp: Any {
     fn translate_key(&self, _ks: &Keystroke) -> Option<Keystroke> {
         None
     }
+    /// A ⌘-key that's the program's even when it can't be sent: it stops
+    /// here rather than going on to the app's menu.
+    fn keeps_key(&self, _ks: &Keystroke) -> bool {
+        false
+    }
+    /// Reload the page another way than its key; false if it can't.
+    fn reload(&self) -> bool {
+        false
+    }
 }
 
 pub enum TerminalEvent {
@@ -1058,7 +1067,36 @@ impl TerminalView {
         };
         if self.send_key(ks, action, cx) {
             cx.stop_propagation();
+        } else if self.app.as_ref().is_some_and(|a| a.keeps_key(ks)) {
+            // Not on to the menu, whose ⌘C copies the grid, not the page.
+            if ks.key == "c" {
+                self.copy(cx);
+            }
+            cx.stop_propagation();
         }
+    }
+
+    /// ⌘R in a tab whose program shows a page (terminal-browser): the key,
+    /// else the app's other way to reload. False if it's no such tab.
+    fn reload_page(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(app) = self.app.as_ref() else { return false };
+        if app.page_url().is_none() {
+            return false;
+        }
+        let ks = Keystroke {
+            modifiers: Modifiers {
+                platform: true,
+                ..Default::default()
+            },
+            key: "r".into(),
+            key_char: None,
+        };
+        if !self.send_keystroke(&ks, cx)
+            && let Some(app) = self.app.as_ref()
+        {
+            app.reload();
+        }
+        true
     }
 
     /// A key let go: its release, to a program that was sent its press and
@@ -1632,6 +1670,11 @@ impl Render for TerminalView {
             .on_key_up(cx.listener(Self::on_key_up))
             .on_action(cx.listener(|this, _: &Copy, _, cx| {
                 this.copy(cx);
+            }))
+            .on_action(cx.listener(|this, _: &crate::browser::Reload, _, cx| {
+                if !this.reload_page(cx) {
+                    cx.propagate();
+                }
             }))
             .on_action(cx.listener(|this, _: &IncreaseFontSize, _, cx| {
                 this.set_font_size(this.font_size + 1., cx)

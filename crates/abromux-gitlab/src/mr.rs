@@ -331,6 +331,8 @@ impl GitLabView {
         };
         let unresolved = r.unresolved();
         let local = self.is_local();
+        // Built before the tabs, which hold `cx` till the end.
+        let stack = if local { None } else { self.stack_button(r, mono.clone(), cx) };
         let sections = [
             (Section::Overview, "Overview", r.mr.user_notes_count as usize),
             (Section::Commits, "Commits", r.commits.len()),
@@ -427,6 +429,7 @@ impl GitLabView {
                         d.child(badge(state, c(bg), c(fg)).child(icon("merge", 12., c(fg))).flex_row_reverse())
                             .child(div().ml_1().font_weight(FontWeight::SEMIBOLD).text_color(c(TEXT)).child(m.author.name.clone()))
                             .child("requested to merge")
+                            .children(stack)
                     })
                     .child(branch(&m.source_branch, mono.clone()))
                     // GitLab's "Copy branch name".
@@ -457,6 +460,131 @@ impl GitLabView {
                     .child(div().flex_1())
                     .child(div().flex().items_center().gap_2().children(self.thread_nav(r, unresolved, cx)).children(self.review_button(r, cx))),
             )
+    }
+
+    /// GitLab's "Stacked merge requests" button ("1 of 2") and, while
+    /// open, its list of the stack, top first; nothing off a stack.
+    fn stack_button(&self, r: &Review, mono: SharedString, cx: &mut Context<Self>) -> Option<Div> {
+        let stack = &r.stack;
+        let at = stack.iter().position(|m| m.iid == r.mr.iid)?;
+        let project = r.mr.project_id;
+        let menu = self.stack_menu.then(|| {
+            let row = |m: &crate::types::StackedMr, cx: &mut Context<Self>| {
+                let me = m.iid == r.mr.iid;
+                let iid = m.iid;
+                let state = match m.state.as_str() {
+                    "merged" => "Merged",
+                    "closed" => "Closed",
+                    _ => "Open",
+                };
+                div()
+                    .id(SharedString::from(format!("gl-stack-{iid}")))
+                    .flex()
+                    .gap_2()
+                    .px_3()
+                    .py_2()
+                    .when(!me, |d| {
+                        d.cursor_pointer().hover(|s| s.bg(c(RAISED))).on_click(cx.listener(move |v, _, _, cx| {
+                            v.stack_menu = false;
+                            v.open_mr(project, iid, cx);
+                        }))
+                    })
+                    .child(div().w(px(20.)).pt(px(2.)).flex_none().when(me, |d| d.child(icon("arrow-right", 16., c(TEXT)))))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .child(div().text_color(c(TEXT)).child(m.title.clone()))
+                            .child(div().flex().gap_1().text_size(px(12.)).text_color(c(MUTED)).child(state).child(when(&m.created_at))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .gap_1()
+                            .h(px(20.))
+                            .text_color(c(MUTED))
+                            .child(icon("file-diff", 14., c(MUTED)))
+                            .child(m.files.to_string())
+                            .child(div().ml_1().text_color(c(GREEN)).child(format!("+{}", m.additions)))
+                            .child(div().text_color(c(RED)).child(format!("\u{2212}{}", m.deletions))),
+                    )
+            };
+            let rows: Vec<_> = stack.iter().rev().map(|m| row(m, cx)).collect();
+            let bottom = stack.first().map(|m| m.target_branch.clone()).unwrap_or_default();
+            deferred(
+                div()
+                    .id("gl-stack-menu")
+                    .absolute()
+                    .top(px(32.))
+                    .left_0()
+                    .w(px(480.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(c(BORDER))
+                    .bg(c(CARD))
+                    .shadow_lg()
+                    .occlude()
+                    .text_color(c(TEXT))
+                    .on_mouse_down_out(cx.listener(|v, _, _, cx| {
+                        v.stack_menu = false;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .border_b_1()
+                            .border_color(c(BORDER))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Stacked merge requests"),
+                    )
+                    .child(div().py_1().children(rows))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_1()
+                            .px_3()
+                            .py_2()
+                            .border_t_1()
+                            .border_color(c(BORDER))
+                            .text_size(px(12.))
+                            .text_color(c(MUTED))
+                            .child("Bottom of stack merges into")
+                            .child(branch(&bottom, mono).child(app_icon("git-branch", 12., c(0xc8e0f9))).flex().items_center().gap_1().flex_row_reverse())
+                            .child("first."),
+                    ),
+            )
+            .with_priority(1)
+        });
+        let open = self.stack_menu;
+        let button = div()
+            .id("gl-stack-button")
+            .flex()
+            .items_center()
+            .gap_1()
+            .h(px(24.))
+            .px_2()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(if open { c(FOCUS) } else { c(BORDER) })
+            .cursor_pointer()
+            .text_color(c(TEXT))
+            .hover(|s| s.bg(ca(0x89888d66)))
+            .child(icon("layers", 14., c(TEXT)))
+            .child(format!("{} of {}", at + 1, stack.len()))
+            .child(app_icon("chevron-down", 14., c(TEXT)))
+            .tooltip(hint("Stacked merge requests"))
+            .on_click(cx.listener(|v, _, _, cx| {
+                v.stack_menu = !v.stack_menu;
+                cx.notify();
+            }));
+        Some(div().relative().mx_1().child(button).children(menu))
     }
 
     /// GitLab's unresolved-threads counter with its up and down arrows;

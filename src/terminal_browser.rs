@@ -66,6 +66,11 @@ pub struct Page {
     pub title: String,
     #[serde(default)]
     tty: Option<String>,
+    /// Its key for `terminal-browser action --browser`.
+    #[serde(default)]
+    key: Option<String>,
+    #[serde(default)]
+    pid: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -142,6 +147,7 @@ pub fn attach(term: &Entity<TerminalView>, url: &str, cx: &mut gpui::App) {
         t.app = Some(Box::new(Tab {
             url: url.into(),
             title: String::new(),
+            browser: None,
         }))
     });
     watch(term, cx);
@@ -152,6 +158,8 @@ pub struct Tab {
     /// At first the page it opened.
     url: String,
     title: String,
+    /// Its browser's key (`terminal-browser ls`), once it answered.
+    browser: Option<String>,
 }
 
 /// The key context of a terminal-browser tab: `KEYS` are bound to nothing
@@ -159,13 +167,13 @@ pub struct Tab {
 pub const KEY_CONTEXT: &str = "TerminalBrowser";
 
 /// The ⌘-keys a terminal-browser tab keeps, as the built-in browser has them:
-/// address bar, reload, back/forward, ⌘F, ⌥⌘I and ⌥⌘C (for find, devtools
+/// address bar, back/forward, ⌘F, ⌥⌘I and ⌥⌘C (for find, devtools
 /// and console if its `shortcuts.json` puts them there), zoom, and editing in
 /// the page. Window-level keys (⌘T, ⌘W, ⌘P, …) stay abromux's; other unbound
-/// ⌘-keys (its default ⇧⌘F find, ⌥⌘J console) reach the tab anyway.
+/// ⌘-keys (its default ⇧⌘F find, ⌥⌘J console) reach the tab anyway. ⌘R
+/// isn't here: it's the browser's Reload there (see [`Tab::reload`]).
 pub const KEYS: &[&str] = &[
     "cmd-l",
-    "cmd-r",
     "cmd-[",
     "cmd-]",
     "cmd-f",
@@ -265,6 +273,9 @@ fn translate(ks: &gpui::Keystroke, shortcuts: &serde_json::Value) -> Option<gpui
 impl Tab {
     /// Take in a reported page; true if the tab should redraw.
     fn update(&mut self, page: Page) -> bool {
+        if let Some(k) = page.key.clone().or(page.pid.map(|p| p.to_string())) {
+            self.browser = Some(k);
+        }
         let url_moved = !page.url.is_empty() && page.url != self.url;
         if page.title == self.title && !url_moved {
             return false;
@@ -302,6 +313,29 @@ impl crate::terminal::TerminalApp for Tab {
 
     fn page_url(&self) -> Option<&str> {
         Some(&self.url)
+    }
+
+    fn keeps_key(&self, ks: &gpui::Keystroke) -> bool {
+        KEYS.iter()
+            .filter_map(|k| gpui::Keystroke::parse(k).ok())
+            .any(|k| k.modifiers == ks.modifiers && k.key == ks.key)
+    }
+
+    /// Reload through terminal-browser's agent CLI, for when ⌘R can't be
+    /// sent as a key (its keyboard mode isn't on yet).
+    fn reload(&self) -> bool {
+        let (Some(bin), Some(browser)) = (find(), self.browser.clone()) else {
+            return false;
+        };
+        std::thread::spawn(move || {
+            let _ = std::process::Command::new(bin)
+                .args(["action", "--browser", &browser, "--", "reload"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        });
+        true
     }
 
     fn translate_key(&self, ks: &gpui::Keystroke) -> Option<gpui::Keystroke> {
@@ -363,11 +397,16 @@ mod tests {
         let tab = Tab {
             url: "https://a.b/".into(),
             title: String::new(),
+            browser: None,
         };
         let ctx = tab.key_context();
         assert!(ctx.split(' ').any(|c| c == KEY_CONTEXT), "{ctx}");
         assert!(ctx.split(' ').any(|c| c == "Terminal"), "{ctx}");
         assert!(tab.takes_cmd_keys());
+        let ks = |k: &str| gpui::Keystroke::parse(k).unwrap();
+        assert!(tab.keeps_key(&ks("cmd-c")));
+        assert!(!tab.keeps_key(&ks("cmd-r")), "⌘R is Reload, an action");
+        assert!(!tab.keeps_key(&ks("cmd-t")));
     }
 
     #[test]
@@ -395,12 +434,15 @@ mod tests {
         let mut tab = Tab {
             url: "https://a.b/".into(),
             title: String::new(),
+            browser: None,
         };
         assert_eq!(tab.title(), "https://a.b/", "the URL until a title comes");
         let page = |url: &str, title: &str| Page {
             url: url.into(),
             title: title.into(),
             tty: None,
+            key: None,
+            pid: None,
         };
         assert!(tab.update(page("https://a.b/", "A")));
         assert!(!tab.update(page("https://a.b/", "A")), "no change, no redraw");
@@ -424,6 +466,9 @@ mod tests {
         let p = r.data.unwrap();
         assert_eq!((p.url.as_str(), p.title.as_str()), ("https://lrt.lt/", "LRT"));
         assert_eq!(p.tty.as_deref(), Some("/dev/ttys004"));
+        let mut tab = Tab { url: String::new(), title: String::new(), browser: None };
+        tab.update(Page { key: Some("90107-1".into()), ..p });
+        assert_eq!(tab.browser.as_deref(), Some("90107-1"));
     }
 
     #[test]

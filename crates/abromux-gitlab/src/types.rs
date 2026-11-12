@@ -479,3 +479,96 @@ where
 {
     Ok(Option::<Vec<T>>::deserialize(d)?.unwrap_or_default())
 }
+
+/// A merge request in a stack: GitLab's "Stacked merge requests", the
+/// open ones whose branches lead to or from this one's.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StackedMr {
+    pub iid: u64,
+    pub title: String,
+    /// opened, merged, closed
+    pub state: String,
+    pub created_at: String,
+    pub source_branch: String,
+    pub target_branch: String,
+    pub files: u64,
+    pub additions: u64,
+    pub deletions: u64,
+}
+
+impl StackedMr {
+    /// From a GraphQL `MergeRequest` with the fields [`STACK_FIELDS`] asks.
+    pub fn from_graphql(v: &serde_json::Value) -> Option<Self> {
+        let s = |k: &str| v[k].as_str().unwrap_or_default().to_string();
+        let d = &v["diffStatsSummary"];
+        let n = |k: &str| d[k].as_u64().unwrap_or(0);
+        Some(Self {
+            iid: v["iid"].as_str()?.parse().ok()?,
+            title: s("title"),
+            state: s("state"),
+            created_at: s("createdAt"),
+            source_branch: s("sourceBranch"),
+            target_branch: s("targetBranch"),
+            files: n("fileCount"),
+            additions: n("additions"),
+            deletions: n("deletions"),
+        })
+    }
+}
+
+/// The GraphQL fields of a [`StackedMr`].
+pub const STACK_FIELDS: &str = "iid title state createdAt sourceBranch targetBranch diffStatsSummary { fileCount additions deletions }";
+
+/// The stack `me` is in, from the merge requests found around it: the ones
+/// it's stacked on, bottom first, then `me`, then those stacked on it (each
+/// after the one it's on). Each once, the first found where several share a
+/// branch.
+pub fn stack_of(me: StackedMr, found: &[StackedMr]) -> Vec<StackedMr> {
+    let mut below = vec![];
+    let mut seen = vec![me.iid];
+    let mut target = me.target_branch.clone();
+    while let Some(m) = found.iter().find(|m| m.source_branch == target && !seen.contains(&m.iid)) {
+        seen.push(m.iid);
+        target = m.target_branch.clone();
+        below.push(m.clone());
+    }
+    below.reverse();
+    let mut out = below;
+    let mut stack = vec![me];
+    while let Some(m) = stack.pop() {
+        let source = m.source_branch.clone();
+        out.push(m);
+        let mut above: Vec<&StackedMr> = found.iter().filter(|a| a.target_branch == source && !seen.contains(&a.iid)).collect();
+        above.sort_by_key(|a| a.iid);
+        for a in above.iter().rev() {
+            seen.push(a.iid);
+            stack.push((*a).clone());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod stack_tests {
+    use super::{StackedMr, stack_of};
+
+    fn mr(iid: u64, source: &str, target: &str) -> StackedMr {
+        StackedMr { iid, source_branch: source.into(), target_branch: target.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn orders_a_stack_bottom_first() {
+        let iids = |v: Vec<StackedMr>| v.into_iter().map(|m| m.iid).collect::<Vec<_>>();
+        // 1 into main, 2 on 1, 3 on 2; looking from 2, found in any order.
+        let found = [mr(3, "ui", "api"), mr(1, "model", "main"), mr(9, "other", "main")];
+        assert_eq!(iids(stack_of(mr(2, "api", "model"), &found)), [1, 2, 3]);
+        // From the bottom, two stacked on it: each with what's on it.
+        let found = [mr(5, "b", "a"), mr(4, "c", "a"), mr(6, "d", "c")];
+        assert_eq!(iids(stack_of(mr(1, "a", "main"), &found)), [1, 4, 6, 5]);
+        // A loop of branches ends, each once.
+        let found = [mr(2, "b", "a"), mr(3, "a", "b")];
+        let mut all = iids(stack_of(mr(1, "a", "b"), &found));
+        all.sort();
+        assert_eq!(all, [1, 2, 3]);
+    }
+}

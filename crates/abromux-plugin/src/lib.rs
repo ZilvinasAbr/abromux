@@ -142,20 +142,39 @@ pub fn open_url(url: &str, window: &mut Window, cx: &mut App) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+static CATCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static CAUGHT: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
-    #[test]
-    fn finds_jira_keys() {
-        let keys = |s: &str| jira_keys(s).into_iter().map(|r| s[r].to_string()).collect::<Vec<_>>();
-        assert_eq!(keys("PAY-1423 Refund fails (see OPS-7, AB2_C-10)."), ["PAY-1423", "OPS-7", "AB2_C-10"]);
-        assert_eq!(keys("Draft: [PAY-1] x"), ["PAY-1"]);
-        // Not tickets: lowercase, one letter, part of a path, URL or branch.
-        assert_eq!(keys("pay-1 P-1 https://x.test/browse/PAY-9 a/PAY-2 PAY-3-fix-it UTF-8x PAY-"), Vec::<String>::new());
-        assert_eq!(keys("ž PAY-5ž"), ["PAY-5"]);
-        assert!(is_jira_key("PAY-1423") && !is_jira_key("PAY-12a"));
+/// For the event being handled now: links that something opens with
+/// gpui's `cx.open_url` (gpui-component's markdown does, with no way to
+/// say otherwise) go to [`open_url`] instead, so they show in abromux's
+/// browser rather than the system's. Call it in a capture-phase mouse
+/// handler around the markdown. Without abromux (tests) it does nothing.
+pub fn catch_opened_urls(window: &mut Window, cx: &mut App) {
+    if cx.try_global::<Host>().is_none() {
+        return;
     }
+    CATCHING.store(true, std::sync::atomic::Ordering::SeqCst);
+    window.defer(cx, |window, cx| {
+        CATCHING.store(false, std::sync::atomic::Ordering::SeqCst);
+        let urls = std::mem::take(&mut *CAUGHT.lock().unwrap_or_else(|e| e.into_inner()));
+        for url in urls {
+            open_url(&url, window, cx);
+        }
+    });
+}
+
+/// abromux's hook on the system's URL opening: true if `url` was caught
+/// (see [`catch_opened_urls`]) and so mustn't open in the system browser.
+pub fn caught_url(url: &str) -> bool {
+    if !CATCHING.load(std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    CAUGHT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(url.to_string());
+    true
 }
 
 /// A plugin: the kind of tab it adds.
@@ -286,3 +305,20 @@ impl<T: Tab> ErasedTab for Entity<T> {
         self.update(cx, |t, cx| t.command(name, args, window, cx))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_jira_keys() {
+        let keys = |s: &str| jira_keys(s).into_iter().map(|r| s[r].to_string()).collect::<Vec<_>>();
+        assert_eq!(keys("PAY-1423 Refund fails (see OPS-7, AB2_C-10)."), ["PAY-1423", "OPS-7", "AB2_C-10"]);
+        assert_eq!(keys("Draft: [PAY-1] x"), ["PAY-1"]);
+        // Not tickets: lowercase, one letter, part of a path, URL or branch.
+        assert_eq!(keys("pay-1 P-1 https://x.test/browse/PAY-9 a/PAY-2 PAY-3-fix-it UTF-8x PAY-"), Vec::<String>::new());
+        assert_eq!(keys("ž PAY-5ž"), ["PAY-5"]);
+        assert!(is_jira_key("PAY-1423") && !is_jira_key("PAY-12a"));
+    }
+}
+

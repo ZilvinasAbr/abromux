@@ -266,6 +266,46 @@ pub fn mr_title(title: &str) -> (String, bool, Option<String>) {
     (t.to_string(), draft, ticket)
 }
 
+/// Merge requests stacked on one another (one's target branch is
+/// another's source, in the same project): `branches[i]` is link i's
+/// project, source and target branch if it's a merge request. Returns the
+/// links in order, each after the one it's stacked on, with its depth.
+pub fn stack_order(branches: &[Option<(&str, &str, &str)>]) -> Vec<(usize, usize)> {
+    let n = branches.len();
+    let parent: Vec<Option<usize>> = (0..n)
+        .map(|i| {
+            let (project, _, target) = branches[i]?;
+            (0..n).find(|&j| {
+                j != i && matches!(branches[j], Some((p, source, _)) if p == project && source == target)
+            })
+        })
+        .collect();
+    fn visit(i: usize, depth: usize, parent: &[Option<usize>], seen: &mut [bool], out: &mut Vec<(usize, usize)>) {
+        if seen[i] {
+            return;
+        }
+        seen[i] = true;
+        out.push((i, depth));
+        for j in 0..parent.len() {
+            if parent[j] == Some(i) {
+                visit(j, depth + 1, parent, seen, out);
+            }
+        }
+    }
+    let mut seen = vec![false; n];
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        if parent[i].is_none() {
+            visit(i, 0, &parent, &mut seen, &mut out);
+        }
+    }
+    // A loop (a → b → a) has no first one: start it where the list does.
+    for i in 0..n {
+        visit(i, 0, &parent, &mut seen, &mut out);
+    }
+    out
+}
+
 // ---- in the app ------------------------------------------------------------
 
 use crate::{
@@ -322,8 +362,14 @@ impl AbroMux {
 
     /// Workspace `wi`'s links as the sidebar lists them: the tracked ones,
     /// then the merge requests from its branches, with the titles their
-    /// tabs or the merge request cache have now.
+    /// tabs or the merge request cache have now; a merge request stacked on
+    /// another comes right after it.
     pub(crate) fn shown_links(&self, wi: usize, cx: &App) -> Vec<Link> {
+        self.stacked_links(wi, cx).into_iter().map(|(l, _)| l).collect()
+    }
+
+    /// `shown_links`, each with how deep it's stacked (0: on no other).
+    pub(crate) fn stacked_links(&self, wi: usize, cx: &App) -> Vec<(Link, usize)> {
         let ws = &self.workspaces[wi];
         let st = gitlab::store(cx).read(cx);
         let mut out = ws.links.clone();
@@ -359,7 +405,22 @@ impl AbroMux {
                 l.title = Some(t);
             }
         }
-        out
+        let branches: Vec<Option<(String, String, String)>> = out
+            .iter()
+            .map(|l| {
+                let k = (l.kind == Kind::Mr).then(|| MrKey::parse(&l.key)).flatten()?;
+                let m = st.mrs.get(&k)?.light.as_ref()?;
+                Some((k.project.clone(), m.source_branch.clone(), m.target_branch.clone()))
+            })
+            .collect();
+        let refs: Vec<Option<(&str, &str, &str)>> = branches
+            .iter()
+            .map(|b| b.as_ref().map(|(p, s, t)| (p.as_str(), s.as_str(), t.as_str())))
+            .collect();
+        stack_order(&refs)
+            .into_iter()
+            .map(|(i, depth)| (out[i].clone(), depth))
+            .collect()
     }
 
     /// Tab `s` shows one of the links workspace `wi` lists in the sidebar.
@@ -600,7 +661,7 @@ impl AbroMux {
 
     /// The selected workspace's links, under its row in the sidebar.
     pub(crate) fn render_links(&self, wi: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let links = self.shown_links(wi, cx);
+        let links = self.stacked_links(wi, cx);
         if links.is_empty() || !cx.global::<Settings>().sidebar.show_links {
             return None;
         }
@@ -608,7 +669,7 @@ impl AbroMux {
         let visible = self.visible_links(wi, cx);
         let hints = self.hints == Some(Hints::Links);
         let grouped = self.workspaces[wi].group.is_some();
-        let rows = links.into_iter().enumerate().map(|(i, l)| {
+        let rows = links.into_iter().enumerate().map(|(i, (l, depth))| {
             let shown = visible.contains(&l.key);
             let key = l.key.clone();
             let open = l.clone();
@@ -640,47 +701,31 @@ impl AbroMux {
                     };
                     move |window, cx| gpui_component::tooltip::Tooltip::new(full.clone()).build(window, cx)
                 })
+                // Stacked on the one above: in from it, with a turn.
+                .when(depth > 0, |d| {
+                    d.ml(px(14. * (depth - 1) as f32 * z)).child(
+                        icon("corner-down-right")
+                            .size(px(11. * z))
+                            .text_color(rgb(MUTED)),
+                    )
+                })
                 .child(
                     icon(l.kind.icon())
                         .size(px(12. * z))
                         .text_color(l.kind.color().map_or(fg, rgb)),
                 )
                 .map(|d| match (l.kind, l.label()) {
-                    // A merge request: what it's about first, then a draft's
-                    // mark and its number.
-                    (Kind::Mr, Some(title)) => {
-                        let (title, draft, _) = mr_title(title);
-                        d.child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(11. * z))
-                                .text_color(fg)
-                                .child(title),
-                        )
-                        .when(draft, |d| {
-                            d.child(
-                                div()
-                                    .flex_none()
-                                    .px(px(4.))
-                                    .rounded(px(3.))
-                                    .bg(rgba(0xffffff14))
-                                    .text_size(px(9.5 * z))
-                                    .text_color(rgb(MUTED))
-                                    .child("Draft"),
-                            )
-                        })
-                        .child(
-                            div()
-                                .flex_none()
-                                .max_w(px(90. * z))
-                                .truncate()
-                                .text_size(px(10. * z))
-                                .text_color(rgb(MUTED))
-                                .child(l.short_key()),
-                        )
-                    }
+                    // A merge request: just what it's about, without the draft
+                    // marker, the ticket or its number (the tooltip has them).
+                    (Kind::Mr, Some(title)) => d.child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(11. * z))
+                            .text_color(fg)
+                            .child(mr_title(title).0),
+                    ),
                     _ => d
                         .child(
                             div()
@@ -748,7 +793,21 @@ impl AbroMux {
 
 #[cfg(test)]
 mod tests {
-    use super::{Kind, MrKey, clean_title, is_jira_key, key_of_url, origin, parse};
+    use super::{Kind, MrKey, clean_title, is_jira_key, key_of_url, origin, parse, stack_order};
+
+    #[test]
+    fn stacks_merge_requests() {
+        let mr = |s: &'static str, t: &'static str| Some(("a/b", s, t));
+        // 0 → main, 1 → feat-2 (on 2), 2 → feat-1 (on 0), 3 a ticket.
+        let order = stack_order(&[mr("feat-1", "main"), mr("feat-3", "feat-2"), mr("feat-2", "feat-1"), None]);
+        assert_eq!(order, [(0, 0), (2, 1), (1, 2), (3, 0)]);
+        // Another project's branch of the same name isn't the base.
+        let order = stack_order(&[Some(("x/y", "feat-1", "main")), mr("feat-2", "feat-1")]);
+        assert_eq!(order, [(0, 0), (1, 0)]);
+        // A loop still lists each once.
+        let order = stack_order(&[mr("a", "b"), mr("b", "a")]);
+        assert_eq!(order.len(), 2);
+    }
 
     fn mr_url(k: &MrKey) -> Option<String> {
         Some(format!("https://gitlab.acme.com/{}/-/merge_requests/{}", k.project, k.iid))

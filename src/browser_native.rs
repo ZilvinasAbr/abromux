@@ -44,6 +44,7 @@ unsafe extern "C" {
     fn abx_download_progress(url: *const c_char, written: *mut i64, total: *mut i64) -> bool;
     fn abx_download_cancel(url: *const c_char) -> bool;
     fn abx_download_forget(url: *const c_char);
+    fn abx_open_url_hook_install(hook: extern "C" fn(*const c_char) -> bool);
 }
 
 /// A script's JSON result, or why it didn't run.
@@ -180,4 +181,15 @@ pub fn download_cancel(url: &str) -> bool {
 pub fn download_forget(url: &str) {
     let url = cstr(url);
     unsafe { abx_download_forget(url.as_ptr()) };
+}
+
+extern "C" fn on_open_url(url: *const c_char) -> bool {
+    let Some(url) = (unsafe { owned(url) }) else { return false };
+    std::panic::catch_unwind(|| abromux_plugin::caught_url(&url)).unwrap_or(false)
+}
+
+/// Let plugins keep links that gpui would open in the system browser
+/// (`abromux_plugin::catch_opened_urls`). Once is enough.
+pub fn open_url_hook_install() {
+    unsafe { abx_open_url_hook_install(on_open_url) };
 }
