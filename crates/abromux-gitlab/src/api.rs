@@ -743,6 +743,66 @@ impl Client {
             .collect())
     }
 
+    /// GitLab's "Stacked merge requests" of merge request `iid` of project
+    /// `full_path` (its branches `source` into `target`): the open ones
+    /// whose target is its source (stacked on it), whose source is its
+    /// target (it's stacked on them), and so on, bottom first, with it.
+    /// Empty when it's on no stack. GraphQL, one query a level.
+    pub fn merge_request_stack(&self, full_path: &str, iid: u64, source: &str, target: &str) -> anyhow::Result<Vec<StackedMr>> {
+        let url = format!("{}/api/graphql", self.host);
+        let list = |bs: &[String]| bs.iter().map(|b| format!("{b:?}")).collect::<Vec<_>>().join(", ");
+        let mut me: Option<StackedMr> = None;
+        let mut found: Vec<StackedMr> = vec![];
+        let (mut ups, mut downs) = (vec![target.to_string()], vec![source.to_string()]);
+        let mut asked: Vec<String> = vec![];
+        // Ten levels each way is a tall stack already.
+        for level in 0..10 {
+            ups.retain(|b| !asked.contains(&format!("u{b}")));
+            downs.retain(|b| !asked.contains(&format!("d{b}")));
+            if ups.is_empty() && downs.is_empty() {
+                break;
+            }
+            asked.extend(ups.iter().map(|b| format!("u{b}")).chain(downs.iter().map(|b| format!("d{b}"))));
+            let mut parts = vec![];
+            if level == 0 {
+                parts.push(format!("me: mergeRequest(iid: \"{iid}\") {{ {STACK_FIELDS} }}"));
+            }
+            if !ups.is_empty() {
+                parts.push(format!("u: mergeRequests(state: opened, sourceBranches: [{}], first: 20) {{ nodes {{ {STACK_FIELDS} }} }}", list(&ups)));
+            }
+            if !downs.is_empty() {
+                parts.push(format!("d: mergeRequests(state: opened, targetBranches: [{}], first: 20) {{ nodes {{ {STACK_FIELDS} }} }}", list(&downs)));
+            }
+            let q = format!("{{ project(fullPath: {full_path:?}) {{ {} }} }}", parts.join(" "));
+            let r = self.transport.send("POST", &url, &self.token, serde_json::json!({ "query": q }).to_string().as_bytes())?;
+            let v: serde_json::Value = decode(&r.body, &url)?;
+            let p = &v["data"]["project"];
+            anyhow::ensure!(p.is_object(), "no project in GitLab's answer");
+            if level == 0 {
+                me = StackedMr::from_graphql(&p["me"]);
+            }
+            let nodes = |k: &str| -> Vec<StackedMr> {
+                p[k]["nodes"].as_array().into_iter().flatten().filter_map(StackedMr::from_graphql).filter(|m| m.iid != iid).collect()
+            };
+            let (u, d) = (nodes("u"), nodes("d"));
+            ups = u.iter().filter(|m| !found.iter().any(|f| f.iid == m.iid)).map(|m| m.target_branch.clone()).collect();
+            downs = d.iter().filter(|m| !found.iter().any(|f| f.iid == m.iid)).map(|m| m.source_branch.clone()).collect();
+            for m in u.into_iter().chain(d) {
+                if !found.iter().any(|f| f.iid == m.iid) {
+                    found.push(m);
+                }
+            }
+            if found.len() > 50 {
+                break;
+            }
+        }
+        let me = me.context("no merge request in GitLab's answer")?;
+        if found.is_empty() {
+            return Ok(vec![]);
+        }
+        Ok(stack_of(me, &found))
+    }
+
     /// A file's bytes at `sha`, or `None` when it isn't there (added or deleted).
     pub fn raw_maybe(&self, project: u64, path: &str, sha: &str) -> anyhow::Result<Option<Vec<u8>>> {
         match self.raw_bytes(project, path, sha) {

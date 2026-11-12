@@ -13,6 +13,8 @@ use crate::{
     view::GitLabView,
 };
 use gpui::{prelude::*, *};
+#[allow(unused_imports)]
+use crate::style::px;
 use gpui_component::input::Input;
 use serde_json::json;
 use std::time::{Duration, Instant};

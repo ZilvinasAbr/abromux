@@ -57,6 +57,9 @@ pub struct Review {
     pub drafts: Vec<DraftNote>,
     /// Several assignees, several reviewers (GitLab's paid tiers), or one.
     pub multiple: (bool, bool),
+    /// GitLab's "Stacked merge requests" this one is in, bottom first
+    /// (it among them); empty when it's on no stack.
+    pub stack: Vec<crate::types::StackedMr>,
 }
 
 /// A file fetched after GitLab left it out: its diff, and whether it was
@@ -209,6 +212,7 @@ impl Review {
             closes: vec![],
             drafts: vec![],
             multiple: (true, true),
+            stack: vec![],
         }
     }
 

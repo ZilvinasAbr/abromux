@@ -10,6 +10,8 @@
 
 use crate::{discussion::overlay, style::*, view::GitLabView};
 use gpui::{prelude::*, *};
+#[allow(unused_imports)]
+use crate::style::px;
 use std::ops::Range;
 
 /// The rows a selection stays in.

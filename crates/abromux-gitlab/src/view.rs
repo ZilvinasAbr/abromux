@@ -20,6 +20,8 @@ use crate::{
 use abromux_plugin::Tab;
 use anyhow::{Context as _, bail};
 use gpui::{prelude::*, *};
+#[allow(unused_imports)]
+use crate::style::px;
 use gpui_component::input::{Input, InputEvent, InputState};
 use serde_json::{Value, json};
 use std::{
@@ -172,12 +174,21 @@ pub struct GitLabView {
     /// What GitLab found for the people picker's search: (query, people).
     pub(crate) people_found: Option<(String, Vec<User>)>,
     pub(crate) _people_task: Option<Task<()>>,
+    /// Markdown texts split into their blocks (`gfm::blocks`), as drawn.
+    pub(crate) md_blocks: std::cell::RefCell<HashMap<String, Rc<[String]>>>,
+    /// The `@name` list open under a comment box (mention.rs), and what
+    /// GitLab found for it on a big project: (query, people).
+    pub(crate) mention: Option<crate::mention::Mention>,
+    pub(crate) mention_found: Option<(String, Vec<User>)>,
+    pub(crate) _mention_task: Option<Task<()>>,
     /// "Copy link" just copied: it reads "Copied" for a moment.
     link_copied: Option<Task<()>>,
     /// The overview's activity: which entries, which order, the menu open.
     pub(crate) activity: crate::mr::ActivityFilter,
     pub(crate) newest_first: bool,
     pub(crate) activity_menu: bool,
+    /// The header's "Stacked merge requests" dropdown is open.
+    pub(crate) stack_menu: bool,
     /// The list's sort dropdown is open.
     sort_menu: bool,
     /// Writing (edit.rs): the text fields, a write under way, the last
@@ -232,8 +243,18 @@ impl GitLabView {
         let tree_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search (e.g. *.rs)"));
         cx.subscribe(&tree_search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
         let boxes = crate::edit::Boxes::new(window, cx);
-        for b in [&boxes.comment, &boxes.reply, &boxes.line] {
-            cx.subscribe(b, |_, _, _: &InputEvent, cx| cx.notify()).detach();
+        use crate::mention::Field;
+        for (b, field) in [(&boxes.comment, Field::Comment), (&boxes.reply, Field::Reply), (&boxes.line, Field::Line)] {
+            cx.subscribe(b, move |v, _, ev: &InputEvent, cx| {
+                match ev {
+                    // `@name` being typed lists who it could be.
+                    InputEvent::Change => v.update_mention(field, cx),
+                    InputEvent::Blur if v.mention.as_ref().is_some_and(|m| m.field == field) => v.mention = None,
+                    _ => {}
+                }
+                cx.notify()
+            })
+            .detach();
         }
         // A people picker on a big project asks GitLab as you type.
         cx.subscribe(&boxes.search, |v, _, ev: &InputEvent, cx| {
@@ -293,10 +314,15 @@ impl GitLabView {
             pick: Default::default(),
             people_found: None,
             _people_task: None,
+            md_blocks: Default::default(),
+            mention: None,
+            mention_found: None,
+            _mention_task: None,
             link_copied: None,
             activity: Default::default(),
             newest_first: false,
             activity_menu: false,
+            stack_menu: false,
             sort_menu: false,
             loc,
             focus: cx.focus_handle(),
@@ -954,6 +980,20 @@ impl GitLabView {
     /// `n` and `p` through unresolved threads.
     fn key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let k = &ev.keystroke;
+        // ⌘= / ⌘- / ⌘0: bigger, smaller, GitLab's size; in a text box too.
+        if k.modifiers.platform && !k.modifiers.control && !k.modifiers.alt {
+            let to = match k.key.as_str() {
+                "=" | "+" => Some(zoom_step(zoom(), true)),
+                "-" if !k.modifiers.shift => Some(zoom_step(zoom(), false)),
+                "0" if !k.modifiers.shift => Some(1.0),
+                _ => None,
+            };
+            if let Some(z) = to {
+                self.zoom_to(z, cx);
+                cx.stop_propagation();
+                return;
+            }
+        }
         // Typing in a comment: the keys are the text's.
         if self.boxes.typing(window, cx) {
             if k.key == "escape" && self.side_menu.is_some() {
@@ -995,9 +1035,10 @@ impl GitLabView {
             return;
         }
         // Escape closes an open menu first, as in GitLab.
-        if k.key == "escape" && (self.menu.is_some() || self.activity_menu) {
+        if k.key == "escape" && (self.menu.is_some() || self.activity_menu || self.stack_menu) {
             self.menu = None;
             self.activity_menu = false;
+            self.stack_menu = false;
             cx.notify();
             cx.stop_propagation();
             return;
@@ -1021,6 +1062,15 @@ impl GitLabView {
             _ => return,
         }
         cx.stop_propagation();
+    }
+
+    /// Draw GitLab tabs at `z` times GitLab's sizes (all of them: the zoom
+    /// is the plugin's, as the file tree's width is).
+    pub(crate) fn zoom_to(&mut self, z: f32, cx: &mut Context<Self>) {
+        set_zoom(z);
+        // Rows are measured at the old size.
+        self.rebuild_rows(cx);
+        cx.refresh_windows();
     }
 
     /// The open merge request again, in place (after a write).
@@ -1278,6 +1328,7 @@ impl Tab for GitLabView {
         json!({
             "location": self.save(cx),
             "host": self.host(),
+            "zoom": zoom(),
             "local": self.local_id(),
             "page": page,
             "me": self.me.as_ref().map(|u| &u.username),
@@ -1287,6 +1338,9 @@ impl Tab for GitLabView {
                 "load": self.review.name(),
                 "error": self.review.error().map(|e| &e.text),
                 "summary": r.map(|r| r.summary()),
+                // GitLab's "Stacked merge requests", bottom first, and its dropdown.
+                "stack": r.map(|r| r.stack.iter().map(|m| json!({ "iid": m.iid, "title": m.title, "files": m.files, "additions": m.additions, "deletions": m.deletions })).collect::<Vec<_>>()),
+                "stack_menu": self.stack_menu,
             },
             "changes": {
                 "rows": self.rows.len(),
@@ -1307,6 +1361,11 @@ impl Tab for GitLabView {
                 "commenting": self.commenting,
                 "side_menu": self.side_menu.map(|m| format!("{m:?}")),
                 "selection": self.sel.map(|s| format!("{s:?}")),
+                "mention": self.mention.as_ref().map(|m| json!({
+                    "query": m.query,
+                    "selected": m.selected,
+                    "people": self.mention_people().iter().map(|u| u.username.clone()).collect::<Vec<_>>(),
+                })),
             },
             "projects": {
                 "load": self.projects.name(),
@@ -1327,6 +1386,17 @@ impl Tab for GitLabView {
         let num_arg = |k: &str| args.get(k).and_then(Value::as_u64);
         match name {
             "state" => {}
+            // `{"to": 1.25}`, or `{"by": "in" | "out" | "reset"}`.
+            "zoom" => {
+                let z = match (args.get("to").and_then(Value::as_f64), str_arg("by")) {
+                    (Some(z), _) => z as f32,
+                    (None, Some("in")) => zoom_step(zoom(), true),
+                    (None, Some("out")) => zoom_step(zoom(), false),
+                    (None, Some("reset")) => 1.0,
+                    _ => bail!("zoom takes to (a number) or by (in, out or reset)"),
+                };
+                self.zoom_to(z, cx);
+            }
             "refresh" => self.refresh(cx),
             "back" => self.back(cx),
             "list" => {
@@ -1373,7 +1443,7 @@ impl Tab for GitLabView {
             }
             "tree_list" => self.tree_flat = args.get("on").and_then(Value::as_bool).unwrap_or(true),
             // The file tree's width in pixels; without one, the default.
-            "tree_width" => self.set_tree_width(num_arg("width").map_or(crate::changes::TREE_W, |w| px(w as f32))),
+            "tree_width" => self.set_tree_width(num_arg("width").map_or(crate::changes::TREE_W, |w| gpui::px(w as f32))),
             "parallel" => self.set_parallel(args.get("on").and_then(Value::as_bool).unwrap_or(true), cx),
             // The file browser's search, or on the list page the list's filter.
             "search" => {
@@ -2135,7 +2205,7 @@ impl Render for GitLabView {
         )
         .absolute()
         .size_full();
-        div()
+        let root = div()
             .id("gitlab")
             .relative()
             .child(measure)
@@ -2206,6 +2276,7 @@ impl Render for GitLabView {
             .text_color(c(TEXT))
             .when(self.sign_in.is_none(), |d| d.child(self.breadcrumb(cx)))
             .child(div().flex_1().min_h(px(0.)).child(page))
-            .children(self.search_overlay(cx))
+            .children(self.search_overlay(cx));
+        Zoomed::new(root, window)
     }
 }

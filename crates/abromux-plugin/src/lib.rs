@@ -50,6 +50,60 @@ pub struct Host {
     pub open_url: fn(&str, &mut Window, &mut App),
     /// Run something in a terminal, see [`Run`].
     pub run_terminal: fn(Run, &mut Window, &mut App),
+    /// The Jira that ticket keys (`PAY-1423`) are on, e.g.
+    /// `https://acme.atlassian.net`, if abromux knows one.
+    pub jira: fn(&App) -> Option<String>,
+}
+
+/// The page of Jira ticket `key`, if abromux knows which Jira it's on.
+pub fn jira_url(key: &str, cx: &App) -> Option<String> {
+    let base = cx.try_global::<Host>().and_then(|h| (h.jira)(cx))?;
+    Some(format!("{}/browse/{key}", base.trim_end_matches('/')))
+}
+
+/// `PAY-1423`: a Jira project key (a capital letter, then capitals, digits
+/// or `_`) and a number.
+pub fn is_jira_key(s: &str) -> bool {
+    let Some((project, n)) = s.split_once('-') else {
+        return false;
+    };
+    let mut c = project.chars();
+    c.next().is_some_and(|f| f.is_ascii_uppercase())
+        && project.len() >= 2
+        && c.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        && !n.is_empty()
+        && n.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Where the Jira keys in `text` are: each as a word of its own, so
+/// `UTF-8x`, `a/PAY-1` and the middle of a URL aren't.
+pub fn jira_keys(text: &str) -> Vec<std::ops::Range<usize>> {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    let mut out = vec![];
+    let mut i = 0;
+    while i < text.len() {
+        let rest = &text[i..];
+        let c = rest.chars().next().unwrap();
+        if !word(c) {
+            i += c.len_utf8();
+            continue;
+        }
+        let len = rest.find(|c: char| !word(c)).unwrap_or(rest.len());
+        let before = text[..i].chars().next_back();
+        let alone = !before.is_some_and(|b| matches!(b, '/' | '.' | '@' | '#' | '=' | '&' | '?' | ':'))
+            && !rest[len..].starts_with(['/', '@']);
+        // `PAY-1423-fix-it` (a branch name) starts with one; `PAY-1423.` ends a sentence.
+        let cand = &rest[..len];
+        let key_len = cand
+            .match_indices('-')
+            .nth(1)
+            .map_or(len, |(j, _)| j);
+        if alone && key_len == len && is_jira_key(cand) {
+            out.push(i..i + len);
+        }
+        i += len;
+    }
+    out
 }
 
 /// A command for a terminal: started in a new one beside the tab `beside`
@@ -86,6 +140,41 @@ pub fn open_url(url: &str, window: &mut Window, cx: &mut App) {
         Some(open) => open(url, window, cx),
         None => cx.open_url(url),
     }
+}
+
+static CATCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static CAUGHT: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// For the event being handled now: links that something opens with
+/// gpui's `cx.open_url` (gpui-component's markdown does, with no way to
+/// say otherwise) go to [`open_url`] instead, so they show in abromux's
+/// browser rather than the system's. Call it in a capture-phase mouse
+/// handler around the markdown. Without abromux (tests) it does nothing.
+pub fn catch_opened_urls(window: &mut Window, cx: &mut App) {
+    if cx.try_global::<Host>().is_none() {
+        return;
+    }
+    CATCHING.store(true, std::sync::atomic::Ordering::SeqCst);
+    window.defer(cx, |window, cx| {
+        CATCHING.store(false, std::sync::atomic::Ordering::SeqCst);
+        let urls = std::mem::take(&mut *CAUGHT.lock().unwrap_or_else(|e| e.into_inner()));
+        for url in urls {
+            open_url(&url, window, cx);
+        }
+    });
+}
+
+/// abromux's hook on the system's URL opening: true if `url` was caught
+/// (see [`catch_opened_urls`]) and so mustn't open in the system browser.
+pub fn caught_url(url: &str) -> bool {
+    if !CATCHING.load(std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    CAUGHT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(url.to_string());
+    true
 }
 
 /// A plugin: the kind of tab it adds.
@@ -216,3 +305,20 @@ impl<T: Tab> ErasedTab for Entity<T> {
         self.update(cx, |t, cx| t.command(name, args, window, cx))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_jira_keys() {
+        let keys = |s: &str| jira_keys(s).into_iter().map(|r| s[r].to_string()).collect::<Vec<_>>();
+        assert_eq!(keys("PAY-1423 Refund fails (see OPS-7, AB2_C-10)."), ["PAY-1423", "OPS-7", "AB2_C-10"]);
+        assert_eq!(keys("Draft: [PAY-1] x"), ["PAY-1"]);
+        // Not tickets: lowercase, one letter, part of a path, URL or branch.
+        assert_eq!(keys("pay-1 P-1 https://x.test/browse/PAY-9 a/PAY-2 PAY-3-fix-it UTF-8x PAY-"), Vec::<String>::new());
+        assert_eq!(keys("ž PAY-5ž"), ["PAY-5"]);
+        assert!(is_jira_key("PAY-1423") && !is_jira_key("PAY-12a"));
+    }
+}
+

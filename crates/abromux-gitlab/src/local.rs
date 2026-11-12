@@ -192,7 +192,8 @@ impl Store {
     pub fn describe(&self) -> String {
         match (&self.head, self.merge_base) {
             (None, _) if self.base == "HEAD" => "uncommitted changes".into(),
-            (None, _) => format!("{} → working tree", self.base),
+            (None, true) => format!("changes since {}", self.base),
+            (None, false) => format!("{} → working tree", self.base),
             (Some(h), true) => format!("{}...{h}", self.base),
             (Some(h), false) => format!("{}..{h}", self.base),
         }
@@ -292,9 +293,14 @@ pub struct Spec {
 
 /// `X...Y`, `X..Y`, `X` (against the working tree), or nothing (the
 /// uncommitted changes, against HEAD). An empty side is HEAD, as git has it.
+/// `--merge-base X`, as `git diff` takes it: the working tree against where
+/// HEAD forked from X, so a branch's commits and what isn't committed yet.
 pub fn parse_spec(spec: &str) -> Spec {
     let spec = spec.trim();
     let side = |s: &str| if s.is_empty() { "HEAD".to_string() } else { s.to_string() };
+    if let Some(base) = spec.strip_prefix("--merge-base") {
+        return Spec { base: side(base.trim()), head: None, merge_base: true };
+    }
     if let Some((a, b)) = spec.split_once("...") {
         return Spec { base: side(a), head: Some(side(b)), merge_base: true };
     }
@@ -352,6 +358,22 @@ pub fn create(cwd: &Path, spec: &str, open: Open) -> anyhow::Result<String> {
     s.updated_at = now_iso();
     save(&s)?;
     Ok(id)
+}
+
+/// What to review in the repository at `cwd` when nothing says: the
+/// branch's work, committed or not, since it forked from the default branch
+/// (`--merge-base origin/main`); on the default branch itself, or without
+/// one to be found, the uncommitted changes (the empty spec).
+pub fn work_spec(cwd: &Path) -> String {
+    let rev = |r: &str| git_text(cwd, &["rev-parse", "--verify", "--quiet", &format!("{r}^{{commit}}")]).ok();
+    let default = git_text(cwd, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+        .ok()
+        .filter(|b| !b.is_empty() && rev(b).is_some())
+        .or_else(|| ["origin/main", "origin/master", "main", "master"].into_iter().find(|b| rev(b).is_some()).map(str::to_string));
+    let Some(base) = default else { return String::new() };
+    let (Some(head), Ok(fork)) = (rev("HEAD"), git_text(cwd, &["merge-base", &base, "HEAD"])) else { return String::new() };
+    // Nothing committed since the fork: the uncommitted changes say it all.
+    if fork == head { String::new() } else { format!("--merge-base {base}") }
 }
 
 /// `$ABROMUX_DIFF_AGENT`, else Claude Code.
@@ -895,6 +917,7 @@ impl LocalGitLab {
             _ => st.describe(),
         });
         let cmd = match &st.head {
+            None if st.merge_base => format!("git diff --merge-base {}", st.base),
             None => format!("git diff {}", st.base),
             Some(h) => format!("git diff {}{}{h}", st.base, if st.merge_base { "..." } else { ".." }),
         };
@@ -1206,6 +1229,7 @@ mod tests {
         assert_eq!(parse_spec("main..x"), Spec { base: "main".into(), head: Some("x".into()), merge_base: false });
         assert_eq!(parse_spec("main...x"), Spec { base: "main".into(), head: Some("x".into()), merge_base: true });
         assert_eq!(parse_spec("..x"), Spec { base: "HEAD".into(), head: Some("x".into()), merge_base: false });
+        assert_eq!(parse_spec("--merge-base origin/main"), Spec { base: "origin/main".into(), head: None, merge_base: true });
     }
 
     #[test]

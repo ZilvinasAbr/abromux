@@ -659,8 +659,20 @@ pub(crate) const PROMPT_CHARS: usize = 2000;
 /// agent's own CLI (`claude -p` on a small model, or `codex exec`), run
 /// through a login shell so it's found on the user's PATH. With `current`,
 /// the title it has now, kept unless the work has moved on. Blocks for up
-/// to a minute; None for other agents or if it fails.
+/// to a minute; None if it fails. Other agents' sessions are named by
+/// whichever of those two is installed.
 pub fn title_for(kind: Kind, prompts: &[String], current: Option<&str>) -> Option<String> {
+    // An agent whose CLI can't make one (Gemini, Cursor, …) borrows Claude
+    // Code's or Codex's, whichever is there.
+    let order = match kind {
+        Kind::Claude | Kind::Codex => vec![kind],
+        _ => vec![Kind::Claude, Kind::Codex],
+    };
+    order.into_iter().find_map(|k| title_from(k, prompts, current))
+}
+
+/// [`title_for`], from `kind`'s CLI alone.
+fn title_from(kind: Kind, prompts: &[String], current: Option<&str>) -> Option<String> {
     use std::process::{Command, Stdio};
     let ask = naming_request(prompts, current);
     let dir = std::env::temp_dir();

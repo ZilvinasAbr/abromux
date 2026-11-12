@@ -107,6 +107,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action("Command Palette…", CommandPalette),
                 MenuItem::action("Go to Workspace…", WorkspaceSwitcher),
                 MenuItem::action("Go to Merge Request…", crate::GoToMergeRequest),
+                MenuItem::action("Review Changes", crate::ReviewChanges),
                 MenuItem::separator(),
                 MenuItem::action("Reopen Previous Session", ReopenSession),
                 MenuItem::action("Import cmux Session", ImportCmuxSession),

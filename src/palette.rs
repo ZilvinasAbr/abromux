@@ -77,10 +77,13 @@ type Cmd = (String, Option<String>, Vec<String>, Box<dyn Action>);
 /// replace config ones of the same title). Ws1–9 and Tab1–9 have none: the
 /// switcher and the tab bar cover them.
 fn commands(project: Option<&Path>, cx: &App) -> Vec<Cmd> {
+    // GitLab turned off (`gitlab.enabled`): none of its commands.
+    let gitlab = crate::plugins::enabled("gitlab", cx);
     let builtin = keymap::ACTIONS
         .iter()
+        .filter(|a| gitlab || !matches!(a.name, "toggleMergeRequests" | "goToMergeRequest" | "refreshMergeRequests"))
         .filter_map(|a| a.title.map(|t| (t.to_string(), None, vec![], (a.action)())));
-    let plugins = crate::plugins::all().iter().flat_map(|p| -> Vec<Cmd> {
+    let plugins = crate::plugins::all().iter().filter(|p| crate::plugins::enabled(p.id, cx)).flat_map(|p| -> Vec<Cmd> {
         let action = Box::new(keymap::OpenPlugin { id: p.id.into() });
         let mut cmds: Vec<Cmd> = vec![(p.title.into(), None, vec![p.id.into()], action)];
         if let Some(title) = p.open_link {

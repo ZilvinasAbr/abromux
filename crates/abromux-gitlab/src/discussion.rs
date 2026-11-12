@@ -10,6 +10,8 @@ use crate::{
     view::GitLabView,
 };
 use gpui::{prelude::*, *};
+#[allow(unused_imports)]
+use crate::style::px;
 use gpui_component::{ActiveTheme as _, text::TextView};
 
 /// Markdown split around what we draw ourselves.
@@ -36,11 +38,13 @@ fn parts<'a>(body: &str, suggestions: &'a [Suggestion]) -> Vec<Part<'a>> {
     };
     while let Some(l) = lines.next() {
         let fence = l.trim_start();
-        if let Some(info) = fence.strip_prefix("```") {
-            let info = info.trim().to_string();
+        // ``` or ~~~, closed by the same.
+        let marker = if fence.starts_with("~~~") { "~~~" } else { "```" };
+        if let Some(info) = fence.strip_prefix(marker) {
+            let info = info.trim_start_matches(['`', '~']).trim().to_string();
             let mut code = String::new();
             for l in lines.by_ref() {
-                if l.trim_start().starts_with("```") {
+                if l.trim_start().starts_with(marker) {
                     break;
                 }
                 code.push_str(l);
@@ -69,16 +73,21 @@ fn parts<'a>(body: &str, suggestions: &'a [Suggestion]) -> Vec<Part<'a>> {
 fn lang_path(lang: &str) -> String {
     let ext = match lang.to_ascii_lowercase().as_str() {
         "rust" | "rs" => "rs",
-        "javascript" | "js" | "jsx" => "js",
-        "typescript" | "ts" | "tsx" => "ts",
+        "javascript" | "js" | "jsx" | "mjs" => "js",
+        "typescript" | "ts" => "ts",
+        "tsx" => "tsx",
         "python" | "py" => "py",
         "ruby" | "rb" => "rb",
         "go" | "golang" => "go",
         "shell" | "sh" | "bash" | "zsh" | "console" => "sh",
         "yaml" | "yml" => "yml",
-        "json" => "json",
+        "json" | "jsonc" | "json5" => "json",
+        "css" => "css",
+        "scss" | "sass" | "less" => "scss",
+        "html" | "xml" | "vue" | "svelte" | "svg" => "html",
         "toml" => "toml",
-        "c" | "cpp" | "c++" | "java" | "kotlin" | "swift" | "css" | "scss" | "php" => "c",
+        "c" | "cpp" | "c++" | "java" | "kotlin" | "swift" => "c",
+        "php" => "php",
         "markdown" | "md" => "md",
         _ => "txt",
     };
@@ -356,18 +365,30 @@ impl GitLabView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let mut out = div().flex().flex_col().gap_2().text_color(c(TEXT));
+        // Its links open in abromux's browser, not the system's.
+        let mut out = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .text_color(c(TEXT))
+            .capture_any_mouse_up(|_, window, cx| abromux_plugin::catch_opened_urls(window, cx));
         let web = self.review.ready().map(|r| r.mr.web_url.clone()).unwrap_or_default();
         let project = web.split("/-/").next().unwrap_or_default().to_string();
         let host = self.host();
+        let jira = abromux_plugin::jira_url("", cx);
         for (i, p) in parts(body, suggestions).into_iter().enumerate() {
             out = match p {
-                Part::Markdown(md) => out.child(
-                    TextView::markdown((id.0, id.1 * 64 + i), link_references(&crate::emoji::expand(&md), &project, &host), window, cx)
-                        .style(md_style())
-                        .selectable(true)
-                        .text_size(px(14.)),
-                ),
+                Part::Markdown(md) => {
+                    let text = link_references(&crate::emoji::expand(&crate::gfm::prepare(&md, &project, &host)), &project, &host, jira.as_deref());
+                    // Each block its own text, with a paragraph's space between.
+                    let blocks = self.md_blocks.borrow_mut().entry(text).or_insert_with_key(|t| crate::gfm::blocks(t).into()).clone();
+                    out.children(blocks.iter().enumerate().map(|(b, block)| {
+                        TextView::markdown(SharedString::from(format!("{}-{}-{i}-{b}", id.0, id.1)), block.clone(), window, cx)
+                            .style(md_style())
+                            .selectable(true)
+                            .text_size(px(14.))
+                    }))
+                }
                 Part::Suggestion(s) => out.child(self.suggestion(s, path, cx)),
                 Part::Code(lang, code) => {
                     let key = SharedString::from(format!("copy-code-{}-{}", id.0, id.1 * 64 + i));
@@ -572,12 +593,19 @@ impl GitLabView {
 }
 
 /// GitLab's references as links: `#12` the project's issue, `!3` its merge
-/// request, `@bob` the user. Not in code (`…`), and only as a word of its
-/// own, so `a#1`, URLs and headings stay as written.
-fn link_references(md: &str, project: &str, host: &str) -> String {
-    if project.is_empty() {
+/// request, `@bob` the user, and `PAY-1423` the Jira ticket (`jira`: where
+/// tickets are, `…/browse/`). Not in code (`…`) or inside a link, and only
+/// as a word of its own, so `a#1`, URLs and headings stay as written.
+fn link_references(md: &str, project: &str, host: &str, jira: Option<&str>) -> String {
+    if project.is_empty() && jira.is_none() {
         return md.to_string();
     }
+    // Where links already are: `[text](url)` whole, `<url>`, bare URLs.
+    let linked = link_spans(md);
+    let tickets: Vec<std::ops::Range<usize>> = match jira {
+        Some(_) => abromux_plugin::jira_keys(md),
+        None => vec![],
+    };
     let mut out = String::with_capacity(md.len());
     let mut in_code = false;
     let mut prev: Option<char> = None;
@@ -586,8 +614,20 @@ fn link_references(md: &str, project: &str, host: &str) -> String {
         if ch == '`' {
             in_code = !in_code;
         }
+        let free = !in_code && !linked.iter().any(|r| r.contains(&i));
+        if free
+            && let Some(base) = jira
+            && let Some(r) = tickets.iter().find(|r| r.start == i)
+        {
+            let key = &md[r.clone()];
+            out.push_str(&format!("[{key}]({base}{key})"));
+            for _ in 1..key.chars().count() {
+                prev = chars.next().map(|(_, c)| c);
+            }
+            continue;
+        }
         let starts_word = prev.is_none_or(|p| p.is_whitespace() || p == '(');
-        if !in_code && starts_word && matches!(ch, '#' | '!' | '@') {
+        if free && !project.is_empty() && starts_word && matches!(ch, '#' | '!' | '@') {
             let rest = &md[i + 1..];
             let len = match ch {
                 '@' => rest.find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))).unwrap_or(rest.len()),
@@ -595,6 +635,7 @@ fn link_references(md: &str, project: &str, host: &str) -> String {
             };
             // A trailing dot ends the sentence, not the name.
             let word = rest[..len].trim_end_matches('.');
+            // `![alt](…)` is an image, not merge request "".
             if !word.is_empty() {
                 let url = match ch {
                     '#' => format!("{project}/-/issues/{word}"),
@@ -614,6 +655,56 @@ fn link_references(md: &str, project: &str, host: &str) -> String {
     out
 }
 
+/// The byte ranges of `md` that are links already: `[text](url)` and
+/// `[text][ref]` from `[` to the end, `<https://…>`, and bare `http(s)://…`.
+fn link_spans(md: &str) -> Vec<std::ops::Range<usize>> {
+    let mut out = vec![];
+    let b = md.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'[' {
+            // To the matching `]`, then `(…)` or `[…]`.
+            let mut depth = 0;
+            let mut close = None;
+            for (j, &c) in b[i..].iter().enumerate() {
+                match c {
+                    b'[' => depth += 1,
+                    b']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = Some(i + j);
+                            break;
+                        }
+                    }
+                    b'\n' if b.get(i + j + 1) == Some(&b'\n') => break,
+                    _ => {}
+                }
+            }
+            if let Some(c) = close {
+                let after = b.get(c + 1).copied();
+                let end = match after {
+                    Some(b'(') => md[c..].find(')').map(|e| c + e + 1),
+                    Some(b'[') => md[c + 1..].find(']').map(|e| c + 1 + e + 1),
+                    Some(b':') => Some(md[c..].find('\n').map_or(md.len(), |e| c + e)),
+                    _ => None,
+                };
+                if let Some(end) = end {
+                    out.push(i..end);
+                    i = end;
+                    continue;
+                }
+            }
+        } else if b[i..].starts_with(b"http://") || b[i..].starts_with(b"https://") {
+            let end = md[i..].find(|c: char| c.is_whitespace() || matches!(c, '>' | ')' | ']')).map_or(md.len(), |e| i + e);
+            out.push(i..end);
+            i = end;
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
 #[cfg(test)]
 mod reference_tests {
     use super::link_references;
@@ -621,13 +712,27 @@ mod reference_tests {
     #[test]
     fn references_become_links() {
         let p = "http://gl/a/b";
-        let l = |s: &str| link_references(s, p, "http://gl");
+        let l = |s: &str| link_references(s, p, "http://gl", None);
         assert_eq!(l("Closes #12."), "Closes [#12](http://gl/a/b/-/issues/12).");
         assert_eq!(l("see !3 and @bob."), "see [!3](http://gl/a/b/-/merge_requests/3) and [@bob](http://gl/bob).");
         assert_eq!(l("(#4)"), "([#4](http://gl/a/b/-/issues/4))");
         // Left alone: code, mid-word, headings, a bang that isn't one.
         assert_eq!(l("`#12` a#1 # Title Wow! @"), "`#12` a#1 # Title Wow! @");
         assert_eq!(l("mail me at x@y.z"), "mail me at x@y.z");
+        // Nor what's a link already.
+        assert_eq!(l("[see #4](http://x/#5) and http://x/a #6"), "[see #4](http://x/#5) and http://x/a [#6](http://gl/a/b/-/issues/6)");
+    }
+
+    #[test]
+    fn jira_tickets_become_links() {
+        let j = |s: &str| link_references(s, "", "http://gl", Some("https://j.test/browse/"));
+        assert_eq!(j("Fixes PAY-12, see (OPS-3)."), "Fixes [PAY-12](https://j.test/browse/PAY-12), see ([OPS-3](https://j.test/browse/OPS-3)).");
+        // Left alone: a link's text and address, code, a branch name.
+        let same = "[PAY-1](https://j.test/browse/PAY-1) https://j.test/browse/PAY-2 `PAY-3` PAY-4-fix";
+        assert_eq!(j(same), same);
+        assert_eq!(j("ž PAY-5"), "ž [PAY-5](https://j.test/browse/PAY-5)");
+        // Without a Jira, nothing.
+        assert_eq!(link_references("PAY-1", "", "http://gl", None), "PAY-1");
     }
 }
 

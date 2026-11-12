@@ -106,6 +106,8 @@ pub const ACTIONS: &[Act] = {
             [(None, ["cmd-shift-m"])];
         "refreshMergeRequests", Some("Refresh Merge Requests"), RefreshMergeRequests,
             [(None, [])];
+        "reviewChanges", Some("Review Changes (Diff of This Workspace's Work)"), ReviewChanges,
+            [(None, ["alt-cmd-d"])];
         "showNotifications", Some("Show Notifications"), ToggleNotifications, [(None, ["cmd-i"])];
         "jumpToUnread", Some("Jump to Latest Unread"), JumpToUnread, [(None, ["cmd-shift-u"])];
         "toggleUnread", Some("Toggle Unread"), ToggleUnread, [(None, ["alt-cmd-u"])];
@@ -227,6 +229,12 @@ pub fn apply(settings: &Settings, cx: &mut App) {
     bindings.extend(crate::terminal_browser::KEYS.iter().map(|k| {
         KeyBinding::new(k, gpui::NoAction, Some(crate::terminal_browser::KEY_CONTEXT))
     }));
+    // ⌘R reloads its page, as in a browser tab, never Rename Tab.
+    bindings.push(KeyBinding::new(
+        "cmd-r",
+        crate::browser::Reload,
+        Some(crate::terminal_browser::KEY_CONTEXT),
+    ));
     cx.clear_key_bindings();
     cx.bind_keys(bindings);
 }

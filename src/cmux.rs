@@ -104,6 +104,7 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
     Some(WorkspaceState {
         name: title.clone().filter(|_| by_user),
         auto_name: title.filter(|_| !by_user),
+        name_surface: None,
         description: str_of(ws, "customDescription").map(str::to_string),
         color: str_of(ws, "customColor").and_then(crate::workspace::parse_color),
         group: None,
