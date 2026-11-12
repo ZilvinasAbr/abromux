@@ -136,7 +136,7 @@ impl File {
     /// The (hunk, line) a position points at. GitLab gives a context line
     /// both numbers, an added line only its new one, a removed line only
     /// its old one.
-    fn find(&self, p: &Position) -> Option<(usize, usize)> {
+    pub(crate) fn find(&self, p: &Position) -> Option<(usize, usize)> {
         for (hi, h) in self.body().hunks().iter().enumerate() {
             for (li, l) in h.lines.iter().enumerate() {
                 let hit = match (p.old_line, p.new_line) {

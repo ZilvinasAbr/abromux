@@ -40,7 +40,8 @@ pub struct Hunk {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Body {
-    Text(Vec<Hunk>),
+    /// Shared: a review is cloned to show a write before it lands.
+    Text(std::sync::Arc<Vec<Hunk>>),
     Binary,
     /// A rename or mode change with no content change.
     Unchanged,
@@ -105,7 +106,7 @@ impl Body {
             }
             mark_changes(&mut h.lines);
         }
-        Body::Text(hunks)
+        Body::Text(std::sync::Arc::new(hunks))
     }
 
     pub fn hunks(&self) -> &[Hunk] {

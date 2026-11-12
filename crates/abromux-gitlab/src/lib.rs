@@ -23,6 +23,7 @@ pub mod highlight;
 pub mod local;
 mod mention;
 mod mr;
+mod optimistic;
 mod search;
 mod projects;
 mod select;
