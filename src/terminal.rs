@@ -28,6 +28,32 @@ use std::sync::Arc;
 
 /// UI monospace font (sidebar metadata); terminals use the Ghostty config's.
 pub const FONT_FAMILY: &str = "JetBrains Mono";
+
+/// Fonts for characters the terminal's face lacks, before macOS's own: the
+/// Ghostty config's further `font-family` lines, then the Nerd Fonts
+/// installed. Ghostty has Nerd Font symbols built in, so programs that draw
+/// icons with them (Neovim's file trees and status lines, eza, starship)
+/// expect them; macOS has no font with those private-use characters.
+fn font_fallbacks(config: &crate::config::Config, cx: &App) -> FontFallbacks {
+    static NERD: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let nerd = NERD.get_or_init(|| nerd_fonts(cx.text_system().all_font_names()));
+    let mut list = config.font_fallbacks.clone();
+    list.extend(nerd.iter().filter(|f| !list.contains(f)).cloned().collect::<Vec<_>>());
+    FontFallbacks::from_fonts(list)
+}
+
+/// The Nerd Font families among `names`: the symbols-only ones first, and
+/// the single-width ("Mono") version of each before its wider one, so an
+/// icon keeps to its cell as in Ghostty.
+fn nerd_fonts(names: Vec<String>) -> Vec<String> {
+    let mut nerd: Vec<String> = names
+        .into_iter()
+        .filter(|n| n.contains("Nerd Font") && !n.starts_with('.'))
+        .collect();
+    nerd.sort_by_key(|n| (!n.starts_with("Symbols"), !n.ends_with("Mono"), n.clone()));
+    nerd.dedup();
+    nerd
+}
 const LINE_HEIGHT: f32 = 1.25;
 const PADDING: f32 = 6.;
 /// The scrollbar's strip at the right edge, which takes its clicks.
@@ -94,6 +120,11 @@ pub trait TerminalApp: Any {
     /// Reload the page another way than its key; false if it can't.
     fn reload(&self) -> bool {
         false
+    }
+    /// Whether the session saves the tab as a browser tab on `page_url`
+    /// rather than as the terminal it is.
+    fn saves_as_page(&self) -> bool {
+        self.page_url().is_some()
     }
 }
 
@@ -1085,7 +1116,28 @@ impl TerminalView {
     /// else the app's other way to reload. False if it's no such tab.
     fn reload_page(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(app) = self.app.as_ref() else { return false };
-        if app.page_url().is_none() {
+        let Some(url) = app.page_url() else { return false };
+        // terminal-browser's ⌘R does nothing on a local file; its CLI's
+        // reload does.
+        if url.starts_with("file:") && app.reload() {
+            return true;
+        }
+        if !self.send_page_key("r", cx)
+            && let Some(app) = self.app.as_ref()
+        {
+            app.reload();
+        }
+        true
+    }
+
+    /// ⌘`key` sent to a tab's program that shows a page (terminal-browser),
+    /// for an edit action (Copy, Cut, Select All) the Edit menu
+    /// handles before the key reaches the tab: the page or its address bar
+    /// has the selection, not the grid. False if it's no such tab or the key
+    /// couldn't be sent. Paste isn't one: terminal-browser takes pasted
+    /// text, as a shell does, and ignores ⌘V.
+    fn send_page_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
+        if !self.app.as_ref().is_some_and(|a| a.page_url().is_some()) {
             return false;
         }
         let ks = Keystroke {
@@ -1093,15 +1145,10 @@ impl TerminalView {
                 platform: true,
                 ..Default::default()
             },
-            key: "r".into(),
+            key: key.into(),
             key_char: None,
         };
-        if !self.send_keystroke(&ks, cx)
-            && let Some(app) = self.app.as_ref()
-        {
-            app.reload();
-        }
-        true
+        self.send_keystroke(&ks, cx)
     }
 
     /// A key let go: its release, to a program that was sent its press and
@@ -1674,7 +1721,19 @@ impl Render for TerminalView {
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))
             .on_action(cx.listener(|this, _: &Copy, _, cx| {
-                this.copy(cx);
+                if !this.send_page_key("c", cx) {
+                    this.copy(cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &gpui_component::input::Cut, _, cx| {
+                if !this.send_page_key("x", cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &gpui_component::input::SelectAll, _, cx| {
+                if !this.send_page_key("a", cx) {
+                    cx.propagate();
+                }
             }))
             .on_action(cx.listener(|this, _: &crate::browser::Reload, _, cx| {
                 if !this.reload_page(cx) {
@@ -1815,7 +1874,10 @@ impl Element for TerminalElement {
         cx: &mut App,
     ) -> Prepaint {
         let view = self.view.read(cx);
-        let font = font(view.config.font_family.clone());
+        let font = Font {
+            fallbacks: Some(font_fallbacks(&view.config, cx)),
+            ..font(view.config.font_family.clone())
+        };
         let font_size = px(view.font_size);
         let selection = (
             view.config
@@ -2709,6 +2771,17 @@ mod tests {
         let (g, pos) = super::mouse_space(at, cell, (16, 35), 2., (200, 40));
         let got = t.encode_mouse(MouseAction::Motion, None, 0, pos, false, g);
         assert_eq!(got, b"\x1b[<35;1600;700M");
+    }
+
+    #[test]
+    fn nerd_fonts_come_symbols_and_mono_first() {
+        let names = ["Menlo", "JetBrainsMono Nerd Font", "JetBrainsMono Nerd Font Mono",
+            "Symbols Nerd Font", "Symbols Nerd Font Mono", ".Hidden Nerd Font"];
+        assert_eq!(
+            super::nerd_fonts(names.iter().map(|s| s.to_string()).collect()),
+            ["Symbols Nerd Font Mono", "Symbols Nerd Font", "JetBrainsMono Nerd Font Mono",
+                "JetBrainsMono Nerd Font"]
+        );
     }
 
     #[test]
