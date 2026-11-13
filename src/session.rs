@@ -743,7 +743,12 @@ fn tab_state(s: &Surface, scrollback: bool, refs: &Refs, cx: &App) -> TabState {
             let t = t.read(cx);
             // A tab whose app shows a page (terminal-browser) comes back as a
             // browser tab on that page, in whichever engine is set then.
-            if let Some(url) = t.app.as_ref().and_then(|a| a.page_url()) {
+            if let Some(url) = t
+                .app
+                .as_ref()
+                .filter(|a| a.saves_as_page())
+                .and_then(|a| a.page_url())
+            {
                 return TabState::Browser {
                     url: url.into(),
                     name: t.custom_title.clone(),

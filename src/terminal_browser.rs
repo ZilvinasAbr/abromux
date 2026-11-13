@@ -161,9 +161,49 @@ pub fn attach(term: &Entity<TerminalView>, url: &str, cx: &mut gpui::App) {
             url: url.into(),
             title: String::new(),
             browser: None,
+            adopted: false,
         }))
     });
-    watch(term, cx);
+    watch(term, None, cx);
+}
+
+/// Browsers that started since the last call, with their sockets: each
+/// socket in `seen` is asked once. For terminal-browser run in a shell
+/// (`terminal-browser open ./report.html`), which [`adopt`] makes a
+/// browser tab while it runs.
+pub fn new_browsers(seen: &mut std::collections::HashSet<PathBuf>) -> Vec<(PathBuf, Page)> {
+    let all = sockets();
+    seen.retain(|s| all.contains(s));
+    all.into_iter()
+        .filter(|s| seen.insert(s.clone()))
+        .filter_map(|s| ask(&s).map(|p| (s, p)))
+        .collect()
+}
+
+impl Page {
+    /// The terminal it draws on.
+    pub fn tty(&self) -> Option<&Path> {
+        self.tty.as_deref().map(Path::new)
+    }
+}
+
+/// Make the shell `term`, in which terminal-browser started (`page`, at
+/// `socket`), a browser tab until it quits: its title and URL, and the
+/// browser's keys (⌘R reloads, ⌘= zooms the page, ⌘C copies from it). The
+/// session still saves it as the terminal it is.
+pub fn adopt(term: &Entity<TerminalView>, socket: PathBuf, page: Page, cx: &mut gpui::App) {
+    term.update(cx, |t, cx| {
+        let mut tab = Tab {
+            url: String::new(),
+            title: String::new(),
+            browser: None,
+            adopted: true,
+        };
+        tab.update(page);
+        t.app = Some(Box::new(tab));
+        t.app_changed(cx);
+    });
+    watch(term, Some(socket), cx);
 }
 
 /// What a terminal-browser tab shows, as its control socket last said.
@@ -173,6 +213,8 @@ pub struct Tab {
     title: String,
     /// Its browser's key (`terminal-browser ls`), once it answered.
     browser: Option<String>,
+    /// Started from the shell (see [`adopt`]), which it gives back on quit.
+    adopted: bool,
 }
 
 /// The key context of a terminal-browser tab: `KEYS` are bound to nothing
@@ -328,6 +370,10 @@ impl crate::terminal::TerminalApp for Tab {
         Some(&self.url)
     }
 
+    fn saves_as_page(&self) -> bool {
+        !self.adopted
+    }
+
     fn keeps_key(&self, ks: &gpui::Keystroke) -> bool {
         KEYS.iter()
             .filter_map(|k| gpui::Keystroke::parse(k).ok())
@@ -366,10 +412,12 @@ impl crate::terminal::TerminalApp for Tab {
 
 /// Keep `term`'s page title and URL up to date while it runs
 /// terminal-browser: often while the first page loads, then once a second.
-fn watch(term: &Entity<TerminalView>, cx: &mut gpui::App) {
+/// An adopted one's shell gets its tab back once the browser is gone.
+fn watch(term: &Entity<TerminalView>, known: Option<PathBuf>, cx: &mut gpui::App) {
     let term = term.downgrade();
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let mut known: Option<PathBuf> = None;
+        let mut known = known;
+        let mut misses = 0;
         for tick in 0usize.. {
             let delay = if tick < 20 { 250 } else { 1000 };
             Timer::after(Duration::from_millis(delay)).await;
@@ -381,7 +429,24 @@ fn watch(term: &Entity<TerminalView>, cx: &mut gpui::App) {
             let found = cx
                 .background_spawn(async move { find_page(&tty, k.as_deref()) })
                 .await;
-            let Some((socket, page)) = found else { continue };
+            let Some((socket, page)) = found else {
+                misses += 1;
+                if misses >= 3 {
+                    let gone = term.update(cx, |t, cx| {
+                        if t.app_mut::<Tab>().is_some_and(|tab| tab.adopted) {
+                            t.app = None;
+                            t.app_changed(cx);
+                            return true;
+                        }
+                        false
+                    });
+                    if gone.unwrap_or(true) {
+                        return;
+                    }
+                }
+                continue;
+            };
+            misses = 0;
             known = Some(socket);
             let alive = term.update(cx, |t, cx| {
                 if t.app_mut::<Tab>().is_some_and(|tab| tab.update(page)) {
@@ -411,6 +476,7 @@ mod tests {
             url: "https://a.b/".into(),
             title: String::new(),
             browser: None,
+            adopted: false,
         };
         let ctx = tab.key_context();
         assert!(ctx.split(' ').any(|c| c == KEY_CONTEXT), "{ctx}");
@@ -448,14 +514,14 @@ mod tests {
             url: "https://a.b/".into(),
             title: String::new(),
             browser: None,
+            adopted: false,
         };
         assert_eq!(tab.title(), "https://a.b/", "the URL until a title comes");
         let page = |url: &str, title: &str| Page {
             url: url.into(),
             title: title.into(),
             tty: None,
-            key: None,
-            pid: None,
+            ..Default::default()
         };
         assert!(tab.update(page("https://a.b/", "A")));
         assert!(!tab.update(page("https://a.b/", "A")), "no change, no redraw");
@@ -479,7 +545,7 @@ mod tests {
         let p = r.data.unwrap();
         assert_eq!((p.url.as_str(), p.title.as_str()), ("https://lrt.lt/", "LRT"));
         assert_eq!(p.tty.as_deref(), Some("/dev/ttys004"));
-        let mut tab = Tab { url: String::new(), title: String::new(), browser: None };
+        let mut tab = Tab { url: String::new(), title: String::new(), browser: None, adopted: false };
         tab.update(Page { key: Some("90107-1".into()), ..p });
         assert_eq!(tab.browser.as_deref(), Some("90107-1"));
     }

@@ -778,6 +778,8 @@ impl AbroMux {
 
     pub(crate) fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut rows: Vec<AnyElement> = vec![];
+        // The selected workspace's row, to scroll into view when asked.
+        let mut active_row = None;
         let mut prev_group = None;
         for (i, ws) in self.workspaces.iter().enumerate() {
             if ws.group != prev_group
@@ -796,11 +798,17 @@ impl AbroMux {
             if !folded || i == self.active {
                 rows.push(self.render_workspace_row(i, ws, cx));
             }
-            if i == self.active
-                && let Some(links) = self.render_links(i, cx)
-            {
-                rows.push(links);
+            if i == self.active {
+                active_row = Some(rows.len() - 1);
+                if let Some(links) = self.render_links(i, cx) {
+                    rows.push(links);
+                }
             }
+        }
+        if let Some(row) = active_row
+            && self.reveal_active.take()
+        {
+            self.sidebar_scroll.scroll_to_item(row);
         }
 
         let s = cx.global::<Settings>();
@@ -840,6 +848,7 @@ impl AbroMux {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .track_scroll(&self.sidebar_scroll)
                     .flex()
                     .flex_col()
                     .gap(px(2.))

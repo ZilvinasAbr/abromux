@@ -32,6 +32,9 @@ pub struct KeyBind {
 #[derive(Clone, Debug)]
 pub struct Config {
     pub font_family: String,
+    /// The `font-family` lines after the first, tried in order for a
+    /// character the face doesn't have, as in Ghostty.
+    pub font_fallbacks: Vec<String>,
     pub font_size: f32,
     pub foreground: Option<Rgb>,
     pub background: Option<Rgb>,
@@ -72,6 +75,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             font_family: "JetBrains Mono".into(),
+            font_fallbacks: vec![],
             font_size: 14.,
             foreground: None,
             background: None,
@@ -137,8 +141,13 @@ impl Config {
         for (k, v) in entries {
             match k.as_str() {
                 // Repeats add fallbacks in Ghostty; the first one is the face.
-                "font-family" if v.is_empty() => family = None,
+                // An empty one starts the list again.
+                "font-family" if v.is_empty() => {
+                    family = None;
+                    c.font_fallbacks.clear();
+                }
                 "font-family" if family.is_none() => family = Some(unquote(v).into()),
+                "font-family" => c.font_fallbacks.push(unquote(v).into()),
                 "font-size" => c.font_size = v.parse().unwrap_or(c.font_size),
                 "foreground" => c.foreground = parse_color(v),
                 "background" => c.background = parse_color(v),
@@ -410,6 +419,7 @@ mod tests {
              keybind = shift+enter=text:\\n\nkeybind = ctrl+k=csi:2J\nkeybind = super+t=new_tab",
         ));
         assert_eq!(c.font_family, "Berkeley Mono");
+        assert_eq!(c.font_fallbacks, ["Symbols Nerd Font"]);
         assert_eq!(c.font_size, 14.);
         assert_eq!(c.background, Some(Rgb(0x1e, 0x1e, 0x2e)));
         assert_eq!(c.palette, vec![(1, Rgb(0xff, 0, 0))]);

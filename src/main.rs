@@ -312,6 +312,11 @@ struct AbroMux {
     sidebar: bool,
     sidebar_width: f32,
     resizing_sidebar: bool,
+    /// The sidebar's workspace list, scrolled to the selected workspace
+    /// when `reveal_active` is set (a shortcut or the palette picked one
+    /// that may be out of view).
+    sidebar_scroll: ScrollHandle,
+    reveal_active: std::cell::Cell<bool>,
     /// The merge requests panel on the right (⌥⌘B, `crate::gitlab`).
     mr_panel: bool,
     split_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
@@ -385,6 +390,8 @@ impl AbroMux {
             sidebar: true,
             sidebar_width: SIDEBAR_WIDTH,
             resizing_sidebar: false,
+            sidebar_scroll: ScrollHandle::new(),
+            reveal_active: Default::default(),
             mr_panel: false,
             split_bounds: Default::default(),
             dragging: None,
@@ -442,6 +449,44 @@ impl AbroMux {
                     })
                     .is_err()
                 {
+                    break;
+                }
+            }
+        })
+        .detach();
+        // terminal-browser run in a shell becomes a browser tab while it runs.
+        cx.spawn_in(window, async move |this, cx| {
+            let mut seen = std::collections::HashSet::new();
+            loop {
+                Timer::after(Duration::from_secs(2)).await;
+                let (s, found) = cx
+                    .background_spawn(async move {
+                        let found = terminal_browser::new_browsers(&mut seen);
+                        (seen, found)
+                    })
+                    .await;
+                seen = s;
+                if found.is_empty() {
+                    continue;
+                }
+                let alive = this.update(cx, |this, cx| {
+                    for (socket, page) in found {
+                        let Some(tty) = page.tty() else { continue };
+                        let term = this.workspaces.iter().flat_map(|w| w.surfaces()).find_map(|s| match s {
+                            Surface::Terminal(t)
+                                if t.read(cx).app.is_none()
+                                    && t.read(cx).tty_name().as_deref() == Some(tty) =>
+                            {
+                                Some(t.clone())
+                            }
+                            _ => None,
+                        });
+                        if let Some(t) = term {
+                            terminal_browser::adopt(&t, socket, page, cx);
+                        }
+                    }
+                });
+                if alive.is_err() {
                     break;
                 }
             }
@@ -1381,6 +1426,7 @@ impl AbroMux {
     fn select_workspace(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index < self.workspaces.len() {
             self.active = index;
+            self.reveal_active.set(true);
             self.focus_active(window, cx);
             cx.notify();
         }
