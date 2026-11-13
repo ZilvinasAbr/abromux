@@ -223,6 +223,9 @@ impl GitLabView {
     }
 }
 
+/// The width of the pipelines' Retry / Cancel column.
+const PIPELINE_ACTIONS_W: f32 = 64.;
+
 /// What a reaction is on: the merge request, or one of its comments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AwardOn {
@@ -283,14 +286,9 @@ pub(crate) fn commit_author(r: &Review, cm: &crate::types::Commit) -> User {
 }
 
 /// A title without its draft marker, as "Mark as ready" leaves it.
+#[cfg(test)]
 fn ready_title(title: &str) -> String {
-    let t = title.trim_start();
-    for prefix in ["Draft:", "[Draft]", "(Draft)", "Draft - ", "Draft "] {
-        if t.len() >= prefix.len() && t[..prefix.len()].eq_ignore_ascii_case(prefix) {
-            return t[prefix.len()..].trim_start().to_string();
-        }
-    }
-    t.to_string()
+    crate::edit::draft_title(title, false)
 }
 
 impl GitLabView {
@@ -333,6 +331,7 @@ impl GitLabView {
         let local = self.is_local();
         // Built before the tabs, which hold `cx` till the end.
         let stack = if local { None } else { self.stack_button(r, mono.clone(), cx) };
+        let actions = self.mr_actions(r, cx);
         let sections = [
             (Section::Overview, "Overview", r.mr.user_notes_count as usize),
             (Section::Commits, "Commits", r.commits.len()),
@@ -409,12 +408,21 @@ impl GitLabView {
             .px_4()
             .child(
                 div()
+                    .flex()
+                    .items_start()
+                    .gap_4()
                     .pt_3()
-                    .text_size(px(30.))
-                    .line_height(px(37.5))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(c(HEADING))
-                    .child(self.linked_title("gl-title", &m.title, cx)),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .text_size(px(30.))
+                            .line_height(px(37.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(HEADING))
+                            .child(self.linked_title("gl-title", &m.title, cx)),
+                    )
+                    .children(actions.map(|a| a.mt_1())),
             )
             .child(
                 div()
@@ -781,6 +789,8 @@ impl GitLabView {
                     }),
             );
         }
+        let squash = self.merge_squash(r);
+        let n = if squash { n.min(1) } else { n };
         facts.push(
             line()
                 .child(bold(n.to_string()))
@@ -794,16 +804,83 @@ impl GitLabView {
                         .child("."),
                 ),
         );
-        if r.mr.force_remove_source_branch || r.mr.should_remove_source_branch.unwrap_or(false) {
+        if self.merge_remove(r) {
             facts.push(line().child("Source branch will be deleted."));
         }
+        // Merging: who may, and whether it waits for a pipeline still going.
+        let can_merge = self.me.is_some() && r.mr.state == "opened" && r.mr.user.as_ref().is_some_and(|u| u.can_merge);
+        let running = r.mr.head_pipeline.as_ref().is_some_and(|p| crate::edit::pipeline_active(&p.status));
+        let waits = matches!(r.mr.detailed_merge_status.as_deref(), Some("ci_still_running" | "ci_must_pass"));
+        let auto_set = r.mr.merge_when_pipeline_succeeds;
+        let controls = (can_merge && !auto_set && (matches!(status, MergeState::Ready) || (running && waits))).then(|| {
+            let remove = self.merge_remove(r);
+            let auto = running;
+            let (label, live) = crate::edit::busy_label(
+                self.busy,
+                crate::edit::Write::Merge,
+                if auto { "Set to auto-merge" } else { "Merge" },
+                if auto { "Setting…" } else { "Merging…" },
+            );
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_4()
+                .px_4()
+                .py_3()
+                .border_t_1()
+                .border_color(c(BG))
+                .child(
+                    crate::edit::primary("gl-merge", label, live)
+                        .when(live, |d| d.on_click(cx.listener(move |v, _, window, cx| v.merge(auto, window, cx)))),
+                )
+                .child(crate::edit::checkbox("gl-merge-remove", remove, "Delete source branch").on_click(cx.listener(
+                    move |v, _, _, cx| {
+                        v.merge_ticks.1 = Some(!remove);
+                        cx.notify();
+                    },
+                )))
+                .when(!r.mr.squash_on_merge, |d| {
+                    d.child(crate::edit::checkbox("gl-merge-squash", squash, "Squash commits").on_click(cx.listener(
+                        move |v, _, _, cx| {
+                            v.merge_ticks.0 = Some(!squash);
+                            cx.notify();
+                        },
+                    )))
+                })
+        });
+        // Set to auto-merge: who did, and GitLab's Cancel auto-merge.
+        let auto_line = (auto_set && r.mr.state == "opened").then(|| {
+            let who = r.mr.merge_user.as_ref().map_or_else(|| "someone".to_string(), |u| u.name.clone());
+            let (label, live) = crate::edit::busy_label(self.busy, crate::edit::Write::Merge, "Cancel auto-merge", "Canceling…");
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .px_4()
+                .py_3()
+                .child(icon("status-pending", 18., c(LINK)))
+                .child(
+                    div()
+                        .flex_1()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(format!("Set by {who} to be merged automatically when all merge checks pass")),
+                )
+                .when(self.me.is_some(), |d| {
+                    d.child(
+                        crate::edit::secondary("gl-cancel-auto-merge", label)
+                            .when(live, |d| d.on_click(cx.listener(|v, _, window, cx| v.cancel_auto_merge(window, cx)))),
+                    )
+                })
+        });
         let merge = div()
             .flex()
             .flex_col()
             .rounded(px(12.))
             .bg(c(RAISED))
             .text_color(c(TEXT))
-            .child(
+            .children(auto_line)
+            .when(!auto_set, |d| d.child(
                 div()
                     .flex()
                     .items_center()
@@ -816,11 +893,13 @@ impl GitLabView {
                         MergeState::Blocked(_) => icon("minus-circle-filled", 18., c(RED)),
                     })
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(match status {
+                        MergeState::Ready if can_merge => "Ready to merge!",
                         MergeState::Ready => "Ready to merge by members who can write to the target branch.",
                         MergeState::Checking => "Checking if merge request can be merged…",
                         MergeState::Blocked(_) => "Merge blocked: 1 check failed",
                     })),
-            )
+            ))
+            .children(controls)
             // The failed check, with GitLab's fix for a draft.
             .when_some(
                 match status {
@@ -829,7 +908,6 @@ impl GitLabView {
                 },
                 |d, check| {
                     let draft = r.mr.detailed_merge_status.as_deref() == Some("draft_status") && self.me.is_some();
-                    let title = ready_title(&r.mr.title);
                     d.child(
                         div()
                             .flex()
@@ -844,9 +922,8 @@ impl GitLabView {
                             .child(div().flex_1().child(check))
                             .when(draft, |d| {
                                 d.child(
-                                    crate::edit::secondary("gl-mark-ready", "Mark as ready").on_click(cx.listener(
-                                        move |v, _, window, cx| v.save_side(serde_json::json!({ "title": title }), window, cx),
-                                    )),
+                                    crate::edit::secondary("gl-mark-ready", "Mark as ready")
+                                        .on_click(cx.listener(|v, _, window, cx| v.set_draft(false, window, cx))),
                                 )
                             }),
                     )
@@ -1097,7 +1174,8 @@ impl GitLabView {
                 .flex_col()
                 .gap_4()
                 .children(self.write_alert(cx))
-                .children(self.description(&r, window, cx))
+                .when(self.editing_mr, |d| d.child(self.mr_edit_form(cx)))
+                .when(!self.editing_mr, |d| d.children(self.description(&r, window, cx)))
                 // Reactions, pipelines, approving and merging are GitLab's;
                 // a local diff has none of them.
                 .when(!self.is_local(), |d| {
@@ -1471,6 +1549,41 @@ impl GitLabView {
     /// GitLab's Pipelines tab: each of the merge request's pipelines, newest
     /// first, with its status, number, the commit it ran on and how it
     /// started.
+    /// GitLab's "Run pipeline" over a merge request's pipelines.
+    fn run_pipeline_button(&self, r: &Review, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        (self.me.is_some() && r.mr.state == "opened").then(|| {
+            let (label, live) = crate::edit::busy_label(self.busy, crate::edit::Write::Pipeline, "Run pipeline", "Starting…");
+            crate::edit::secondary("gl-run-pipeline", label)
+                .when(live, |d| d.on_click(cx.listener(|v, _, window, cx| v.pipeline_action(None, true, window, cx))))
+        })
+    }
+
+    /// A pipeline's Retry (failed or canceled) or Cancel (still going).
+    fn pipeline_buttons(&self, p: &crate::types::Pipeline, cx: &mut Context<Self>) -> Div {
+        let id = p.id;
+        let active = crate::edit::pipeline_active(&p.status);
+        let retry = matches!(p.status.as_str(), "failed" | "canceled");
+        div()
+            .w(px(PIPELINE_ACTIONS_W))
+            .flex_none()
+            .flex()
+            .justify_end()
+            .when(self.me.is_some() && self.busy != Some(crate::edit::Write::Pipeline), |d| {
+                d.when(retry, |d| {
+                    d.child(
+                        crate::edit::icon_button(SharedString::from(format!("pipeline-retry-{id}")), app_icon("rotate-cw", 16., c(TEXT)), "Retry")
+                            .on_click(cx.listener(move |v, _, window, cx| v.pipeline_action(Some(id), true, window, cx))),
+                    )
+                })
+                .when(active, |d| {
+                    d.child(
+                        crate::edit::icon_button(SharedString::from(format!("pipeline-cancel-{id}")), app_icon("x", 16., c(RED)), "Cancel pipeline")
+                            .on_click(cx.listener(move |v, _, window, cx| v.pipeline_action(Some(id), false, window, cx))),
+                    )
+                })
+            })
+    }
+
     pub(crate) fn pipelines_page(&self, r: &Review, cx: &mut Context<Self>) -> AnyElement {
         let mono = self.mono(cx);
         if r.pipelines.is_empty() {
@@ -1478,9 +1591,12 @@ impl GitLabView {
                 .px_4()
                 .py_6()
                 .flex()
-                .justify_center()
+                .flex_col()
+                .items_center()
+                .gap_3()
                 .text_color(c(MUTED))
                 .child("There are currently no pipelines.")
+                .children(self.run_pipeline_button(r, cx))
                 .into_any_element();
         }
         let head = |text: &'static str, w: Option<f32>| {
@@ -1501,6 +1617,7 @@ impl GitLabView {
                 .text_color(c(TEXT))
                 .child(text)
         };
+        let run = self.run_pipeline_button(r, cx);
         let rows = r.pipelines.iter().enumerate().map(|(i, p)| {
             use crate::types::PipelineTone::*;
             let (word, tone) = p.label();
@@ -1596,12 +1713,14 @@ impl GitLabView {
                         ),
                 )
                 .child(div().w(px(120.)).flex_none().child(pipeline_icon(p, 20.)))
+                .child(self.pipeline_buttons(p, cx))
         });
         div()
             .id("gl-pipelines")
             .size_full()
             .overflow_y_scroll()
             .px_4()
+            .children(run.map(|b| div().flex().justify_end().pt_3().pb_1().child(b)))
             .child(
                 div()
                     .flex()
@@ -1611,7 +1730,8 @@ impl GitLabView {
                     .border_color(c(RAISED))
                     .child(head("Status", Some(180.)))
                     .child(head("Pipeline", None))
-                    .child(head("Stages", Some(120.))),
+                    .child(head("Stages", Some(120.)))
+                    .child(div().w(px(PIPELINE_ACTIONS_W)).flex_none()),
             )
             .children(rows)
             .into_any_element()

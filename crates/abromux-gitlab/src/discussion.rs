@@ -332,6 +332,15 @@ impl GitLabView {
             (Some(r), None) => Some(div().flex().items_center().ml_1().child(r)),
             (Some(r), Some(a)) => Some(div().flex().items_center().ml_1().child(r).child(a.ml_0())),
         };
+        // Your own: Edit and Delete, last as in GitLab.
+        let actions = match (actions, self.note_owner_actions(n, cx)) {
+            (a, None) => a,
+            (None, Some(o)) => Some(o.ml_1()),
+            (Some(a), Some(o)) => Some(a.child(o)),
+        };
+        let editing = self.editing_note == Some(n.id);
+        let body = if editing { self.note_edit_form(cx) } else { body };
+        let confirm = (self.deleting_note == Some(n.id)).then(|| self.note_delete_confirm(n.id, cx));
         let awards = if self.is_local() { None } else { self.note_awards(n.id, cx) };
         div()
             .flex()
@@ -350,6 +359,7 @@ impl GitLabView {
                     .gap_1()
                     .child(self.note_header(&n.author, &n.created_at, mr_author, actions))
                     .child(body)
+                    .children(confirm)
                     .children(awards),
             )
     }

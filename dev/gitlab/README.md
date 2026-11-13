@@ -39,7 +39,8 @@ python3 dev/gitlab/seed.py  # recreate the fixtures project from scratch
 
 ```bash
 cargo test -p abromux-gitlab                         # offline, on tests/fixtures
-ABROMUX_GITLAB_LIVE=1 cargo test -p abromux-gitlab   # also against the live GitLab
+ABROMUX_GITLAB_LIVE=1 cargo test -p abromux-gitlab   # also against the live GitLab (tests/manage.rs merges
+                                                     # a merge request it makes, as alice, with a token it revokes)
 dev/gitlab/record-fixtures.sh                        # re-record tests/fixtures after reseeding
 ```
 
@@ -85,7 +86,9 @@ it shows: `state`, `open {url | iid}`, `section {name}`, `file {path}`,
 `fold {path}`, `viewed {path}`, `tree`, `parallel {on}`, `expand {path, hunk, lines}`,
 `compare {base, head}`, `next_thread`, `prev_thread`, `thread {body}`, `search {query}`,
 `list {scope, state}`, `browse {path | id}` (a project's merge requests; `{}`: the projects),
-`paste {text}` (into the list's search), `back`, `refresh`. Real input goes through `debug.input`
+`paste {text}` (into the list's search), `back`, `refresh`; and writing: `merge {auto, squash, remove_source_branch}`,
+`cancel_auto_merge`, `close`, `reopen`, `draft {on}`, `edit_mr {title, description, save}`, `edit_note {id, body, save}`,
+`delete_note {id, sure}`, `pipeline {id, action: retry|cancel|run}`, `menu {on}` (the header's ⋮). Real input goes through `debug.input`
 (`key:n`, `ui:down,X,Y;ui:up,X,Y`, `ui:scroll,X,Y,DY`).
 
 The loop in one command, tests + build + a screenshot in `target/shots/`:

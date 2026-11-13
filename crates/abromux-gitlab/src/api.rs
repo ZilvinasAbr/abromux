@@ -675,14 +675,82 @@ impl Client {
         Ok(())
     }
 
+    /// Merge it, as GitLab's Merge button does: at head `sha` (GitLab
+    /// refuses if a push came since), squashing and deleting the source
+    /// branch as ticked. With `auto`, set it to merge once its checks pass
+    /// instead ("Set to auto-merge").
+    pub fn merge(&self, project: u64, iid: u64, opts: &MergeOptions) -> anyhow::Result<MergeRequest> {
+        let path = format!("projects/{project}/merge_requests/{iid}/merge");
+        let mut body = serde_json::json!({
+            "squash": opts.squash,
+            "should_remove_source_branch": opts.remove_source_branch,
+        });
+        if let Some(sha) = &opts.sha {
+            body["sha"] = sha.clone().into();
+        }
+        if opts.auto {
+            // `auto_merge` since GitLab 17; older ones know the other name.
+            body["auto_merge"] = true.into();
+            body["merge_when_pipeline_succeeds"] = true.into();
+        }
+        self.write("PUT", &path, body).map_err(|e| match ApiError::status_of(&e) {
+            Some(405 | 406 | 422) => e.context("GitLab can't merge it as it stands: check the merge checks above, then refresh"),
+            Some(409) => e.context("the source branch changed since this page loaded: refresh and look again before merging"),
+            _ => e,
+        })
+    }
+
+    /// Take back auto-merge ("Cancel auto-merge").
+    pub fn cancel_auto_merge(&self, project: u64, iid: u64) -> anyhow::Result<()> {
+        let path = format!("projects/{project}/merge_requests/{iid}/cancel_merge_when_pipeline_succeeds");
+        let _: serde_json::Value = self.write("POST", &path, serde_json::json!({}))?;
+        Ok(())
+    }
+
+    /// Close or reopen it.
+    pub fn set_open(&self, project: u64, iid: u64, open: bool) -> anyhow::Result<MergeRequest> {
+        self.update(project, iid, serde_json::json!({ "state_event": if open { "reopen" } else { "close" } }))
+    }
+
+    /// Change comment `note`'s text (yours).
+    pub fn edit_note(&self, project: u64, iid: u64, note: u64, body: &str) -> anyhow::Result<Note> {
+        self.write("PUT", &format!("projects/{project}/merge_requests/{iid}/notes/{note}"), serde_json::json!({ "body": body }))
+    }
+
+    /// Delete comment `note` (yours).
+    pub fn delete_note(&self, project: u64, iid: u64, note: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write("DELETE", &format!("projects/{project}/merge_requests/{iid}/notes/{note}"), serde_json::json!({}))?;
+        Ok(())
+    }
+
+    /// Run pipeline `id`'s failed and canceled jobs again ("Retry").
+    pub fn retry_pipeline(&self, project: u64, id: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write("POST", &format!("projects/{project}/pipelines/{id}/retry"), serde_json::json!({}))?;
+        Ok(())
+    }
+
+    /// Stop pipeline `id`'s running and pending jobs ("Cancel pipeline").
+    pub fn cancel_pipeline(&self, project: u64, id: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write("POST", &format!("projects/{project}/pipelines/{id}/cancel"), serde_json::json!({}))?;
+        Ok(())
+    }
+
+    /// Run a new pipeline for the merge request ("Run pipeline").
+    pub fn run_pipeline(&self, project: u64, iid: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write("POST", &format!("projects/{project}/merge_requests/{iid}/pipelines"), serde_json::json!({}))?;
+        Ok(())
+    }
+
     /// The merge request's pipelines, newest first: each commit's status.
     pub fn pipelines(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Pipeline>> {
         self.get_all(&format!("projects/{project}/merge_requests/{iid}/pipelines"))
     }
 
     /// The latest pipeline that ran on commit `sha`, if any.
-    pub fn pipeline_for_sha(&self, project: u64, sha: &str) -> anyhow::Result<Option<Pipeline>> {
-        let all: Vec<Pipeline> = self.get(&format!("projects/{project}/pipelines?sha={sha}&per_page=1"))?;
+    /// On `git_ref` only: another branch made from the same commit runs
+    /// pipelines on it too.
+    pub fn pipeline_for_sha(&self, project: u64, sha: &str, git_ref: &str) -> anyhow::Result<Option<Pipeline>> {
+        let all: Vec<Pipeline> = self.get(&format!("projects/{project}/pipelines?sha={sha}&ref={}&per_page=1", query_value(git_ref)))?;
         Ok(all.into_iter().next())
     }
 
@@ -897,6 +965,27 @@ fn scope_query(scope: &Scope) -> String {
         Scope::All => "scope=all".into(),
         Scope::Project(id) => format!("project_id={id}"),
     }
+}
+
+/// `s` as a URL query value: branch names may hold `&`, `#`, `+` and the like.
+fn query_value(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// What GitLab's merge widget has ticked, for [`Client::merge`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MergeOptions {
+    pub squash: bool,
+    pub remove_source_branch: bool,
+    /// Merge once the checks pass, not now.
+    pub auto: bool,
+    /// The head commit the merge is for.
+    pub sha: Option<String>,
 }
 
 /// The merge requests list in `scope` and `state` (all its pages: `get_all`).

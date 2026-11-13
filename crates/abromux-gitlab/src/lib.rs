@@ -34,6 +34,8 @@ pub mod time;
 pub mod types;
 pub mod view;
 
+pub use edit::{draft_title, pipeline_active};
+
 use abromux_plugin::{Plugin, TabHandle};
 use gpui::{App, AppContext as _, Window};
 use serde::{Deserialize, Serialize};
@@ -60,10 +62,12 @@ macro_rules! icons {
     };
 }
 
-static ASSETS: [(&str, &[u8]); 34] = icons!(
+static ASSETS: [(&str, &[u8]); 36] = icons!(
     "layers",
     "file-diff",
     "arrow-right",
+    "ellipsis-v",
+    "remove",
     "comment-lines",
     "sort-desc",
     "sort-asc",
@@ -387,7 +391,7 @@ fn load_rest(
     r.review_states = c.reviewers(project, iid).unwrap_or_default().into_iter().map(|rv| (rv.user.id, rv.state)).collect();
     r.pipelines = c.pipelines(project, iid).unwrap_or_default();
     if let Some(sha) = r.mr.merge_commit_sha.clone().or_else(|| r.mr.squash_commit_sha.clone()).filter(|_| r.mr.state == "merged") {
-        r.merge_pipeline = c.pipeline_for_sha(project, &sha).ok().flatten();
+        r.merge_pipeline = c.pipeline_for_sha(project, &sha, &r.mr.target_branch).ok().flatten();
     }
     // The roles of whoever commented that the first hundred members don't
     // cover: one short request each, together.

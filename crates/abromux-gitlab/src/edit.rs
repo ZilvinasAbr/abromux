@@ -41,6 +41,13 @@ pub enum Write {
     LineDraft,
     SubmitReview,
     Sidebar,
+    Merge,
+    /// Closing, reopening, marking as draft or ready.
+    MrState,
+    EditMr,
+    EditNote,
+    DeleteNote,
+    Pipeline,
 }
 
 /// A button's label and whether it's live, given what's being written:
@@ -59,6 +66,11 @@ pub struct Boxes {
     pub line: Entity<InputState>,
     /// The search in a sidebar dropdown (side.rs).
     pub search: Entity<InputState>,
+    /// Editing the merge request: its title and description.
+    pub title: Entity<InputState>,
+    pub description: Entity<InputState>,
+    /// Editing one of your comments.
+    pub note: Entity<InputState>,
 }
 
 impl Boxes {
@@ -71,12 +83,15 @@ impl Boxes {
             reply: field("Reply…", window, cx),
             line: field("Write a comment on this line…", window, cx),
             search: cx.new(|cx| InputState::new(window, cx).placeholder("Search")),
+            title: cx.new(|cx| InputState::new(window, cx).placeholder("Title")),
+            description: cx.new(|cx| InputState::new(window, cx).multi_line(true).auto_grow(6, 24).placeholder("Describe the goal of the changes and what reviewers should be aware of.")),
+            note: field("Edit comment…", window, cx),
         }
     }
 
     /// One of them has the keys: the tab's shortcuts stand aside.
     pub fn typing(&self, window: &Window, cx: &App) -> bool {
-        [&self.comment, &self.reply, &self.line, &self.search]
+        [&self.comment, &self.reply, &self.line, &self.search, &self.title, &self.description, &self.note]
             .iter()
             .any(|b| b.read(cx).focus_handle(cx).is_focused(window))
     }
@@ -160,6 +175,67 @@ impl Writes {
     pub fn any(&self) -> bool {
         !self.queue.is_empty()
     }
+}
+
+/// GitLab's danger (red) button, for deleting.
+pub fn danger(id: impl Into<ElementId>, label: &'static str, enabled: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .h(px(32.))
+        .px_3()
+        .rounded(px(8.))
+        .bg(c(if enabled { 0xdd2b0e } else { 0x6e1f14 }))
+        .text_color(c(if enabled { HEADING } else { MUTED }))
+        .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(c(0xc91c00))))
+        .child(label)
+}
+
+/// A checkbox with its label, as GitLab's merge widget has them.
+pub fn checkbox(id: impl Into<ElementId>, on: bool, label: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap_2()
+        .cursor_pointer()
+        .child(icon(if on { "square-check" } else { "square" }, 16., c(if on { FOCUS } else { MUTED })))
+        .child(label)
+}
+
+/// A small icon button, as on a comment's header.
+pub fn icon_button(id: impl Into<ElementId>, svg: Svg, tip: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .size(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.))
+        .cursor_pointer()
+        .hover(|s| s.bg(ca(0x89888d66)))
+        .child(svg)
+        .tooltip(hint(tip))
+}
+
+/// The title with GitLab's draft marker, or without it ("Mark as ready").
+pub fn draft_title(title: &str, draft: bool) -> String {
+    let t = title.trim_start();
+    let mut bare = t;
+    for prefix in ["Draft:", "[Draft]", "(Draft)", "Draft - ", "Draft "] {
+        if bare.len() >= prefix.len() && bare[..prefix.len()].eq_ignore_ascii_case(prefix) {
+            bare = bare[prefix.len()..].trim_start();
+            break;
+        }
+    }
+    if draft { format!("Draft: {bare}") } else { bare.to_string() }
+}
+
+/// Whether a pipeline in this status is still to finish: auto-merge waits
+/// for it, Cancel stops it.
+pub fn pipeline_active(status: &str) -> bool {
+    matches!(status, "created" | "waiting_for_resource" | "preparing" | "pending" | "running" | "scheduled")
 }
 
 impl GitLabView {
@@ -522,7 +598,389 @@ impl GitLabView {
         })
     }
 
+    /// Merge now, or with `auto` once the checks pass, with the widget's
+    /// ticks. It waits for GitLab ("Merging…"): a merge can be refused.
+    pub(crate) fn merge(&mut self, auto: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(r) = self.review.ready() else { return };
+        let opts = crate::api::MergeOptions {
+            squash: self.merge_squash(r),
+            remove_source_branch: self.merge_remove(r),
+            auto,
+            sha: r.mr.sha.clone(),
+        };
+        self.write(Write::Merge, None, move |c, p, iid| c.merge(p, iid, &opts).map(|_| ()), |_, _, _| {}, window, cx);
+    }
+
+    pub(crate) fn cancel_auto_merge(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.write(Write::Merge, None, |c, p, iid| c.cancel_auto_merge(p, iid), |_, _, _| {}, window, cx);
+    }
+
+    /// The widget's "Squash commits": what was ticked, else the author's
+    /// choice (or the project's, when it always squashes).
+    pub(crate) fn merge_squash(&self, r: &crate::review::Review) -> bool {
+        r.mr.squash_on_merge || self.merge_ticks.0.unwrap_or(r.mr.squash)
+    }
+
+    /// The widget's "Delete source branch": ticked, else the author's choice.
+    pub(crate) fn merge_remove(&self, r: &crate::review::Review) -> bool {
+        self.merge_ticks.1.unwrap_or(r.mr.force_remove_source_branch || r.mr.should_remove_source_branch.unwrap_or(false))
+    }
+
+    /// Close or reopen the merge request.
+    pub(crate) fn set_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.mr_menu = false;
+        self.write(
+            Write::MrState,
+            Some(Patch::State { open }),
+            move |c, p, iid| c.set_open(p, iid, open).map(|_| ()),
+            |_, _, _| {},
+            window,
+            cx,
+        );
+    }
+
+    /// Mark as draft, or as ready.
+    pub(crate) fn set_draft(&mut self, draft: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(r) = self.review.ready() else { return };
+        let fields = serde_json::json!({ "title": draft_title(&r.mr.title, draft) });
+        self.mr_menu = false;
+        self.write(
+            Write::MrState,
+            Some(Patch::Fields { fields: fields.clone(), people: vec![] }),
+            move |c, p, iid| c.update(p, iid, fields).map(|_| ()),
+            |_, _, _| {},
+            window,
+            cx,
+        );
+    }
+
+    /// GitLab's Edit: the title and description in fields, at the top of
+    /// the Overview.
+    pub(crate) fn open_edit_mr(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(r) = self.review.ready().cloned() else { return };
+        self.mr_menu = false;
+        self.editing_mr = true;
+        self.boxes.title.update(cx, |b, cx| b.set_value(r.mr.title.clone(), window, cx));
+        self.boxes.description.update(cx, |b, cx| b.set_value(r.mr.description.clone().unwrap_or_default(), window, cx));
+        self.set_section(crate::Section::Overview, cx);
+        self.overview_list.scroll_to(gpui::ListOffset::default());
+        self.boxes.title.update(cx, |b, cx| b.focus(window, cx));
+        cx.notify();
+    }
+
+    pub(crate) fn close_edit_mr(&mut self, cx: &mut Context<Self>) {
+        self.editing_mr = false;
+        cx.notify();
+    }
+
+    /// Save the edited title and description: they show at once, and the
+    /// form comes back with them if GitLab turns them down.
+    pub(crate) fn save_mr(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let title = self.boxes.title.read(cx).value().trim().to_string();
+        let description = self.boxes.description.read(cx).value().to_string();
+        if title.is_empty() {
+            return;
+        }
+        self.close_edit_mr(cx);
+        let fields = serde_json::json!({ "title": title, "description": description });
+        self.write(
+            Write::EditMr,
+            Some(Patch::Fields { fields: fields.clone(), people: vec![] }),
+            move |c, p, iid| c.update(p, iid, fields).map(|_| ()),
+            move |v, window, cx| {
+                v.editing_mr = true;
+                v.boxes.title.update(cx, |b, cx| b.set_value(title, window, cx));
+                v.boxes.description.update(cx, |b, cx| b.set_value(description, window, cx));
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Edit your comment `note`: its text in a field, in place.
+    pub(crate) fn open_edit_note(&mut self, note: u64, body: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if is_pending_note(note) {
+            return;
+        }
+        self.editing_note = Some(note);
+        self.deleting_note = None;
+        let body = body.to_string();
+        self.boxes.note.update(cx, |b, cx| {
+            b.set_value(body, window, cx);
+            b.focus(window, cx);
+        });
+        self.rebuild_rows(cx);
+    }
+
+    pub(crate) fn close_edit_note(&mut self, cx: &mut Context<Self>) {
+        self.editing_note = None;
+        self.rebuild_rows(cx);
+    }
+
+    /// Save the comment being edited: the new text shows at once, and comes
+    /// back to its field if GitLab turns it down.
+    pub(crate) fn save_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(note) = self.editing_note else { return };
+        let body = self.boxes.note.read(cx).value().trim().to_string();
+        if body.is_empty() {
+            return;
+        }
+        self.close_edit_note(cx);
+        let back = body.clone();
+        self.write(
+            Write::EditNote,
+            Some(Patch::EditNote { note, body: body.clone() }),
+            move |c, p, iid| c.edit_note(p, iid, note, &body).map(|_| ()),
+            move |v, window, cx| {
+                v.editing_note = Some(note);
+                v.boxes.note.update(cx, |b, cx| b.set_value(back, window, cx));
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Ask, then (with `sure`) delete your comment `note`: it goes at once,
+    /// and comes back if GitLab turns that down.
+    pub(crate) fn delete_note(&mut self, note: u64, sure: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if is_pending_note(note) {
+            return;
+        }
+        if !sure {
+            self.deleting_note = Some(note);
+            self.rebuild_rows(cx);
+            return;
+        }
+        self.deleting_note = None;
+        self.write(
+            Write::DeleteNote,
+            Some(Patch::DeleteNote { note }),
+            move |c, p, iid| c.delete_note(p, iid, note),
+            |_, _, _| {},
+            window,
+            cx,
+        );
+    }
+
+    pub(crate) fn cancel_delete_note(&mut self, cx: &mut Context<Self>) {
+        self.deleting_note = None;
+        self.rebuild_rows(cx);
+    }
+
+    /// Retry or cancel pipeline `id`, or (`None`) run a new one.
+    pub(crate) fn pipeline_action(&mut self, id: Option<u64>, retry: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.write(
+            Write::Pipeline,
+            None,
+            move |c, p, iid| match (id, retry) {
+                (None, _) => c.run_pipeline(p, iid),
+                (Some(id), true) => c.retry_pipeline(p, id),
+                (Some(id), false) => c.cancel_pipeline(p, id),
+            },
+            |_, _, _| {},
+            window,
+            cx,
+        );
+    }
+
     // ---- what they look like ----------------------------------------------
+
+    /// The header's buttons right of the title, as GitLab has them: Edit,
+    /// and ⋮ with Mark as draft or ready, Close or Reopen, Copy reference.
+    pub(crate) fn mr_actions(&self, r: &crate::review::Review, cx: &mut Context<Self>) -> Option<Div> {
+        if self.is_local() {
+            return None;
+        }
+        let m = &r.mr;
+        let writes = self.me.is_some() && m.state != "merged" && m.state != "locked";
+        let item = |id: &'static str, label: String, danger: bool| {
+            div()
+                .id(id)
+                .px_3()
+                .py_1()
+                .cursor_pointer()
+                .hover(|st| st.bg(c(RAISED)))
+                .text_color(c(if danger { RED } else { TEXT }))
+                .child(label)
+        };
+        let menu = self.mr_menu.then(|| {
+            let draft = m.draft;
+            let open = m.state == "opened";
+            let reference = m.references.full.clone();
+            let items = div()
+                .when(writes && open, |d| {
+                    d.child(
+                        item("gl-mr-draft", if draft { "Mark as ready" } else { "Mark as draft" }.into(), false)
+                            .on_click(cx.listener(move |v, _, window, cx| v.set_draft(!draft, window, cx))),
+                    )
+                })
+                .when(writes, |d| {
+                    d.child(
+                        item("gl-mr-state", if open { "Close merge request" } else { "Reopen merge request" }.into(), open)
+                            .on_click(cx.listener(move |v, _, window, cx| v.set_open(!open, window, cx))),
+                    )
+                })
+                .when(!reference.is_empty(), |d| {
+                    d.child(
+                        item("gl-mr-copy-ref", "Copy reference".into(), false).on_click(cx.listener(
+                            move |v, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(reference.clone()));
+                                v.mr_menu = false;
+                                cx.notify();
+                            },
+                        )),
+                    )
+                });
+            deferred(
+                div()
+                    .id("gl-mr-menu")
+                    .absolute()
+                    .top(px(36.))
+                    .right_0()
+                    .min_w(px(220.))
+                    .py_1()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(c(BORDER))
+                    .bg(c(CARD))
+                    .shadow_lg()
+                    .occlude()
+                    .on_mouse_down_out(cx.listener(|v, _, _, cx| {
+                        v.mr_menu = false;
+                        cx.notify();
+                    }))
+                    .child(items),
+            )
+            .with_priority(1)
+        });
+        Some(
+            div()
+                .relative()
+                .flex()
+                .items_center()
+                .gap_2()
+                .flex_none()
+                .when(writes, |d| {
+                    d.child(secondary("gl-mr-edit", "Edit").on_click(cx.listener(|v, _, window, cx| v.open_edit_mr(window, cx))))
+                })
+                .child(
+                    secondary("gl-mr-more", "")
+                        .px_2()
+                        .child(icon("ellipsis-v", 16., c(TEXT)))
+                        .tooltip(hint("Merge request actions"))
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.mr_menu = !v.mr_menu;
+                            cx.notify();
+                        })),
+                )
+                .children(menu),
+        )
+    }
+
+    /// Editing the merge request: Title and Description, Save changes.
+    pub(crate) fn mr_edit_form(&self, cx: &mut Context<Self>) -> Div {
+        let empty = self.boxes.title.read(cx).value().trim().is_empty();
+        let (label, live) = busy_label(self.busy, Write::EditMr, "Save changes", "Saving…");
+        let enabled = !empty && live;
+        let field = |d: Div| d.p_2().rounded(px(8.)).border_1().border_color(c(BORDER)).bg(c(CARD));
+        let heading = |s: &'static str| div().font_weight(FontWeight::SEMIBOLD).text_color(c(HEADING)).child(s);
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(heading("Title"))
+            .child(field(div()).child(Input::new(&self.boxes.title).appearance(false)))
+            .child(div().text_size(px(12.)).text_color(c(MUTED)).child("Start the title with Draft: to prevent a merge request draft from merging before it's ready."))
+            .child(heading("Description").mt_2())
+            .child(field(div()).child(Input::new(&self.boxes.description).appearance(false)))
+            .child(div().text_size(px(12.)).text_color(c(MUTED)).child("Markdown is supported."))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .mt_2()
+                    .child(
+                        primary("gl-mr-save", label, enabled)
+                            .when(enabled, |d| d.on_click(cx.listener(|v, _, window, cx| v.save_mr(window, cx)))),
+                    )
+                    .child(secondary("gl-mr-cancel", "Cancel").on_click(cx.listener(|v, _, _, cx| v.close_edit_mr(cx)))),
+            )
+    }
+
+    /// Your comment's Edit and Delete buttons.
+    pub(crate) fn note_owner_actions(&self, n: &crate::types::Note, cx: &mut Context<Self>) -> Option<Div> {
+        let mine = self.me.as_ref().is_some_and(|me| me.id == n.author.id);
+        if !mine || n.system || is_pending_note(n.id) || self.is_local() || self.review.ready().is_some_and(|r| r.mr.state == "locked") {
+            return None;
+        }
+        let (id, body) = (n.id, n.body.clone());
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .child(
+                    icon_button(SharedString::from(format!("note-edit-{id}")), app_icon("pencil", 14., c(MUTED)), "Edit comment")
+                        .on_click(cx.listener(move |v, _, window, cx| v.open_edit_note(id, &body, window, cx))),
+                )
+                .child(
+                    icon_button(SharedString::from(format!("note-delete-{id}")), icon("remove", 15., c(MUTED)), "Delete comment")
+                        .on_click(cx.listener(move |v, _, window, cx| v.delete_note(id, false, window, cx))),
+                ),
+        )
+    }
+
+    /// The comment being edited: its field, Save changes and Cancel.
+    pub(crate) fn note_edit_form(&self, cx: &mut Context<Self>) -> Div {
+        let empty = self.boxes.note.read(cx).value().trim().is_empty();
+        let (label, live) = busy_label(self.busy, Write::EditNote, "Save changes", "Saving…");
+        let enabled = !empty && live;
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .p_2()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(c(0x1068bf))
+                    .bg(c(BG))
+                    .child(Input::new(&self.boxes.note).appearance(false)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        primary("gl-note-save", label, enabled)
+                            .when(enabled, |d| d.on_click(cx.listener(|v, _, window, cx| v.save_note(window, cx)))),
+                    )
+                    .child(secondary("gl-note-cancel", "Cancel").on_click(cx.listener(|v, _, _, cx| v.close_edit_note(cx)))),
+            )
+    }
+
+    /// GitLab's question before deleting a comment.
+    pub(crate) fn note_delete_confirm(&self, note: u64, cx: &mut Context<Self>) -> Div {
+        let (label, live) = busy_label(self.busy, Write::DeleteNote, "Delete comment", "Deleting…");
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .p_2()
+            .rounded(px(8.))
+            .bg(c(0x3e1d22))
+            .border_1()
+            .border_color(c(0x7a2e3a))
+            .child(div().flex_1().text_color(c(TEXT)).child("Are you sure you want to delete this comment?"))
+            .child(
+                danger(SharedString::from(format!("note-delete-sure-{note}")), label, live)
+                    .when(live, |d| d.on_click(cx.listener(move |v, _, window, cx| v.delete_note(note, true, window, cx)))),
+            )
+            .child(secondary("gl-note-delete-cancel", "Cancel").on_click(cx.listener(|v, _, _, cx| v.cancel_delete_note(cx))))
+    }
 
     /// What went wrong with the last write, in GitLab's alert.
     pub(crate) fn write_alert(&self, cx: &mut Context<Self>) -> Option<Div> {
@@ -747,5 +1205,15 @@ mod tests {
         assert_eq!(busy_label(None, Write::Approve, "Approve", "Approving…"), ("Approve", true));
         assert_eq!(busy_label(Some(Write::Approve), Write::Approve, "Approve", "Approving…"), ("Approving…", false));
         assert_eq!(busy_label(Some(Write::Approve), Write::Reply, "Reply", "Replying…"), ("Reply", true));
+    }
+
+    #[test]
+    fn draft_marker_comes_and_goes() {
+        use super::draft_title;
+        assert_eq!(draft_title("Fix the limiter", true), "Draft: Fix the limiter");
+        assert_eq!(draft_title("Draft: Fix the limiter", true), "Draft: Fix the limiter");
+        assert_eq!(draft_title("[Draft] Fix the limiter", true), "Draft: Fix the limiter");
+        assert_eq!(draft_title("Draft: Fix the limiter", false), "Fix the limiter");
+        assert_eq!(draft_title("Drafting notes", true), "Draft: Drafting notes");
     }
 }
