@@ -6,6 +6,7 @@
 
 use crate::{
     AbroMux, Hints, SIDEBAR_WIDTH, TITLEBAR_H, focus_selected, hint_pill, one_line,
+    select_all_on_double_click,
     settings::{IndicatorStyle, Placement, Settings},
     shortcut_digit, terminal,
     theme::*,
@@ -957,6 +958,9 @@ impl AbroMux {
                 MouseButton::Left,
                 cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
                     if ev.click_count >= 2 {
+                        // The double-click's first click folded or unfolded
+                        // the group; put it back as it was.
+                        this.toggle_group(gid, cx);
                         this.start_group_rename(gid, window, cx);
                     } else {
                         this.toggle_group(gid, cx);
@@ -1005,6 +1009,7 @@ impl AbroMux {
                     .border_color(rgba(0xffffff59))
                     .text_color(rgb(TEXT))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_up(MouseButton::Left, select_all_on_double_click)
                     .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                         if ev.keystroke.key == "escape" {
                             this.renaming_group = None;
@@ -1293,6 +1298,7 @@ impl AbroMux {
                             .text_color(rgb(TEXT))
                             .font_weight(FontWeight::SEMIBOLD)
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_mouse_up(MouseButton::Left, select_all_on_double_click)
                             .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                                 if ev.keystroke.key == "escape" {
                                     this.renaming = None;

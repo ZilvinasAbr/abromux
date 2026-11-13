@@ -2425,6 +2425,7 @@ impl AbroMux {
                         .border_1()
                         .border_color(rgb(ACCENT))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_mouse_up(MouseButton::Left, select_all_on_double_click)
                         .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                             if ev.keystroke.key == "escape" {
                                 this.renaming_tab = None;
@@ -3147,6 +3148,14 @@ pub(crate) fn focus_selected(input: &Entity<InputState>, window: &mut Window, cx
         })
         .detach();
     input.update(cx, |i, cx| i.focus(window, cx));
+}
+
+/// For a rename field's `on_mouse_up`: a double-click selects the whole
+/// name rather than one word, so typing replaces it.
+pub(crate) fn select_all_on_double_click(ev: &MouseUpEvent, window: &mut Window, cx: &mut App) {
+    if ev.click_count >= 2 {
+        window.dispatch_action(Box::new(SelectAll), cx);
+    }
 }
 
 /// The ⌘/⌃ digit that selects item `index` of `count`: 1–8 for the first
