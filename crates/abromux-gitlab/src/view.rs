@@ -201,6 +201,19 @@ pub struct GitLabView {
     pub(crate) write_error: Option<String>,
     pub(crate) replying: Option<String>,
     pub(crate) commenting: Option<crate::edit::LineKey>,
+    /// The merge widget's "Squash commits" and "Delete source branch" as
+    /// ticked here (None: as the merge request says).
+    pub(crate) merge_ticks: (Option<bool>, Option<bool>),
+    /// The header's ⋮ menu is open.
+    pub(crate) mr_menu: bool,
+    /// Editing the title and description (Edit), a comment of yours, and
+    /// the comment asked about deleting.
+    pub(crate) editing_mr: bool,
+    pub(crate) editing_note: Option<u64>,
+    pub(crate) deleting_note: Option<u64>,
+    /// The merge request (its global id) the ticks and edits above are of:
+    /// another one showing drops them, so its fields never save over it.
+    edits_of: Option<u64>,
     /// The diff line under the pointer: the one with the comment bubble.
     pub(crate) hovered_line: Option<crate::edit::LineKey>,
     /// The file browser's search field.
@@ -256,6 +269,9 @@ impl GitLabView {
             })
             .detach();
         }
+        for b in [&boxes.title, &boxes.description, &boxes.note] {
+            cx.subscribe(b, |_, _, _: &InputEvent, cx| cx.notify()).detach();
+        }
         // A people picker on a big project asks GitLab as you type.
         cx.subscribe(&boxes.search, |v, _, ev: &InputEvent, cx| {
             if matches!(ev, InputEvent::Change) {
@@ -287,6 +303,12 @@ impl GitLabView {
             write_error: None,
             replying: None,
             commenting: None,
+            merge_ticks: (None, None),
+            mr_menu: false,
+            editing_mr: false,
+            editing_note: None,
+            deleting_note: None,
+            edits_of: None,
             hovered_line: None,
             list_search,
             search: None,
@@ -669,6 +691,7 @@ impl GitLabView {
             if let Some((r, serial)) = seen {
                 self.loc.project = Some(r.mr.project_id);
                 self.review_serial = serial;
+                self.edits_for(r.mr.id);
                 self.set_review(r, None, cx);
             } else if let Target::Id(p, iid) = target
                 && !crate::local::is_local(&host)
@@ -758,12 +781,25 @@ impl GitLabView {
         self.show_review(r, serial, fetched, cx);
     }
 
+    /// Merge request `id` is showing: drop the ticks and edits of another.
+    fn edits_for(&mut self, id: u64) {
+        if self.edits_of != Some(id) {
+            self.edits_of = Some(id);
+            self.merge_ticks = (None, None);
+            self.mr_menu = false;
+            self.editing_mr = false;
+            self.editing_note = None;
+            self.deleting_note = None;
+        }
+    }
+
     /// `r`, newly loaded (fetched at `fetched`), in place of what's showing.
     fn show_review(&mut self, r: Rc<Review>, serial: u64, fetched: std::time::Instant, cx: &mut Context<Self>) {
         self.loc.project = Some(r.mr.project_id);
         self.loc.iid = Some(r.mr.iid);
         self.pending_path = None;
         self.review_serial = serial;
+        self.edits_for(r.mr.id);
         self.want_avatars(&r, cx);
         // Fetched texts, images and expansions are by file
         // index: only good while the files are the same.
@@ -1000,9 +1036,28 @@ impl GitLabView {
                 self.close_side_menu(window, cx);
                 return;
             }
+            // ⌘Enter sends the box, as on GitLab.
+            if k.key == "enter" && k.modifiers.platform {
+                let focused = |b: &Entity<InputState>| b.read(cx).focus_handle(cx).is_focused(window);
+                if focused(&self.boxes.comment) {
+                    self.post_comment(window, cx);
+                } else if focused(&self.boxes.reply) {
+                    self.send_reply(false, window, cx);
+                } else if focused(&self.boxes.line) {
+                    self.send_line_comment(false, window, cx);
+                } else if focused(&self.boxes.note) {
+                    self.save_note(window, cx);
+                } else if focused(&self.boxes.title) || focused(&self.boxes.description) {
+                    self.save_mr(window, cx);
+                }
+                cx.stop_propagation();
+                return;
+            }
             if k.key == "escape" {
                 self.replying = None;
                 self.commenting = None;
+                self.editing_note = None;
+                self.editing_mr = false;
                 window.focus(&self.focus);
                 self.rebuild_rows(cx);
             }
@@ -1035,10 +1090,14 @@ impl GitLabView {
             return;
         }
         // Escape closes an open menu first, as in GitLab.
-        if k.key == "escape" && (self.menu.is_some() || self.activity_menu || self.stack_menu) {
+        if k.key == "escape" && (self.menu.is_some() || self.activity_menu || self.stack_menu || self.mr_menu || self.deleting_note.is_some()) {
             self.menu = None;
             self.activity_menu = false;
             self.stack_menu = false;
+            self.mr_menu = false;
+            if self.deleting_note.take().is_some() {
+                self.rebuild_rows(cx);
+            }
             cx.notify();
             cx.stop_propagation();
             return;
@@ -1359,6 +1418,10 @@ impl Tab for GitLabView {
                 "error": self.write_error,
                 "replying": self.replying,
                 "commenting": self.commenting,
+                "editing_mr": self.editing_mr,
+                "editing_note": self.editing_note,
+                "deleting_note": self.deleting_note,
+                "menu": self.mr_menu,
                 "side_menu": self.side_menu.map(|m| format!("{m:?}")),
                 "selection": self.sel.map(|s| format!("{s:?}")),
                 "mention": self.mention.as_ref().map(|m| json!({
@@ -1398,6 +1461,51 @@ impl Tab for GitLabView {
                 self.zoom_to(z, cx);
             }
             "refresh" => self.refresh(cx),
+            // Writing the merge request, as its buttons do.
+            "merge" => {
+                if let Some(v) = args.get("squash").and_then(Value::as_bool) {
+                    self.merge_ticks.0 = Some(v);
+                }
+                if let Some(v) = args.get("remove_source_branch").and_then(Value::as_bool) {
+                    self.merge_ticks.1 = Some(v);
+                }
+                let auto = args.get("auto").and_then(Value::as_bool).unwrap_or(false);
+                self.merge(auto, window, cx);
+            }
+            "cancel_auto_merge" => self.cancel_auto_merge(window, cx),
+            "close" => self.set_open(false, window, cx),
+            "reopen" => self.set_open(true, window, cx),
+            "draft" => self.set_draft(args.get("on").and_then(Value::as_bool).unwrap_or(true), window, cx),
+            "edit_mr" => {
+                self.open_edit_mr(window, cx);
+                if let Some(t) = str_arg("title") {
+                    self.boxes.title.update(cx, |b, cx| b.set_value(t.to_string(), window, cx));
+                }
+                if let Some(d) = str_arg("description") {
+                    self.boxes.description.update(cx, |b, cx| b.set_value(d.to_string(), window, cx));
+                }
+                if args.get("save").and_then(Value::as_bool).unwrap_or(true) {
+                    self.save_mr(window, cx);
+                }
+            }
+            "edit_note" => {
+                let id = num_arg("id").context("missing id")?;
+                let body = str_arg("body").context("missing body")?.to_string();
+                self.open_edit_note(id, &body, window, cx);
+                if args.get("save").and_then(Value::as_bool).unwrap_or(true) {
+                    self.save_note(window, cx);
+                }
+            }
+            "delete_note" => {
+                let id = num_arg("id").context("missing id")?;
+                self.delete_note(id, args.get("sure").and_then(Value::as_bool).unwrap_or(true), window, cx);
+            }
+            // {"id": 12, "action": "retry"|"cancel"}, or {"action": "run"}.
+            "pipeline" => match str_arg("action").unwrap_or("retry") {
+                "run" => self.pipeline_action(None, true, window, cx),
+                a => self.pipeline_action(Some(num_arg("id").context("missing id")?), a == "retry", window, cx),
+            },
+            "menu" => self.mr_menu = args.get("on").and_then(Value::as_bool).unwrap_or(!self.mr_menu),
             "back" => self.back(cx),
             "list" => {
                 let scope = serde_json::from_value(json!(str_arg("scope").unwrap_or("to_review")))

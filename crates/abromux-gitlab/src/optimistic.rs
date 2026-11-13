@@ -47,6 +47,12 @@ pub enum Patch {
     /// labels, remove_labels, milestone_id, title); `people`: who the ids
     /// may name, beyond those the review knows.
     Fields { fields: Value, people: Vec<User> },
+    /// Comment `note` with new text.
+    EditNote { note: u64, body: String },
+    /// Comment `note` deleted (a thread left with no notes goes too).
+    DeleteNote { note: u64 },
+    /// Closed, or reopened.
+    State { open: bool },
 }
 
 impl Patch {
@@ -145,8 +151,37 @@ impl Patch {
                 }
             }
             Patch::Fields { fields, people } => apply_fields(r, fields, people, me),
+            Patch::EditNote { note, body } => {
+                for d in threads_mut(r) {
+                    for x in d.notes.iter_mut().filter(|x| x.id == *note) {
+                        x.body = body.clone();
+                    }
+                }
+            }
+            Patch::DeleteNote { note } => {
+                for d in threads_mut(r) {
+                    d.notes.retain(|x| x.id != *note);
+                }
+                r.general.retain(|d| !d.notes.is_empty());
+                r.outdated.retain(|d| !d.notes.is_empty());
+                for f in &mut r.files {
+                    f.threads.retain(|(_, _, d)| !d.notes.is_empty());
+                    f.outdated.retain(|d| !d.notes.is_empty());
+                }
+            }
+            Patch::State { open } => {
+                if r.mr.state != "merged" {
+                    r.mr.state = if *open { "opened" } else { "closed" }.to_string();
+                }
+            }
         }
     }
+}
+
+/// Every thread, wherever it is.
+fn threads_mut(r: &mut Review) -> impl Iterator<Item = &mut Discussion> {
+    let on_files = r.files.iter_mut().flat_map(|f| f.threads.iter_mut().map(|(_, _, d)| d).chain(f.outdated.iter_mut()));
+    r.general.iter_mut().chain(r.outdated.iter_mut()).chain(on_files)
 }
 
 /// Thread `id`, wherever it is.
@@ -208,6 +243,9 @@ fn apply_fields(r: &mut Review, fields: &Value, people: &[User], me: &User) {
     if let Some(t) = fields.get("title").and_then(Value::as_str) {
         r.mr.title = t.to_string();
         r.mr.draft = ["Draft:", "[Draft]", "(Draft)", "Draft "].iter().any(|p| t.starts_with(p));
+    }
+    if let Some(d) = fields.get("description").and_then(Value::as_str) {
+        r.mr.description = Some(d.to_string());
     }
 }
 
@@ -320,5 +358,22 @@ mod tests {
         // Someone unknown: left as it was.
         Patch::Fields { fields: json!({ "assignee_ids": [42] }), people: vec![] }.apply(&mut r, &user(1), 3);
         assert!(r.mr.assignees.is_empty());
+    }
+
+    #[test]
+    fn edits_and_deletes_a_comment_and_closes() {
+        let mut r = review();
+        let bodies = |r: &mut Review| -> Vec<(String, String)> {
+            super::threads_mut(r).flat_map(|d| d.notes.iter().map(|n| (d.id.clone(), n.body.clone())).collect::<Vec<_>>()).collect()
+        };
+        Patch::EditNote { note: 1, body: "better".into() }.apply(&mut r, &user(1), 1);
+        assert_eq!(bodies(&mut r), [("t1".to_string(), "better".to_string())]);
+        Patch::DeleteNote { note: 1 }.apply(&mut r, &user(1), 2);
+        assert!(super::threads_mut(&mut r).next().is_none(), "the thread goes with its only note");
+        Patch::DeleteNote { note: 1 }.apply(&mut r, &user(1), 3);
+        Patch::State { open: false }.apply(&mut r, &user(1), 4);
+        assert_eq!(r.mr.state, "closed");
+        Patch::Fields { fields: serde_json::json!({ "description": "new words" }), people: vec![] }.apply(&mut r, &user(1), 5);
+        assert_eq!(r.mr.description.as_deref(), Some("new words"));
     }
 }

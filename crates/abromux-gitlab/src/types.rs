@@ -110,6 +110,24 @@ pub struct MergeRequest {
     /// asked for (`include_diverged_commits_count`).
     pub diverged_commits_count: Option<u32>,
     pub time_stats: TimeStats,
+    /// Set to merge when its checks pass (GitLab's auto-merge), and by whom.
+    pub merge_when_pipeline_succeeds: bool,
+    pub merge_user: Option<User>,
+    /// The author asked for the commits to be squashed; the project
+    /// always squashes (`squash_on_merge`).
+    pub squash: bool,
+    pub squash_on_merge: bool,
+    /// The head commit: merging says which one it means.
+    pub sha: Option<String>,
+    /// What the signed-in user may do; single-MR endpoint only.
+    pub user: Option<MrPermissions>,
+}
+
+/// The single-MR endpoint's `user`: whether you may merge it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct MrPermissions {
+    pub can_merge: bool,
 }
 
 /// A comment of your review not yet submitted (GitLab's "Pending").
