@@ -1,6 +1,8 @@
 //! Notes and threads as GitLab draws them: avatar, name, @username, time,
 //! the markdown body, and suggestions as a small diff ("Suggested change").
 
+#[allow(unused_imports)]
+use crate::style::px;
 use crate::{
     diff::{Kind, Line, word_changes},
     highlight::Highlighter,
@@ -10,8 +12,6 @@ use crate::{
     view::GitLabView,
 };
 use gpui::{prelude::*, *};
-#[allow(unused_imports)]
-use crate::style::px;
 use gpui_component::{ActiveTheme as _, text::TextView};
 
 /// Markdown split around what we draw ourselves.
@@ -39,7 +39,11 @@ fn parts<'a>(body: &str, suggestions: &'a [Suggestion]) -> Vec<Part<'a>> {
     while let Some(l) = lines.next() {
         let fence = l.trim_start();
         // ``` or ~~~, closed by the same.
-        let marker = if fence.starts_with("~~~") { "~~~" } else { "```" };
+        let marker = if fence.starts_with("~~~") {
+            "~~~"
+        } else {
+            "```"
+        };
         if let Some(info) = fence.strip_prefix(marker) {
             let info = info.trim_start_matches(['`', '~']).trim().to_string();
             let mut code = String::new();
@@ -97,7 +101,13 @@ fn lang_path(lang: &str) -> String {
 /// One diff line of code: number cells, sign, and its text (drawn by the
 /// caller: selectable, select.rs); `selected` as GitLab draws the line you
 /// clicked the number of.
-pub fn code_line_with(l: &Line, mono: &SharedString, gutter_extra: Option<AnyElement>, selected: bool, text: AnyElement) -> Div {
+pub fn code_line_with(
+    l: &Line,
+    mono: &SharedString,
+    gutter_extra: Option<AnyElement>,
+    selected: bool,
+    text: AnyElement,
+) -> Div {
     let (bg, num_color, sign) = match l.kind {
         Kind::Added => (c(ADD_BG), c(ADD_NUM), "+"),
         Kind::Removed => (c(DEL_BG), c(DEL_NUM), "-"),
@@ -125,14 +135,34 @@ pub fn code_line_with(l: &Line, mono: &SharedString, gutter_extra: Option<AnyEle
         .flex()
         .w_full()
         .bg(bg)
-        .child(div().relative().flex().flex_none().child(num(l.old)).child(num(l.new)).children(gutter_extra))
-        .child(div().w(px(18.75)).flex_none().flex().justify_center().text_color(num_color).child(sign))
+        .child(
+            div()
+                .relative()
+                .flex()
+                .flex_none()
+                .child(num(l.old))
+                .child(num(l.new))
+                .children(gutter_extra),
+        )
+        .child(
+            div()
+                .w(px(18.75))
+                .flex_none()
+                .flex()
+                .justify_center()
+                .text_color(num_color)
+                .child(sign),
+        )
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.))
                 .pr(px(18.75))
-                .text_color(if l.kind == Kind::NoNewline { ca(LINE_NUM) } else { c(CODE_TEXT) })
+                .text_color(if l.kind == Kind::NoNewline {
+                    ca(LINE_NUM)
+                } else {
+                    c(CODE_TEXT)
+                })
                 .child(text),
         )
 }
@@ -165,13 +195,25 @@ pub fn half_with(l: Option<&Line>, new_side: bool, text: Option<AnyElement>) -> 
                 .text_color(num_color)
                 .children(n.map(|n| n.to_string())),
         )
-        .child(div().w(px(18.75)).flex_none().flex().justify_center().text_color(num_color).child(sign))
+        .child(
+            div()
+                .w(px(18.75))
+                .flex_none()
+                .flex()
+                .justify_center()
+                .text_color(num_color)
+                .child(sign),
+        )
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.))
                 .pr(px(10.))
-                .text_color(if l.kind == Kind::NoNewline { ca(LINE_NUM) } else { c(CODE_TEXT) })
+                .text_color(if l.kind == Kind::NoNewline {
+                    ca(LINE_NUM)
+                } else {
+                    c(CODE_TEXT)
+                })
                 .child(text),
         )
 }
@@ -184,9 +226,21 @@ pub fn line_highlights(l: &Line) -> (SharedString, Vec<(std::ops::Range<usize>, 
     let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = l
         .spans
         .iter()
-        .map(|(r, t)| (r.clone(), HighlightStyle { color: Some(token(*t)), ..Default::default() }))
+        .map(|(r, t)| {
+            (
+                r.clone(),
+                HighlightStyle {
+                    color: Some(token(*t)),
+                    ..Default::default()
+                },
+            )
+        })
         .collect();
-    let word = if l.kind == Kind::Added { ca(ADD_WORD) } else { ca(DEL_WORD) };
+    let word = if l.kind == Kind::Added {
+        ca(ADD_WORD)
+    } else {
+        ca(DEL_WORD)
+    };
     for r in &l.changed {
         highlights = overlay(highlights, r.clone(), word);
     }
@@ -211,12 +265,18 @@ pub(crate) fn overlay(
     let mut out = vec![];
     for w in cuts.windows(2) {
         let (a, b) = (w[0], w[1]);
-        let base = hl.iter().find(|(r, _)| r.start <= a && b <= r.end).map(|(_, s)| *s);
+        let base = hl
+            .iter()
+            .find(|(r, _)| r.start <= a && b <= r.end)
+            .map(|(_, s)| *s);
         let inside = range.start <= a && b <= range.end;
         match (base, inside) {
             (_, true) => out.push((
                 a..b,
-                HighlightStyle { background_color: Some(bg), ..base.unwrap_or_default() },
+                HighlightStyle {
+                    background_color: Some(bg),
+                    ..base.unwrap_or_default()
+                },
             )),
             (Some(s), false) => out.push((a..b, s)),
             (None, false) => {}
@@ -230,7 +290,13 @@ impl GitLabView {
         cx.theme().mono_font_family.clone()
     }
 
-    pub(crate) fn note_header(&self, author: &User, created: &str, mr_author: u64, actions: Option<Div>) -> Div {
+    pub(crate) fn note_header(
+        &self,
+        author: &User,
+        created: &str,
+        mr_author: u64,
+        actions: Option<Div>,
+    ) -> Div {
         // In a side-by-side diff's half-width thread GitLab leaves out the
         // @username and the badges, keeping the header one line.
         let compact = self.loc.parallel && self.loc.section == crate::Section::Changes;
@@ -245,18 +311,35 @@ impl GitLabView {
             .flex_wrap()
             .items_center()
             .gap_1()
-            .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(TEXT)).child(author.name.clone()))
-            .when(!compact, |d| d.child(div().text_color(c(MUTED)).child(format!("@{}", author.username))))
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(c(TEXT))
+                    .child(author.name.clone()),
+            )
+            .when(!compact, |d| {
+                d.child(
+                    div()
+                        .text_color(c(MUTED))
+                        .child(format!("@{}", author.username)),
+                )
+            })
             .child(when(created).ml_1().text_color(c(MUTED)));
         div()
             .flex()
             .items_start()
             .gap_1()
             .child(who)
-            .when(!compact && !local && author.id == mr_author, |d| d.child(badge("Author", c(0xa4a3a8), c(BG)).flex_none()))
-            .when_some(self.review.ready().and_then(|r| r.roles.get(&author.id).copied()).filter(|_| !compact && !local), |d, role| {
-                d.child(badge(role, c(0xa4a3a8), c(BG)).flex_none())
+            .when(!compact && !local && author.id == mr_author, |d| {
+                d.child(badge("Author", c(0xa4a3a8), c(BG)).flex_none())
             })
+            .when_some(
+                self.review
+                    .ready()
+                    .and_then(|r| r.roles.get(&author.id).copied())
+                    .filter(|_| !compact && !local),
+                |d, role| d.child(badge(role, c(0xa4a3a8), c(BG)).flex_none()),
+            )
             .children(actions.map(|a| a.flex_none().mt(px(-4.))))
     }
 
@@ -273,12 +356,18 @@ impl GitLabView {
                 .cursor_pointer()
                 .hover(|s| s.bg(ca(0x89888d66)))
                 .child(icon(name, 16., color))
-                .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip).build(window, cx))
+                .tooltip(move |window, cx| {
+                    gpui_component::tooltip::Tooltip::new(tip).build(window, cx)
+                })
         };
         // Made here and not yet GitLab's: nothing to do to it yet.
         let writes = self.me.is_some() && !crate::optimistic::is_pending_thread(&d.id);
         let resolved = d.resolved();
-        let link = format!("{}#note_{}", self.review.ready().map_or("", |r| r.mr.web_url.as_str()), first.id);
+        let link = format!(
+            "{}#note_{}",
+            self.review.ready().map_or("", |r| r.mr.web_url.as_str()),
+            first.id
+        );
         div()
             .flex()
             .items_center()
@@ -288,24 +377,42 @@ impl GitLabView {
                 el.child(
                     button(
                         format!("note-resolve-{}", d.id),
-                        if resolved { "check-circle-filled" } else { "check-circle" },
+                        if resolved {
+                            "check-circle-filled"
+                        } else {
+                            "check-circle"
+                        },
                         if resolved { c(GREEN) } else { c(MUTED) },
-                        if resolved { "Unresolve thread" } else { "Resolve thread" },
+                        if resolved {
+                            "Unresolve thread"
+                        } else {
+                            "Resolve thread"
+                        },
                     )
-                    .on_click(cx.listener(move |v, _, window, cx| v.set_resolved(&id, !resolved, window, cx))),
+                    .on_click(cx.listener(move |v, _, window, cx| {
+                        v.set_resolved(&id, !resolved, window, cx)
+                    })),
                 )
             })
             .when(writes, |el| {
                 let id = d.id.clone();
                 el.child(
-                    button(format!("note-reply-{}", d.id), "reply", c(MUTED), "Reply to comment")
-                        .on_click(cx.listener(move |v, _, window, cx| v.open_reply(&id, window, cx))),
+                    button(
+                        format!("note-reply-{}", d.id),
+                        "reply",
+                        c(MUTED),
+                        "Reply to comment",
+                    )
+                    .on_click(cx.listener(move |v, _, window, cx| v.open_reply(&id, window, cx))),
                 )
             })
             .when(self.has_web(), |el| {
                 el.child(
-                    button(format!("note-link-{}", d.id), "link", c(MUTED), "Copy link")
-                        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))),
+                    button(format!("note-link-{}", d.id), "link", c(MUTED), "Copy link").on_click(
+                        move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))
+                        },
+                    ),
                 )
             })
     }
@@ -321,12 +428,23 @@ impl GitLabView {
         cx: &mut Context<Self>,
     ) -> Div {
         let mr_author = self.mr_author_id();
-        let body = self.markdown(("note", n.id as usize), &n.body, &n.suggestions, path, window, cx);
+        let body = self.markdown(
+            ("note", n.id as usize),
+            &n.body,
+            &n.suggestions,
+            path,
+            window,
+            cx,
+        );
         // GitLab's "Add reaction" first among a note's buttons; a local diff
         // has no reactions.
         let pending = crate::optimistic::is_pending_note(n.id);
-        let react = (self.me.is_some() && !pending && !self.is_local() && !n.system && self.review.ready().is_some_and(|r| r.mr.state != "locked"))
-            .then(|| self.add_reaction(crate::mr::AwardOn::Note(n.id), cx));
+        let react = (self.me.is_some()
+            && !pending
+            && !self.is_local()
+            && !n.system
+            && self.review.ready().is_some_and(|r| r.mr.state != "locked"))
+        .then(|| self.add_reaction(crate::mr::AwardOn::Note(n.id), cx));
         let actions = match (react, actions) {
             (None, a) => a,
             (Some(r), None) => Some(div().flex().items_center().ml_1().child(r)),
@@ -339,9 +457,18 @@ impl GitLabView {
             (Some(a), Some(o)) => Some(a.child(o)),
         };
         let editing = self.editing_note == Some(n.id);
-        let body = if editing { self.note_edit_form(cx) } else { body };
-        let confirm = (self.deleting_note == Some(n.id)).then(|| self.note_delete_confirm(n.id, cx));
-        let awards = if self.is_local() { None } else { self.note_awards(n.id, cx) };
+        let body = if editing {
+            self.note_edit_form(cx)
+        } else {
+            body
+        };
+        let confirm =
+            (self.deleting_note == Some(n.id)).then(|| self.note_delete_confirm(n.id, cx));
+        let awards = if self.is_local() {
+            None
+        } else {
+            self.note_awards(n.id, cx)
+        };
         div()
             .flex()
             .gap_2()
@@ -382,21 +509,40 @@ impl GitLabView {
             .gap_3()
             .text_color(c(TEXT))
             .capture_any_mouse_up(|_, window, cx| abromux_plugin::catch_opened_urls(window, cx));
-        let web = self.review.ready().map(|r| r.mr.web_url.clone()).unwrap_or_default();
+        let web = self
+            .review
+            .ready()
+            .map(|r| r.mr.web_url.clone())
+            .unwrap_or_default();
         let project = web.split("/-/").next().unwrap_or_default().to_string();
         let host = self.host();
         let jira = abromux_plugin::jira_url("", cx);
         for (i, p) in parts(body, suggestions).into_iter().enumerate() {
             out = match p {
                 Part::Markdown(md) => {
-                    let text = link_references(&crate::emoji::expand(&crate::gfm::prepare(&md, &project, &host)), &project, &host, jira.as_deref());
+                    let text = link_references(
+                        &crate::emoji::expand(&crate::gfm::prepare(&md, &project, &host)),
+                        &project,
+                        &host,
+                        jira.as_deref(),
+                    );
                     // Each block its own text, with a paragraph's space between.
-                    let blocks = self.md_blocks.borrow_mut().entry(text).or_insert_with_key(|t| crate::gfm::blocks(t).into()).clone();
+                    let blocks = self
+                        .md_blocks
+                        .borrow_mut()
+                        .entry(text)
+                        .or_insert_with_key(|t| crate::gfm::blocks(t).into())
+                        .clone();
                     out.children(blocks.iter().enumerate().map(|(b, block)| {
-                        TextView::markdown(SharedString::from(format!("{}-{}-{i}-{b}", id.0, id.1)), block.clone(), window, cx)
-                            .style(md_style())
-                            .selectable(true)
-                            .text_size(px(14.))
+                        TextView::markdown(
+                            SharedString::from(format!("{}-{}-{i}-{b}", id.0, id.1)),
+                            block.clone(),
+                            window,
+                            cx,
+                        )
+                        .style(md_style())
+                        .selectable(true)
+                        .text_size(px(14.))
                     }))
                 }
                 Part::Suggestion(s) => out.child(self.suggestion(s, path, cx)),
@@ -416,16 +562,32 @@ impl GitLabView {
     fn code_block(&self, lang: &str, code: &str, key: SharedString, cx: &mut Context<Self>) -> Div {
         let mut hl = Highlighter::new(&lang_path(lang));
         let group = crate::select::Group::block(&key);
-        let lines: Vec<AnyElement> = code.lines().enumerate().map(|(i, l)| {
-            let highlights: Vec<_> = hl
-                .line(l)
-                .into_iter()
-                .map(|(r, t)| (r, HighlightStyle { color: Some(token(t)), ..Default::default() }))
-                .collect();
-            // An empty line still takes its height.
-            let text = if l.is_empty() { " ".to_string() } else { l.to_string() };
-            self.sel_text(SharedString::from(text), highlights, group, i, cx)
-        }).collect();
+        let lines: Vec<AnyElement> = code
+            .lines()
+            .enumerate()
+            .map(|(i, l)| {
+                let highlights: Vec<_> = hl
+                    .line(l)
+                    .into_iter()
+                    .map(|(r, t)| {
+                        (
+                            r,
+                            HighlightStyle {
+                                color: Some(token(t)),
+                                ..Default::default()
+                            },
+                        )
+                    })
+                    .collect();
+                // An empty line still takes its height.
+                let text = if l.is_empty() {
+                    " ".to_string()
+                } else {
+                    l.to_string()
+                };
+                self.sel_text(SharedString::from(text), highlights, group, i, cx)
+            })
+            .collect();
         let mut block = div()
             .p(px(12.))
             .rounded(px(4.))
@@ -436,26 +598,34 @@ impl GitLabView {
             .font_family(self.mono(cx))
             .text_size(px(14.))
             .line_height(px(22.4));
-        block.text_style().get_or_insert_with(Default::default).font_features = Some(FontFeatures::disable_ligatures());
+        block
+            .text_style()
+            .get_or_insert_with(Default::default)
+            .font_features = Some(FontFeatures::disable_ligatures());
         let copy = code.to_string();
-        div().relative().child(block.flex().flex_col().children(lines)).child(
-            div()
-                .id(key)
-                .absolute()
-                .top(px(8.))
-                .right(px(8.))
-                .size(px(28.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.))
-                .bg(ca(0x89888d66))
-                .cursor_pointer()
-                .hover(|s| s.bg(ca(0x89888d99)))
-                .child(icon("copy", 14., c(TEXT)))
-                .tooltip(hint("Copy to clipboard"))
-                .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
-        )
+        div()
+            .relative()
+            .child(block.flex().flex_col().children(lines))
+            .child(
+                div()
+                    .id(key)
+                    .absolute()
+                    .top(px(8.))
+                    .right(px(8.))
+                    .size(px(28.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.))
+                    .bg(ca(0x89888d66))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(ca(0x89888d99)))
+                    .child(icon("copy", 14., c(TEXT)))
+                    .tooltip(hint("Copy to clipboard"))
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
+                    }),
+            )
     }
 
     /// GitLab's "Suggested change": the lines it replaces and with what.
@@ -508,7 +678,11 @@ impl GitLabView {
                     .bg(c(RAISED))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(c(TEXT))
-                    .child(if s.applied { "Suggestion applied" } else { "Suggested change" }),
+                    .child(if s.applied {
+                        "Suggestion applied"
+                    } else {
+                        "Suggested change"
+                    }),
             )
             .children({
                 let group = crate::select::Group::block(("suggestion", s.from_line, &s.to_content));
@@ -540,12 +714,20 @@ impl GitLabView {
     ) -> Vec<AnyElement> {
         let notes: Vec<&Note> = d.notes.iter().filter(|n| !n.system).collect();
         let mut out = vec![];
-        let Some(first) = notes.first() else { return out };
+        let Some(first) = notes.first() else {
+            return out;
+        };
         let actions = self.thread_actions(d, first, cx);
-        out.push(self.note(first, path, first_avatar, Some(actions), window, cx).into_any_element());
+        out.push(
+            self.note(first, path, first_avatar, Some(actions), window, cx)
+                .into_any_element(),
+        );
         if !toggle {
             for n in &notes[1..] {
-                out.push(self.note(n, path, true, None, window, cx).into_any_element());
+                out.push(
+                    self.note(n, path, true, None, window, cx)
+                        .into_any_element(),
+                );
             }
             return out;
         }
@@ -564,7 +746,15 @@ impl GitLabView {
                     .border_color(c(RAISED))
                     .cursor_pointer()
                     .text_color(c(LINK))
-                    .child(app_icon(if collapsed { "chevron-right" } else { "chevron-down" }, 14., c(LINK)))
+                    .child(app_icon(
+                        if collapsed {
+                            "chevron-right"
+                        } else {
+                            "chevron-down"
+                        },
+                        14.,
+                        c(LINK),
+                    ))
                     .when(collapsed, |el| {
                         let last = notes.last().unwrap();
                         el.child(
@@ -572,15 +762,24 @@ impl GitLabView {
                                 .flex()
                                 .gap_1()
                                 .items_center()
-                                .child(div().flex().children(notes[1..].iter().take(3).map(|n| self.avatars.of(&n.author, 20.))))
-                                .child(format!("{} repl{}", notes.len() - 1, if notes.len() == 2 { "y" } else { "ies" }))
                                 .child(
-                                    div().text_color(c(MUTED)).child(format!(
-                                        "Last reply by {} {}",
-                                        last.author.name,
-                                        time::ago(&last.created_at, time::now())
-                                    )),
-                                ),
+                                    div().flex().children(
+                                        notes[1..]
+                                            .iter()
+                                            .take(3)
+                                            .map(|n| self.avatars.of(&n.author, 20.)),
+                                    ),
+                                )
+                                .child(format!(
+                                    "{} repl{}",
+                                    notes.len() - 1,
+                                    if notes.len() == 2 { "y" } else { "ies" }
+                                ))
+                                .child(div().text_color(c(MUTED)).child(format!(
+                                    "Last reply by {} {}",
+                                    last.author.name,
+                                    time::ago(&last.created_at, time::now())
+                                ))),
                         )
                     })
                     .when(!collapsed, |el| el.child("Collapse replies"))
@@ -594,7 +793,10 @@ impl GitLabView {
             );
             if !collapsed {
                 for n in &notes[1..] {
-                    out.push(self.note(n, path, true, None, window, cx).into_any_element());
+                    out.push(
+                        self.note(n, path, true, None, window, cx)
+                            .into_any_element(),
+                    );
                 }
             }
         }
@@ -640,8 +842,12 @@ fn link_references(md: &str, project: &str, host: &str, jira: Option<&str>) -> S
         if free && !project.is_empty() && starts_word && matches!(ch, '#' | '!' | '@') {
             let rest = &md[i + 1..];
             let len = match ch {
-                '@' => rest.find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))).unwrap_or(rest.len()),
-                _ => rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len()),
+                '@' => rest
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')))
+                    .unwrap_or(rest.len()),
+                _ => rest
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(rest.len()),
             };
             // A trailing dot ends the sentence, not the name.
             let word = rest[..len].trim_end_matches('.');
@@ -705,7 +911,9 @@ fn link_spans(md: &str) -> Vec<std::ops::Range<usize>> {
                 }
             }
         } else if b[i..].starts_with(b"http://") || b[i..].starts_with(b"https://") {
-            let end = md[i..].find(|c: char| c.is_whitespace() || matches!(c, '>' | ')' | ']')).map_or(md.len(), |e| i + e);
+            let end = md[i..]
+                .find(|c: char| c.is_whitespace() || matches!(c, '>' | ')' | ']'))
+                .map_or(md.len(), |e| i + e);
             out.push(i..end);
             i = end;
             continue;
@@ -724,21 +932,31 @@ mod reference_tests {
         let p = "http://gl/a/b";
         let l = |s: &str| link_references(s, p, "http://gl", None);
         assert_eq!(l("Closes #12."), "Closes [#12](http://gl/a/b/-/issues/12).");
-        assert_eq!(l("see !3 and @bob."), "see [!3](http://gl/a/b/-/merge_requests/3) and [@bob](http://gl/bob).");
+        assert_eq!(
+            l("see !3 and @bob."),
+            "see [!3](http://gl/a/b/-/merge_requests/3) and [@bob](http://gl/bob)."
+        );
         assert_eq!(l("(#4)"), "([#4](http://gl/a/b/-/issues/4))");
         // Left alone: code, mid-word, headings, a bang that isn't one.
         assert_eq!(l("`#12` a#1 # Title Wow! @"), "`#12` a#1 # Title Wow! @");
         assert_eq!(l("mail me at x@y.z"), "mail me at x@y.z");
         // Nor what's a link already.
-        assert_eq!(l("[see #4](http://x/#5) and http://x/a #6"), "[see #4](http://x/#5) and http://x/a [#6](http://gl/a/b/-/issues/6)");
+        assert_eq!(
+            l("[see #4](http://x/#5) and http://x/a #6"),
+            "[see #4](http://x/#5) and http://x/a [#6](http://gl/a/b/-/issues/6)"
+        );
     }
 
     #[test]
     fn jira_tickets_become_links() {
         let j = |s: &str| link_references(s, "", "http://gl", Some("https://j.test/browse/"));
-        assert_eq!(j("Fixes PAY-12, see (OPS-3)."), "Fixes [PAY-12](https://j.test/browse/PAY-12), see ([OPS-3](https://j.test/browse/OPS-3)).");
+        assert_eq!(
+            j("Fixes PAY-12, see (OPS-3)."),
+            "Fixes [PAY-12](https://j.test/browse/PAY-12), see ([OPS-3](https://j.test/browse/OPS-3))."
+        );
         // Left alone: a link's text and address, code, a branch name.
-        let same = "[PAY-1](https://j.test/browse/PAY-1) https://j.test/browse/PAY-2 `PAY-3` PAY-4-fix";
+        let same =
+            "[PAY-1](https://j.test/browse/PAY-1) https://j.test/browse/PAY-2 `PAY-3` PAY-4-fix";
         assert_eq!(j(same), same);
         assert_eq!(j("ž PAY-5"), "ž [PAY-5](https://j.test/browse/PAY-5)");
         // Without a Jira, nothing.
@@ -757,7 +975,10 @@ mod tests {
     fn splits_suggestions_out_of_bodies() {
         let n = Note {
             body: "Simpler:\n\n```suggestion:-0+0\n  x // y\n```\nafter".into(),
-            suggestions: vec![Suggestion { from_line: 17, ..Default::default() }],
+            suggestions: vec![Suggestion {
+                from_line: 17,
+                ..Default::default()
+            }],
             ..Default::default()
         };
         let p = parts(&n.body, &n.suggestions);
@@ -767,17 +988,34 @@ mod tests {
         assert!(matches!(&p[2], Part::Markdown(m) if m.trim() == "after"));
         // Other code blocks come out with their language.
         let p = parts("Use:\n```rust\nlet l = 3;\n\nl\n```\n", &[]);
-        assert!(matches!(&p[1], Part::Code(lang, code) if lang == "rust" && code == "let l = 3;\n\nl"));
+        assert!(
+            matches!(&p[1], Part::Code(lang, code) if lang == "rust" && code == "let l = 3;\n\nl")
+        );
         assert_eq!(super::lang_path("Rust"), "x.rs");
     }
 
     #[test]
     fn overlays_a_background_across_spans() {
-        let s = |c: u32| HighlightStyle { color: Some(rgb(c).into()), ..Default::default() };
+        let s = |c: u32| HighlightStyle {
+            color: Some(rgb(c).into()),
+            ..Default::default()
+        };
         let bg: Hsla = rgb(0x00ff00).into();
         // "ab cd ef": spans on "ab" (0..2) and "ef" (6..8); changed 1..7.
         let out = overlay(vec![(0..2, s(1)), (6..8, s(2))], 1..7, bg);
-        let ranges: Vec<_> = out.iter().map(|(r, h)| (r.clone(), h.background_color.is_some())).collect();
-        assert_eq!(ranges, [(0..1, false), (1..2, true), (2..6, true), (6..7, true), (7..8, false)]);
+        let ranges: Vec<_> = out
+            .iter()
+            .map(|(r, h)| (r.clone(), h.background_color.is_some()))
+            .collect();
+        assert_eq!(
+            ranges,
+            [
+                (0..1, false),
+                (1..2, true),
+                (2..6, true),
+                (6..7, true),
+                (7..8, false)
+            ]
+        );
     }
 }

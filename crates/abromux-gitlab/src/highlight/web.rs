@@ -5,12 +5,17 @@
 //! block comment, a template string, a JSX element, a `<style>` block) is a
 //! stack of modes.
 
-use super::{push, string_end, Spans, Tok};
+use super::{Spans, Tok, push, string_end};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    Script { ts: bool, jsx: bool },
-    Css { scss: bool },
+    Script {
+        ts: bool,
+        jsx: bool,
+    },
+    Css {
+        scss: bool,
+    },
     Json,
     /// HTML, XML, Vue, Svelte.
     Markup,
@@ -69,14 +74,19 @@ struct Tag {
 #[derive(Clone, Debug)]
 enum Mode {
     Script(Script),
-    Template { ts: bool, jsx: bool },
+    Template {
+        ts: bool,
+        jsx: bool,
+    },
     /// A block comment, until this.
     Comment(&'static str),
     Tag(Tag),
     /// An attribute's value that goes on past the line.
     AttrString(char),
     /// JSX's children, or HTML's text.
-    Text { jsx: bool },
+    Text {
+        jsx: bool,
+    },
     Css(Css),
     Json,
 }
@@ -91,22 +101,94 @@ pub struct Lexer {
 }
 
 const KEYWORDS: &[&str] = &[
-    "abstract", "async", "await", "break", "case", "catch", "class", "const", "continue", "debugger",
-    "default", "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for", "function",
-    "if", "implements", "import", "in", "instanceof", "interface", "let", "new", "null", "override",
-    "private", "protected", "public", "return", "static", "super", "switch", "this", "throw", "true",
-    "try", "typeof", "undefined", "var", "void", "while", "with", "yield", "NaN", "Infinity",
+    "abstract",
+    "async",
+    "await",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "debugger",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "function",
+    "if",
+    "implements",
+    "import",
+    "in",
+    "instanceof",
+    "interface",
+    "let",
+    "new",
+    "null",
+    "override",
+    "private",
+    "protected",
+    "public",
+    "return",
+    "static",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typeof",
+    "undefined",
+    "var",
+    "void",
+    "while",
+    "with",
+    "yield",
+    "NaN",
+    "Infinity",
 ];
 /// Keywords that are values: a `/` after them divides.
-const VALUES: &[&str] = &["this", "super", "true", "false", "null", "undefined", "NaN", "Infinity"];
+const VALUES: &[&str] = &[
+    "this",
+    "super",
+    "true",
+    "false",
+    "null",
+    "undefined",
+    "NaN",
+    "Infinity",
+];
 /// Keywords only where one is used as such (`import x from 'y'`), not
 /// where it's a name (`const type = 1`, `{ from: a }`).
 const SOFT: &[&str] = &[
-    "accessor", "as", "asserts", "declare", "from", "get", "infer", "is", "keyof", "module", "namespace",
-    "of", "readonly", "satisfies", "set", "type", "unique",
+    "accessor",
+    "as",
+    "asserts",
+    "declare",
+    "from",
+    "get",
+    "infer",
+    "is",
+    "keyof",
+    "module",
+    "namespace",
+    "of",
+    "readonly",
+    "satisfies",
+    "set",
+    "type",
+    "unique",
 ];
 /// TypeScript's built-in types.
-const TYPES: &[&str] = &["any", "bigint", "boolean", "never", "number", "object", "string", "symbol", "unknown"];
+const TYPES: &[&str] = &[
+    "any", "bigint", "boolean", "never", "number", "object", "string", "symbol", "unknown",
+];
 
 impl Lexer {
     pub fn new(kind: Kind) -> Self {
@@ -214,11 +296,22 @@ impl Lexer {
     }
 
     fn pop(&mut self) -> Option<Mode> {
-        if self.stack.len() > 1 { self.stack.pop() } else { None }
+        if self.stack.len() > 1 {
+            self.stack.pop()
+        } else {
+            None
+        }
     }
 
     /// A block comment opening at `i` (`open` long).
-    fn block_comment(&mut self, text: &str, i: usize, out: &mut Spans, open: usize, close: &'static str) -> usize {
+    fn block_comment(
+        &mut self,
+        text: &str,
+        i: usize,
+        out: &mut Spans,
+        open: usize,
+        close: &'static str,
+    ) -> usize {
         match text[i + open..].find(close) {
             Some(e) => {
                 let stop = i + open + e + close.len();
@@ -263,7 +356,10 @@ impl Lexer {
             }
             '`' => {
                 push(out, i..i + 1, Tok::String);
-                self.stack.push(Mode::Template { ts: s.ts, jsx: s.jsx });
+                self.stack.push(Mode::Template {
+                    ts: s.ts,
+                    jsx: s.jsx,
+                });
                 return i + 1;
             }
             '{' => {
@@ -299,7 +395,10 @@ impl Lexer {
                 }
             }
             // JSX: `<div`, `<>`, `</div>`.
-            '<' if s.jsx && !value && next.is_some_and(|n| n.is_ascii_alphabetic() || n == '>' || n == '/') => {
+            '<' if s.jsx
+                && !value
+                && next.is_some_and(|n| n.is_ascii_alphabetic() || n == '>' || n == '/') =>
+            {
                 self.stack.push(Mode::Tag(Tag {
                     jsx: true,
                     ..Tag::default()
@@ -340,7 +439,9 @@ impl Lexer {
         let prev = last_word(before);
         // `f(`, `f?.(`, a tagged template `` sql`…` ``, a generic call `f<T>(`.
         let generic = after.starts_with('<')
-            && after.find('>').is_some_and(|p| after[p + 1..].starts_with('(') && !after[..p].contains(['(', ')', ';', '=']));
+            && after.find('>').is_some_and(|p| {
+                after[p + 1..].starts_with('(') && !after[..p].contains(['(', ')', ';', '='])
+            });
         let call = after.starts_with(['(', '`']) || after.starts_with("?.(") || generic;
         self.after_value = true;
         let tok = if member {
@@ -355,11 +456,23 @@ impl Lexer {
             Some(Tok::Keyword)
         } else if prev == "function" || arrow_def(after) {
             Some(Tok::Function)
-        } else if matches!(prev, "class" | "interface" | "type" | "enum" | "extends" | "implements" | "namespace" | "new") {
+        } else if matches!(
+            prev,
+            "class"
+                | "interface"
+                | "type"
+                | "enum"
+                | "extends"
+                | "implements"
+                | "namespace"
+                | "new"
+        ) {
             Some(Tok::Type)
         } else if call {
             Some(Tok::Function)
-        } else if word.starts_with(|c: char| c.is_ascii_uppercase()) && word.chars().any(|c| c.is_ascii_lowercase()) {
+        } else if word.starts_with(|c: char| c.is_ascii_uppercase())
+            && word.chars().any(|c| c.is_ascii_lowercase())
+        {
             Some(Tok::Type)
         } else {
             None
@@ -409,14 +522,18 @@ impl Lexer {
         let rest = &text[i..];
         let c = rest.chars().next().unwrap();
         let ts = self.ts;
-        let Some(Mode::Tag(t)) = self.stack.last_mut() else { unreachable!() };
+        let Some(Mode::Tag(t)) = self.stack.last_mut() else {
+            unreachable!()
+        };
         if t.name.is_none() {
             if c == '/' && !t.closing {
                 t.closing = true;
                 return i + 1;
             }
             let n = rest
-                .find(|ch: char| !(ch.is_alphanumeric() || matches!(ch, '-' | ':' | '.' | '_' | '!')))
+                .find(|ch: char| {
+                    !(ch.is_alphanumeric() || matches!(ch, '-' | ':' | '.' | '_' | '!'))
+                })
                 .unwrap_or(rest.len());
             t.name = Some(rest[..n].to_ascii_lowercase());
             if n > 0 {
@@ -517,8 +634,13 @@ impl Lexer {
         if !jsx && rest.starts_with("<!--") {
             return self.block_comment(text, i, out, 4, "-->");
         }
-        if c == '<' && after.starts_with(|n: char| n.is_ascii_alphabetic() || matches!(n, '/' | '>' | '!')) {
-            self.stack.push(Mode::Tag(Tag { jsx, ..Tag::default() }));
+        if c == '<'
+            && after.starts_with(|n: char| n.is_ascii_alphabetic() || matches!(n, '/' | '>' | '!'))
+        {
+            self.stack.push(Mode::Tag(Tag {
+                jsx,
+                ..Tag::default()
+            }));
             return i + 1;
         }
         if c == '{' && jsx {
@@ -535,7 +657,9 @@ impl Lexer {
         if c == '&'
             && let Some(n) = after.find(';')
             && (1..=10).contains(&n)
-            && after[..n].chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '#')
+            && after[..n]
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '#')
         {
             push(out, i..i + n + 2, Tok::Number);
             return i + n + 2;
@@ -738,7 +862,9 @@ fn css_value(text: &str, i: usize, out: &mut Spans, at: bool) -> usize {
         }
         // A color: `#fff`.
         '#' => {
-            let n = after.find(|ch: char| !ch.is_ascii_alphanumeric()).unwrap_or(after.len());
+            let n = after
+                .find(|ch: char| !ch.is_ascii_alphanumeric())
+                .unwrap_or(after.len());
             if n > 0 {
                 push(out, i..i + 1 + n, Tok::Number);
                 return i + 1 + n;
@@ -756,7 +882,11 @@ fn css_value(text: &str, i: usize, out: &mut Spans, at: bool) -> usize {
         '@' | '$' => {
             let n = css_ident(after);
             if n > 0 {
-                let tok = if c == '@' && at { Tok::Keyword } else { Tok::Variable };
+                let tok = if c == '@' && at {
+                    Tok::Keyword
+                } else {
+                    Tok::Variable
+                };
                 push(out, i..i + 1 + n, tok);
                 return i + 1 + n;
             }
@@ -768,7 +898,10 @@ fn css_value(text: &str, i: usize, out: &mut Spans, at: bool) -> usize {
         push(out, i..i + n, Tok::Variable);
         return i + n;
     }
-    if c.is_ascii_digit() || (matches!(c, '.' | '-' | '+') && after.starts_with(|n: char| n.is_ascii_digit() || n == '.')) {
+    if c.is_ascii_digit()
+        || (matches!(c, '.' | '-' | '+')
+            && after.starts_with(|n: char| n.is_ascii_digit() || n == '.'))
+    {
         let n = c.len_utf8()
             + after
                 .find(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '.' | '%')))
@@ -810,17 +943,23 @@ fn is_decl(seg: &str, term: Option<u8>) -> bool {
     let s = seg.strip_prefix(['$', '@']).unwrap_or(seg);
     let n = css_ident(s);
     let after = s[n..].trim_start();
-    let Some(value) = after.strip_prefix(':') else { return false };
-    n > 0 && !value.starts_with(':') && (value.starts_with(char::is_whitespace) || !seg.trim_end().ends_with(','))
+    let Some(value) = after.strip_prefix(':') else {
+        return false;
+    };
+    n > 0
+        && !value.starts_with(':')
+        && (value.starts_with(char::is_whitespace) || !seg.trim_end().ends_with(','))
 }
 
 fn css_ident(s: &str) -> usize {
     let start = s.starts_with(|c: char| c.is_alphabetic() || c == '_')
-        || (s.starts_with('-') && s[1..].starts_with(|c: char| c.is_alphabetic() || c == '-' || c == '_'));
+        || (s.starts_with('-')
+            && s[1..].starts_with(|c: char| c.is_alphabetic() || c == '-' || c == '_'));
     if !start {
         return 0;
     }
-    s.find(|c: char| !(c.is_alphanumeric() || matches!(c, '-' | '_'))).unwrap_or(s.len())
+    s.find(|c: char| !(c.is_alphanumeric() || matches!(c, '-' | '_')))
+        .unwrap_or(s.len())
 }
 
 fn ident_start(c: char) -> bool {
@@ -828,7 +967,8 @@ fn ident_start(c: char) -> bool {
 }
 
 fn ident_len(s: &str) -> usize {
-    s.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).unwrap_or(s.len())
+    s.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+        .unwrap_or(s.len())
 }
 
 /// The name that ends `before`, if it ends with one.
@@ -845,9 +985,9 @@ fn last_word(before: &str) -> &str {
 /// (`from 'x'`, `as const`, `type X`), not by `=`, `:` or `(`.
 fn soft_keyword(after: &str) -> bool {
     after.starts_with(char::is_whitespace)
-        && after
-            .trim_start()
-            .starts_with(|c: char| ident_start(c) || matches!(c, '"' | '\'' | '`' | '{' | '[' | '*'))
+        && after.trim_start().starts_with(|c: char| {
+            ident_start(c) || matches!(c, '"' | '\'' | '`' | '{' | '[' | '*')
+        })
 }
 
 /// After a name, a function is assigned to it: `= (a) =>`, `= async x =>`,
@@ -935,7 +1075,9 @@ mod tests {
     /// Each line's tokens, lexed in order.
     fn lines(path: &str, text: &[&'static str]) -> Vec<Vec<(&'static str, Tok)>> {
         let mut h = Highlighter::new(path);
-        text.iter().map(|l| h.line(l).into_iter().map(|(r, t)| (&l[r], t)).collect()).collect()
+        text.iter()
+            .map(|l| h.line(l).into_iter().map(|(r, t)| (&l[r], t)).collect())
+            .collect()
     }
 
     fn toks(path: &str, line: &'static str) -> Vec<(&'static str, Tok)> {
@@ -949,7 +1091,10 @@ mod tests {
             [("import", Keyword), ("from", Keyword), ("'./x'", String)]
         );
         assert_eq!(
-            toks("a.ts", "export const load = async (id: string): Promise<User> => {"),
+            toks(
+                "a.ts",
+                "export const load = async (id: string): Promise<User> => {"
+            ),
             [
                 ("export", Keyword),
                 ("const", Keyword),
@@ -966,47 +1111,103 @@ mod tests {
         );
         assert_eq!(
             toks("a.ts", "type Props = { readonly id: number };"),
-            [("type", Keyword), ("Props", Type), ("=", Operator), ("readonly", Keyword), ("number", Keyword)]
+            [
+                ("type", Keyword),
+                ("Props", Type),
+                ("=", Operator),
+                ("readonly", Keyword),
+                ("number", Keyword)
+            ]
         );
-        assert_eq!(toks("a.ts", "@Component({ selector: 'x' })"), [("@Component", Type), ("'x'", String)]);
+        assert_eq!(
+            toks("a.ts", "@Component({ selector: 'x' })"),
+            [("@Component", Type), ("'x'", String)]
+        );
         // Soft keywords as names, members named like keywords.
-        assert_eq!(toks("a.ts", "const type = map.get(from);"), [("const", Keyword), ("=", Operator), ("get", Function)]);
+        assert_eq!(
+            toks("a.ts", "const type = map.get(from);"),
+            [("const", Keyword), ("=", Operator), ("get", Function)]
+        );
         assert_eq!(
             toks("a.ts", "class A extends B implements C {}"),
-            [("class", Keyword), ("A", Type), ("extends", Keyword), ("B", Type), ("implements", Keyword), ("C", Type)]
+            [
+                ("class", Keyword),
+                ("A", Type),
+                ("extends", Keyword),
+                ("B", Type),
+                ("implements", Keyword),
+                ("C", Type)
+            ]
         );
         // `<` compares in .ts: no JSX.
-        assert_eq!(toks("a.ts", "if (a <b) {}"), [("if", Keyword), ("<", Operator)]);
+        assert_eq!(
+            toks("a.ts", "if (a <b) {}"),
+            [("if", Keyword), ("<", Operator)]
+        );
     }
 
     #[test]
     fn javascript_templates_and_regexes() {
         assert_eq!(
             toks("a.js", "const s = `id ${user.id} ok`;"),
-            [("const", Keyword), ("=", Operator), ("`id ", String), ("${", Operator), ("}", Operator), (" ok`", String)]
+            [
+                ("const", Keyword),
+                ("=", Operator),
+                ("`id ", String),
+                ("${", Operator),
+                ("}", Operator),
+                (" ok`", String)
+            ]
         );
         // A template over lines, with `${…}` holding braces.
         assert_eq!(
             lines("a.js", &["sql`", "  select ${f({ a: 1 })}", "`;", "x"]),
             [
                 vec![("sql", Function), ("`", String)],
-                vec![("  select ", String), ("${", Operator), ("f", Function), ("1", Number), ("}", Operator)],
+                vec![
+                    ("  select ", String),
+                    ("${", Operator),
+                    ("f", Function),
+                    ("1", Number),
+                    ("}", Operator)
+                ],
                 vec![("`", String)],
                 vec![],
             ]
         );
         assert_eq!(
             toks("a.js", "const re = /a\\/[/]b/gi; x = a / b / c;"),
-            [("const", Keyword), ("=", Operator), ("/a\\/[/]b/gi", String), ("=", Operator), ("/", Operator), ("/", Operator)]
+            [
+                ("const", Keyword),
+                ("=", Operator),
+                ("/a\\/[/]b/gi", String),
+                ("=", Operator),
+                ("/", Operator),
+                ("/", Operator)
+            ]
         );
-        assert_eq!(toks("a.mjs", "#!/usr/bin/env node"), [("#!/usr/bin/env node", Comment)]);
-        assert_eq!(toks("a.js", "items.map(x => x * 2)"), [("map", Function), ("=>", Operator), ("*", Operator), ("2", Number)]);
+        assert_eq!(
+            toks("a.mjs", "#!/usr/bin/env node"),
+            [("#!/usr/bin/env node", Comment)]
+        );
+        assert_eq!(
+            toks("a.js", "items.map(x => x * 2)"),
+            [
+                ("map", Function),
+                ("=>", Operator),
+                ("*", Operator),
+                ("2", Number)
+            ]
+        );
     }
 
     #[test]
     fn jsx() {
         assert_eq!(
-            toks("a.tsx", "return <Button onClick={() => go(1)} disabled>Don't {name}</Button>;"),
+            toks(
+                "a.tsx",
+                "return <Button onClick={() => go(1)} disabled>Don't {name}</Button>;"
+            ),
             [
                 ("return", Keyword),
                 ("Button", Tag),
@@ -1021,7 +1222,18 @@ mod tests {
         );
         // An element over lines; the script after it.
         assert_eq!(
-            lines("a.jsx", &["  <div", "    className=\"a\"", "  >", "    it's <b>x</b>", "  </div>", ");", "const a = 1;"]),
+            lines(
+                "a.jsx",
+                &[
+                    "  <div",
+                    "    className=\"a\"",
+                    "  >",
+                    "    it's <b>x</b>",
+                    "  </div>",
+                    ");",
+                    "const a = 1;"
+                ]
+            ),
             [
                 vec![("div", Tag)],
                 vec![("className", Attribute), ("=", Operator), ("\"a\"", String)],
@@ -1033,43 +1245,109 @@ mod tests {
             ]
         );
         // Generics aren't elements.
-        assert_eq!(toks("a.tsx", "useState<string>(x)"), [("useState", Function), ("<", Operator), ("string", Keyword), (">", Operator)]);
+        assert_eq!(
+            toks("a.tsx", "useState<string>(x)"),
+            [
+                ("useState", Function),
+                ("<", Operator),
+                ("string", Keyword),
+                (">", Operator)
+            ]
+        );
     }
 
     #[test]
     fn css_and_scss() {
         assert_eq!(
             toks("a.css", ".btn:hover > a, #main {"),
-            [(".btn:hover", Attribute), (">", Operator), ("a", Tag), ("#main", Attribute)]
+            [
+                (".btn:hover", Attribute),
+                (">", Operator),
+                ("a", Tag),
+                ("#main", Attribute)
+            ]
         );
         assert_eq!(
-            lines("a.css", &["a {", "  color: #fff !important;", "  margin: 0 -4px;", "  background: url(a.png) rgba(0, 0, 0, .5);", "}"]),
+            lines(
+                "a.css",
+                &[
+                    "a {",
+                    "  color: #fff !important;",
+                    "  margin: 0 -4px;",
+                    "  background: url(a.png) rgba(0, 0, 0, .5);",
+                    "}"
+                ]
+            ),
             [
                 vec![("a", Tag)],
                 vec![("color", Type), ("#fff", Number), ("!important", Keyword)],
                 vec![("margin", Type), ("0", Number), ("-4px", Number)],
-                vec![("background", Type), ("url", Function), ("a.png", String), ("rgba", Function), ("0", Number), ("0", Number), ("0", Number), (".5", Number)],
+                vec![
+                    ("background", Type),
+                    ("url", Function),
+                    ("a.png", String),
+                    ("rgba", Function),
+                    ("0", Number),
+                    ("0", Number),
+                    ("0", Number),
+                    (".5", Number)
+                ],
                 vec![],
             ]
         );
         assert_eq!(
             toks("a.css", "@media screen and (max-width: 600px) {"),
-            [("@media", Keyword), ("and", Keyword), ("max-width", Type), ("600px", Number)]
+            [
+                ("@media", Keyword),
+                ("and", Keyword),
+                ("max-width", Type),
+                ("600px", Number)
+            ]
         );
         assert_eq!(
-            lines("a.scss", &["$gap: 4px; // half", ".a {", "  &:hover { gap: $gap; }", "  @include m(1);", "}"]),
+            lines(
+                "a.scss",
+                &[
+                    "$gap: 4px; // half",
+                    ".a {",
+                    "  &:hover { gap: $gap; }",
+                    "  @include m(1);",
+                    "}"
+                ]
+            ),
             [
                 vec![("$gap", Variable), ("4px", Number), ("// half", Comment)],
                 vec![(".a", Attribute)],
-                vec![("&", Operator), (":hover", Attribute), ("gap", Type), ("$gap", Variable)],
+                vec![
+                    ("&", Operator),
+                    (":hover", Attribute),
+                    ("gap", Type),
+                    ("$gap", Variable)
+                ],
                 vec![("@include", Keyword), ("m", Function), ("1", Number)],
                 vec![],
             ]
         );
-        assert_eq!(toks("a.css", ":root { --gap: var(--x); }"), [(":root", Attribute), ("--gap", Variable), ("var", Function), ("--x", Variable)]);
+        assert_eq!(
+            toks("a.css", ":root { --gap: var(--x); }"),
+            [
+                (":root", Attribute),
+                ("--gap", Variable),
+                ("var", Function),
+                ("--x", Variable)
+            ]
+        );
         // A value over lines.
         assert_eq!(
-            lines("a.css", &["a {", "  box-shadow: 0 1px red,", "    inset 0 2px blue;", "}"])[2],
+            lines(
+                "a.css",
+                &[
+                    "a {",
+                    "  box-shadow: 0 1px red,",
+                    "    inset 0 2px blue;",
+                    "}"
+                ]
+            )[2],
             [("0", Number), ("2px", Number)]
         );
     }
@@ -1077,49 +1355,150 @@ mod tests {
     #[test]
     fn json() {
         assert_eq!(
-            toks("package.json", r#"  "version": "1.0", "n": -1.5e3, "ok": true, "x": null"#),
-            [("\"version\"", Tag), ("\"1.0\"", String), ("\"n\"", Tag), ("-1.5e3", Number), ("\"ok\"", Tag), ("true", Keyword), ("\"x\"", Tag), ("null", Keyword)]
+            toks(
+                "package.json",
+                r#"  "version": "1.0", "n": -1.5e3, "ok": true, "x": null"#
+            ),
+            [
+                ("\"version\"", Tag),
+                ("\"1.0\"", String),
+                ("\"n\"", Tag),
+                ("-1.5e3", Number),
+                ("\"ok\"", Tag),
+                ("true", Keyword),
+                ("\"x\"", Tag),
+                ("null", Keyword)
+            ]
         );
         assert_eq!(toks("tsconfig.jsonc", "// c"), [("// c", Comment)]);
-        assert_eq!(toks("composer.lock", "{\"a\": 1}"), [("\"a\"", Tag), ("1", Number)]);
+        assert_eq!(
+            toks("composer.lock", "{\"a\": 1}"),
+            [("\"a\"", Tag), ("1", Number)]
+        );
     }
 
     #[test]
     fn html_and_vue() {
         assert_eq!(
-            toks("a.html", "<a href=\"/x\" class='b'>Tom &amp; Jerry</a> <!-- c -->"),
-            [("a", Tag), ("href", Attribute), ("=", Operator), ("\"/x\"", String), ("class", Attribute), ("=", Operator), ("'b'", String), ("&amp;", Number), ("a", Tag), ("<!-- c -->", Comment)]
+            toks(
+                "a.html",
+                "<a href=\"/x\" class='b'>Tom &amp; Jerry</a> <!-- c -->"
+            ),
+            [
+                ("a", Tag),
+                ("href", Attribute),
+                ("=", Operator),
+                ("\"/x\"", String),
+                ("class", Attribute),
+                ("=", Operator),
+                ("'b'", String),
+                ("&amp;", Number),
+                ("a", Tag),
+                ("<!-- c -->", Comment)
+            ]
         );
         assert_eq!(
             lines(
                 "A.vue",
-                &["<template><p :class=\"x\">{{ n }}</p></template>", "<script setup lang=\"ts\">", "const n: number = 1", "</script>", "<style scoped lang=\"scss\">", ".a { color: red }", "</style>"]
+                &[
+                    "<template><p :class=\"x\">{{ n }}</p></template>",
+                    "<script setup lang=\"ts\">",
+                    "const n: number = 1",
+                    "</script>",
+                    "<style scoped lang=\"scss\">",
+                    ".a { color: red }",
+                    "</style>"
+                ]
             ),
             [
-                vec![("template", Tag), ("p", Tag), (":class", Attribute), ("=", Operator), ("\"x\"", String), ("p", Tag), ("template", Tag)],
-                vec![("script", Tag), ("setup", Attribute), ("lang", Attribute), ("=", Operator), ("\"ts\"", String)],
-                vec![("const", Keyword), ("number", Keyword), ("=", Operator), ("1", Number)],
+                vec![
+                    ("template", Tag),
+                    ("p", Tag),
+                    (":class", Attribute),
+                    ("=", Operator),
+                    ("\"x\"", String),
+                    ("p", Tag),
+                    ("template", Tag)
+                ],
+                vec![
+                    ("script", Tag),
+                    ("setup", Attribute),
+                    ("lang", Attribute),
+                    ("=", Operator),
+                    ("\"ts\"", String)
+                ],
+                vec![
+                    ("const", Keyword),
+                    ("number", Keyword),
+                    ("=", Operator),
+                    ("1", Number)
+                ],
                 vec![("script", Tag)],
-                vec![("style", Tag), ("scoped", Attribute), ("lang", Attribute), ("=", Operator), ("\"scss\"", String)],
+                vec![
+                    ("style", Tag),
+                    ("scoped", Attribute),
+                    ("lang", Attribute),
+                    ("=", Operator),
+                    ("\"scss\"", String)
+                ],
                 vec![(".a", Attribute), ("color", Type)],
                 vec![("style", Tag)],
             ]
         );
         // A script and its end on one line.
-        assert_eq!(toks("a.html", "<script>let a = 1</script>")[..2], [("script", Tag), ("let", Keyword)]);
+        assert_eq!(
+            toks("a.html", "<script>let a = 1</script>")[..2],
+            [("script", Tag), ("let", Keyword)]
+        );
     }
 
     #[test]
     fn odd_lines_dont_panic() {
         let odd = [
-            "", " ", "<", "</", "<>", "`", "${", "}", "{", "/", "/*", "*/", "'", "\"", "@", "#", "$", "-", "--", "!",
-            "a: ", "<a b=\"", "url(", "ž ū <ž>", "x = /[/", "@media", "&", "#{", "<!--", ".", "1.", "-.", "a{b:c}",
+            "",
+            " ",
+            "<",
+            "</",
+            "<>",
+            "`",
+            "${",
+            "}",
+            "{",
+            "/",
+            "/*",
+            "*/",
+            "'",
+            "\"",
+            "@",
+            "#",
+            "$",
+            "-",
+            "--",
+            "!",
+            "a: ",
+            "<a b=\"",
+            "url(",
+            "ž ū <ž>",
+            "x = /[/",
+            "@media",
+            "&",
+            "#{",
+            "<!--",
+            ".",
+            "1.",
+            "-.",
+            "a{b:c}",
         ];
-        for path in ["a.ts", "a.tsx", "a.js", "a.css", "a.scss", "a.json", "a.html", "a.vue"] {
+        for path in [
+            "a.ts", "a.tsx", "a.js", "a.css", "a.scss", "a.json", "a.html", "a.vue",
+        ] {
             let mut h = Highlighter::new(path);
             for l in odd {
                 for (r, _) in h.line(l) {
-                    assert!(l.get(r.clone()).is_some() && r.start <= r.end, "{path} {l:?}");
+                    assert!(
+                        l.get(r.clone()).is_some() && r.start <= r.end,
+                        "{path} {l:?}"
+                    );
                 }
             }
         }

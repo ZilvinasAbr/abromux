@@ -5,17 +5,17 @@
 //! threads) are laid out only when on screen, so a 3000-line diff scrolls
 //! like a short one.
 
+#[allow(unused_imports)]
+use crate::style::px;
 use crate::{
     diff::{Body, changed_ranges},
     discussion::{code_line_with, half_with, line_highlights},
-    select::Group,
     review::{File, Review},
+    select::Group,
     style::*,
     view::{Failure, GitLabView, Load},
 };
 use gpui::{prelude::*, *};
-#[allow(unused_imports)]
-use crate::style::px;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -83,7 +83,11 @@ impl Shot {
             .ok()
             .and_then(|r| r.into_dimensions().ok());
         let image = crate::avatars::image_from_bytes(bytes).map(std::sync::Arc::new);
-        Shot { image, bytes: n, size }
+        Shot {
+            image,
+            bytes: n,
+            size,
+        }
     }
 }
 
@@ -104,7 +108,10 @@ impl Picture {
 
 fn is_image(path: &str) -> bool {
     let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
-    matches!(ext.as_deref(), Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico"))
+    matches!(
+        ext.as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico")
+    )
 }
 
 /// GitLab's file sizes: `512 B`, `1.00 KiB`, `2.50 MiB`.
@@ -160,8 +167,18 @@ pub struct Shape<'a> {
 
 /// The new file's last line in hunk `h`, and the old one's.
 fn hunk_end(h: &crate::diff::Hunk) -> (u32, u32) {
-    let new = h.lines.iter().filter_map(|l| l.new).max().unwrap_or(h.new_start.saturating_sub(1));
-    let old = h.lines.iter().filter_map(|l| l.old).max().unwrap_or(h.old_start.saturating_sub(1));
+    let new = h
+        .lines
+        .iter()
+        .filter_map(|l| l.new)
+        .max()
+        .unwrap_or(h.new_start.saturating_sub(1));
+    let old = h
+        .lines
+        .iter()
+        .filter_map(|l| l.old)
+        .max()
+        .unwrap_or(h.old_start.saturating_sub(1));
     (new, old)
 }
 
@@ -183,7 +200,11 @@ pub fn rows(r: &Review, s: &Shape) -> Vec<Row> {
                         } else {
                             h.new_start.saturating_sub(1).saturating_sub(prev_new_end)
                         };
-                        let shown = if expandable && (s.lines)(fi).is_some() { (s.above)(fi, hi).min(gap) } else { 0 };
+                        let shown = if expandable && (s.lines)(fi).is_some() {
+                            (s.above)(fi, hi).min(gap)
+                        } else {
+                            0
+                        };
                         // The header shows while lines above are hidden: none at the
                         // top of a file, or once they're all shown (as in GitLab).
                         if gap > shown {
@@ -296,8 +317,17 @@ pub fn matches(path: &str, query: &str) -> bool {
 #[derive(Clone)]
 pub enum TreeItem {
     /// `path`: the folder's full path, which folding goes by.
-    Folder { name: String, depth: usize, path: String, folded: bool },
-    File { index: usize, name: String, depth: usize },
+    Folder {
+        name: String,
+        depth: usize,
+        path: String,
+        folded: bool,
+    },
+    File {
+        index: usize,
+        name: String,
+        depth: usize,
+    },
 }
 
 /// The tree of the files matching `query` (see [`matches`]), without the
@@ -314,7 +344,12 @@ pub fn tree_folded(r: &Review, query: &str, folded: &dyn Fn(&str) -> bool) -> Ve
         files: Vec<(String, usize)>,
     }
     let mut root = Dir::default();
-    for (i, f) in r.files.iter().enumerate().filter(|(_, f)| matches(f.path(), query)) {
+    for (i, f) in r
+        .files
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| matches(f.path(), query))
+    {
         let mut d = &mut root;
         let parts: Vec<&str> = f.path().split('/').collect();
         for p in &parts[..parts.len() - 1] {
@@ -322,11 +357,26 @@ pub fn tree_folded(r: &Review, query: &str, folded: &dyn Fn(&str) -> bool) -> Ve
         }
         d.files.push((parts[parts.len() - 1].to_string(), i));
     }
-    fn walk(d: &Dir, depth: usize, at: &str, folded: &dyn Fn(&str) -> bool, out: &mut Vec<TreeItem>) {
+    fn walk(
+        d: &Dir,
+        depth: usize,
+        at: &str,
+        folded: &dyn Fn(&str) -> bool,
+        out: &mut Vec<TreeItem>,
+    ) {
         for (name, sub) in &d.dirs {
-            let path = if at.is_empty() { name.clone() } else { format!("{at}/{name}") };
+            let path = if at.is_empty() {
+                name.clone()
+            } else {
+                format!("{at}/{name}")
+            };
             let is_folded = folded(&path);
-            out.push(TreeItem::Folder { name: name.clone(), depth, path: path.clone(), folded: is_folded });
+            out.push(TreeItem::Folder {
+                name: name.clone(),
+                depth,
+                path: path.clone(),
+                folded: is_folded,
+            });
             if !is_folded {
                 walk(sub, depth + 1, &path, folded, out);
             }
@@ -348,7 +398,11 @@ fn card(d: Div) -> Div {
 }
 
 impl GitLabView {
-    pub(crate) fn changes_page(&self, main: &std::rc::Rc<Review>, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn changes_page(
+        &self,
+        main: &std::rc::Rc<Review>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         self.current_drawn.set(self.current_file());
         // The picked versions' diffs, or the latest while those load.
         let r = &self.shown().unwrap_or_else(|| main.clone());
@@ -396,9 +450,23 @@ impl GitLabView {
             .child(self.fold_all_buttons(r, cx))
             .child(self.view_switch(cx))
             .child(icon("file", 16., c(MUTED)))
-            .child(div().text_color(c(TEXT)).child(format!("{} file{}", r.files.len(), if r.files.len() == 1 { "" } else { "s" })))
-            .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(GREEN)).child(format!("+{added}")))
-            .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(RED)).child(format!("−{removed}")));
+            .child(div().text_color(c(TEXT)).child(format!(
+                "{} file{}",
+                r.files.len(),
+                if r.files.len() == 1 { "" } else { "s" }
+            )))
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(c(GREEN))
+                    .child(format!("+{added}")),
+            )
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(c(RED))
+                    .child(format!("−{removed}")),
+            );
         let diff = div()
             .size_full()
             // Scrolling yourself ends a jump's hold on the view, and the
@@ -409,7 +477,13 @@ impl GitLabView {
                     cx.notify();
                 }
             }))
-            .child(list(self.diff_list.clone(), cx.processor(|v, ix: usize, window, cx| v.row(ix, window, cx))).size_full());
+            .child(
+                list(
+                    self.diff_list.clone(),
+                    cx.processor(|v, ix: usize, window, cx| v.row(ix, window, cx)),
+                )
+                .size_full(),
+            );
         // GitLab keeps the header of the file being read at the top.
         let top = self.diff_list.logical_scroll_top();
         let sticky = self.active_file().filter(|f| {
@@ -438,7 +512,12 @@ impl GitLabView {
         let diff = match self.compare_loading() {
             Some(Some(e)) => div().p_4().text_color(c(RED)).child(e.to_string()),
             Some(None) => spinner("gl-compare-loading"),
-            None => div().relative().size_full().overflow_hidden().child(diff).children(sticky),
+            None => div()
+                .relative()
+                .size_full()
+                .overflow_hidden()
+                .child(diff)
+                .children(sticky),
         };
         div()
             .size_full()
@@ -450,7 +529,9 @@ impl GitLabView {
                     .flex_1()
                     .min_h(px(0.))
                     .flex()
-                    .when(self.tree_shown(), |d| d.child(self.file_tree(r, cx)).child(self.tree_edge(cx)))
+                    .when(self.tree_shown(), |d| {
+                        d.child(self.file_tree(r, cx)).child(self.tree_edge(cx))
+                    })
                     .child(
                         div()
                             .flex_1()
@@ -472,13 +553,27 @@ impl GitLabView {
     /// Viewing one commit: which, the ones before and after, and the way
     /// back to all of the merge request's changes.
     fn commit_banner(&self, r: &Review, i: usize, cx: &mut Context<Self>) -> Div {
-        let Some(commit) = r.commits.get(i) else { return div() };
+        let Some(commit) = r.commits.get(i) else {
+            return div();
+        };
         let mono = self.mono(cx);
         // GitLab lists commits newest first: "previous" is the next one down.
         let (older, newer) = ((i + 1 < r.commits.len()).then_some(i + 1), i.checked_sub(1));
-        let step = |id: &'static str, label: &'static str, back: bool, to: Option<usize>, cx: &mut Context<Self>| {
+        let step = |id: &'static str,
+                    label: &'static str,
+                    back: bool,
+                    to: Option<usize>,
+                    cx: &mut Context<Self>| {
             let color = c(if to.is_some() { TEXT } else { MUTED });
-            let chevron = app_icon(if back { "chevron-left" } else { "chevron-right" }, 14., color);
+            let chevron = app_icon(
+                if back {
+                    "chevron-left"
+                } else {
+                    "chevron-right"
+                },
+                14.,
+                color,
+            );
             div()
                 .id(id)
                 .flex()
@@ -488,12 +583,16 @@ impl GitLabView {
                 .px_3()
                 .bg(ca(if to.is_some() { 0x89888d66 } else { 0x89888d26 }))
                 .text_color(color)
-                .when(to.is_some(), |d| d.cursor_pointer().hover(|s| s.bg(ca(0x89888d99))))
+                .when(to.is_some(), |d| {
+                    d.cursor_pointer().hover(|s| s.bg(ca(0x89888d99)))
+                })
                 // The chevron leads "Previous" and trails "Next".
                 .child(label)
                 .child(chevron)
                 .when(back, |d| d.flex_row_reverse())
-                .when_some(to, |d, to| d.on_click(cx.listener(move |v, _, _, cx| v.open_commit(to, cx))))
+                .when_some(to, |d, to| {
+                    d.on_click(cx.listener(move |v, _, _, cx| v.open_commit(to, cx)))
+                })
         };
         div()
             .flex()
@@ -502,7 +601,12 @@ impl GitLabView {
             .gap_2()
             .text_color(c(TEXT))
             .child("Viewing commit")
-            .child(div().font_family(mono).text_color(c(LINK)).child(commit.short_id.clone()))
+            .child(
+                div()
+                    .font_family(mono)
+                    .text_color(c(LINK))
+                    .child(commit.short_id.clone()),
+            )
             .child(
                 div()
                     .flex()
@@ -513,8 +617,9 @@ impl GitLabView {
                     .child(step("gl-commit-next", "Next", false, newer, cx)),
             )
             .child(
-                crate::edit::secondary("gl-all-changes", "Show latest version")
-                    .on_click(cx.listener(|v, _, _, cx| v.set_compare(crate::Compare::default(), cx))),
+                crate::edit::secondary("gl-all-changes", "Show latest version").on_click(
+                    cx.listener(|v, _, _, cx| v.set_compare(crate::Compare::default(), cx)),
+                ),
             )
     }
 
@@ -524,7 +629,11 @@ impl GitLabView {
         let cm = r.commits.get(i)?;
         let mono = self.mono(cx);
         let author = crate::mr::commit_author(r, cm);
-        let when = if cm.authored_date.is_empty() { &cm.created_at } else { &cm.authored_date };
+        let when = if cm.authored_date.is_empty() {
+            &cm.created_at
+        } else {
+            &cm.authored_date
+        };
         let sha = cm.id.clone();
         Some(
             div()
@@ -547,7 +656,12 @@ impl GitLabView {
                                 .min_w(px(0.))
                                 .flex()
                                 .flex_col()
-                                .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(TEXT)).child(cm.title.clone()))
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(c(TEXT))
+                                        .child(cm.title.clone()),
+                                )
                                 .child(
                                     div()
                                         .flex()
@@ -588,7 +702,11 @@ impl GitLabView {
                                         .cursor_pointer()
                                         .hover(|s| s.bg(ca(0x89888d99)))
                                         .child(icon("copy", 14., c(TEXT)))
-                                        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(sha.clone()))),
+                                        .on_click(move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                sha.clone(),
+                                            ))
+                                        }),
                                 ),
                         ),
                 )
@@ -603,7 +721,13 @@ impl GitLabView {
                             .text_size(px(13.))
                             .line_height(px(20.))
                             .text_color(c(TEXT))
-                            .children(body.lines().map(|l| div().child(if l.is_empty() { " ".to_string() } else { l.to_string() }))),
+                            .children(body.lines().map(|l| {
+                                div().child(if l.is_empty() {
+                                    " ".to_string()
+                                } else {
+                                    l.to_string()
+                                })
+                            })),
                     )
                 }),
         )
@@ -611,7 +735,13 @@ impl GitLabView {
 
     pub(crate) fn open_commit(&mut self, i: usize, cx: &mut Context<Self>) {
         self.loc.section = crate::Section::Changes;
-        self.set_compare(crate::Compare { commit: Some(i), ..Default::default() }, cx);
+        self.set_compare(
+            crate::Compare {
+                commit: Some(i),
+                ..Default::default()
+            },
+            cx,
+        );
     }
 
     /// GitLab's version picker: "Compare [main ▾] and [latest version ▾]".
@@ -619,7 +749,12 @@ impl GitLabView {
     fn version_picker(&self, r: &Review, head: bool, cx: &mut Context<Self>) -> Stateful<Div> {
         let versions = &r.versions;
         // GitLab numbers versions from the oldest; the newest is "latest version".
-        let number = |id: u64| versions.iter().position(|v| v.id == id).map(|i| versions.len() - i);
+        let number = |id: u64| {
+            versions
+                .iter()
+                .position(|v| v.id == id)
+                .map(|i| versions.len() - i)
+        };
         let name = |id: u64| match number(id) {
             Some(n) if n == versions.len() => "latest version".to_string(),
             Some(n) => format!("version {n}"),
@@ -644,67 +779,113 @@ impl GitLabView {
                     ..Default::default()
                 };
                 let short = v.head_commit_sha.get(..8).unwrap_or_default();
-                items.push((name(v.id), format!("{short} · {}", crate::time::ago(&v.created_at, now)), pick));
+                items.push((
+                    name(v.id),
+                    format!("{short} · {}", crate::time::ago(&v.created_at, now)),
+                    pick,
+                ));
             }
         } else {
-            items.push((format!("{} (base)", r.mr.target_branch), String::new(), crate::Compare { base: None, commit: None, ..self.compare }));
+            items.push((
+                format!("{} (base)", r.mr.target_branch),
+                String::new(),
+                crate::Compare {
+                    base: None,
+                    commit: None,
+                    ..self.compare
+                },
+            ));
             // Only versions older than the head can be its base.
-            for v in versions.iter().filter(|v| number(v.id).is_some_and(|n| n < head_number)) {
+            for v in versions
+                .iter()
+                .filter(|v| number(v.id).is_some_and(|n| n < head_number))
+            {
                 let short = v.head_commit_sha.get(..8).unwrap_or_default();
-                let pick = crate::Compare { base: Some(v.id), head: self.compare.head.or(current_head), commit: None };
-                items.push((name(v.id), format!("{short} · {}", crate::time::ago(&v.created_at, now)), pick));
+                let pick = crate::Compare {
+                    base: Some(v.id),
+                    head: self.compare.head.or(current_head),
+                    commit: None,
+                };
+                items.push((
+                    name(v.id),
+                    format!("{short} · {}", crate::time::ago(&v.created_at, now)),
+                    pick,
+                ));
             }
         }
         let selected = |pick: &crate::Compare| {
-            if head { pick.head == self.compare.head } else { pick.base == self.compare.base }
+            if head {
+                pick.head == self.compare.head
+            } else {
+                pick.base == self.compare.base
+            }
         };
-        let menu = open.then(|| {
-            deferred(
-                div()
-                    .id(if head { "gl-head-menu" } else { "gl-base-menu" })
-                    .absolute()
-                    .top(px(30.))
-                    .left_0()
-                    .min_w(px(240.))
-                    .py_1()
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(c(BORDER))
-                    .bg(c(CARD))
-                    .shadow_lg()
-                    .occlude()
-                    .on_mouse_down_out(cx.listener(|v, _, _, cx| {
-                        v.menu = None;
-                        cx.notify();
-                    }))
-                    .children(items.into_iter().enumerate().map(|(i, (title, detail, pick))| {
-                        let on = selected(&pick);
-                        div()
-                            .id(i)
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .px_3()
-                            .py_1()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(c(RAISED)))
-                            .child(div().w(px(14.)).when(on, |d| d.child(app_icon("check", 14., c(TEXT)))))
-                            .child(
+        let menu =
+            open.then(|| {
+                deferred(
+                    div()
+                        .id(if head { "gl-head-menu" } else { "gl-base-menu" })
+                        .absolute()
+                        .top(px(30.))
+                        .left_0()
+                        .min_w(px(240.))
+                        .py_1()
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(c(BORDER))
+                        .bg(c(CARD))
+                        .shadow_lg()
+                        .occlude()
+                        .on_mouse_down_out(cx.listener(|v, _, _, cx| {
+                            v.menu = None;
+                            cx.notify();
+                        }))
+                        .children(items.into_iter().enumerate().map(
+                            |(i, (title, detail, pick))| {
+                                let on = selected(&pick);
                                 div()
+                                    .id(i)
                                     .flex()
-                                    .flex_col()
-                                    .child(div().text_color(c(TEXT)).child(title))
-                                    .when(!detail.is_empty(), |d| {
-                                        d.child(div().text_size(px(12.)).line_height(px(16.)).text_color(c(MUTED)).child(detail))
-                                    }),
-                            )
-                            .on_click(cx.listener(move |v, _, _, cx| v.set_compare(pick, cx)))
-                    })),
-            )
-            .with_priority(1)
-        });
+                                    .items_center()
+                                    .gap_2()
+                                    .px_3()
+                                    .py_1()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(c(RAISED)))
+                                    .child(
+                                        div()
+                                            .w(px(14.))
+                                            .when(on, |d| d.child(app_icon("check", 14., c(TEXT)))),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .child(div().text_color(c(TEXT)).child(title))
+                                            .when(!detail.is_empty(), |d| {
+                                                d.child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .line_height(px(16.))
+                                                        .text_color(c(MUTED))
+                                                        .child(detail),
+                                                )
+                                            }),
+                                    )
+                                    .on_click(
+                                        cx.listener(move |v, _, _, cx| v.set_compare(pick, cx)),
+                                    )
+                            },
+                        )),
+                )
+                .with_priority(1)
+            });
         div()
-            .id(if head { "gl-head-version" } else { "gl-base-version" })
+            .id(if head {
+                "gl-head-version"
+            } else {
+                "gl-base-version"
+            })
             .relative()
             .flex()
             .items_center()
@@ -718,7 +899,11 @@ impl GitLabView {
             .child(label)
             .child(app_icon("chevron-down", 14., c(TEXT)))
             .on_click(cx.listener(move |v, _, _, cx| {
-                v.menu = if v.menu == Some(head) { None } else { Some(head) };
+                v.menu = if v.menu == Some(head) {
+                    None
+                } else {
+                    Some(head)
+                };
                 cx.notify();
             }))
             .children(menu)
@@ -748,11 +933,22 @@ impl GitLabView {
                 .rounded(px(8.))
                 .bg(ca(if to.is_some() { 0x89888d66 } else { 0x89888d26 }))
                 .text_color(c(if to.is_some() { TEXT } else { MUTED }))
-                .when(to.is_some(), |d| d.cursor_pointer().hover(|s| s.bg(ca(0x89888d99))))
+                .when(to.is_some(), |d| {
+                    d.cursor_pointer().hover(|s| s.bg(ca(0x89888d99)))
+                })
                 .child(label)
-                .when_some(to, |d, to| d.on_click(cx.listener(move |v, _, _, cx| v.scroll_to_file(to, cx))))
+                .when_some(to, |d, to| {
+                    d.on_click(cx.listener(move |v, _, _, cx| v.scroll_to_file(to, cx)))
+                })
         };
-        let name = |i: usize| r.files[i].path().rsplit('/').next().unwrap_or_default().to_string();
+        let name = |i: usize| {
+            r.files[i]
+                .path()
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        };
         let prev = at.checked_sub(1);
         let next = (at + 1 < n).then_some(at + 1);
         Some(
@@ -761,9 +957,26 @@ impl GitLabView {
                 .items_center()
                 .gap_3()
                 .py_3()
-                .child(step("gl-file-prev", prev.map_or("Previous file".into(), |i| format!("← {}", name(i))), prev, cx))
-                .child(div().flex_1().flex().justify_center().text_color(c(MUTED)).child(format!("File {} of {n}", at + 1)))
-                .child(step("gl-file-next", next.map_or("Next file".into(), |i| format!("{} →", name(i))), next, cx)),
+                .child(step(
+                    "gl-file-prev",
+                    prev.map_or("Previous file".into(), |i| format!("← {}", name(i))),
+                    prev,
+                    cx,
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .justify_center()
+                        .text_color(c(MUTED))
+                        .child(format!("File {} of {n}", at + 1)),
+                )
+                .child(step(
+                    "gl-file-next",
+                    next.map_or("Next file".into(), |i| format!("{} →", name(i))),
+                    next,
+                    cx,
+                )),
         )
     }
 
@@ -771,7 +984,11 @@ impl GitLabView {
     /// "Show one file at a time".
     fn fold_all_buttons(&self, r: &Review, cx: &mut Context<Self>) -> Div {
         let paths: Vec<String> = r.files.iter().map(|f| f.path().to_string()).collect();
-        let button = |id: &'static str, name: &'static str, fold: bool, paths: Vec<String>, cx: &mut Context<Self>| {
+        let button = |id: &'static str,
+                      name: &'static str,
+                      fold: bool,
+                      paths: Vec<String>,
+                      cx: &mut Context<Self>| {
             div()
                 .id(id)
                 .size(px(32.))
@@ -796,8 +1013,14 @@ impl GitLabView {
             .mr_2()
             .rounded(px(8.))
             .overflow_hidden()
-            .child(button("gl-expand-all", "expand-all", false, paths.clone(), cx).tooltip(hint("Expand all files")))
-            .child(button("gl-collapse-all", "collapse-all", true, paths, cx).tooltip(hint("Collapse all files")))
+            .child(
+                button("gl-expand-all", "expand-all", false, paths.clone(), cx)
+                    .tooltip(hint("Expand all files")),
+            )
+            .child(
+                button("gl-collapse-all", "collapse-all", true, paths, cx)
+                    .tooltip(hint("Collapse all files")),
+            )
             .child({
                 let on = self.single_file.is_some();
                 div()
@@ -810,7 +1033,11 @@ impl GitLabView {
                     .bg(ca(if on { 0x89888d99 } else { 0x89888d66 }))
                     .hover(|s| s.bg(ca(0x89888d99)))
                     .child(icon("file", 16., c(TEXT)))
-                    .tooltip(hint(if on { "Show all files" } else { "Show one file at a time" }))
+                    .tooltip(hint(if on {
+                        "Show all files"
+                    } else {
+                        "Show one file at a time"
+                    }))
                     .on_click(cx.listener(move |v, _, _, cx| v.set_single(!on, cx)))
             })
     }
@@ -886,7 +1113,9 @@ impl GitLabView {
 
     /// While the tree's edge is dragged: its width follows the pointer.
     pub(crate) fn resize_tree(&mut self, p: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some((x0, w0)) = self.tree_resize else { return };
+        let Some((x0, w0)) = self.tree_resize else {
+            return;
+        };
         self.set_tree_width(w0 + (p.x - x0) / zoom());
         cx.notify();
     }
@@ -895,30 +1124,36 @@ impl GitLabView {
     /// for the default width.
     fn tree_edge(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let dragging = self.tree_resize.is_some();
-        div().relative().h_full().w(px(1.)).flex_none().when(dragging, |d| d.bg(c(LINK))).child(
-            div()
-                .id("gl-tree-edge")
-                .absolute()
-                .top_0()
-                .left(px(-3.))
-                .w(px(7.))
-                .h_full()
-                .cursor_col_resize()
-                .hover(|s| s.bg(ca(0x428fdc66)))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|v, ev: &MouseDownEvent, _, cx| {
-                        if ev.click_count >= 2 {
-                            v.tree_resize = None;
-                            v.set_tree_width(TREE_W);
-                        } else {
-                            v.tree_resize = Some((ev.position.x, v.tree_width));
-                        }
-                        cx.stop_propagation();
-                        cx.notify();
-                    }),
-                ),
-        )
+        div()
+            .relative()
+            .h_full()
+            .w(px(1.))
+            .flex_none()
+            .when(dragging, |d| d.bg(c(LINK)))
+            .child(
+                div()
+                    .id("gl-tree-edge")
+                    .absolute()
+                    .top_0()
+                    .left(px(-3.))
+                    .w(px(7.))
+                    .h_full()
+                    .cursor_col_resize()
+                    .hover(|s| s.bg(ca(0x428fdc66)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|v, ev: &MouseDownEvent, _, cx| {
+                            if ev.click_count >= 2 {
+                                v.tree_resize = None;
+                                v.set_tree_width(TREE_W);
+                            } else {
+                                v.tree_resize = Some((ev.position.x, v.tree_width));
+                            }
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    ),
+            )
     }
 
     fn file_tree(&self, r: &Review, cx: &mut Context<Self>) -> Div {
@@ -926,12 +1161,21 @@ impl GitLabView {
         let query = self.tree_search.read(cx).value().to_string();
         // List mode: every file at the top level, by path.
         let items = if self.tree_flat {
-            let mut files: Vec<(usize, &str)> =
-                r.files.iter().enumerate().map(|(i, f)| (i, f.path())).filter(|(_, p)| matches(p, &query)).collect();
+            let mut files: Vec<(usize, &str)> = r
+                .files
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (i, f.path()))
+                .filter(|(_, p)| matches(p, &query))
+                .collect();
             files.sort_by_key(|(_, p)| *p);
             files
                 .into_iter()
-                .map(|(index, p)| TreeItem::File { index, name: p.rsplit('/').next().unwrap_or(p).to_string(), depth: 0 })
+                .map(|(index, p)| TreeItem::File {
+                    index,
+                    name: p.rsplit('/').next().unwrap_or(p).to_string(),
+                    depth: 0,
+                })
                 .collect()
         } else {
             // A search shows every match, folded folders or not.
@@ -943,7 +1187,10 @@ impl GitLabView {
         // it changes, scroll the tree to its row.
         if active != self.tree_active.get() {
             self.tree_active.set(active);
-            if let Some(ix) = items.iter().position(|it| matches!(it, TreeItem::File { index, .. } if Some(*index) == active)) {
+            if let Some(ix) = items
+                .iter()
+                .position(|it| matches!(it, TreeItem::File { index, .. } if Some(*index) == active))
+            {
                 self.tree_scroll.scroll_to_item(ix, ScrollStrategy::Center);
             }
         }
@@ -962,7 +1209,12 @@ impl GitLabView {
                     .items_center()
                     .gap_2()
                     .pb_2()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(TEXT)).child("Files"))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(TEXT))
+                            .child("Files"),
+                    )
                     .child(count_badge(r.files.len()))
                     .child(div().flex_1())
                     .child(self.tree_mode_switch(cx)),
@@ -986,48 +1238,73 @@ impl GitLabView {
                             "gl-tree",
                             items.len(),
                             cx.processor(move |v, range: std::ops::Range<usize>, _, cx| {
-                                let Some(r) = review.clone() else { return vec![] };
+                                let Some(r) = review.clone() else {
+                                    return vec![];
+                                };
                                 let active = v.current_file();
-                                range.map(|i| v.tree_row(&items[i], &r, active, cx)).collect::<Vec<_>>()
+                                range
+                                    .map(|i| v.tree_row(&items[i], &r, active, cx))
+                                    .collect::<Vec<_>>()
                             }),
                         )
                         .size_full()
                         .track_scroll(self.tree_scroll.clone()),
                     )
-                    .when(none, |d| d.child(div().py_2().text_color(c(MUTED)).child("No files found.")))
+                    .when(none, |d| {
+                        d.child(div().py_2().text_color(c(MUTED)).child("No files found."))
+                    })
             })
     }
 
     /// One row of the file tree: a folder, or a file with its counts.
-    fn tree_row(&self, it: &TreeItem, r: &Review, active: Option<usize>, cx: &mut Context<Self>) -> AnyElement {
+    fn tree_row(
+        &self,
+        it: &TreeItem,
+        r: &Review,
+        active: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let flat = self.tree_flat;
         match it {
-            TreeItem::Folder { name, depth, path, folded } => {
+            TreeItem::Folder {
+                name,
+                depth,
+                path,
+                folded,
+            } => {
                 let (name, depth, path, folded) = (name.clone(), *depth, path.clone(), *folded);
                 div()
-                .id(SharedString::from(format!("dir-{path}")))
-                .w_full()
-                .flex()
-                .items_center()
-                .gap_1()
-                .h(px(32.))
-                .pl(px(4. + depth as f32 * 16.))
-                .relative()
-                .children(tree_guides(depth))
-                .rounded(px(4.))
-                .cursor_pointer()
-                .hover(|s| s.bg(c(RAISED)))
-                .text_color(c(TEXT))
-                .child(app_icon(if folded { "chevron-right" } else { "chevron-down" }, 14., c(MUTED)))
-                .child(app_icon("folder", 16., c(MUTED)))
-                .child(div().ml_1().child(name))
-                .on_click(cx.listener(move |v, _, _, cx| {
-                    if !v.folded_dirs.remove(&path) {
-                        v.folded_dirs.insert(path.clone());
-                    }
-                    cx.notify();
-                }))
-                .into_any_element()
+                    .id(SharedString::from(format!("dir-{path}")))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .h(px(32.))
+                    .pl(px(4. + depth as f32 * 16.))
+                    .relative()
+                    .children(tree_guides(depth))
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(c(RAISED)))
+                    .text_color(c(TEXT))
+                    .child(app_icon(
+                        if folded {
+                            "chevron-right"
+                        } else {
+                            "chevron-down"
+                        },
+                        14.,
+                        c(MUTED),
+                    ))
+                    .child(app_icon("folder", 16., c(MUTED)))
+                    .child(div().ml_1().child(name))
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        if !v.folded_dirs.remove(&path) {
+                            v.folded_dirs.insert(path.clone());
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element()
             }
             TreeItem::File { index, name, depth } => {
                 let (index, name, depth) = (*index, name.clone(), *depth);
@@ -1040,7 +1317,9 @@ impl GitLabView {
                 };
                 let viewed = self.loc.viewed.iter().any(|p| p == f.path());
                 // List mode: the folder under the name.
-                let dir = flat.then(|| f.path().rsplit_once('/').map(|(d, _)| d.to_string())).flatten();
+                let dir = flat
+                    .then(|| f.path().rsplit_once('/').map(|(d, _)| d.to_string()))
+                    .flatten();
                 let name = div()
                     .flex()
                     .flex_col()
@@ -1078,7 +1357,11 @@ impl GitLabView {
                             .flex_1()
                             .min_w(px(0.))
                             .truncate()
-                            .font_weight(if viewed { FontWeight::NORMAL } else { FontWeight::SEMIBOLD })
+                            .font_weight(if viewed {
+                                FontWeight::NORMAL
+                            } else {
+                                FontWeight::SEMIBOLD
+                            })
                             .text_color(c(if viewed { MUTED } else { TEXT }))
                             .child(name),
                     )
@@ -1100,7 +1383,10 @@ impl GitLabView {
     /// The file being read: the one gone to, else the one at the top.
     pub(crate) fn current_file(&self) -> Option<usize> {
         let n = self.shown().map_or(0, |r| r.files.len());
-        self.current.filter(|&f| f < n).or(self.single_file).or_else(|| self.active_file())
+        self.current
+            .filter(|&f| f < n)
+            .or(self.single_file)
+            .or_else(|| self.active_file())
     }
 
     /// The file whose card is at the top of the diff.
@@ -1108,7 +1394,11 @@ impl GitLabView {
         if self.rows.is_empty() {
             return None;
         }
-        let top = self.diff_list.logical_scroll_top().item_ix.min(self.rows.len() - 1);
+        let top = self
+            .diff_list
+            .logical_scroll_top()
+            .item_ix
+            .min(self.rows.len() - 1);
         self.rows[..=top].iter().rev().find_map(|r| match r {
             Row::File(f) => Some(*f),
             _ => None,
@@ -1123,13 +1413,15 @@ impl GitLabView {
         if self.compare != crate::Compare::default() {
             self.set_compare(crate::Compare::default(), cx);
         }
-        let Some(r) = self.review.ready().cloned() else { return };
-        let Some((fi, ti)) = r
-            .files
-            .iter()
-            .enumerate()
-            .find_map(|(fi, f)| f.threads.iter().position(|(_, _, d)| d.id == id).map(|ti| (fi, ti)))
-        else {
+        let Some(r) = self.review.ready().cloned() else {
+            return;
+        };
+        let Some((fi, ti)) = r.files.iter().enumerate().find_map(|(fi, f)| {
+            f.threads
+                .iter()
+                .position(|(_, _, d)| d.id == id)
+                .map(|ti| (fi, ti))
+        }) else {
             cx.notify();
             return;
         };
@@ -1167,7 +1459,10 @@ impl GitLabView {
                 break;
             }
         }
-        self.diff_list.scroll_to(ListOffset { item_ix: top, offset_in_item: px(0.) });
+        self.diff_list.scroll_to(ListOffset {
+            item_ix: top,
+            offset_in_item: px(0.),
+        });
     }
 
     /// GitLab's `j`/`k`: the next or previous file's header to the top.
@@ -1178,13 +1473,18 @@ impl GitLabView {
         }
         let at = self.current_file().unwrap_or(0);
         if self.single_file.is_some() {
-            let next = if forward { (at + 1).min(n - 1) } else { at.saturating_sub(1) };
+            let next = if forward {
+                (at + 1).min(n - 1)
+            } else {
+                at.saturating_sub(1)
+            };
             self.scroll_to_file(next, cx);
             return;
         }
         // At a header already: step from it; mid-file going back: to its own header.
         let top = self.diff_list.logical_scroll_top();
-        let at_header = self.current.is_some() || self.rows.get(top.item_ix) == Some(&Row::File(at)) && top.offset_in_item <= px(1.);
+        let at_header = self.current.is_some()
+            || self.rows.get(top.item_ix) == Some(&Row::File(at)) && top.offset_in_item <= px(1.);
         let next = match forward {
             true => (at + 1).min(n - 1),
             false if at_header => at.saturating_sub(1),
@@ -1204,13 +1504,20 @@ impl GitLabView {
                 .files
                 .iter()
                 .enumerate()
-                .flat_map(|(fi, f)| f.threads.iter().filter(|(_, _, d)| !d.resolved()).map(move |(_, _, d)| (fi, d.id.clone())))
+                .flat_map(|(fi, f)| {
+                    f.threads
+                        .iter()
+                        .filter(|(_, _, d)| !d.resolved())
+                        .map(move |(_, _, d)| (fi, d.id.clone()))
+                })
                 .collect();
             if all.is_empty() {
                 return;
             }
             let here = self.thread_cursor.and_then(|c| match self.rows.get(c) {
-                Some(Row::Thread(f, t)) => all.iter().position(|(_, id)| *id == r.files[*f].threads[*t].2.id),
+                Some(Row::Thread(f, t)) => all
+                    .iter()
+                    .position(|(_, id)| *id == r.files[*f].threads[*t].2.id),
                 _ => None,
             });
             let next = match (here, forward) {
@@ -1255,7 +1562,13 @@ impl GitLabView {
         let top = self.diff_list.logical_scroll_top().item_ix;
         let at = self
             .thread_cursor
-            .filter(|&c| self.rows.get(c).is_some_and(|r| matches!(r, Row::Thread(..))) && c >= top && c <= top + 40)
+            .filter(|&c| {
+                self.rows
+                    .get(c)
+                    .is_some_and(|r| matches!(r, Row::Thread(..)))
+                    && c >= top
+                    && c <= top + 40
+            })
             .unwrap_or(top);
         let target = if forward {
             threads.iter().find(|&&i| i > at).or(threads.first())
@@ -1276,7 +1589,10 @@ impl GitLabView {
             self.rebuild_rows(cx);
         }
         if let Some(ix) = self.rows.iter().position(|r| *r == Row::File(file)) {
-            self.diff_list.scroll_to(ListOffset { item_ix: ix, offset_in_item: px(0.) });
+            self.diff_list.scroll_to(ListOffset {
+                item_ix: ix,
+                offset_in_item: px(0.),
+            });
         }
         // Near the end the list can't put the file at the top yet: a file still
         // loading is short. Aim at it again as rows come in, for a moment.
@@ -1295,11 +1611,16 @@ impl GitLabView {
         let mono = self.mono(cx);
         match row {
             Row::File(fi) => self.file_header(&r.files[fi], fi, cx).into_any_element(),
-            Row::Message(fi) if matches!(r.files[fi].body(), Body::Binary) && is_image(r.files[fi].path()) => {
+            Row::Message(fi)
+                if matches!(r.files[fi].body(), Body::Binary) && is_image(r.files[fi].path()) =>
+            {
                 // GitLab's "2-up": old on the left in red, new on the right in green.
                 let side = |s: &Shot, border: Option<u32>| {
                     let picture = match &s.image {
-                        Some(i) => img(i.clone()).max_w(px(400.)).max_h(px(400.)).into_any_element(),
+                        Some(i) => img(i.clone())
+                            .max_w(px(400.))
+                            .max_h(px(400.))
+                            .into_any_element(),
                         // GitLab's broken image.
                         None => div()
                             .size(px(20.))
@@ -1332,7 +1653,11 @@ impl GitLabView {
                         .flex_col()
                         .items_center()
                         .gap_1()
-                        .child(div().when_some(border, |d, b| d.border_1().border_color(c(b))).child(picture))
+                        .child(
+                            div()
+                                .when_some(border, |d, b| d.border_1().border_color(c(b)))
+                                .child(picture),
+                        )
                         .child(caption)
                 };
                 let body = match self.pictures.get(&fi) {
@@ -1349,7 +1674,16 @@ impl GitLabView {
                     Some(Load::Failed(e)) => div().text_color(c(RED)).child(e.text.clone()),
                     _ => spinner("gl-picture-loading").py_0(),
                 };
-                card(div().flex().justify_center().px_4().py_4().bg(c(CARD)).child(body)).into_any_element()
+                card(
+                    div()
+                        .flex()
+                        .justify_center()
+                        .px_4()
+                        .py_4()
+                        .bg(c(CARD))
+                        .child(body),
+                )
+                .into_any_element()
             }
             Row::Message(fi) if matches!(r.files[fi].body(), Body::Pending) => {
                 let path = r.files[fi].path().to_string();
@@ -1365,7 +1699,11 @@ impl GitLabView {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(div().text_color(c(RED)).child(format!("Couldn't load the changes: {e}")))
+                        .child(
+                            div()
+                                .text_color(c(RED))
+                                .child(format!("Couldn't load the changes: {e}")),
+                        )
                         .child(
                             div()
                                 .id(SharedString::from(format!("late-retry-{fi}")))
@@ -1431,7 +1769,9 @@ impl GitLabView {
                                     .cursor_pointer()
                                     .hover(|s| s.bg(ca(0x89888d99)))
                                     .child("View file")
-                                    .on_click(move |_, window, cx| abromux_plugin::open_url(&url, window, cx)),
+                                    .on_click(move |_, window, cx| {
+                                        abromux_plugin::open_url(&url, window, cx)
+                                    }),
                             )
                         }),
                 )
@@ -1450,9 +1790,18 @@ impl GitLabView {
                                 .w(px(NUM_W * 2.))
                                 .flex_none()
                                 .flex()
-                                .when(expandable, |d| d.children(self.expand_buttons(fi, Some(hi), hidden, cx))),
+                                .when(expandable, |d| {
+                                    d.children(self.expand_buttons(fi, Some(hi), hidden, cx))
+                                }),
                         )
-                        .child(div().pl(px(18.75)).flex_1().min_w(px(0.)).truncate().child(h.header.clone())),
+                        .child(
+                            div()
+                                .pl(px(18.75))
+                                .flex_1()
+                                .min_w(px(0.))
+                                .truncate()
+                                .child(h.header.clone()),
+                        ),
                 )
                 .into_any_element()
             }
@@ -1463,13 +1812,22 @@ impl GitLabView {
                     kind: crate::diff::Kind::Context,
                     old: Some(old),
                     new: Some(new),
-                    text: text.as_ref().and_then(|t| t.lines.get(i).cloned()).unwrap_or_default(),
-                    spans: text.as_ref().and_then(|t| t.spans.get(i).cloned()).unwrap_or_default(),
+                    text: text
+                        .as_ref()
+                        .and_then(|t| t.lines.get(i).cloned())
+                        .unwrap_or_default(),
+                    spans: text
+                        .as_ref()
+                        .and_then(|t| t.spans.get(i).cloned())
+                        .unwrap_or_default(),
                     changed: vec![],
                 };
                 let (t, h) = line_highlights(&line);
                 if self.loc.parallel {
-                    let (left, right) = (self.sel_text(t.clone(), h.clone(), Group::Diff(0), ix, cx), self.sel_text(t, h, Group::Diff(1), ix, cx));
+                    let (left, right) = (
+                        self.sel_text(t.clone(), h.clone(), Group::Diff(0), ix, cx),
+                        self.sel_text(t, h, Group::Diff(1), ix, cx),
+                    );
                     let row = code(div(), mono)
                         .flex()
                         .w_full()
@@ -1488,7 +1846,10 @@ impl GitLabView {
                     .threads
                     .iter()
                     .filter(|(h, x, d)| {
-                        *h == hi && (Some(*x) == l || Some(*x) == rt) && d.resolved() && !self.open_resolved.contains(&d.id)
+                        *h == hi
+                            && (Some(*x) == l || Some(*x) == rt)
+                            && d.resolved()
+                            && !self.open_resolved.contains(&d.id)
                     })
                     .collect();
                 let gutter = folded.first().map(|(_, _, d)| {
@@ -1530,13 +1891,19 @@ impl GitLabView {
                 card(div().child(self.hover_line(key, row.children(button), cx))).into_any_element()
             }
             Row::Expand(fi) => {
-                let hidden = self.contents.get(&fi).and_then(|l| l.ready()).map(|t| t.lines.len() as u32);
+                let hidden = self
+                    .contents
+                    .get(&fi)
+                    .and_then(|l| l.ready())
+                    .map(|t| t.lines.len() as u32);
                 card(
                     code(div(), mono)
                         .flex()
                         .h(px(CODE_LINE))
                         .bg(c(HUNK_BG))
-                        .child(div().w(px(NUM_W * 2.)).flex_none().flex().children(self.expand_buttons(fi, None, hidden.unwrap_or(u32::MAX), cx))),
+                        .child(div().w(px(NUM_W * 2.)).flex_none().flex().children(
+                            self.expand_buttons(fi, None, hidden.unwrap_or(u32::MAX), cx),
+                        )),
                 )
                 .into_any_element()
             }
@@ -1547,7 +1914,9 @@ impl GitLabView {
                 let folded: Vec<_> = f
                     .threads
                     .iter()
-                    .filter(|(h, l2, d)| (*h, *l2) == (hi, li) && d.resolved() && !self.open_resolved.contains(&d.id))
+                    .filter(|(h, l2, d)| {
+                        (*h, *l2) == (hi, li) && d.resolved() && !self.open_resolved.contains(&d.id)
+                    })
                     .collect();
                 let gutter = (!folded.is_empty()).then(|| {
                     let id = folded[0].2.id.clone();
@@ -1576,7 +1945,11 @@ impl GitLabView {
                     .h_full()
                     .cursor_pointer()
                     .on_click(cx.listener(move |v, _, _, cx| {
-                        v.selected_line = if v.selected_line == Some(key) { None } else { Some(key) };
+                        v.selected_line = if v.selected_line == Some(key) {
+                            None
+                        } else {
+                            Some(key)
+                        };
                         cx.notify();
                     }))
                     .into_any_element();
@@ -1588,7 +1961,10 @@ impl GitLabView {
                     .left_0()
                     .size_full()
                     .children([Some(pick), gutter].into_iter().flatten())
-                    .children(self.comment_button(key, cx).map(|b| b.left(px(NUM_W - 22.))))
+                    .children(
+                        self.comment_button(key, cx)
+                            .map(|b| b.left(px(NUM_W - 22.))),
+                    )
                     .into_any_element();
                 let (t, h) = line_highlights(l);
                 let text = self.sel_text(t, h, Group::Diff(0), ix, cx);
@@ -1610,7 +1986,9 @@ impl GitLabView {
                     .min_w(px(0.))
                     .flex()
                     .flex_col()
-                    .when(parallel, |d| d.border_l_1().border_r_1().border_color(c(BORDER)))
+                    .when(parallel, |d| {
+                        d.border_l_1().border_r_1().border_color(c(BORDER))
+                    })
                     .children(self.thread_notes(d, Some(&path), true, true, window, cx))
                     .child(self.reply_bar(&d.id, d.resolvable(), d.resolved(), cx))
                     // GitLab's "Start another thread" on the same line, while
@@ -1621,16 +1999,34 @@ impl GitLabView {
                             .filter(|k| self.me.is_some() && self.commenting != Some(*k)),
                         |el, key| {
                             el.child(
-                                div().flex().px_4().py_3().border_t_1().border_color(c(RAISED)).bg(c(CARD)).child(
-                                    crate::edit::secondary(SharedString::from(format!("another-{}", d.id)), "Start another thread")
-                                        .on_click(cx.listener(move |v, _, window, cx| v.open_line_comment(key, window, cx))),
-                                ),
+                                div()
+                                    .flex()
+                                    .px_4()
+                                    .py_3()
+                                    .border_t_1()
+                                    .border_color(c(RAISED))
+                                    .bg(c(CARD))
+                                    .child(
+                                        crate::edit::secondary(
+                                            SharedString::from(format!("another-{}", d.id)),
+                                            "Start another thread",
+                                        )
+                                        .on_click(
+                                            cx.listener(move |v, _, window, cx| {
+                                                v.open_line_comment(key, window, cx)
+                                            }),
+                                        ),
+                                    ),
                             )
                         },
                     );
-                let empty =|| div().flex_1().bg(c(EMPTY_BG));
+                let empty = || div().flex_1().bg(c(EMPTY_BG));
                 let row = if parallel {
-                    if old_side { div().flex().child(thread).child(empty()) } else { div().flex().child(empty()).child(thread) }
+                    if old_side {
+                        div().flex().child(thread).child(empty())
+                    } else {
+                        div().flex().child(empty()).child(thread)
+                    }
                 } else {
                     div().flex().child(thread)
                 };
@@ -1654,7 +2050,9 @@ impl GitLabView {
                                     .cursor_pointer()
                                     .text_color(c(LINK))
                                     .child(match d.resolution() {
-                                        Some((who, _)) => format!("Resolved by {} · Hide thread", who.name),
+                                        Some((who, _)) => {
+                                            format!("Resolved by {} · Hide thread", who.name)
+                                        }
                                         None => "Hide thread".into(),
                                     })
                                     .on_click(cx.listener(move |v, _, _, cx| {
@@ -1666,7 +2064,14 @@ impl GitLabView {
                 )
                 .into_any_element()
             }
-            Row::End(_) => card(div().h(px(1.)).border_b_1().border_color(c(BORDER)).rounded_b(px(8.))).into_any_element(),
+            Row::End(_) => card(
+                div()
+                    .h(px(1.))
+                    .border_b_1()
+                    .border_color(c(BORDER))
+                    .rounded_b(px(8.)),
+            )
+            .into_any_element(),
             Row::Draft(_) => {
                 let form = self.line_form(cx);
                 if !self.loc.parallel {
@@ -1674,9 +2079,19 @@ impl GitLabView {
                 }
                 // Side by side, under its side's half, as threads are.
                 let old_side = self.commenting.is_some_and(|(_, _, new)| new.is_none());
-                let form = div().flex_1().min_w(px(0.)).border_l_1().border_r_1().border_color(c(BORDER)).child(form);
+                let form = div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .border_l_1()
+                    .border_r_1()
+                    .border_color(c(BORDER))
+                    .child(form);
                 let empty = div().flex_1().bg(c(EMPTY_BG));
-                let row = if old_side { div().flex().child(form).child(empty) } else { div().flex().child(empty).child(form) };
+                let row = if old_side {
+                    div().flex().child(form).child(empty)
+                } else {
+                    div().flex().child(empty).child(form)
+                };
                 card(row).into_any_element()
             }
             Row::Gap => div().h(px(16.)).into_any_element(),
@@ -1696,7 +2111,13 @@ impl GitLabView {
             let piece = |s: &str, r: Option<std::ops::Range<usize>>, bg: u32| {
                 let mut hl = vec![];
                 if let Some(r) = r {
-                    hl.push((r, HighlightStyle { background_color: Some(c(bg)), ..Default::default() }));
+                    hl.push((
+                        r,
+                        HighlightStyle {
+                            background_color: Some(c(bg)),
+                            ..Default::default()
+                        },
+                    ));
                 }
                 StyledText::new(SharedString::from(s.to_string())).with_highlights(hl)
             };
@@ -1730,33 +2151,60 @@ impl GitLabView {
                 div()
                     .id(SharedString::from(format!("fold-file-{fi}")))
                     .cursor_pointer()
-                    .child(app_icon(if folded { "chevron-right" } else { "chevron-down" }, 16., c(TEXT)))
+                    .child(app_icon(
+                        if folded {
+                            "chevron-right"
+                        } else {
+                            "chevron-down"
+                        },
+                        16.,
+                        c(TEXT),
+                    ))
                     .on_click(cx.listener(move |v, _, _, cx| v.toggle_folded(&toggle_path, cx))),
             )
             .child(div().font_weight(FontWeight::SEMIBOLD).child(name))
             .when(f.meta.deleted_file, |d| d.child("deleted"))
-            .when(f.meta.generated_file, |d| d.child(badge("Generated", c(0xa4a3a8), c(BG))))
+            .when(f.meta.generated_file, |d| {
+                d.child(badge("Generated", c(0xa4a3a8), c(BG)))
+            })
             .child(
                 div()
                     .id(SharedString::from(format!("copy-{fi}")))
                     .cursor_pointer()
                     .child(icon("copy", 14., c(MUTED)))
-                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy_path.clone()))),
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(copy_path.clone()))
+                    }),
             )
             .children(mode.map(|m| div().text_size(px(12.)).child(m)))
             .child(div().flex_1())
-            .map(|el| match self.pictures.get(&fi).and_then(|p| p.ready()).and_then(Picture::size_change) {
-                // An image: how much its size changed, and its size.
-                Some((delta, now)) => el
-                    .child(div().text_color(c(if delta < 0 { RED } else { GREEN })).child(format!(
-                        "{}{}",
-                        if delta < 0 { "−" } else { "+" },
-                        human_size(delta.unsigned_abs() as usize)
-                    )))
-                    .child(div().text_color(c(TEXT)).child(format!("({})", human_size(now)))),
-                None => el
-                    .child(div().text_color(c(GREEN)).child(format!("+{a}")))
-                    .child(div().text_color(c(RED)).child(format!("−{d}"))),
+            .map(|el| {
+                match self
+                    .pictures
+                    .get(&fi)
+                    .and_then(|p| p.ready())
+                    .and_then(Picture::size_change)
+                {
+                    // An image: how much its size changed, and its size.
+                    Some((delta, now)) => el
+                        .child(
+                            div()
+                                .text_color(c(if delta < 0 { RED } else { GREEN }))
+                                .child(format!(
+                                    "{}{}",
+                                    if delta < 0 { "−" } else { "+" },
+                                    human_size(delta.unsigned_abs() as usize)
+                                )),
+                        )
+                        .child(
+                            div()
+                                .text_color(c(TEXT))
+                                .child(format!("({})", human_size(now))),
+                        ),
+                    None => el
+                        .child(div().text_color(c(GREEN)).child(format!("+{a}")))
+                        .child(div().text_color(c(RED)).child(format!("−{d}"))),
+                }
             })
             .child(
                 div()
@@ -1769,7 +2217,11 @@ impl GitLabView {
                     .rounded(px(4.))
                     .border_2()
                     // `v` marks the file being read: its Viewed is ringed.
-                    .border_color(if current { c(FOCUS) } else { gpui::transparent_black() })
+                    .border_color(if current {
+                        c(FOCUS)
+                    } else {
+                        gpui::transparent_black()
+                    })
                     .cursor_pointer()
                     .child(checkbox(viewed))
                     .child("Viewed")
@@ -1802,7 +2254,9 @@ impl GitLabView {
                         .cursor_pointer()
                         .hover(|s| s.bg(ca(0x89888d66)))
                         .child(icon("external-link", 14., c(TEXT)))
-                        .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
+                        .tooltip(move |window, cx| {
+                            gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+                        })
                         .on_click(move |_, window, cx| abromux_plugin::open_url(&url, window, cx)),
                 )
             })
@@ -1815,7 +2269,12 @@ impl GitLabView {
         if f.meta.deleted_file {
             return None;
         }
-        let project = r.mr.web_url.split("/-/").next().filter(|p| !p.is_empty())?.to_string();
+        let project =
+            r.mr.web_url
+                .split("/-/")
+                .next()
+                .filter(|p| !p.is_empty())?
+                .to_string();
         let sha = r.mr.diff_refs.as_ref()?.head_sha.clone();
         let short = sha.get(..8).unwrap_or(&sha).to_string();
         Some((format!("{project}/-/blob/{sha}/{}", f.meta.new_path), short))
@@ -1823,50 +2282,73 @@ impl GitLabView {
 
     /// A diff line that tells the view when the pointer is on it, so only
     /// that line has the comment bubble (one per line costs scrolling time).
-    fn hover_line(&self, key: crate::edit::LineKey, row: Div, cx: &mut Context<Self>) -> Stateful<Div> {
-        row.id(SharedString::from(format!("line-{}-{:?}-{:?}", key.0, key.1, key.2)))
-            .on_hover(cx.listener(move |v, on: &bool, _, cx| {
-                if *on {
-                    v.hovered_line = Some(key);
-                } else if v.hovered_line == Some(key) {
-                    v.hovered_line = None;
-                }
-                cx.notify();
-            }))
+    fn hover_line(
+        &self,
+        key: crate::edit::LineKey,
+        row: Div,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        row.id(SharedString::from(format!(
+            "line-{}-{:?}-{:?}",
+            key.0, key.1, key.2
+        )))
+        .on_hover(cx.listener(move |v, on: &bool, _, cx| {
+            if *on {
+                v.hovered_line = Some(key);
+            } else if v.hovered_line == Some(key) {
+                v.hovered_line = None;
+            }
+            cx.notify();
+        }))
     }
 
     /// GitLab's speech bubble on the hovered line: a new thread there. Only
     /// on the latest version, where GitLab starts threads; to be placed.
-    fn comment_button(&self, key: crate::edit::LineKey, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    fn comment_button(
+        &self,
+        key: crate::edit::LineKey,
+        cx: &mut Context<Self>,
+    ) -> Option<Stateful<Div>> {
         let latest = self.compare == crate::Compare::default();
         if !latest || self.loc.iid.is_none() || self.hovered_line != Some(key) {
             return None;
         }
-        Some(div()
-            .id(SharedString::from(format!("comment-{}-{:?}-{:?}", key.0, key.1, key.2)))
-            .absolute()
-            .top(px(1.))
-            .size(px(18.))
-            .rounded(px(4.))
-            .bg(c(0x1068bf))
-            .flex()
-            .items_center()
-            .justify_center()
-            .cursor_pointer()
-            .child(icon("comment", 12., c(HEADING)))
-            .tooltip(hint("Add a comment to this line"))
-            .on_click(cx.listener(move |v, _, window, cx| {
-                // Not also the number's click under it (selecting the line).
-                cx.stop_propagation();
-                if v.compare == crate::Compare::default() {
-                    v.open_line_comment(key, window, cx)
-                }
-            })))
+        Some(
+            div()
+                .id(SharedString::from(format!(
+                    "comment-{}-{:?}-{:?}",
+                    key.0, key.1, key.2
+                )))
+                .absolute()
+                .top(px(1.))
+                .size(px(18.))
+                .rounded(px(4.))
+                .bg(c(0x1068bf))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .child(icon("comment", 12., c(HEADING)))
+                .tooltip(hint("Add a comment to this line"))
+                .on_click(cx.listener(move |v, _, window, cx| {
+                    // Not also the number's click under it (selecting the line).
+                    cx.stop_propagation();
+                    if v.compare == crate::Compare::default() {
+                        v.open_line_comment(key, window, cx)
+                    }
+                })),
+        )
     }
 
     /// GitLab's expand buttons in a hunk's (or the end's) number gutter:
     /// 20 more lines, or all of them.
-    fn expand_buttons(&self, fi: usize, hunk: Option<usize>, hidden: u32, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn expand_buttons(
+        &self,
+        fi: usize,
+        hunk: Option<usize>,
+        hidden: u32,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let button = |id: String, icon_name: &'static str, n: u32, cx: &mut Context<Self>| {
             div()
                 .id(SharedString::from(id))
@@ -1883,7 +2365,11 @@ impl GitLabView {
                 .into_any_element()
         };
         let key = format!("{fi}-{}", hunk.map_or("end".into(), |h| h.to_string()));
-        let more = if hunk.is_some() { "expand-up" } else { "expand-down" };
+        let more = if hunk.is_some() {
+            "expand-up"
+        } else {
+            "expand-down"
+        };
         if hidden > 20 {
             vec![
                 button(format!("more-{key}"), more, 20, cx),
@@ -1896,7 +2382,13 @@ impl GitLabView {
 
     /// Show `n` more unchanged lines above hunk `hunk`, or after the last
     /// one; the file's text is fetched the first time.
-    pub(crate) fn expand(&mut self, fi: usize, hunk: Option<usize>, n: u32, cx: &mut Context<Self>) {
+    pub(crate) fn expand(
+        &mut self,
+        fi: usize,
+        hunk: Option<usize>,
+        n: u32,
+        cx: &mut Context<Self>,
+    ) {
         let slot = match hunk {
             Some(h) => self.above.entry((fi, h)).or_insert(0),
             None => self.below.entry(fi).or_insert(0),
@@ -1910,29 +2402,46 @@ impl GitLabView {
 
     /// Fetch the images among the binary files, for their previews.
     pub(crate) fn fetch_pictures(&mut self, cx: &mut Context<Self>) {
-        let (Some(r), Some(c)) = (self.shown(), self.client.clone()) else { return };
-        let Some(refs) = r.mr.diff_refs.clone() else { return };
+        let (Some(r), Some(c)) = (self.shown(), self.client.clone()) else {
+            return;
+        };
+        let Some(refs) = r.mr.diff_refs.clone() else {
+            return;
+        };
         for (fi, f) in r.files.iter().enumerate() {
-            if !matches!(f.body(), Body::Binary) || !is_image(f.path()) || self.pictures.contains_key(&fi) {
+            if !matches!(f.body(), Body::Binary)
+                || !is_image(f.path())
+                || self.pictures.contains_key(&fi)
+            {
                 continue;
             }
             // The old version from the base, the new one from the head.
             let old = (!f.meta.new_file).then(|| (f.meta.old_path.clone(), refs.base_sha.clone()));
-            let new = (!f.meta.deleted_file).then(|| (f.meta.new_path.clone(), refs.head_sha.clone()));
+            let new =
+                (!f.meta.deleted_file).then(|| (f.meta.new_path.clone(), refs.head_sha.clone()));
             let (c, project) = (c.clone(), r.mr.project_id);
             self.pictures.insert(fi, Load::Loading);
             cx.spawn(async move |this, cx| {
                 let got = cx
                     .background_spawn(async move {
-                        let shot = |side: Option<(String, String)>| -> anyhow::Result<Option<Shot>> {
-                            let Some((path, sha)) = side else { return Ok(None) };
-                            Ok(Some(Shot::of(c.raw_bytes(project, &path, &sha)?)))
-                        };
-                        anyhow::Ok(Picture { old: shot(old)?, new: shot(new)? })
+                        let shot =
+                            |side: Option<(String, String)>| -> anyhow::Result<Option<Shot>> {
+                                let Some((path, sha)) = side else {
+                                    return Ok(None);
+                                };
+                                Ok(Some(Shot::of(c.raw_bytes(project, &path, &sha)?)))
+                            };
+                        anyhow::Ok(Picture {
+                            old: shot(old)?,
+                            new: shot(new)?,
+                        })
                     })
                     .await;
                 this.update(cx, |v, cx| {
-                    v.pictures.insert(fi, got.map_or_else(|e| Load::Failed(Failure::of(&e)), Load::Ready));
+                    v.pictures.insert(
+                        fi,
+                        got.map_or_else(|e| Load::Failed(Failure::of(&e)), Load::Ready),
+                    );
                     cx.notify();
                 })
                 .ok();
@@ -1946,7 +2455,9 @@ impl GitLabView {
     /// of them doesn't fire a thousand requests at once.
     pub(crate) fn fetch_late(&mut self, fi: usize, cx: &mut Context<Self>) {
         const AT_ONCE: usize = 6;
-        let (Some(r), Some(c)) = (self.review.ready().cloned(), self.client.clone()) else { return };
+        let (Some(r), Some(c)) = (self.review.ready().cloned(), self.client.clone()) else {
+            return;
+        };
         let Some(f) = r.files.get(fi) else { return };
         let path = f.path().to_string();
         if self.late.contains_key(&path) || f.late.get().is_some() {
@@ -1956,16 +2467,30 @@ impl GitLabView {
             // Asked again when it's drawn after one of these lands.
             return;
         }
-        let Some(refs) = r.mr.diff_refs.clone() else { return };
+        let Some(refs) = r.mr.diff_refs.clone() else {
+            return;
+        };
         self.late.insert(path.clone(), None);
-        let (project, old_path, new_path) = (r.mr.project_id, f.meta.old_path.clone(), f.meta.new_path.clone());
+        let (project, old_path, new_path) = (
+            r.mr.project_id,
+            f.meta.old_path.clone(),
+            f.meta.new_path.clone(),
+        );
         let (new_file, deleted) = (f.meta.new_file, f.meta.deleted_file);
         let slot = f.late.clone();
         cx.spawn(async move |this, cx| {
             let got = cx
                 .background_spawn(async move {
-                    let old = if new_file { None } else { c.raw_maybe(project, &old_path, &refs.base_sha)? };
-                    let new = if deleted { None } else { c.raw_maybe(project, &new_path, &refs.head_sha)? };
+                    let old = if new_file {
+                        None
+                    } else {
+                        c.raw_maybe(project, &old_path, &refs.base_sha)?
+                    };
+                    let new = if deleted {
+                        None
+                    } else {
+                        c.raw_maybe(project, &new_path, &refs.head_sha)?
+                    };
                     let status = match (&old, &new) {
                         (None, Some(_)) => Some("added"),
                         (Some(_), None) => Some("deleted"),
@@ -1993,8 +2518,12 @@ impl GitLabView {
     }
 
     fn fetch_text(&mut self, fi: usize, cx: &mut Context<Self>) {
-        let (Some(r), Some(c)) = (self.shown(), self.client.clone()) else { return };
-        let Some(sha) = r.mr.diff_refs.as_ref().map(|d| d.head_sha.clone()) else { return };
+        let (Some(r), Some(c)) = (self.shown(), self.client.clone()) else {
+            return;
+        };
+        let Some(sha) = r.mr.diff_refs.as_ref().map(|d| d.head_sha.clone()) else {
+            return;
+        };
         let (project, path) = (r.mr.project_id, r.files[fi].meta.new_path.clone());
         self.contents.insert(fi, Load::Loading);
         cx.spawn(async move |this, cx| {
@@ -2008,7 +2537,13 @@ impl GitLabView {
                 })
                 .await;
             this.update(cx, |v, cx| {
-                v.contents.insert(fi, got.map_or_else(|e| Load::Failed(Failure::of(&e)), |t| Load::Ready(std::rc::Rc::new(t))));
+                v.contents.insert(
+                    fi,
+                    got.map_or_else(
+                        |e| Load::Failed(Failure::of(&e)),
+                        |t| Load::Ready(std::rc::Rc::new(t)),
+                    ),
+                );
                 v.rebuild_rows(cx);
             })
             .ok();
@@ -2027,7 +2562,10 @@ impl GitLabView {
 
     pub(crate) fn toggle_folded(&mut self, path: &str, cx: &mut Context<Self>) {
         let r = self.shown();
-        let now = r.as_ref().and_then(|r| r.files.iter().find(|f| f.path() == path)).map(|f| self.is_folded(f));
+        let now = r
+            .as_ref()
+            .and_then(|r| r.files.iter().find(|f| f.path() == path))
+            .map(|f| self.is_folded(f));
         if let Some(now) = now {
             self.folded.insert(path.to_string(), !now);
             self.rebuild_rows(cx);
@@ -2039,13 +2577,19 @@ impl GitLabView {
     /// Unmarking is the checkbox's.
     pub(crate) fn mark_viewed_here(&mut self, cx: &mut Context<Self>) {
         let Some(r) = self.shown() else { return };
-        let Some(fi) = self.current_file() else { return };
-        let Some(path) = r.files.get(fi).map(|f| f.path().to_string()) else { return };
+        let Some(fi) = self.current_file() else {
+            return;
+        };
+        let Some(path) = r.files.get(fi).map(|f| f.path().to_string()) else {
+            return;
+        };
         if !self.loc.viewed.contains(&path) {
             self.toggle_viewed(&path, cx);
         }
         let n = r.files.len();
-        let next = (1..n).map(|d| (fi + d) % n).find(|&i| !self.loc.viewed.iter().any(|p| p == r.files[i].path()));
+        let next = (1..n)
+            .map(|d| (fi + d) % n)
+            .find(|&i| !self.loc.viewed.iter().any(|p| p == r.files[i].path()));
         // All viewed: stay on this one.
         self.scroll_to_file(next.unwrap_or(fi), cx);
     }
@@ -2077,7 +2621,12 @@ impl GitLabView {
             open: &|id: &str| self.open_resolved.contains(id),
             above: &|f, h| self.above.get(&(f, h)).copied().unwrap_or(0),
             below: &|f| self.below.get(&f).copied().unwrap_or(0),
-            lines: &|f| self.contents.get(&f).and_then(|t| t.ready()).map(|t| t.lines.len() as u32),
+            lines: &|f| {
+                self.contents
+                    .get(&f)
+                    .and_then(|t| t.ready())
+                    .map(|t| t.lines.len() as u32)
+            },
             parallel: self.loc.parallel,
             draft: self.commenting,
         };
@@ -2119,10 +2668,16 @@ impl GitLabView {
         });
         self.rows = rows;
         self.diff_list.reset(self.rows.len());
-        let jump = self.jump.filter(|(_, at)| at.elapsed() < std::time::Duration::from_secs(5)).map(|(f, _)| f);
+        let jump = self
+            .jump
+            .filter(|(_, at)| at.elapsed() < std::time::Duration::from_secs(5))
+            .map(|(f, _)| f);
         let new_top = match jump.and_then(|f| self.rows.iter().position(|r| *r == Row::File(f))) {
             Some(ix) => {
-                self.diff_list.scroll_to(ListOffset { item_ix: ix, offset_in_item: px(0.) });
+                self.diff_list.scroll_to(ListOffset {
+                    item_ix: ix,
+                    offset_in_item: px(0.),
+                });
                 cx.notify();
                 return;
             }
@@ -2131,7 +2686,10 @@ impl GitLabView {
         if let Some(ix) = new_top {
             let kept = anchor.is_some_and(|a| same(&self.rows[ix], &a));
             let offset = if kept { top.offset_in_item } else { px(0.) };
-            self.diff_list.scroll_to(ListOffset { item_ix: ix, offset_in_item: offset });
+            self.diff_list.scroll_to(ListOffset {
+                item_ix: ix,
+                offset_in_item: offset,
+            });
         }
         cx.notify();
     }
@@ -2140,7 +2698,15 @@ impl GitLabView {
 /// GitLab's thin lines down the tree, one under each enclosing folder's
 /// chevron.
 fn tree_guides(depth: usize) -> impl Iterator<Item = Div> {
-    (0..depth).map(|k| div().absolute().top_0().bottom_0().left(px(11. + k as f32 * 16.)).w(px(1.)).bg(c(RAISED)))
+    (0..depth).map(|k| {
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(11. + k as f32 * 16.))
+            .w(px(1.))
+            .bg(c(RAISED))
+    })
 }
 
 #[cfg(test)]
@@ -2152,9 +2718,21 @@ mod tests {
     #[test]
     fn tree_width_leaves_the_diff_room() {
         assert_eq!(clamp_tree_width(px(500.), px(1400.)), px(500.));
-        assert_eq!(clamp_tree_width(px(50.), px(1400.)), px(200.), "not narrower than 200");
-        assert_eq!(clamp_tree_width(px(1300.), px(1400.)), px(1000.), "400 left for the diff");
-        assert_eq!(clamp_tree_width(px(500.), px(500.)), px(200.), "a narrow tab: the least");
+        assert_eq!(
+            clamp_tree_width(px(50.), px(1400.)),
+            px(200.),
+            "not narrower than 200"
+        );
+        assert_eq!(
+            clamp_tree_width(px(1300.), px(1400.)),
+            px(1000.),
+            "400 left for the diff"
+        );
+        assert_eq!(
+            clamp_tree_width(px(500.), px(500.)),
+            px(200.),
+            "a narrow tab: the least"
+        );
     }
     use crate::{review::Review, types::*};
 
@@ -2170,7 +2748,11 @@ mod tests {
             notes: vec![Note {
                 resolvable: true,
                 resolved,
-                position: Some(Position { new_path: Some(path.into()), new_line: Some(new_line), ..Default::default() }),
+                position: Some(Position {
+                    new_path: Some(path.into()),
+                    new_line: Some(new_line),
+                    ..Default::default()
+                }),
                 ..Default::default()
             }],
             ..Default::default()
@@ -2178,18 +2760,35 @@ mod tests {
         Review::build(
             MergeRequest::default(),
             vec![
-                FileDiff { new_file: true, ..diff("src/b.rs", "@@ -0,0 +1,2 @@\n+x\n+y\n") },
+                FileDiff {
+                    new_file: true,
+                    ..diff("src/b.rs", "@@ -0,0 +1,2 @@\n+x\n+y\n")
+                },
                 diff("a/README.md", "@@ -1 +1 @@\n-a\n+b\n"),
                 diff("z.txt", ""),
             ],
-            vec![thread("t1", "src/b.rs", 1, false), thread("t2", "src/b.rs", 2, true)],
+            vec![
+                thread("t1", "src/b.rs", 1, false),
+                thread("t2", "src/b.rs", 2, true),
+            ],
             Approvals::default(),
             vec![],
         )
     }
 
     fn plain(r: &Review) -> Vec<Row> {
-        rows(r, &Shape { folded: &|_| false, open: &|_| false, above: &|_, _| 0, below: &|_| 0, lines: &|_| None, draft: None, parallel: false })
+        rows(
+            r,
+            &Shape {
+                folded: &|_| false,
+                open: &|_| false,
+                above: &|_, _| 0,
+                below: &|_| 0,
+                lines: &|_| None,
+                draft: None,
+                parallel: false,
+            },
+        )
     }
 
     #[test]
@@ -2198,17 +2797,43 @@ mod tests {
         let rows = plain(&r);
         use Row::*;
         // No header for a hunk at the top of the file, as in GitLab.
-        assert_eq!(rows[..6], [File(0), Line(0, 0, 0), Thread(0, 0), Line(0, 0, 1), End(0), Gap]);
+        assert_eq!(
+            rows[..6],
+            [
+                File(0),
+                Line(0, 0, 0),
+                Thread(0, 0),
+                Line(0, 0, 1),
+                End(0),
+                Gap
+            ]
+        );
         // The resolved one opens on request.
         let open = super::rows(
             &r,
-            &Shape { folded: &|_| false, open: &|id| id == "t2", above: &|_, _| 0, below: &|_| 0, lines: &|_| None, draft: None, parallel: false },
+            &Shape {
+                folded: &|_| false,
+                open: &|id| id == "t2",
+                above: &|_, _| 0,
+                below: &|_| 0,
+                lines: &|_| None,
+                draft: None,
+                parallel: false,
+            },
         );
         assert_eq!(open[3..5], [Line(0, 0, 1), Thread(0, 1)]);
         // A folded file is just its header.
         let folded = super::rows(
             &r,
-            &Shape { folded: &|f| f.path() == "src/b.rs", open: &|_| false, above: &|_, _| 0, below: &|_| 0, lines: &|_| None, draft: None, parallel: false },
+            &Shape {
+                folded: &|f| f.path() == "src/b.rs",
+                open: &|_| false,
+                above: &|_, _| 0,
+                below: &|_| 0,
+                lines: &|_| None,
+                draft: None,
+                parallel: false,
+            },
         );
         assert_eq!(folded[..2], [File(0), Gap]);
         // A file without hunks says why.
@@ -2236,24 +2861,79 @@ mod tests {
         assert_eq!(before[..2], [File(0), Hunk(0, 0, 9)]);
         assert!(before.contains(&Expand(0)));
         // 5 shown above, with old numbers 2 ahead; 3 after the hunk of a 30-line file.
-        let shape = Shape { folded: &|_| false, open: &|_| false, above: &|_, _| 5, below: &|_| 3, lines: &|_| Some(30), draft: None, parallel: false };
+        let shape = Shape {
+            folded: &|_| false,
+            open: &|_| false,
+            above: &|_, _| 5,
+            below: &|_| 3,
+            lines: &|_| Some(30),
+            draft: None,
+            parallel: false,
+        };
         let rows = super::rows(&r, &shape);
         assert_eq!(
             rows[..7],
-            [File(0), Hunk(0, 0, 4), Context(0, 5, 7), Context(0, 6, 8), Context(0, 7, 9), Context(0, 8, 10), Context(0, 9, 11)]
+            [
+                File(0),
+                Hunk(0, 0, 4),
+                Context(0, 5, 7),
+                Context(0, 6, 8),
+                Context(0, 7, 9),
+                Context(0, 8, 10),
+                Context(0, 9, 11)
+            ]
         );
-        let after: Vec<_> = rows.iter().skip_while(|r| !matches!(r, Line(0, 0, 2))).skip(1).copied().collect();
-        assert_eq!(after, [Context(0, 12, 14), Context(0, 13, 15), Context(0, 14, 16), Expand(0), End(0), Gap]);
+        let after: Vec<_> = rows
+            .iter()
+            .skip_while(|r| !matches!(r, Line(0, 0, 2)))
+            .skip(1)
+            .copied()
+            .collect();
+        assert_eq!(
+            after,
+            [
+                Context(0, 12, 14),
+                Context(0, 13, 15),
+                Context(0, 14, 16),
+                Expand(0),
+                End(0),
+                Gap
+            ]
+        );
         // All of it: no header, no button.
-        let all = Shape { folded: &|_| false, open: &|_| false, above: &|_, _| u32::MAX, below: &|_| u32::MAX, lines: &|_| Some(12), draft: None, parallel: false };
+        let all = Shape {
+            folded: &|_| false,
+            open: &|_| false,
+            above: &|_, _| u32::MAX,
+            below: &|_| u32::MAX,
+            lines: &|_| Some(12),
+            draft: None,
+            parallel: false,
+        };
         let rows = super::rows(&r, &all);
-        assert!(!rows.iter().any(|r| matches!(r, Hunk(..) | Expand(_))), "{rows:?}");
-        assert_eq!(rows.iter().filter(|r| matches!(r, Context(..))).count(), 9 + 1);
+        assert!(
+            !rows.iter().any(|r| matches!(r, Hunk(..) | Expand(_))),
+            "{rows:?}"
+        );
+        assert_eq!(
+            rows.iter().filter(|r| matches!(r, Context(..))).count(),
+            9 + 1
+        );
         // Side by side: the changed line pairs up with its replacement.
-        let side = Shape { parallel: true, ..all };
+        let side = Shape {
+            parallel: true,
+            ..all
+        };
         let rows = super::rows(&r, &side);
-        let pairs: Vec<_> = rows.iter().filter(|r| matches!(r, Pair(..))).copied().collect();
-        assert_eq!(pairs, [Pair(0, 0, Some(0), Some(0)), Pair(0, 0, Some(1), Some(2))]);
+        let pairs: Vec<_> = rows
+            .iter()
+            .filter(|r| matches!(r, Pair(..)))
+            .copied()
+            .collect();
+        assert_eq!(
+            pairs,
+            [Pair(0, 0, Some(0), Some(0)), Pair(0, 0, Some(1), Some(2))]
+        );
     }
 
     #[test]
@@ -2285,12 +2965,17 @@ mod tests {
                 TreeItem::File { name, depth, .. } => format!("{depth}f {name}"),
             })
             .collect();
-        assert_eq!(items, ["0d a", "1f README.md", "0d src", "1f b.rs", "0f z.txt"]);
+        assert_eq!(
+            items,
+            ["0d a", "1f README.md", "0d src", "1f b.rs", "0f z.txt"]
+        );
         // A folded folder keeps its row, not its files.
         let folded: Vec<String> = tree_folded(&review(), "", &|p| p == "src")
             .into_iter()
             .map(|t| match t {
-                TreeItem::Folder { name, folded, .. } => format!("{name}{}", if folded { "+" } else { "" }),
+                TreeItem::Folder { name, folded, .. } => {
+                    format!("{name}{}", if folded { "+" } else { "" })
+                }
                 TreeItem::File { name, .. } => name,
             })
             .collect();

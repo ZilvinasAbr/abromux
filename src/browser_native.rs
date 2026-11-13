@@ -184,7 +184,9 @@ pub fn download_forget(url: &str) {
 }
 
 extern "C" fn on_open_url(url: *const c_char) -> bool {
-    let Some(url) = (unsafe { owned(url) }) else { return false };
+    let Some(url) = (unsafe { owned(url) }) else {
+        return false;
+    };
     std::panic::catch_unwind(|| abromux_plugin::caught_url(&url)).unwrap_or(false)
 }
 

@@ -81,17 +81,31 @@ fn commands(project: Option<&Path>, cx: &App) -> Vec<Cmd> {
     let gitlab = crate::plugins::enabled("gitlab", cx);
     let builtin = keymap::ACTIONS
         .iter()
-        .filter(|a| gitlab || !matches!(a.name, "toggleMergeRequests" | "goToMergeRequest" | "refreshMergeRequests"))
+        .filter(|a| {
+            gitlab
+                || !matches!(
+                    a.name,
+                    "toggleMergeRequests" | "goToMergeRequest" | "refreshMergeRequests"
+                )
+        })
         .filter_map(|a| a.title.map(|t| (t.to_string(), None, vec![], (a.action)())));
-    let plugins = crate::plugins::all().iter().filter(|p| crate::plugins::enabled(p.id, cx)).flat_map(|p| -> Vec<Cmd> {
-        let action = Box::new(keymap::OpenPlugin { id: p.id.into() });
-        let mut cmds: Vec<Cmd> = vec![(p.title.into(), None, vec![p.id.into()], action)];
-        if let Some(title) = p.open_link {
-            let action = Box::new(keymap::OpenPluginLink { id: p.id.into() });
-            cmds.push((title.into(), None, vec![p.id.into(), "url".into(), "link".into(), "paste".into()], action));
-        }
-        cmds
-    });
+    let plugins = crate::plugins::all()
+        .iter()
+        .filter(|p| crate::plugins::enabled(p.id, cx))
+        .flat_map(|p| -> Vec<Cmd> {
+            let action = Box::new(keymap::OpenPlugin { id: p.id.into() });
+            let mut cmds: Vec<Cmd> = vec![(p.title.into(), None, vec![p.id.into()], action)];
+            if let Some(title) = p.open_link {
+                let action = Box::new(keymap::OpenPluginLink { id: p.id.into() });
+                cmds.push((
+                    title.into(),
+                    None,
+                    vec![p.id.into(), "url".into(), "link".into(), "paste".into()],
+                    action,
+                ));
+            }
+            cmds
+        });
     let builtin = builtin.chain(plugins);
     // A project file that doesn't parse shows its error as a command.
     let local = project.map(|p| (p, settings::read_project(p)));
@@ -226,7 +240,10 @@ impl AbroMux {
             window,
             |this, input, ev: &InputEvent, _, cx| match ev {
                 InputEvent::Change
-                    if this.palette.as_ref().is_some_and(|p| matches!(p.mode, Mode::NewFolder | Mode::OpenLink(_))) =>
+                    if this
+                        .palette
+                        .as_ref()
+                        .is_some_and(|p| matches!(p.mode, Mode::NewFolder | Mode::OpenLink(_))) =>
                 {
                     // The line under the input follows what's typed.
                     cx.notify()
@@ -308,11 +325,16 @@ impl AbroMux {
         }
         let Some(&(ix, _)) = p.matches.get(p.selected) else {
             let typed = p.input.read(cx).value().to_string();
-            if p.mode == Mode::MergeRequests && crate::gitlab::model::MrKey::parse(&typed).is_some() {
+            if p.mode == Mode::MergeRequests && crate::gitlab::model::MrKey::parse(&typed).is_some()
+            {
                 cx.notify();
                 return {
                     if let Err(e) = self.open_mr_ref(&typed, window, cx) {
-                        gpui_component::WindowExt::push_notification(window, gpui_component::notification::Notification::error(format!("{e:#}")), cx);
+                        gpui_component::WindowExt::push_notification(
+                            window,
+                            gpui_component::notification::Notification::error(format!("{e:#}")),
+                            cx,
+                        );
                     }
                 };
             }
@@ -497,7 +519,11 @@ impl AbroMux {
             }
             Mode::NewFolder => {
                 let typed = crate::one_line(&p.input.read(cx).value());
-                let name = if typed.is_empty() { &p.suggested } else { &typed };
+                let name = if typed.is_empty() {
+                    &p.suggested
+                } else {
+                    &typed
+                };
                 let root = crate::folder::root(cx.global::<Settings>());
                 let dir = root.join(crate::folder::slug(name));
                 format!(
@@ -509,10 +535,17 @@ impl AbroMux {
             Mode::OpenLink(id) => {
                 let url = p.input.read(cx).value().trim().to_string();
                 let plugin = crate::plugins::find(id);
-                let what = plugin.and_then(|pl| pl.open_link).unwrap_or("Open link").trim_end_matches('…');
+                let what = plugin
+                    .and_then(|pl| pl.open_link)
+                    .unwrap_or("Open link")
+                    .trim_end_matches('…');
                 match plugin {
-                    _ if url.is_empty() => format!("{what}: paste its link  ·  Esc to cancel").into(),
-                    Some(pl) if (pl.claims)(&url) => "Enter to open it in a new tab  ·  Esc to cancel".into(),
+                    _ if url.is_empty() => {
+                        format!("{what}: paste its link  ·  Esc to cancel").into()
+                    }
+                    Some(pl) if (pl.claims)(&url) => {
+                        "Enter to open it in a new tab  ·  Esc to cancel".into()
+                    }
                     _ => format!("Not a link this opens ({what})  ·  Esc to cancel").into(),
                 }
             }

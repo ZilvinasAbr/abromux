@@ -9,7 +9,9 @@ use gpui::{prelude::*, *};
 static ZOOM: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// The zoom levels ⌘= and ⌘- step through, as a browser's.
-pub const ZOOMS: [f32; 13] = [0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+pub const ZOOMS: [f32; 13] = [
+    0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
+];
 
 fn zoom_file() -> Option<std::path::PathBuf> {
     Some(crate::cache::root()?.join("zoom"))
@@ -67,7 +69,10 @@ pub struct Zoomed {
 
 impl Zoomed {
     pub fn new(child: impl IntoElement, window: &Window) -> Self {
-        Self { child: child.into_any_element(), rem: window.rem_size() * zoom() }
+        Self {
+            child: child.into_any_element(),
+            rem: window.rem_size() * zoom(),
+        }
     }
 }
 
@@ -98,7 +103,12 @@ impl Element for Zoomed {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, ()) {
-        (window.with_rem_size(Some(self.rem), |window| self.child.request_layout(window, cx)), ())
+        (
+            window.with_rem_size(Some(self.rem), |window| {
+                self.child.request_layout(window, cx)
+            }),
+            (),
+        )
     }
 
     fn prepaint(
@@ -177,8 +187,12 @@ pub const NUM_W: f32 = 50.;
 /// Code text: the mono font at GitLab's size, without ligatures (GitLab
 /// Mono has none; a terminal font may turn `->` into an arrow).
 pub fn code(mut d: Div, mono: SharedString) -> Div {
-    d.text_style().get_or_insert_with(Default::default).font_features = Some(FontFeatures::disable_ligatures());
-    d.font_family(mono).text_size(px(CODE_SIZE)).line_height(px(CODE_LINE))
+    d.text_style()
+        .get_or_insert_with(Default::default)
+        .font_features = Some(FontFeatures::disable_ligatures());
+    d.font_family(mono)
+        .text_size(px(CODE_SIZE))
+        .line_height(px(CODE_LINE))
 }
 
 /// Markdown (descriptions, notes) with GitLab's code blocks: the code
@@ -246,7 +260,9 @@ pub fn when(iso: &str) -> Stateful<Div> {
     div()
         .id(SharedString::from(format!("t-{iso}")))
         .child(crate::time::ago(iso, crate::time::now()))
-        .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(exact.clone()).build(window, cx))
+        .tooltip(move |window, cx| {
+            gpui_component::tooltip::Tooltip::new(exact.clone()).build(window, cx)
+        })
 }
 
 /// A hover hint, as GitLab's buttons have.
@@ -275,8 +291,16 @@ pub fn hex(s: &str) -> Hsla {
 /// A label as GitLab 19.5 draws it: a pill in its color with its text
 /// color, scoped ones (`priority::high`) included.
 pub fn label_pill(l: &crate::types::Label) -> Div {
-    let bg = if l.color.is_empty() { c(RAISED) } else { hex(&l.color) };
-    let fg = if l.text_color.is_empty() { c(TEXT) } else { hex(&l.text_color) };
+    let bg = if l.color.is_empty() {
+        c(RAISED)
+    } else {
+        hex(&l.color)
+    };
+    let fg = if l.text_color.is_empty() {
+        c(TEXT)
+    } else {
+        hex(&l.text_color)
+    };
     div()
         .px(px(6.))
         .rounded(px(6.))
@@ -307,8 +331,17 @@ pub fn branch(name: &str, mono: SharedString) -> Div {
 
 /// `@bob` in a system note: orange for you, blue for others.
 pub fn mention(name: &str, me: bool) -> Div {
-    let (bg, fg) = if me { (0x7d2d0e, 0xfada9c) } else { (0x254581, 0xc8e0f9) };
-    div().px(px(2.)).rounded(px(4.)).bg(c(bg)).text_color(c(fg)).child(name.to_string())
+    let (bg, fg) = if me {
+        (0x7d2d0e, 0xfada9c)
+    } else {
+        (0x254581, 0xc8e0f9)
+    };
+    div()
+        .px(px(2.))
+        .rounded(px(4.))
+        .bg(c(bg))
+        .text_color(c(fg))
+        .child(name.to_string())
 }
 
 /// One of the plugin's icons (assets/), tinted.
@@ -365,13 +398,15 @@ pub fn file_icon(path: &str, size: f32) -> Svg {
 
 /// GitLab's loading spinner, centered with some room around it.
 pub fn spinner(id: &'static str) -> Div {
-    div().flex().justify_center().py_6().child(
-        icon("loader", 24., c(MUTED)).with_animation(
+    div()
+        .flex()
+        .justify_center()
+        .py_6()
+        .child(icon("loader", 24., c(MUTED)).with_animation(
             id,
             Animation::new(std::time::Duration::from_millis(800)).repeat(),
             |s, t| s.with_transformation(Transformation::rotate(percentage(t))),
-        ),
-    )
+        ))
 }
 
 /// GitLab's "Viewed"-style checkbox.

@@ -15,8 +15,17 @@ fn every_file_of_a_huge_merge_request() {
         eprintln!("skipped: set ABROMUX_GITLAB_LIVE=1 to read the local GitLab");
         return;
     }
-    let c = Client::new("http://localhost:8929", "glpat-abromux-dev-bob-token", Arc::new(Curl));
-    let mr = c.merge_requests(Scope::All).unwrap().into_iter().find(|m| m.title == "Vendor everything").expect("!9");
+    let c = Client::new(
+        "http://localhost:8929",
+        "glpat-abromux-dev-bob-token",
+        Arc::new(Curl),
+    );
+    let mr = c
+        .merge_requests(Scope::All)
+        .unwrap()
+        .into_iter()
+        .find(|m| m.title == "Vendor everything")
+        .expect("!9");
     let r = load_review(&c, mr.project_id, mr.iid).unwrap();
     // GitLab's diff stops at 1000; GraphQL lists the rest, with their counts.
     assert_eq!(r.files.len(), 1203);
@@ -25,13 +34,25 @@ fn every_file_of_a_huge_merge_request() {
         (a + x, d + y)
     });
     assert_eq!((added, removed), (70001, 0));
-    let pending: Vec<_> = r.files.iter().filter(|f| *f.body() == Body::Pending).collect();
+    let pending: Vec<_> = r
+        .files
+        .iter()
+        .filter(|f| *f.body() == Body::Pending)
+        .collect();
     assert_eq!(pending.len(), 203);
     // One of them fetched as the tab does: both sides, diffed here.
-    let f = r.files.iter().find(|f| f.path() == "huge/generated.rs").unwrap();
+    let f = r
+        .files
+        .iter()
+        .find(|f| f.path() == "huge/generated.rs")
+        .unwrap();
     let refs = r.mr.diff_refs.clone().unwrap();
-    let old = c.raw_maybe(mr.project_id, &f.meta.old_path, &refs.base_sha).unwrap();
-    let new = c.raw_maybe(mr.project_id, &f.meta.new_path, &refs.head_sha).unwrap();
+    let old = c
+        .raw_maybe(mr.project_id, &f.meta.old_path, &refs.base_sha)
+        .unwrap();
+    let new = c
+        .raw_maybe(mr.project_id, &f.meta.new_path, &refs.head_sha)
+        .unwrap();
     assert!(old.is_none(), "added in this merge request");
     let body = Body::local(old.as_deref(), new.as_deref(), f.path());
     assert_eq!(body.counts(), (40000, 0));
@@ -62,7 +83,11 @@ fn a_batch_answers_as_single_requests_do() {
     for (url, got) in urls.iter().zip(batch) {
         let got = got.unwrap();
         let one = Curl.get(url, token).unwrap();
-        assert_eq!((got.status, got.next_page, got.total), (one.status, one.next_page, one.total), "{url}");
+        assert_eq!(
+            (got.status, got.next_page, got.total),
+            (one.status, one.next_page, one.total),
+            "{url}"
+        );
         assert_eq!(got.body, one.body, "{url}");
     }
 }

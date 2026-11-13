@@ -227,7 +227,11 @@ pub fn apply(settings: &Settings, cx: &mut App) {
     // Terminal bindings in the same view, and bound to nothing, so they fall
     // through to the terminal, which sends them on.
     bindings.extend(crate::terminal_browser::KEYS.iter().map(|k| {
-        KeyBinding::new(k, gpui::NoAction, Some(crate::terminal_browser::KEY_CONTEXT))
+        KeyBinding::new(
+            k,
+            gpui::NoAction,
+            Some(crate::terminal_browser::KEY_CONTEXT),
+        )
     }));
     // ⌘R reloads its page, as in a browser tab, never Rename Tab.
     bindings.push(KeyBinding::new(

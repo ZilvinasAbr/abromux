@@ -145,7 +145,8 @@ fn post_scroll(window: &Window, x: f64, y: f64, dy: f64) -> anyhow::Result<()> {
             source: *mut Object,
             units: u32,
             wheel_count: u32,
-            wheel1: i32, ...
+            wheel1: i32,
+            ...
         ) -> *mut Object;
         fn CGEventSetLocation(event: *mut Object, at: Point);
         fn CFRelease(cf: *mut Object);
@@ -183,7 +184,8 @@ fn post_scroll(window: &Window, x: f64, y: f64, dy: f64) -> anyhow::Result<()> {
         }
         // On the next run loop pass: gpui is mid-update now and the view's
         // handler would re-enter it.
-        let _: () = msg_send![view, performSelector: sel!(scrollWheel:) withObject: ev afterDelay: 0f64];
+        let _: () =
+            msg_send![view, performSelector: sel!(scrollWheel:) withObject: ev afterDelay: 0f64];
     }
     Ok(())
 }

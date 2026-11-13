@@ -1,7 +1,7 @@
 mod about;
-mod alert;
 mod activity;
 mod agent;
+mod alert;
 mod banner;
 mod bench;
 mod browser;
@@ -13,13 +13,13 @@ mod channel;
 mod cli;
 mod cmux;
 mod config;
-mod folder;
-mod gitlab;
 mod cursor;
 mod debug;
 mod downloads;
 mod find_bar;
+mod folder;
 mod ghostty;
+mod gitlab;
 mod hold;
 mod icon;
 mod ipc;
@@ -29,13 +29,13 @@ mod link;
 mod links;
 mod markdown;
 mod menu;
-mod notification;
-mod notify_hook;
 mod menubar;
 mod naming;
+mod notification;
+mod notify_hook;
 mod osc99;
-mod paths;
 mod palette;
+mod paths;
 mod plugins;
 mod pty;
 mod quit;
@@ -278,7 +278,10 @@ struct TerminalOpts {
 
 impl TerminalOpts {
     fn cwd(cwd: Option<String>) -> Self {
-        TerminalOpts { cwd, ..Default::default() }
+        TerminalOpts {
+            cwd,
+            ..Default::default()
+        }
     }
 }
 
@@ -472,15 +475,17 @@ impl AbroMux {
                 let alive = this.update(cx, |this, cx| {
                     for (socket, page) in found {
                         let Some(tty) = page.tty() else { continue };
-                        let term = this.workspaces.iter().flat_map(|w| w.surfaces()).find_map(|s| match s {
-                            Surface::Terminal(t)
-                                if t.read(cx).app.is_none()
-                                    && t.read(cx).tty_name().as_deref() == Some(tty) =>
-                            {
-                                Some(t.clone())
-                            }
-                            _ => None,
-                        });
+                        let term = this.workspaces.iter().flat_map(|w| w.surfaces()).find_map(
+                            |s| match s {
+                                Surface::Terminal(t)
+                                    if t.read(cx).app.is_none()
+                                        && t.read(cx).tty_name().as_deref() == Some(tty) =>
+                                {
+                                    Some(t.clone())
+                                }
+                                _ => None,
+                            },
+                        );
                         if let Some(t) = term {
                             terminal_browser::adopt(&t, socket, page, cx);
                         }
@@ -671,12 +676,22 @@ impl AbroMux {
     /// [`split_node`](Self::split_node).
     fn leaf_node(&mut self, tabs: Vec<Surface>, active: usize) -> Option<Node> {
         let active = active.min(tabs.len().checked_sub(1)?);
-        Some(Node::Leaf(Pane { id: self.pane_id(), tabs, active }))
+        Some(Node::Leaf(Pane {
+            id: self.pane_id(),
+            tabs,
+            active,
+        }))
     }
 
     /// `a` and `b` side by side along `axis`, `a` taking `ratio` (kept to
     /// 0.1–0.9). A side that came out empty collapses into the other.
-    fn split_node(&mut self, axis: Axis, ratio: f32, a: Option<Node>, b: Option<Node>) -> Option<Node> {
+    fn split_node(
+        &mut self,
+        axis: Axis,
+        ratio: f32,
+        a: Option<Node>,
+        b: Option<Node>,
+    ) -> Option<Node> {
         match (a, b) {
             (Some(a), Some(b)) => Some(Node::Split {
                 id: self.id(),
@@ -709,7 +724,12 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Surface {
-        let TerminalOpts { cwd, mut env, command, attach } = opts;
+        let TerminalOpts {
+            cwd,
+            mut env,
+            command,
+            attach,
+        } = opts;
         let surface = attach.as_ref().map_or(self.next_surface + 1, |(n, _)| *n);
         let home = self
             .workspaces
@@ -777,7 +797,10 @@ impl AbroMux {
             match terminal_browser::command(url) {
                 Some(cmd) => {
                     let ws = self.workspaces.get(self.active).map_or(0, |w| w.id);
-                    let opts = TerminalOpts { command: Some(cmd), ..Default::default() };
+                    let opts = TerminalOpts {
+                        command: Some(cmd),
+                        ..Default::default()
+                    };
                     let s = self.make_terminal(ws, opts, window, cx);
                     if let Surface::Terminal(t) = &s {
                         terminal_browser::attach(t, url, cx);
@@ -813,7 +836,13 @@ impl AbroMux {
     }
 
     /// A link plugin `id` opens, as its new tab in the focused pane.
-    pub(crate) fn open_plugin_link(&mut self, id: &str, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_plugin_link(
+        &mut self,
+        id: &str,
+        url: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match self.make_plugin(id, &serde_json::json!({ "url": url }), window, cx) {
             Ok(s) => self.add_tab(s, window, cx),
             Err(e) => window.push_notification(Notification::error(format!("{e:#}")), cx),
@@ -825,7 +854,8 @@ impl AbroMux {
     pub(crate) fn gitlab_on(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let on = plugins::enabled("gitlab", cx);
         if !on {
-            let note = Notification::info("Turn it on in Settings › GitLab › Use GitLab.").title("GitLab is turned off");
+            let note = Notification::info("Turn it on in Settings › GitLab › Use GitLab.")
+                .title("GitLab is turned off");
             window.push_notification(note, cx);
         }
         on
@@ -846,11 +876,18 @@ impl AbroMux {
                 .map(|o| std::path::PathBuf::from(String::from_utf8_lossy(&o).trim()))
         };
         let mut repos: Vec<std::path::PathBuf> = vec![];
-        if let Some(t) = ws.focused_surface().and_then(|s| s.cwd(cx)).and_then(|c| top(std::path::Path::new(&c))) {
+        if let Some(t) = ws
+            .focused_surface()
+            .and_then(|s| s.cwd(cx))
+            .and_then(|c| top(std::path::Path::new(&c)))
+        {
             repos.push(t);
         }
         if repos.is_empty() {
-            let places = gitlab::remote::places(ws.home.as_deref(), &ws.surfaces().filter_map(|s| s.cwd(cx)).collect::<Vec<_>>());
+            let places = gitlab::remote::places(
+                ws.home.as_deref(),
+                &ws.surfaces().filter_map(|s| s.cwd(cx)).collect::<Vec<_>>(),
+            );
             for p in places {
                 if let Some(t) = top(&p.dir)
                     && !repos.contains(&t)
@@ -860,7 +897,8 @@ impl AbroMux {
             }
         }
         if repos.is_empty() {
-            let note = Notification::warning("No tab of this workspace is in a git repository.").title("Nothing to review");
+            let note = Notification::warning("No tab of this workspace is in a git repository.")
+                .title("Nothing to review");
             return window.push_notification(note, cx);
         }
         for repo in repos {
@@ -868,14 +906,17 @@ impl AbroMux {
             let id = match made {
                 Ok(id) => id,
                 Err(e) => {
-                    let note = Notification::error(format!("{}: {e:#}", repo.display())).title("Couldn't open the diff");
+                    let note = Notification::error(format!("{}: {e:#}", repo.display()))
+                        .title("Couldn't open the diff");
                     window.push_notification(note, cx);
                     continue;
                 }
             };
             // The tab already showing it comes forward, fetched again.
             let open = self.workspaces[wi].surfaces().find_map(|s| match s {
-                Surface::Plugin(t) if t.state(cx)["local"] == serde_json::json!(id) => Some(t.clone()),
+                Surface::Plugin(t) if t.state(cx)["local"] == serde_json::json!(id) => {
+                    Some(t.clone())
+                }
                 _ => None,
             });
             if let Some(tab) = open {
@@ -1011,7 +1052,9 @@ impl AbroMux {
                     None => s.is_browser(cx),
                 })
         });
-        let surface = match claimed.map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx)) {
+        let surface = match claimed
+            .map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx))
+        {
             Some(Ok(s)) => s,
             // It couldn't: the page, as before.
             _ => self.make_browser(&url, window, cx),
@@ -1043,7 +1086,8 @@ impl AbroMux {
         if focus && self.reuse_link_tab(wi, url, window, cx) {
             return;
         }
-        let claimed = plugins::claiming(url, cx).map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx));
+        let claimed = plugins::claiming(url, cx)
+            .map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx));
         let surface = match claimed {
             Some(Ok(s)) => s,
             _ => self.make_browser(url, window, cx),
@@ -1295,7 +1339,8 @@ impl AbroMux {
             }
         };
         self.building_home = Some(dir.clone());
-        let index = self.create_workspace(Some(dir.to_string_lossy().into_owned()), true, window, cx);
+        let index =
+            self.create_workspace(Some(dir.to_string_lossy().into_owned()), true, window, cx);
         self.building_home = None;
         let ws = &mut self.workspaces[index];
         ws.home = Some(dir);
@@ -1312,10 +1357,16 @@ impl AbroMux {
     /// default `claude`) on `.abromux/cleanup.md`. The agent finds what the
     /// workspace made, asks, removes it, and ends with `abromux folder
     /// remove`. It runs in a shell, so the shell stays if it stops early.
-    pub(crate) fn clean_up_folder(&mut self, wi: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn clean_up_folder(
+        &mut self,
+        wi: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(home) = self.workspaces.get(wi).and_then(|w| w.home.clone()) else {
-            let note = Notification::warning("Only a workspace made with ⇧⌘I has a folder to clean up.")
-                .title("Not a workspace folder");
+            let note =
+                Notification::warning("Only a workspace made with ⇧⌘I has a folder to clean up.")
+                    .title("Not a workspace folder");
             return window.push_notification(note, cx);
         };
         let ask = match folder::write_cleanup(&home) {
@@ -1334,9 +1385,16 @@ impl AbroMux {
             .filter(|a| !a.trim().is_empty())
             .unwrap_or_else(|| "claude".into());
         let id = self.workspaces[wi].id;
-        let s = self.make_terminal(id, TerminalOpts::cwd(Some(home.to_string_lossy().into_owned())), window, cx);
+        let s = self.make_terminal(
+            id,
+            TerminalOpts::cwd(Some(home.to_string_lossy().into_owned())),
+            window,
+            cx,
+        );
         if let Surface::Terminal(t) = &s {
-            t.update(cx, |t, _| t.send(format!("{} '{ask}'\r", agent.trim()).as_bytes()));
+            t.update(cx, |t, _| {
+                t.send(format!("{} '{ask}'\r", agent.trim()).as_bytes())
+            });
         }
         self.select_workspace(wi, window, cx);
         let pane = self.workspaces[wi].focused_pane;
@@ -1373,7 +1431,9 @@ impl AbroMux {
                 .await;
             let _ = this.update_in(cx, |_, window, cx| {
                 let note = match result {
-                    Ok(done) => Notification::success(done.join("\n")).title("Workspace folder removed"),
+                    Ok(done) => {
+                        Notification::success(done.join("\n")).title("Workspace folder removed")
+                    }
                     Err(e) => Notification::error(format!("{}: {e}", dir.display()))
                         .title("Couldn't remove the workspace folder"),
                 };
@@ -2373,7 +2433,9 @@ impl AbroMux {
                 )
                 .on_mouse_down(
                     MouseButton::Middle,
-                    cx.listener(move |this, _, window, cx| this.request_close_surface(sid, window, cx)),
+                    cx.listener(move |this, _, window, cx| {
+                        this.request_close_surface(sid, window, cx)
+                    }),
                 )
                 .on_drag(
                     DraggedTab {
@@ -2474,61 +2536,60 @@ impl AbroMux {
             this.workspaces[this.active].focused_pane = pane_id;
             cx.notify();
         };
-        let tab_bar =
-            div()
-                .id(("tabbar", pane_id))
-                .h(px(TABBAR_H))
-                .flex_none()
-                .flex()
-                .items_center()
-                .bg(rgb(TABBAR_BG))
-                .border_b_1()
-                .border_color(rgb(BORDER))
-                .child(
-                    div()
-                        .id(("tabs", pane_id))
-                        .h_full()
-                        .flex()
-                        .overflow_x_scroll()
-                        .children(tabs),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .h_full()
-                        .on_mouse_down(MouseButton::Left, |ev, window, _| {
-                            titlebar::drag_or_zoom(ev, window)
-                        })
-                        .drag_over::<DraggedTab>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
-                        .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
-                            this.move_tab(
-                                d.sid,
-                                TabDrop::Tabs {
-                                    pane: pane_id,
-                                    index: tab_count,
-                                },
-                                window,
-                                cx,
-                            )
-                        })),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(2.))
-                        .px(px(6.))
-                        // Shown while this pane is zoomed (⌘⇧↩); a click unzooms.
-                        .when(self.ws().zoom == Some(pane_id), |d| {
-                            d.child(
-                                tinted_icon_button(("pane-zoom", pane_id), "maximize-2", ACCENT)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.workspaces[this.active].toggle_zoom();
-                                        cx.notify();
-                                    })),
-                            )
-                        })
-                );
+        let tab_bar = div()
+            .id(("tabbar", pane_id))
+            .h(px(TABBAR_H))
+            .flex_none()
+            .flex()
+            .items_center()
+            .bg(rgb(TABBAR_BG))
+            .border_b_1()
+            .border_color(rgb(BORDER))
+            .child(
+                div()
+                    .id(("tabs", pane_id))
+                    .h_full()
+                    .flex()
+                    .overflow_x_scroll()
+                    .children(tabs),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .on_mouse_down(MouseButton::Left, |ev, window, _| {
+                        titlebar::drag_or_zoom(ev, window)
+                    })
+                    .drag_over::<DraggedTab>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
+                    .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
+                        this.move_tab(
+                            d.sid,
+                            TabDrop::Tabs {
+                                pane: pane_id,
+                                index: tab_count,
+                            },
+                            window,
+                            cx,
+                        )
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(2.))
+                    .px(px(6.))
+                    // Shown while this pane is zoomed (⌘⇧↩); a click unzooms.
+                    .when(self.ws().zoom == Some(pane_id), |d| {
+                        d.child(
+                            tinted_icon_button(("pane-zoom", pane_id), "maximize-2", ACCENT)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.workspaces[this.active].toggle_zoom();
+                                    cx.notify();
+                                })),
+                        )
+                    }),
+            );
 
         let content = match pane.active_surface() {
             Some(Surface::Terminal(t)) => t.clone().into_any_element(),
@@ -2665,10 +2726,7 @@ impl Render for AbroMux {
             bottom_right: rounded && !self.mr_panel,
             bottom_left: rounded && !self.sidebar,
         };
-        let main = match ws
-            .zoom
-            .and_then(|z| ws.panes().find(|p| p.id == z))
-        {
+        let main = match ws.zoom.and_then(|z| ws.panes().find(|p| p.id == z)) {
             Some(p) => self.render_pane(p, multi, corners, cx),
             None => self.render_node(&ws.root, multi, corners, cx),
         };
@@ -2678,7 +2736,8 @@ impl Render for AbroMux {
             None
         };
         let title = self.ws().name(cx);
-        let mr_panel = (self.mr_panel && plugins::enabled("gitlab", cx)).then(|| self.render_mr_panel(cx));
+        let mr_panel =
+            (self.mr_panel && plugins::enabled("gitlab", cx)).then(|| self.render_mr_panel(cx));
 
         div()
             .id("abromux")
@@ -2801,11 +2860,19 @@ impl Render for AbroMux {
                     gitlab::store(cx).update(cx, |s, cx| s.refresh_all(cx))
                 }
             }))
-            .on_action(cx.listener(|this, _: &ReviewChanges, window, cx| this.review_changes(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &ReviewChanges, window, cx| this.review_changes(window, cx)),
+            )
             // Reached when no browser took them: a plugin's tab has the focus.
-            .on_action(cx.listener(|this, _: &browser::ZoomIn, window, cx| this.zoom_plugin("in", window, cx)))
-            .on_action(cx.listener(|this, _: &browser::ZoomOut, window, cx| this.zoom_plugin("out", window, cx)))
-            .on_action(cx.listener(|this, _: &browser::ActualSize, window, cx| this.zoom_plugin("reset", window, cx)))
+            .on_action(cx.listener(|this, _: &browser::ZoomIn, window, cx| {
+                this.zoom_plugin("in", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &browser::ZoomOut, window, cx| {
+                this.zoom_plugin("out", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &browser::ActualSize, window, cx| {
+                this.zoom_plugin("reset", window, cx)
+            }))
             .on_action(cx.listener(|this, _: &FocusAddressBar, window, cx| {
                 if let Some(Surface::Browser(b)) = this.ws().focused_surface() {
                     BrowserView::focus_address(b, window, cx);
@@ -2900,9 +2967,11 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &ToggleUnread, _, cx| {
                 this.toggle_unread(cx);
             }))
-            .on_action(cx.listener(|this, _: &MarkOldestUnreadAndJumpNext, window, cx| {
-                this.mark_oldest_and_jump_next(window, cx);
-            }))
+            .on_action(
+                cx.listener(|this, _: &MarkOldestUnreadAndJumpNext, window, cx| {
+                    this.mark_oldest_and_jump_next(window, cx);
+                }),
+            )
             .on_action(cx.listener(|this, _: &LastPane, window, cx| {
                 this.last_pane(window, cx);
             }))
@@ -3276,8 +3345,16 @@ fn run_app(cwd: Option<String>) {
             KeyBinding::new("ctrl-n", browser::SuggestNext, Some("Omnibar > Input")),
             KeyBinding::new("up", browser::SuggestPrev, Some("Omnibar > Input")),
             KeyBinding::new("ctrl-p", browser::SuggestPrev, Some("Omnibar > Input")),
-            KeyBinding::new("escape", browser::DismissSuggestions, Some("Omnibar > Input")),
-            KeyBinding::new("shift-backspace", browser::RemoveSuggestion, Some("Omnibar > Input")),
+            KeyBinding::new(
+                "escape",
+                browser::DismissSuggestions,
+                Some("Omnibar > Input"),
+            ),
+            KeyBinding::new(
+                "shift-backspace",
+                browser::RemoveSuggestion,
+                Some("Omnibar > Input"),
+            ),
             // Keybindings run before key listeners; let these reach the PTY.
             KeyBinding::new("tab", NoAction, Some("Terminal")),
             KeyBinding::new("shift-tab", NoAction, Some("Terminal")),

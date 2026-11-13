@@ -123,11 +123,15 @@ impl SettingsView {
             .iter()
             .map(|(key, input)| {
                 let key: Key = key;
-                cx.subscribe_in(input, window, move |_, input, ev: &InputEvent, window, cx| {
-                    if matches!(ev, InputEvent::Blur | InputEvent::PressEnter { .. }) {
-                        save_text(key, input.read(cx).value().trim(), window, cx);
-                    }
-                })
+                cx.subscribe_in(
+                    input,
+                    window,
+                    move |_, input, ev: &InputEvent, window, cx| {
+                        if matches!(ev, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                            save_text(key, input.read(cx).value().trim(), window, cx);
+                        }
+                    },
+                )
             })
             .collect();
         _subscriptions.extend([
@@ -403,26 +407,29 @@ fn folder_row(title: &'static str, description: &'static str, key: Key) -> Row {
                         .text_color(rgb(MUTED))
                         .child(crate::workspace::tilde(&shown.to_string_lossy())),
                 )
-                .child(button("choose-folder", "Choose…").on_click(move |_, window, cx| {
-                    let picked = cx.prompt_for_paths(PathPromptOptions {
-                        files: false,
-                        directories: true,
-                        multiple: false,
-                        prompt: Some("Use Folder".into()),
-                    });
-                    window
-                        .spawn(cx, async move |cx| {
-                            let Ok(Ok(Some(paths))) = picked.await else {
-                                return;
-                            };
-                            let Some(dir) = paths.into_iter().next() else {
-                                return;
-                            };
-                            let dir = crate::workspace::tilde(&dir.to_string_lossy());
-                            let _ = cx.update(|window, cx| save(key, Some(json!(dir)), window, cx));
-                        })
-                        .detach();
-                }))
+                .child(
+                    button("choose-folder", "Choose…").on_click(move |_, window, cx| {
+                        let picked = cx.prompt_for_paths(PathPromptOptions {
+                            files: false,
+                            directories: true,
+                            multiple: false,
+                            prompt: Some("Use Folder".into()),
+                        });
+                        window
+                            .spawn(cx, async move |cx| {
+                                let Ok(Ok(Some(paths))) = picked.await else {
+                                    return;
+                                };
+                                let Some(dir) = paths.into_iter().next() else {
+                                    return;
+                                };
+                                let dir = crate::workspace::tilde(&dir.to_string_lossy());
+                                let _ =
+                                    cx.update(|window, cx| save(key, Some(json!(dir)), window, cx));
+                            })
+                            .detach();
+                    }),
+                )
                 .into_any_element()
         },
     )
@@ -1054,9 +1061,9 @@ fn workspace_colors_page(cx: &App) -> Page {
 
 /// The GitLab page's text settings: key, placeholder, masked, value.
 type TextField = (Key, &'static str, bool, fn(&Settings) -> Option<String>);
-const TEXT_FIELDS: &[TextField] = &[
-    (&["gitlab", "host"], "the GitLab tab's", false, |s| s.gitlab.host.clone()),
-];
+const TEXT_FIELDS: &[TextField] = &[(&["gitlab", "host"], "the GitLab tab's", false, |s| {
+    s.gitlab.host.clone()
+})];
 
 /// Save a text field: empty, or the default, removes the key.
 fn save_text(key: Key, value: &str, window: &mut Window, cx: &mut App) {
@@ -1129,16 +1136,14 @@ fn gitlab_page(fields: &[(Key, Entity<InputState>)]) -> Page {
             ),
             group(
                 "Connection",
-                [
-                    text_row(
-                        "Host",
-                        "Your GitLab, e.g. gitlab.example.com. Empty: the one you signed in \
+                [text_row(
+                    "Host",
+                    "Your GitLab, e.g. gitlab.example.com. Empty: the one you signed in \
                          to in a GitLab tab, with its token. Workspace checkouts whose \
                          remote is elsewhere are left out.",
-                        &["gitlab", "host"],
-                        fields,
-                    ),
-                ]
+                    &["gitlab", "host"],
+                    fields,
+                )]
                 .into_iter()
                 .flatten()
                 .chain([
@@ -1605,7 +1610,13 @@ fn render_group(g: &Group, ix: usize, window: &mut Window, cx: &mut App) -> AnyE
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().downgrade();
-        let pages = pages(&view, self.recording, self.needs_modifier, &self.text_fields, cx);
+        let pages = pages(
+            &view,
+            self.recording,
+            self.needs_modifier,
+            &self.text_fields,
+            cx,
+        );
         self.page = self.page.min(pages.len() - 1);
         let query = self.search.read(cx).value().trim().to_lowercase();
         let searching = !query.is_empty();
@@ -1900,5 +1911,8 @@ fn open_config(cx: &mut App) {
 
 /// The Ghostty config file whose settings win: the last one abromux reads.
 fn ghostty_config() -> Option<PathBuf> {
-    crate::paths::ghostty_configs().into_iter().rev().find(|p| p.is_file())
+    crate::paths::ghostty_configs()
+        .into_iter()
+        .rev()
+        .find(|p| p.is_file())
 }

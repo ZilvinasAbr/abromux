@@ -85,14 +85,13 @@ pub fn init() -> mpsc::UnboundedReceiver<usize> {
         let delegate: *mut Object = msg_send![decl.register(), new];
         // The center holds its delegate weakly; this one lives for the app.
         let _: () = msg_send![center, setDelegate: delegate];
-        let done = block::ConcreteBlock::new(|granted: bool, err: *mut Object| {
-            match error_text(err) {
+        let done =
+            block::ConcreteBlock::new(|granted: bool, err: *mut Object| match error_text(err) {
                 Some(e) => log(&format!("notification permission failed: {e}")),
                 None if !granted => log("notifications are turned off for this app"),
                 None => {}
-            }
-        })
-        .copy();
+            })
+            .copy();
         // UNAuthorizationOptionBadge | Sound | Alert.
         let _: () =
             msg_send![center, requestAuthorizationWithOptions: 0b111u64 completionHandler: &*done];
@@ -141,7 +140,8 @@ pub fn post(id: usize, title: &str, body: &str, sound: bool) {
             }
         })
         .copy();
-        let _: () = msg_send![center, addNotificationRequest: request withCompletionHandler: &*done];
+        let _: () =
+            msg_send![center, addNotificationRequest: request withCompletionHandler: &*done];
         let _: () = msg_send![content, release];
     }
 }

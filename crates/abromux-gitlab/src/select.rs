@@ -8,10 +8,10 @@
 //! selection longer than the screen copies whole; a block copies the lines
 //! it drew.
 
-use crate::{discussion::overlay, style::*, view::GitLabView};
-use gpui::{prelude::*, *};
 #[allow(unused_imports)]
 use crate::style::px;
+use crate::{discussion::overlay, style::*, view::GitLabView};
+use gpui::{prelude::*, *};
 use std::ops::Range;
 
 /// The rows a selection stays in.
@@ -80,7 +80,10 @@ impl Selection {
 
 /// `i`, or the nearest char boundary below it.
 fn floor(s: &str, i: usize) -> usize {
-    (0..=i.min(s.len())).rev().find(|i| s.is_char_boundary(*i)).unwrap_or(0)
+    (0..=i.min(s.len()))
+        .rev()
+        .find(|i| s.is_char_boundary(*i))
+        .unwrap_or(0)
 }
 
 /// A selectable line drawn this frame: where, and its laid-out text.
@@ -106,10 +109,16 @@ impl GitLabView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if let Group::Block(_) = group {
-            self.sel_lines.borrow_mut().insert((group, row), text.to_string());
+            self.sel_lines
+                .borrow_mut()
+                .insert((group, row), text.to_string());
         }
         let mut highlights = highlights;
-        if let Some(r) = self.sel.and_then(|s| s.range(group, row, text.len())).filter(|r| !r.is_empty()) {
+        if let Some(r) = self
+            .sel
+            .and_then(|s| s.range(group, row, text.len()))
+            .filter(|r| !r.is_empty())
+        {
             let (start, end) = (floor(&text, r.start), floor(&text, r.end));
             highlights = overlay(highlights, start..end, ca(SELECTION));
         }
@@ -119,21 +128,44 @@ impl GitLabView {
         // pointer by it (`follow`), since rows don't see moves while the
         // button's down.
         let drawn = std::rc::Rc::new(std::cell::Cell::new(None));
-        self.sel_drawn.borrow_mut().push(Drawn { group, row, at: drawn.clone(), layout: styled.layout().clone() });
+        self.sel_drawn.borrow_mut().push(Drawn {
+            group,
+            row,
+            at: drawn.clone(),
+            layout: styled.layout().clone(),
+        });
         div()
             .relative()
             .w_full()
             .cursor(CursorStyle::IBeam)
             .child(styled)
-            .child(canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
+            .child(
+                canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |v, ev: &MouseDownEvent, window, cx| {
-                    let p = Pos { row, col: index(&down, ev.position) };
+                    let p = Pos {
+                        row,
+                        col: index(&down, ev.position),
+                    };
                     v.sel = Some(match v.sel {
                         // Shift-click extends, as in a browser.
-                        Some(s) if ev.modifiers.shift && s.group == group => Selection { head: p, dragging: true, ..s },
-                        _ => Selection { group, anchor: p, head: p, dragging: true },
+                        Some(s) if ev.modifiers.shift && s.group == group => Selection {
+                            head: p,
+                            dragging: true,
+                            ..s
+                        },
+                        _ => Selection {
+                            group,
+                            anchor: p,
+                            head: p,
+                            dragging: true,
+                        },
                     });
                     // The tab keeps the keys (for ⌘C); nothing above takes the click.
                     v.sel_started = true;
@@ -149,23 +181,49 @@ impl GitLabView {
     /// one of the selection's group (above the first: its start; below the
     /// last: its end).
     pub(crate) fn follow(&mut self, p: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(s) = self.sel.filter(|s| s.dragging) else { return };
+        let Some(s) = self.sel.filter(|s| s.dragging) else {
+            return;
+        };
         let head = {
             let drawn = self.sel_drawn.borrow();
-            let lines: Vec<(&Drawn, Bounds<Pixels>)> =
-                drawn.iter().filter(|d| d.group == s.group).filter_map(|d| Some((d, d.at.get()?))).collect();
-            let Some(first) = lines.iter().min_by_key(|(d, _)| d.row) else { return };
+            let lines: Vec<(&Drawn, Bounds<Pixels>)> = drawn
+                .iter()
+                .filter(|d| d.group == s.group)
+                .filter_map(|d| Some((d, d.at.get()?)))
+                .collect();
+            let Some(first) = lines.iter().min_by_key(|(d, _)| d.row) else {
+                return;
+            };
             let last = lines.iter().max_by_key(|(d, _)| d.row).unwrap();
-            if let Some((d, _)) = lines.iter().find(|(_, b)| p.y >= b.top() && p.y < b.bottom()) {
-                Pos { row: d.row, col: index(&d.layout, p) }
+            if let Some((d, _)) = lines
+                .iter()
+                .find(|(_, b)| p.y >= b.top() && p.y < b.bottom())
+            {
+                Pos {
+                    row: d.row,
+                    col: index(&d.layout, p),
+                }
             } else if p.y < first.1.top() {
-                Pos { row: first.0.row, col: 0 }
+                Pos {
+                    row: first.0.row,
+                    col: 0,
+                }
             } else if p.y >= last.1.bottom() {
-                Pos { row: last.0.row, col: usize::MAX }
+                Pos {
+                    row: last.0.row,
+                    col: usize::MAX,
+                }
             } else {
                 // Between two lines (a thread between them): the one above's end.
-                let above = lines.iter().filter(|(_, b)| b.bottom() <= p.y).max_by_key(|(d, _)| d.row).unwrap_or(first);
-                Pos { row: above.0.row, col: usize::MAX }
+                let above = lines
+                    .iter()
+                    .filter(|(_, b)| b.bottom() <= p.y)
+                    .max_by_key(|(d, _)| d.row)
+                    .unwrap_or(first);
+                Pos {
+                    row: above.0.row,
+                    col: usize::MAX,
+                }
             }
         };
         if let Some(s) = self.sel.as_mut().filter(|s| s.head != head) {
@@ -177,7 +235,9 @@ impl GitLabView {
     /// ⌘C with code selected: the selection to the clipboard. False when
     /// there's nothing to copy (the key is someone else's then).
     pub(crate) fn copy_selection(&self, cx: &mut Context<Self>) -> bool {
-        let Some(s) = self.sel.filter(|s| s.anchor != s.head) else { return false };
+        let Some(s) = self.sel.filter(|s| s.anchor != s.head) else {
+            return false;
+        };
         let text = match s.group {
             Group::Diff(side) => s.text(|row| self.diff_row_text(row, side)),
             group => {
@@ -193,7 +253,12 @@ impl GitLabView {
     pub(crate) fn diff_row_text(&self, row: usize, side: u8) -> Option<String> {
         use crate::changes::Row;
         let r = self.shown()?;
-        let lines = |f: usize, h: usize| r.files.get(f).and_then(|f| f.body().hunks().get(h)).map(|h| h.lines.clone());
+        let lines = |f: usize, h: usize| {
+            r.files
+                .get(f)
+                .and_then(|f| f.body().hunks().get(h))
+                .map(|h| h.lines.clone())
+        };
         match *self.rows.get(row)? {
             Row::Line(f, h, l) => lines(f, h)?.get(l).map(|l| l.text.clone()),
             Row::Pair(f, h, l, rt) => {
@@ -233,18 +298,32 @@ mod tests {
     fn a_selection_copies_what_it_covers() {
         let rows = ["fn main() {", "    let x = 1;", "", "}"];
         let at = |row, col| Pos { row, col };
-        let sel = |a, b| Selection { group: Group::Diff(0), anchor: a, head: b, dragging: false };
+        let sel = |a, b| Selection {
+            group: Group::Diff(0),
+            anchor: a,
+            head: b,
+            dragging: false,
+        };
         let text = |s: Selection| s.text(|r| rows.get(r).map(|t| t.to_string()));
         // Within a line, either way round.
         assert_eq!(text(sel(at(1, 4), at(1, 7))), "let");
         assert_eq!(text(sel(at(1, 7), at(1, 4))), "let");
         // Across lines: the tail of the first, whole middles (empty ones too), the head of the last.
-        assert_eq!(text(sel(at(0, 3), at(3, 1))), "main() {\n    let x = 1;\n\n}");
+        assert_eq!(
+            text(sel(at(0, 3), at(3, 1))),
+            "main() {\n    let x = 1;\n\n}"
+        );
         // Rows that aren't code are skipped.
         let s = sel(at(0, 0), at(2, 0));
-        assert_eq!(s.text(|r| (r != 1).then(|| rows[r].to_string())), "fn main() {\n");
+        assert_eq!(
+            s.text(|r| (r != 1).then(|| rows[r].to_string())),
+            "fn main() {\n"
+        );
         // Another group's rows aren't selected.
         assert_eq!(sel(at(0, 0), at(1, 3)).range(Group::Diff(1), 0, 11), None);
-        assert_eq!(sel(at(0, 0), at(1, 3)).range(Group::Diff(0), 0, 11), Some(0..11));
+        assert_eq!(
+            sel(at(0, 0), at(1, 3)).range(Group::Diff(0), 0, 11),
+            Some(0..11)
+        );
     }
 }

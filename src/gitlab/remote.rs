@@ -33,7 +33,9 @@ pub fn host_name(setting: &str) -> String {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    abromux_plugin::git::text(dir, args).ok().filter(|s| !s.is_empty())
+    abromux_plugin::git::text(dir, args)
+        .ok()
+        .filter(|s| !s.is_empty())
 }
 
 /// One place to look: a directory, and a branch it was made on.
@@ -63,10 +65,12 @@ pub fn discover(places: &[Place], host: &str) -> Vec<(String, Vec<String>)> {
         }
         let branches = found.entry(project).or_default();
         let current = fresh
-            .then(|| match crate::workspace::git_head(&top.to_string_lossy()) {
-                Some(crate::workspace::Head::Branch(b)) => Some(b),
-                _ => None,
-            })
+            .then(
+                || match crate::workspace::git_head(&top.to_string_lossy()) {
+                    Some(crate::workspace::Head::Branch(b)) => Some(b),
+                    _ => None,
+                },
+            )
             .flatten();
         for b in current.into_iter().chain(p.branch.clone()) {
             if !branches.contains(&b) {
@@ -119,7 +123,10 @@ mod tests {
 
     #[test]
     fn reads_host_setting() {
-        assert_eq!(host_name("https://GitLab.example.com/"), "gitlab.example.com");
+        assert_eq!(
+            host_name("https://GitLab.example.com/"),
+            "gitlab.example.com"
+        );
         assert_eq!(host_name("gitlab.com"), "gitlab.com");
         assert_eq!(host_name("gitlab.x:8443"), "gitlab.x");
     }

@@ -90,14 +90,12 @@ pub fn jira_keys(text: &str) -> Vec<std::ops::Range<usize>> {
         }
         let len = rest.find(|c: char| !word(c)).unwrap_or(rest.len());
         let before = text[..i].chars().next_back();
-        let alone = !before.is_some_and(|b| matches!(b, '/' | '.' | '@' | '#' | '=' | '&' | '?' | ':'))
+        let alone = !before
+            .is_some_and(|b| matches!(b, '/' | '.' | '@' | '#' | '=' | '&' | '?' | ':'))
             && !rest[len..].starts_with(['/', '@']);
         // `PAY-1423-fix-it` (a branch name) starts with one; `PAY-1423.` ends a sentence.
         let cand = &rest[..len];
-        let key_len = cand
-            .match_indices('-')
-            .nth(1)
-            .map_or(len, |(j, _)| j);
+        let key_len = cand.match_indices('-').nth(1).map_or(len, |(j, _)| j);
         if alone && key_len == len && is_jira_key(cand) {
             out.push(i..i + len);
         }
@@ -275,8 +273,13 @@ trait ErasedTab {
     fn save(&self, cx: &App) -> Value;
     fn state(&self, cx: &App) -> Value;
     fn focus_handle(&self, cx: &App) -> FocusHandle;
-    fn command(&self, name: &str, args: &Value, window: &mut Window, cx: &mut App)
-    -> anyhow::Result<Value>;
+    fn command(
+        &self,
+        name: &str,
+        args: &Value,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> anyhow::Result<Value>;
 }
 
 impl<T: Tab> ErasedTab for Entity<T> {
@@ -312,13 +315,23 @@ mod tests {
 
     #[test]
     fn finds_jira_keys() {
-        let keys = |s: &str| jira_keys(s).into_iter().map(|r| s[r].to_string()).collect::<Vec<_>>();
-        assert_eq!(keys("PAY-1423 Refund fails (see OPS-7, AB2_C-10)."), ["PAY-1423", "OPS-7", "AB2_C-10"]);
+        let keys = |s: &str| {
+            jira_keys(s)
+                .into_iter()
+                .map(|r| s[r].to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            keys("PAY-1423 Refund fails (see OPS-7, AB2_C-10)."),
+            ["PAY-1423", "OPS-7", "AB2_C-10"]
+        );
         assert_eq!(keys("Draft: [PAY-1] x"), ["PAY-1"]);
         // Not tickets: lowercase, one letter, part of a path, URL or branch.
-        assert_eq!(keys("pay-1 P-1 https://x.test/browse/PAY-9 a/PAY-2 PAY-3-fix-it UTF-8x PAY-"), Vec::<String>::new());
+        assert_eq!(
+            keys("pay-1 P-1 https://x.test/browse/PAY-9 a/PAY-2 PAY-3-fix-it UTF-8x PAY-"),
+            Vec::<String>::new()
+        );
         assert_eq!(keys("ž PAY-5ž"), ["PAY-5"]);
         assert!(is_jira_key("PAY-1423") && !is_jira_key("PAY-12a"));
     }
 }
-

@@ -67,7 +67,11 @@ enum Lane {
 }
 
 enum Job {
-    Light { keys: Vec<MrKey>, lists: Option<Lists>, min_fields: bool },
+    Light {
+        keys: Vec<MrKey>,
+        lists: Option<Lists>,
+        min_fields: bool,
+    },
     /// Load it as its tab would, recorded; with its project's id if known.
     Review(MrKey, Option<u64>),
 }
@@ -194,8 +198,11 @@ pub fn base_url(host: &str) -> String {
 fn who(setting: Option<String>) -> (String, Option<String>) {
     let host = match setting.filter(|h| !h.trim().is_empty()) {
         Some(h) => base_url(&h),
-        None if std::env::var_os("ABROMUX_GITLAB_TOKEN").is_some() => abromux_gitlab::DEFAULT_HOST.into(),
-        None => abromux_gitlab::auth::saved_host().unwrap_or_else(|| abromux_gitlab::DEFAULT_HOST.into()),
+        None if std::env::var_os("ABROMUX_GITLAB_TOKEN").is_some() => {
+            abromux_gitlab::DEFAULT_HOST.into()
+        }
+        None => abromux_gitlab::auth::saved_host()
+            .unwrap_or_else(|| abromux_gitlab::DEFAULT_HOST.into()),
     };
     let token = abromux_gitlab::auth::token(&host);
     (cache::host_key(&host), token)
@@ -319,7 +326,10 @@ fn spawn_lane(lane: Lane, mut wake: mpsc::UnboundedReceiver<()>, cx: &mut App) {
                 .flatten();
             match job {
                 Some((job, snap)) => {
-                    let done = cx.background_executor().spawn(async move { run(job, snap) }).await;
+                    let done = cx
+                        .background_executor()
+                        .spawn(async move { run(job, snap) })
+                        .await;
                     let _ = cx.update(|cx| store(cx).update(cx, |s, cx| s.finish(done, cx)));
                 }
                 None => {
@@ -344,11 +354,24 @@ fn run(job: Job, snap: Snap) -> Done {
     };
     let c = Client::new(&snap.host, &snap.token, Arc::new(paced));
     match job {
-        Job::Light { keys, lists, min_fields } => {
-            let fields = if min_fields { api::MIN_FIELDS } else { api::FIELDS };
+        Job::Light {
+            keys,
+            lists,
+            min_fields,
+        } => {
+            let fields = if min_fields {
+                api::MIN_FIELDS
+            } else {
+                api::FIELDS
+            };
             let q = api::light_query(&keys, lists.as_ref(), fields);
-            let result = api::graphql(&c, &q).map(|data| api::parse_checked(&data, &keys, lists.as_ref()));
-            Done::Light { keys, lists, result }
+            let result =
+                api::graphql(&c, &q).map(|data| api::parse_checked(&data, &keys, lists.as_ref()));
+            Done::Light {
+                keys,
+                lists,
+                result,
+            }
         }
         Job::Review(k, project) => {
             let started = Instant::now();
@@ -382,14 +405,20 @@ impl Store {
             return;
         }
         let setting = settings(cx).host.clone();
-        let wanted = setting.as_deref().map(base_url).map(|h| cache::host_key(&h));
+        let wanted = setting
+            .as_deref()
+            .map(base_url)
+            .map(|h| cache::host_key(&h));
         let switched = wanted.as_ref().is_some_and(|h| *h != self.host);
         if self.who_busy || (!switched && self.who_at.is_some_and(|t| t.elapsed() < WHO_EVERY)) {
             return;
         }
         self.who_busy = true;
         cx.spawn(async move |this, cx| {
-            let (host, token) = cx.background_executor().spawn(async move { who(setting) }).await;
+            let (host, token) = cx
+                .background_executor()
+                .spawn(async move { who(setting) })
+                .await;
             let _ = this.update(cx, |s, cx| {
                 s.who_busy = false;
                 s.who_at = Some(Instant::now());
@@ -445,7 +474,11 @@ impl Store {
         } else {
             (Prio::Recent, s.recent_seconds)
         };
-        let secs = if self.app_active { secs } else { secs * INACTIVE_FACTOR };
+        let secs = if self.app_active {
+            secs
+        } else {
+            secs * INACTIVE_FACTOR
+        };
         (prio, secs)
     }
 
@@ -456,7 +489,10 @@ impl Store {
             .filter_map(|m| m.inspected_at.map(|t| (t, &m.key)))
             .collect();
         r.sort_by(|a, b| b.cmp(a));
-        r.into_iter().enumerate().map(|(i, (_, k))| (k.clone(), i)).collect()
+        r.into_iter()
+            .enumerate()
+            .map(|(i, (_, k))| (k.clone(), i))
+            .collect()
     }
 
     fn failed_lately(&self, k: &MrKey, t: &Throttle, now: Instant) -> bool {
@@ -606,7 +642,10 @@ impl Store {
             }
             let (prio, _) = self.cadence(m, ranks.get(&m.key).copied(), s);
             let prio = prio.max(Prio::Background);
-            if t.allows(prio, now) && !self.busy.contains(&m.key) && !self.failed_lately(&m.key, t, now) {
+            if t.allows(prio, now)
+                && !self.busy.contains(&m.key)
+                && !self.failed_lately(&m.key, t, now)
+            {
                 todo.push((prio, &m.key));
             }
         }
@@ -619,7 +658,11 @@ impl Store {
         let now = Instant::now();
         let secs = now_secs();
         match done {
-            Done::Light { keys, lists, result } => {
+            Done::Light {
+                keys,
+                lists,
+                result,
+            } => {
                 self.light_busy = false;
                 match result {
                     Ok(c) => {
@@ -632,7 +675,9 @@ impl Store {
                             }
                         }
                     }
-                    Err(Error::Other(m)) if m.contains("doesn't exist on type") && !self.min_fields => {
+                    Err(Error::Other(m))
+                        if m.contains("doesn't exist on type") && !self.min_fields =>
+                    {
                         self.min_fields = true;
                         for k in &keys {
                             self.checked.remove(k);
@@ -672,11 +717,18 @@ impl Store {
     /// `r` (of `k`, recorded in `bytes`) is the latest: what the cheap check
     /// knows of it, and that its recording is current.
     fn took(&mut self, k: &MrKey, r: &Review, bytes: u64, now: Instant, secs: u64) {
-        let m = self.mrs.entry(k.clone()).or_insert_with(|| Mr::new(k.clone()));
+        let m = self
+            .mrs
+            .entry(k.clone())
+            .or_insert_with(|| Mr::new(k.clone()));
         let light = Light::of_review(r, m.light.as_ref());
         m.review = Some(Recorded {
             signature: light.signature(),
-            bytes: if bytes > 0 { bytes } else { m.review.as_ref().map_or(0, |d| d.bytes) },
+            bytes: if bytes > 0 {
+                bytes
+            } else {
+                m.review.as_ref().map_or(0, |d| d.bytes)
+            },
         });
         m.light = Some(light);
         m.review_skip = None;
@@ -688,7 +740,9 @@ impl Store {
     /// Loads put in `cache::Shared` by tabs: the list learns of them, so
     /// their recordings count, and needn't be fetched again here.
     fn take_shared(&mut self, cx: &mut Context<Self>) {
-        let Some(shared) = cache::shared(cx) else { return };
+        let Some(shared) = cache::shared(cx) else {
+            return;
+        };
         let host = cache::host_key(&self.host);
         let new: Vec<(MrKey, Rc<Review>, u64, bool)> = shared
             .since(self.shared_seen)
@@ -738,7 +792,10 @@ impl Store {
     }
 
     fn upsert(&mut self, k: MrKey, l: model::Light, now: Instant, secs: u64) {
-        let m = self.mrs.entry(k.clone()).or_insert_with(|| Mr::new(k.clone()));
+        let m = self
+            .mrs
+            .entry(k.clone())
+            .or_insert_with(|| Mr::new(k.clone()));
         m.light = Some(l);
         m.gone = false;
         m.fetched_at = secs;
@@ -760,11 +817,7 @@ impl Store {
             return;
         }
         let mut roles: HashMap<MrKey, model::Roles> = HashMap::new();
-        for (list, set) in [
-            (c.authored, 0),
-            (c.review, 1),
-            (c.assigned, 2),
-        ] {
+        for (list, set) in [(c.authored, 0), (c.review, 1), (c.assigned, 2)] {
             for (k, l) in list.unwrap_or_default() {
                 let r = roles.entry(k.clone()).or_default();
                 match set {
@@ -866,7 +919,9 @@ impl Store {
     /// Load it again first thing, whatever its schedule.
     pub fn refetch(&mut self, k: &MrKey) {
         self.failed.remove(k);
-        self.mrs.entry(k.clone()).or_insert_with(|| Mr::new(k.clone()));
+        self.mrs
+            .entry(k.clone())
+            .or_insert_with(|| Mr::new(k.clone()));
         if !self.urgent.contains(k) {
             self.urgent.push_back(k.clone());
         }
@@ -902,7 +957,10 @@ impl Store {
         let secs = now_secs();
         let newly: Vec<MrKey> = open.difference(&self.open).cloned().collect();
         for k in &newly {
-            let m = self.mrs.entry(k.clone()).or_insert_with(|| Mr::new(k.clone()));
+            let m = self
+                .mrs
+                .entry(k.clone())
+                .or_insert_with(|| Mr::new(k.clone()));
             m.inspected_at = Some(secs);
             m.review_skip = None;
         }
@@ -1006,7 +1064,11 @@ impl Store {
 
     /// Recently opened, newest first.
     pub fn recent(&self) -> Vec<&Mr> {
-        let mut v: Vec<&Mr> = self.mrs.values().filter(|m| m.inspected_at.is_some()).collect();
+        let mut v: Vec<&Mr> = self
+            .mrs
+            .values()
+            .filter(|m| m.inspected_at.is_some())
+            .collect();
         v.sort_by_key(|m| std::cmp::Reverse(m.inspected_at));
         v
     }

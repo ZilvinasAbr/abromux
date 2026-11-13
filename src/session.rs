@@ -370,7 +370,10 @@ impl AbroMux {
                     .workspaces
                     .iter()
                     .map(|w| {
-                        workspace_key(w.custom_name.as_deref(), &node_state(&w.root, false, &self.surface_refs, cx))
+                        workspace_key(
+                            w.custom_name.as_deref(),
+                            &node_state(&w.root, false, &self.surface_refs, cx),
+                        )
                     })
                     .collect();
                 (0..saved.workspaces.len())
@@ -546,7 +549,11 @@ impl AbroMux {
                 let [a, b] = *children;
                 let a = self.build_node(a, ws, window, cx);
                 let b = self.build_node(b, ws, window, cx);
-                let axis = if vertical { Axis::Vertical } else { Axis::Horizontal };
+                let axis = if vertical {
+                    Axis::Vertical
+                } else {
+                    Axis::Horizontal
+                };
                 self.split_node(axis, ratio, a, b)
             }
         }
@@ -571,7 +578,11 @@ impl AbroMux {
             } => {
                 let cwd = std::path::Path::new(&cwd).is_dir().then_some(cwd);
                 let attach = surface.zip(held);
-                let opts = crate::TerminalOpts { cwd, attach, ..Default::default() };
+                let opts = crate::TerminalOpts {
+                    cwd,
+                    attach,
+                    ..Default::default()
+                };
                 let s = self.make_terminal(ws, opts, window, cx);
                 if let Surface::Terminal(t) = &s {
                     t.update(cx, |t, cx| {
@@ -588,7 +599,8 @@ impl AbroMux {
             }
             // terminal-browser can't take the built-in browser's history.
             TabState::Browser { url, name, .. }
-                if crate::settings::terminal_browser(cx) && !crate::markdown::is_markdown_url(&url) =>
+                if crate::settings::terminal_browser(cx)
+                    && !crate::markdown::is_markdown_url(&url) =>
             {
                 (self.make_browser(&url, window, cx), name)
             }
@@ -602,7 +614,11 @@ impl AbroMux {
                     Some(h) => {
                         // A Markdown tab is one from the start (its scheme is
                         // set up then); others start blank under their history.
-                        let first = if crate::markdown::is_markdown_url(&url) { url.as_str() } else { "" };
+                        let first = if crate::markdown::is_markdown_url(&url) {
+                            url.as_str()
+                        } else {
+                            ""
+                        };
                         let s = self.make_browser(first, window, cx);
                         if let Surface::Browser(b) = &s {
                             b.update(cx, |b, cx| {

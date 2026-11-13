@@ -1,10 +1,11 @@
 //! A terminal pane: a PTY running the user's shell, parsed by libghostty-vt,
 //! drawn cell-by-cell with gpui.
 
+use crate::pty::{Feed, Opened, Pty};
 use crate::{
-    find_bar::{FindBar, Step},
     agent::{self, Agent, Kind},
     config::{Config, CursorStyle as ConfigCursor},
+    find_bar::{FindBar, Step},
     ghostty::{
         self, CursorStyle as Caret, Frame, ImageLayer, ImagePixels, MouseAction, MouseGeometry,
         Rgb, ffi,
@@ -14,7 +15,6 @@ use crate::{
     sprite,
     theme::*,
 };
-use crate::pty::{Feed, Opened, Pty};
 use futures::{StreamExt, channel::mpsc};
 use gpui::{prelude::*, *};
 use gpui_component::input::{self, InputEvent, InputState};
@@ -38,7 +38,12 @@ fn font_fallbacks(config: &crate::config::Config, cx: &App) -> FontFallbacks {
     static NERD: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     let nerd = NERD.get_or_init(|| nerd_fonts(cx.text_system().all_font_names()));
     let mut list = config.font_fallbacks.clone();
-    list.extend(nerd.iter().filter(|f| !list.contains(f)).cloned().collect::<Vec<_>>());
+    list.extend(
+        nerd.iter()
+            .filter(|f| !list.contains(f))
+            .cloned()
+            .collect::<Vec<_>>(),
+    );
     FontFallbacks::from_fonts(list)
 }
 
@@ -1115,8 +1120,12 @@ impl TerminalView {
     /// ⌘R in a tab whose program shows a page (terminal-browser): the key,
     /// else the app's other way to reload. False if it's no such tab.
     fn reload_page(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(app) = self.app.as_ref() else { return false };
-        let Some(url) = app.page_url() else { return false };
+        let Some(app) = self.app.as_ref() else {
+            return false;
+        };
+        let Some(url) = app.page_url() else {
+            return false;
+        };
         // terminal-browser's ⌘R does nothing on a local file; its CLI's
         // reload does.
         if url.starts_with("file:") && app.reload() {
@@ -1167,9 +1176,13 @@ impl TerminalView {
         let Some((code, unshifted)) = map_key(key) else {
             return;
         };
-        let bytes =
-            self.term
-                .encode_key_action(ffi::GHOSTTY_KEY_ACTION_RELEASE, code, mods, None, unshifted);
+        let bytes = self.term.encode_key_action(
+            ffi::GHOSTTY_KEY_ACTION_RELEASE,
+            code,
+            mods,
+            None,
+            unshifted,
+        );
         if !bytes.is_empty() {
             self.send(&bytes);
         }
@@ -1225,7 +1238,9 @@ impl TerminalView {
             .key_char
             .as_deref()
             .filter(|_| printable && !m.control && !m.platform);
-        let bytes = self.term.encode_key_action(action, key, mods, text, unshifted);
+        let bytes = self
+            .term
+            .encode_key_action(action, key, mods, text, unshifted);
         if bytes.is_empty() {
             return false;
         }
@@ -1289,8 +1304,10 @@ impl TerminalView {
         let focus = self.focus.clone();
         cx.on_focus_in(&focus, window, |this, window, _| this.update_focus(window))
             .detach();
-        cx.on_focus_out(&focus, window, |this, _, window, _| this.update_focus(window))
-            .detach();
+        cx.on_focus_out(&focus, window, |this, _, window, _| {
+            this.update_focus(window)
+        })
+        .detach();
         cx.observe_window_activation(window, |this, window, _| this.update_focus(window))
             .detach();
         self.update_focus(window);
@@ -1305,7 +1322,10 @@ impl TerminalView {
             return;
         }
         let (action, mods) = if down {
-            (ffi::GHOSTTY_KEY_ACTION_PRESS, ffi::GHOSTTY_MODS_SUPER as u16)
+            (
+                ffi::GHOSTTY_KEY_ACTION_PRESS,
+                ffi::GHOSTTY_MODS_SUPER as u16,
+            )
         } else {
             (ffi::GHOSTTY_KEY_ACTION_RELEASE, 0)
         };
@@ -1685,7 +1705,10 @@ impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.hook_focus(window, cx);
         let bg = self.frame.background;
-        let find_bar = self.find.shown().map(|input| self.render_find_bar(input, cx));
+        let find_bar = self
+            .find
+            .shown()
+            .map(|input| self.render_find_bar(input, cx));
         let paste_prompt = self
             .pending_paste
             .as_deref()
@@ -1730,11 +1753,13 @@ impl Render for TerminalView {
                     cx.propagate();
                 }
             }))
-            .on_action(cx.listener(|this, _: &gpui_component::input::SelectAll, _, cx| {
-                if !this.send_page_key("a", cx) {
-                    cx.propagate();
-                }
-            }))
+            .on_action(
+                cx.listener(|this, _: &gpui_component::input::SelectAll, _, cx| {
+                    if !this.send_page_key("a", cx) {
+                        cx.propagate();
+                    }
+                }),
+            )
             .on_action(cx.listener(|this, _: &crate::browser::Reload, _, cx| {
                 if !this.reload_page(cx) {
                     cx.propagate();
@@ -2433,7 +2458,12 @@ fn spawn_shell(
 
 /// Take the program's output on the main thread, all that's queued at once,
 /// so a flood of output costs one repaint.
-fn drain(feed: Feed, mut wake: mpsc::Receiver<()>, generation: usize, cx: &mut Context<TerminalView>) {
+fn drain(
+    feed: Feed,
+    mut wake: mpsc::Receiver<()>,
+    generation: usize,
+    cx: &mut Context<TerminalView>,
+) {
     cx.spawn(async move |this, cx| {
         loop {
             let woke = wake.next().await.is_some();
@@ -2775,12 +2805,22 @@ mod tests {
 
     #[test]
     fn nerd_fonts_come_symbols_and_mono_first() {
-        let names = ["Menlo", "JetBrainsMono Nerd Font", "JetBrainsMono Nerd Font Mono",
-            "Symbols Nerd Font", "Symbols Nerd Font Mono", ".Hidden Nerd Font"];
+        let names = [
+            "Menlo",
+            "JetBrainsMono Nerd Font",
+            "JetBrainsMono Nerd Font Mono",
+            "Symbols Nerd Font",
+            "Symbols Nerd Font Mono",
+            ".Hidden Nerd Font",
+        ];
         assert_eq!(
             super::nerd_fonts(names.iter().map(|s| s.to_string()).collect()),
-            ["Symbols Nerd Font Mono", "Symbols Nerd Font", "JetBrainsMono Nerd Font Mono",
-                "JetBrainsMono Nerd Font"]
+            [
+                "Symbols Nerd Font Mono",
+                "Symbols Nerd Font",
+                "JetBrainsMono Nerd Font Mono",
+                "JetBrainsMono Nerd Font"
+            ]
         );
     }
 

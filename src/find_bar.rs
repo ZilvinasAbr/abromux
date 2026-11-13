@@ -64,7 +64,9 @@ impl FindBar {
             .bg(rgb(TABBAR_BG))
             .text_size(px(12.))
             .text_color(rgb(TEXT))
-            .on_action(cx.listener(move |this, _: &input::Escape, window, cx| close(this, window, cx)))
+            .on_action(
+                cx.listener(move |this, _: &input::Escape, window, cx| close(this, window, cx)),
+            )
             .child(icon("search"))
             .child(
                 div()
@@ -72,7 +74,12 @@ impl FindBar {
                     .min_w_0()
                     .child(Input::new(input).appearance(false).text_size(px(12.))),
             )
-            .child(div().flex_none().text_color(rgb(MUTED)).child(self.counter()))
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(rgb(MUTED))
+                    .child(self.counter()),
+            )
             .child(
                 icon_button("find-up", "chevron-up")
                     .on_click(cx.listener(move |this, _, _, cx| step(this, Step::Up, cx))),

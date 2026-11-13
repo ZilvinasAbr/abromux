@@ -202,7 +202,9 @@ impl Pipeline {
             "success" => ("passed", PipelineTone::Good),
             "failed" => ("failed", PipelineTone::Bad),
             "running" => ("running", PipelineTone::Busy),
-            "pending" | "waiting_for_resource" | "preparing" | "created" | "scheduled" => ("pending", PipelineTone::Waiting),
+            "pending" | "waiting_for_resource" | "preparing" | "created" | "scheduled" => {
+                ("pending", PipelineTone::Waiting)
+            }
             "canceled" | "canceling" => ("canceled", PipelineTone::Neutral),
             "skipped" => ("skipped", PipelineTone::Neutral),
             "manual" => ("manual action needed", PipelineTone::Neutral),
@@ -318,13 +320,24 @@ impl Discussion {
     }
 
     pub fn resolved(&self) -> bool {
-        self.resolvable() && self.notes.iter().filter(|n| n.resolvable).all(|n| n.resolved)
+        self.resolvable()
+            && self
+                .notes
+                .iter()
+                .filter(|n| n.resolvable)
+                .all(|n| n.resolved)
     }
 
     /// Who resolved it and when.
     pub fn resolution(&self) -> Option<(&User, &str)> {
-        let n = self.notes.iter().find(|n| n.resolved && n.resolved_by.is_some())?;
-        Some((n.resolved_by.as_ref()?, n.resolved_at.as_deref().unwrap_or_default()))
+        let n = self
+            .notes
+            .iter()
+            .find(|n| n.resolved && n.resolved_by.is_some())?;
+        Some((
+            n.resolved_by.as_ref()?,
+            n.resolved_at.as_deref().unwrap_or_default(),
+        ))
     }
 }
 
@@ -431,7 +444,12 @@ pub struct Member {
 
 impl Member {
     pub fn user(&self) -> User {
-        User { id: self.id, username: self.username.clone(), name: self.name.clone(), avatar_url: self.avatar_url.clone() }
+        User {
+            id: self.id,
+            username: self.username.clone(),
+            name: self.name.clone(),
+            avatar_url: self.avatar_url.clone(),
+        }
     }
 
     /// The role badge GitLab shows on this member's notes.
@@ -476,7 +494,10 @@ fn labels<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Label>, D::Error
     Ok(all
         .into_iter()
         .map(|l| match l {
-            One::Name(name) => Label { name, ..Default::default() },
+            One::Name(name) => Label {
+                name,
+                ..Default::default()
+            },
             One::Full(l) => l,
         })
         .collect())
@@ -545,7 +566,10 @@ pub fn stack_of(me: StackedMr, found: &[StackedMr]) -> Vec<StackedMr> {
     let mut below = vec![];
     let mut seen = vec![me.iid];
     let mut target = me.target_branch.clone();
-    while let Some(m) = found.iter().find(|m| m.source_branch == target && !seen.contains(&m.iid)) {
+    while let Some(m) = found
+        .iter()
+        .find(|m| m.source_branch == target && !seen.contains(&m.iid))
+    {
         seen.push(m.iid);
         target = m.target_branch.clone();
         below.push(m.clone());
@@ -556,7 +580,10 @@ pub fn stack_of(me: StackedMr, found: &[StackedMr]) -> Vec<StackedMr> {
     while let Some(m) = stack.pop() {
         let source = m.source_branch.clone();
         out.push(m);
-        let mut above: Vec<&StackedMr> = found.iter().filter(|a| a.target_branch == source && !seen.contains(&a.iid)).collect();
+        let mut above: Vec<&StackedMr> = found
+            .iter()
+            .filter(|a| a.target_branch == source && !seen.contains(&a.iid))
+            .collect();
         above.sort_by_key(|a| a.iid);
         for a in above.iter().rev() {
             seen.push(a.iid);
@@ -571,14 +598,23 @@ mod stack_tests {
     use super::{StackedMr, stack_of};
 
     fn mr(iid: u64, source: &str, target: &str) -> StackedMr {
-        StackedMr { iid, source_branch: source.into(), target_branch: target.into(), ..Default::default() }
+        StackedMr {
+            iid,
+            source_branch: source.into(),
+            target_branch: target.into(),
+            ..Default::default()
+        }
     }
 
     #[test]
     fn orders_a_stack_bottom_first() {
         let iids = |v: Vec<StackedMr>| v.into_iter().map(|m| m.iid).collect::<Vec<_>>();
         // 1 into main, 2 on 1, 3 on 2; looking from 2, found in any order.
-        let found = [mr(3, "ui", "api"), mr(1, "model", "main"), mr(9, "other", "main")];
+        let found = [
+            mr(3, "ui", "api"),
+            mr(1, "model", "main"),
+            mr(9, "other", "main"),
+        ];
         assert_eq!(iids(stack_of(mr(2, "api", "model"), &found)), [1, 2, 3]);
         // From the bottom, two stacked on it: each with what's on it.
         let found = [mr(5, "b", "a"), mr(4, "c", "a"), mr(6, "d", "c")];

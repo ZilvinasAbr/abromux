@@ -2,15 +2,15 @@
 //! A browser pane: address bar + native WKWebView (via wry / gpui-component).
 
 use crate::{
-    find_bar::{FindBar, Step},
     browser_find,
     browser_history::{self, Entry},
     browser_native::{self, Pixels},
     downloads::{self, Downloads},
+    find_bar::{FindBar, Step},
     markdown,
-    webauthn,
     terminal::{Find, FindNext, FindPrevious, UseSelectionForFind},
     theme::*,
+    webauthn,
 };
 use futures::{
     StreamExt,
@@ -86,21 +86,39 @@ pub enum BrowserEvent {
     TitleChanged,
     Focused,
     /// ⌘- or middle-click on a link; `focus` (⇧ held) switches to the new tab.
-    OpenTab { url: String, focus: bool },
+    OpenTab {
+        url: String,
+        focus: bool,
+    },
 }
 
 enum WebMsg {
     Title(String),
     /// A page load started, or `finished`.
-    Url { url: String, finished: bool },
+    Url {
+        url: String,
+        finished: bool,
+    },
     /// A find script's result, or the page selection for ⌘E.
     Find(String),
     Selection(String),
-    OpenTab { url: String, focus: bool },
-    DownloadStarted { url: String, path: PathBuf },
-    DownloadDone { url: String, ok: bool },
+    OpenTab {
+        url: String,
+        focus: bool,
+    },
+    DownloadStarted {
+        url: String,
+        path: PathBuf,
+    },
+    DownloadDone {
+        url: String,
+        ok: bool,
+    },
     /// The page's bitmap for cover `generation`.
-    Cover { generation: u64, pixels: Option<Pixels> },
+    Cover {
+        generation: u64,
+        pixels: Option<Pixels>,
+    },
     /// A Markdown tab's `mailto:` link: the system's.
     External(String),
 }
@@ -137,7 +155,10 @@ impl PageLog {
 enum Cover {
     None,
     /// Waiting for the bitmap; the page still shows (`hidden`: no longer).
-    Pending { generation: u64, hidden: bool },
+    Pending {
+        generation: u64,
+        hidden: bool,
+    },
     /// The bitmap, or None if WebKit had none to give.
     Shown(Option<Arc<RenderImage>>),
 }
@@ -251,7 +272,11 @@ impl BrowserView {
                     #[serde(default)]
                     focus: bool,
                 }
-                let Ok(Msg { open_tab: url, focus }) = serde_json::from_str(req.body()) else {
+                let Ok(Msg {
+                    open_tab: url,
+                    focus,
+                }) = serde_json::from_str(req.body())
+                else {
                     return;
                 };
                 if url.starts_with("http://") || url.starts_with("https://") {
@@ -325,7 +350,8 @@ impl BrowserView {
                         browser_history::typed(&url);
                     }
                     if picked {
-                        this.address.update(cx, |a, cx| a.set_value(url.clone(), window, cx));
+                        this.address
+                            .update(cx, |a, cx| a.set_value(url.clone(), window, cx));
                     }
                     this.set_suggestions(vec![], cx);
                     this.navigate(&url, cx);
@@ -480,7 +506,9 @@ impl BrowserView {
     fn follow_markdown(cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(Duration::from_millis(500)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
                 let alive = this.update(cx, |this, cx| {
                     if !this.shown {
                         return;
@@ -754,7 +782,8 @@ impl BrowserView {
             self.set_suggestions(vec![], cx);
         } else {
             let url = self.url.clone();
-            self.address.update(cx, |a, cx| a.set_value(url, window, cx));
+            self.address
+                .update(cx, |a, cx| a.set_value(url, window, cx));
         }
     }
 
@@ -777,10 +806,13 @@ impl BrowserView {
 
     /// Go to suggestion `i` (clicked).
     fn open_suggestion(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(e) = self.suggestions.get(i) else { return };
+        let Some(e) = self.suggestions.get(i) else {
+            return;
+        };
         let url = e.url.clone();
         browser_history::typed(&url);
-        self.address.update(cx, |a, cx| a.set_value(url.clone(), window, cx));
+        self.address
+            .update(cx, |a, cx| a.set_value(url.clone(), window, cx));
         self.set_suggestions(vec![], cx);
         self.navigate(&url, cx);
         self.focus_page(window, cx);
@@ -965,8 +997,7 @@ impl BrowserView {
             let mut idle = 0;
             loop {
                 let polling = this.update(cx, |this, cx| {
-                    let loading: bool =
-                        unsafe { msg_send![this.wk_webview(cx), isLoading] };
+                    let loading: bool = unsafe { msg_send![this.wk_webview(cx), isLoading] };
                     if loading != this.loading {
                         this.loading = loading;
                         this.nav_presses[Nav::Reload as usize] += 1;
@@ -1105,7 +1136,12 @@ impl BrowserView {
     /// The find bar, as a strip above the page.
     fn render_find_bar(&self, input: Entity<InputState>, cx: &mut Context<Self>) -> Stateful<Div> {
         self.find
-            .render(&input, Self::find_step, |this, window, cx| this.close_find(window, cx), cx)
+            .render(
+                &input,
+                Self::find_step,
+                |this, window, cx| this.close_find(window, cx),
+                cx,
+            )
             .flex_none()
             .border_b_1()
             .border_color(rgb(BORDER))
@@ -1212,8 +1248,9 @@ impl BrowserView {
             icon.into_any_element()
         } else {
             let animation = match nav {
-                Nav::Reload => Animation::new(Duration::from_millis(180))
-                    .with_easing(ease_out_quint()),
+                Nav::Reload => {
+                    Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint())
+                }
                 _ => Animation::new(Duration::from_millis(250)),
             };
             icon.with_animation((id, presses), animation, move |icon, t| {
@@ -1497,7 +1534,11 @@ impl Render for BrowserView {
         });
         let downloads_button = self.render_downloads_button(cx);
         let downloads = self.downloads_open.then(|| self.render_downloads(cx));
-        let address = if let Some(path) = self.markdown.then(|| markdown::path_of(&self.url)).flatten() {
+        let address = if let Some(path) = self
+            .markdown
+            .then(|| markdown::path_of(&self.url))
+            .flatten()
+        {
             // A Markdown tab shows the file it's on instead of an address bar.
             div()
                 .flex_1()
@@ -1532,18 +1573,18 @@ impl Render for BrowserView {
                 .bg(rgb(INPUT_BG))
                 .text_size(px(12.))
                 .key_context(OMNIBAR)
-                .on_action(cx.listener(|this, _: &SuggestNext, _, cx| {
-                    this.move_suggestion(true, cx)
-                }))
-                .on_action(cx.listener(|this, _: &SuggestPrev, _, cx| {
-                    this.move_suggestion(false, cx)
-                }))
+                .on_action(
+                    cx.listener(|this, _: &SuggestNext, _, cx| this.move_suggestion(true, cx)),
+                )
+                .on_action(
+                    cx.listener(|this, _: &SuggestPrev, _, cx| this.move_suggestion(false, cx)),
+                )
                 .on_action(cx.listener(|this, _: &DismissSuggestions, window, cx| {
                     this.dismiss_suggestions(window, cx)
                 }))
-                .on_action(cx.listener(|this, _: &RemoveSuggestion, _, cx| {
-                    this.remove_suggestion(cx)
-                }))
+                .on_action(
+                    cx.listener(|this, _: &RemoveSuggestion, _, cx| this.remove_suggestion(cx)),
+                )
                 .child(
                     Input::new(&self.address)
                         .appearance(false)
@@ -1551,8 +1592,15 @@ impl Render for BrowserView {
                 )
                 .into_any_element()
         };
-        let downloads_button = if self.markdown { None } else { downloads_button };
-        let find_bar = self.find.shown().map(|input| self.render_find_bar(input, cx));
+        let downloads_button = if self.markdown {
+            None
+        } else {
+            downloads_button
+        };
+        let find_bar = self
+            .find
+            .shown()
+            .map(|input| self.render_find_bar(input, cx));
         div()
             .key_context("Browser")
             .track_focus(&self.focus)
@@ -1563,9 +1611,11 @@ impl Render for BrowserView {
                 cx.listener(|this, _: &ToggleDevTools, _, cx| this.show_inspector(false, cx)),
             )
             .on_action(cx.listener(|this, _: &ShowConsole, _, cx| this.show_inspector(true, cx)))
-            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
-                this.set_zoom(zoom_step(this.zoom, true), cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &ZoomIn, _, cx| {
+                    this.set_zoom(zoom_step(this.zoom, true), cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &ZoomOut, _, cx| {
                 this.set_zoom(zoom_step(this.zoom, false), cx)
             }))
@@ -1805,6 +1855,9 @@ mod tests {
     #[test]
     fn user_agent_looks_like_safari() {
         let ua = user_agent();
-        assert!(ua.contains(" Version/") && ua.ends_with(" Safari/605.1.15"), "{ua}");
+        assert!(
+            ua.contains(" Version/") && ua.ends_with(" Safari/605.1.15"),
+            "{ua}"
+        );
     }
 }

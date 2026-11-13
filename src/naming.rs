@@ -116,7 +116,9 @@ impl AbroMux {
         let title = self.workspaces[i].surfaces().find_map(|s| match s {
             Surface::Terminal(t) if t.entity_id() == surface => {
                 let t = t.read(cx);
-                t.has_claude().then(|| agent_title(t.shown_title())).flatten()
+                t.has_claude()
+                    .then(|| agent_title(t.shown_title()))
+                    .flatten()
             }
             _ => None,
         });
@@ -182,7 +184,6 @@ impl AbroMux {
         })
         .detach();
     }
-
 }
 
 /// A title Claude Code set on its terminal, as a workspace name: None for
@@ -238,7 +239,6 @@ impl Naming {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,9 +272,11 @@ mod tests {
 
     #[test]
     fn agent_titles() {
-        assert_eq!(agent_title("Abromux workspace name").as_deref(), Some("Abromux workspace name"));
+        assert_eq!(
+            agent_title("Abromux workspace name").as_deref(),
+            Some("Abromux workspace name")
+        );
         assert_eq!(agent_title("  Claude Code "), None);
         assert_eq!(agent_title(""), None);
     }
-
 }

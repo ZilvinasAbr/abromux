@@ -46,7 +46,11 @@ pub fn call_timeout(method: &str, params: Value, timeout: Duration) -> anyhow::R
     round_trip(method, params, Some(timeout)).map(|(v, _)| v)
 }
 
-fn round_trip(method: &str, params: Value, timeout: Option<Duration>) -> anyhow::Result<(Value, UnixStream)> {
+fn round_trip(
+    method: &str,
+    params: Value,
+    timeout: Option<Duration>,
+) -> anyhow::Result<(Value, UnixStream)> {
     let path = socket_path();
     let stream = UnixStream::connect(&path)
         .map_err(|e| anyhow::anyhow!("abromux is not running ({}: {e})", path.display()))?;

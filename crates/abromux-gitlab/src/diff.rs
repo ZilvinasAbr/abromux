@@ -76,7 +76,10 @@ impl Body {
         if old.is_some_and(binary) || new.is_some_and(binary) {
             return Body::Binary;
         }
-        let text = |b: Option<&[u8]>| b.map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+        let text = |b: Option<&[u8]>| {
+            b.map(|b| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_default()
+        };
         let (old, new) = (text(old), text(new));
         // A pathological pair gives up on the best diff after a while, not on the diff.
         let diff = similar::TextDiff::configure()
@@ -133,7 +136,10 @@ pub const LONG_LINE: usize = 5000;
 
 fn clip(text: &mut String) {
     if text.len() > LONG_LINE {
-        let cut = (0..=LONG_LINE).rev().find(|i| text.is_char_boundary(*i)).unwrap_or(0);
+        let cut = (0..=LONG_LINE)
+            .rev()
+            .find(|i| text.is_char_boundary(*i))
+            .unwrap_or(0);
         let more = text[cut..].chars().count();
         text.truncate(cut);
         text.push_str(&format!(" … ({more} more characters)"));
@@ -285,13 +291,20 @@ pub fn word_changes(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize
     if a.len() * b.len() > 250_000 {
         return middle();
     }
-    let (ta, tb): (Vec<&str>, Vec<&str>) = (a.iter().map(|r| &old[r.clone()]).collect(), b.iter().map(|r| &new[r.clone()]).collect());
+    let (ta, tb): (Vec<&str>, Vec<&str>) = (
+        a.iter().map(|r| &old[r.clone()]).collect(),
+        b.iter().map(|r| &new[r.clone()]).collect(),
+    );
     // LCS lengths from the end.
     let (n, m) = (ta.len(), tb.len());
     let mut l = vec![vec![0u32; m + 1]; n + 1];
     for i in (0..n).rev() {
         for j in (0..m).rev() {
-            l[i][j] = if ta[i] == tb[j] { l[i + 1][j + 1] + 1 } else { l[i + 1][j].max(l[i][j + 1]) };
+            l[i][j] = if ta[i] == tb[j] {
+                l[i + 1][j + 1] + 1
+            } else {
+                l[i + 1][j].max(l[i][j + 1])
+            };
         }
     }
     let (mut keep_a, mut keep_b) = (vec![false; n], vec![false; m]);
@@ -309,7 +322,8 @@ pub fn word_changes(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize
         }
     }
     // Only spaces in common: say the line changed, not every word in it.
-    let common = |keep: &[bool], t: &[&str]| keep.iter().zip(t).any(|(k, s)| *k && !s.trim().is_empty());
+    let common =
+        |keep: &[bool], t: &[&str]| keep.iter().zip(t).any(|(k, s)| *k && !s.trim().is_empty());
     if !common(&keep_a, &ta) {
         return middle();
     }
@@ -387,22 +401,42 @@ mod tests {
     #[test]
     fn local_diffs_read_like_gitlabs() {
         // Added: every line, from line 1.
-        let Body::Text(h) = Body::local(None, Some(b"a\nb\n"), "x.txt") else { panic!() };
+        let Body::Text(h) = Body::local(None, Some(b"a\nb\n"), "x.txt") else {
+            panic!()
+        };
         assert_eq!((h.len(), h[0].new_start, h[0].lines.len()), (1, 1, 2));
         assert!(h[0].lines.iter().all(|l| l.kind == Kind::Added));
         // Modified: the change with 3 lines of context, as GitLab cuts it.
         let old: String = (1..=20).map(|n| format!("{n}\n")).collect();
         let new = old.replace("10\n", "ten\n");
-        let Body::Text(h) = Body::local(Some(old.as_bytes()), Some(new.as_bytes()), "x.txt") else { panic!() };
+        let Body::Text(h) = Body::local(Some(old.as_bytes()), Some(new.as_bytes()), "x.txt") else {
+            panic!()
+        };
         assert_eq!(h.len(), 1);
-        assert_eq!((h[0].old_start, h[0].new_start, h[0].lines.len()), (7, 7, 8));
+        assert_eq!(
+            (h[0].old_start, h[0].new_start, h[0].lines.len()),
+            (7, 7, 8)
+        );
         // Deleted, binary, and the same on both sides.
-        assert!(Body::local(Some(b"gone\n"), None, "x.txt").hunks()[0].lines.iter().all(|l| l.kind == Kind::Removed));
-        assert_eq!(Body::local(None, Some(b"\x89PNG\0\0"), "x.png"), Body::Binary);
-        assert_eq!(Body::local(Some(b"same\n"), Some(b"same\n"), "x.txt"), Body::Unchanged);
+        assert!(
+            Body::local(Some(b"gone\n"), None, "x.txt").hunks()[0]
+                .lines
+                .iter()
+                .all(|l| l.kind == Kind::Removed)
+        );
+        assert_eq!(
+            Body::local(None, Some(b"\x89PNG\0\0"), "x.png"),
+            Body::Binary
+        );
+        assert_eq!(
+            Body::local(Some(b"same\n"), Some(b"same\n"), "x.txt"),
+            Body::Unchanged
+        );
         // A minified line is cut short, saying by how much.
         let long = format!("{}\n", "x".repeat(LONG_LINE + 1234));
-        let Body::Text(h) = Body::local(None, Some(long.as_bytes()), "min.js") else { panic!() };
+        let Body::Text(h) = Body::local(None, Some(long.as_bytes()), "min.js") else {
+            panic!()
+        };
         assert!(h[0].lines[0].text.ends_with(" … (1234 more characters)"));
     }
 
@@ -434,12 +468,23 @@ mod tests {
 
     #[test]
     fn tells_why_there_is_no_diff() {
-        let f = |collapsed, diff: &str, too_large| FileDiff { collapsed, too_large, diff: diff.into(), ..Default::default() };
+        let f = |collapsed, diff: &str, too_large| FileDiff {
+            collapsed,
+            too_large,
+            diff: diff.into(),
+            ..Default::default()
+        };
         assert_eq!(Body::of(&f(true, "", false)), Body::Collapsed);
         assert_eq!(Body::of(&f(false, "", false)), Body::Unchanged);
         assert_eq!(Body::of(&f(false, "", true)), Body::TooLarge);
-        assert_eq!(Body::of(&f(false, "Binary files a and b differ", false)), Body::Binary);
-        assert!(matches!(Body::of(&f(true, "@@ -1 +1 @@\n-a\n+b\n", false)), Body::Text(_)));
+        assert_eq!(
+            Body::of(&f(false, "Binary files a and b differ", false)),
+            Body::Binary
+        );
+        assert!(matches!(
+            Body::of(&f(true, "@@ -1 +1 @@\n-a\n+b\n", false)),
+            Body::Text(_)
+        ));
     }
 
     #[test]
@@ -460,7 +505,10 @@ mod tests {
 
     #[test]
     fn marks_what_changed_like_gitlab() {
-        let (old, new) = ("    Config { limit: 100 }", "    Config { limit: env(\"L\").or(100) }");
+        let (old, new) = (
+            "    Config { limit: 100 }",
+            "    Config { limit: env(\"L\").or(100) }",
+        );
         let (o, n) = changed_ranges(old, new);
         // The `)` breaks the common suffix, so `100` changed too.
         assert_eq!(&old[o.unwrap()], "100");
@@ -477,7 +525,10 @@ mod tests {
         mark_changes(&mut h[0].lines);
         // "a1" → "a2" have no token in common: the differing middle.
         let marks: Vec<_> = h[0].lines.iter().map(|l| l.changed.clone()).collect();
-        assert_eq!(marks, [vec![1..2], vec![1..2], vec![1..2], vec![1..2], vec![]]);
+        assert_eq!(
+            marks,
+            [vec![1..2], vec![1..2], vec![1..2], vec![1..2], vec![]]
+        );
     }
 
     #[test]
@@ -485,7 +536,11 @@ mod tests {
         let old = "Find, devtools and console use its own shortcuts, set here";
         let new = "Find, devtools and console reach the tab too, set here";
         let (o, n) = word_changes(old, new);
-        let pieces = |s: &str, r: &[Range<usize>]| r.iter().map(|r| s[r.clone()].to_string()).collect::<Vec<_>>();
+        let pieces = |s: &str, r: &[Range<usize>]| {
+            r.iter()
+                .map(|r| s[r.clone()].to_string())
+                .collect::<Vec<_>>()
+        };
         assert_eq!(pieces(old, &o), ["use its own shortcuts"]);
         assert_eq!(pieces(new, &n), ["reach the tab too"]);
         // Two separate changes stay two.

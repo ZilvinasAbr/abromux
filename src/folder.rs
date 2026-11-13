@@ -350,7 +350,11 @@ pub fn write_cleanup(ws: &Path) -> std::io::Result<&'static str> {
 pub fn docker_resources(ws: &Path) -> Result<Vec<String>, String> {
     let tag = tag(ws);
     let kinds: [(&str, &[&str], &str); 3] = [
-        ("container", &["ps", "-a"], "{{.Names}}  {{.Image}}  {{.Status}}"),
+        (
+            "container",
+            &["ps", "-a"],
+            "{{.Names}}  {{.Image}}  {{.Status}}",
+        ),
         ("volume", &["volume", "ls"], "{{.Name}}"),
         ("network", &["network", "ls"], "{{.Name}}"),
     ];
@@ -359,7 +363,12 @@ pub fn docker_resources(ws: &Path) -> Result<Vec<String>, String> {
         for label in ["abromux.workspace", "com.docker.compose.project"] {
             let res = Command::new("docker")
                 .args(cmd)
-                .args(["--filter", &format!("label={label}={tag}"), "--format", format])
+                .args([
+                    "--filter",
+                    &format!("label={label}={tag}"),
+                    "--format",
+                    format,
+                ])
                 .output()
                 .map_err(|e| format!("docker: {e}"))?;
             if !res.status.success() {
@@ -396,8 +405,7 @@ pub fn blockers(ws: &Path) -> Vec<String> {
 /// the folder. Without `force` it refuses while a worktree has changes
 /// ([`blockers`]). Returns what it did, a line each.
 pub fn remove(ws: &Path, force: bool) -> Result<Vec<String>, String> {
-    let meta =
-        read_meta(ws).ok_or_else(|| format!("{}: not a workspace folder", ws.display()))?;
+    let meta = read_meta(ws).ok_or_else(|| format!("{}: not a workspace folder", ws.display()))?;
     let home = crate::paths::home_var();
     if ws.parent().is_none() || home.as_deref() == Some(ws) {
         return Err(format!("{}: won't delete that", ws.display()));
@@ -420,7 +428,10 @@ pub fn remove(ws: &Path, force: bool) -> Result<Vec<String>, String> {
         };
         let src = Path::new(&c.source);
         if !src.is_dir() {
-            done.push(format!("{}: {} is gone, deleted its files", c.path, c.source));
+            done.push(format!(
+                "{}: {} is gone, deleted its files",
+                c.path, c.source
+            ));
             continue;
         }
         if path.exists() {
@@ -441,7 +452,10 @@ pub fn remove(ws: &Path, force: bool) -> Result<Vec<String>, String> {
         } else {
             format!("kept branch {branch} (not merged)")
         };
-        done.push(format!("{}: removed the worktree from {}, {branch_note}", c.path, c.source));
+        done.push(format!(
+            "{}: removed the worktree from {}, {branch_note}",
+            c.path, c.source
+        ));
     }
     std::fs::remove_dir_all(ws).map_err(|e| format!("{}: {e}", ws.display()))?;
     done.push(format!("deleted {}", ws.display()));
@@ -596,14 +610,34 @@ mod tests {
         run(&["init", "-q", "-b", "main"]);
         std::fs::write(repo.join(".gitignore"), "target/\n").unwrap();
         run(&["add", ".gitignore"]);
-        run(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]);
+        run(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "init",
+        ]);
         repo
     }
 
     fn commit(dir: &Path, file: &str) {
         std::fs::write(dir.join(file), "x").unwrap();
         git(dir, &["add", file]).unwrap();
-        git(dir, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", file]).unwrap();
+        git(
+            dir,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                file,
+            ],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -634,7 +668,13 @@ mod tests {
         let has = |r: &Path, b: &str| git(r, &["rev-parse", "--verify", "--quiet", b]).is_ok();
         assert!(!has(&merged, "refs/heads/ws/done"), "merged branch deleted");
         assert!(has(&unmerged, "refs/heads/ws/done"), "unmerged branch kept");
-        assert_eq!(git(&unmerged, &["worktree", "list"]).unwrap().lines().count(), 1);
+        assert_eq!(
+            git(&unmerged, &["worktree", "list"])
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
         assert!(notes.is_dir(), "a copy's source stays");
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -648,7 +688,13 @@ mod tests {
         let c = add(&ws, &r, Some("feature")).unwrap();
         assert!(!c.new_branch);
         remove(&ws, false).unwrap();
-        assert!(git(&r, &["rev-parse", "--verify", "--quiet", "refs/heads/feature"]).is_ok());
+        assert!(
+            git(
+                &r,
+                &["rev-parse", "--verify", "--quiet", "refs/heads/feature"]
+            )
+            .is_ok()
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -662,6 +708,9 @@ mod tests {
 
     #[test]
     fn tag_is_the_folder_name() {
-        assert_eq!(tag(Path::new("/x/ws/quiet-amber-falcon-2")), "quiet-amber-falcon-2");
+        assert_eq!(
+            tag(Path::new("/x/ws/quiet-amber-falcon-2")),
+            "quiet-amber-falcon-2"
+        );
     }
 }

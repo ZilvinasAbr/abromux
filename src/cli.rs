@@ -287,7 +287,9 @@ pub fn run(argv: Vec<String>) -> i32 {
 fn diff_cmd(mut pos: Vec<String>, opts: Map<String, Value>, as_json: bool) -> Result<(), String> {
     use abromux_gitlab::local;
     local::init(crate::channel::support_dir().join("local-diffs"));
-    let text = |k: &str, opts: &Map<String, Value>| opts.get(k).and_then(Value::as_str).map(str::to_string);
+    let text = |k: &str, opts: &Map<String, Value>| {
+        opts.get(k).and_then(Value::as_str).map(str::to_string)
+    };
     let e = |e: anyhow::Error| format!("{e:#}");
     match pos.first().map(String::as_str) {
         Some("list" | "ls") => {
@@ -301,7 +303,13 @@ fn diff_cmd(mut pos: Vec<String>, opts: Map<String, Value>, as_json: bool) -> Re
             }
             for s in all {
                 let open = s.threads.iter().filter(|t| !t.resolved()).count();
-                println!("{}  {}  {}  ({} threads, {open} open)", s.id, s.repo, s.describe(), s.threads.len());
+                println!(
+                    "{}  {}  {}  ({} threads, {open} open)",
+                    s.id,
+                    s.repo,
+                    s.describe(),
+                    s.threads.len()
+                );
             }
             return Ok(());
         }
@@ -309,17 +317,31 @@ fn diff_cmd(mut pos: Vec<String>, opts: Map<String, Value>, as_json: bool) -> Re
             let id = local::find(pos.get(1).ok_or("diff threads: missing <id>")?).map_err(e)?;
             let s = local::load(&id).map_err(e)?;
             let unresolved = opts.contains_key("unresolved");
-            let threads: Vec<&local::Thread> = s.threads.iter().filter(|t| !unresolved || !t.resolved()).collect();
+            let threads: Vec<&local::Thread> = s
+                .threads
+                .iter()
+                .filter(|t| !unresolved || !t.resolved())
+                .collect();
             if as_json {
-                println!("{}", serde_json::to_string_pretty(&threads).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&threads).unwrap_or_default()
+                );
                 return Ok(());
             }
             for t in threads {
                 let at = t.position().map_or("(the whole diff)".to_string(), |p| {
-                    let line = p.new_line.map_or_else(|| format!("old {}", p.old_line.unwrap_or(0)), |n| n.to_string());
+                    let line = p.new_line.map_or_else(
+                        || format!("old {}", p.old_line.unwrap_or(0)),
+                        |n| n.to_string(),
+                    );
                     format!("{}:{line}", p.path())
                 });
-                println!("{}  {}  {at}", t.id, if t.resolved() { "resolved" } else { "open" });
+                println!(
+                    "{}  {}  {at}",
+                    t.id,
+                    if t.resolved() { "resolved" } else { "open" }
+                );
                 for n in &t.notes {
                     let mut lines = n.body.lines();
                     println!("  {}: {}", n.author.name, lines.next().unwrap_or_default());
@@ -336,13 +358,16 @@ fn diff_cmd(mut pos: Vec<String>, opts: Map<String, Value>, as_json: bool) -> Re
             let mut body = pos[3..].join(" ");
             if body.is_empty() && !std::io::stdin().is_terminal() {
                 use std::io::Read as _;
-                std::io::stdin().read_to_string(&mut body).map_err(|e| e.to_string())?;
+                std::io::stdin()
+                    .read_to_string(&mut body)
+                    .map_err(|e| e.to_string())?;
             }
             let resolve = opts.contains_key("resolve");
             if body.trim().is_empty() && !resolve {
                 return Err("diff reply: give the answer (as text, or on stdin)".into());
             }
-            let t = local::reply(&id, &thread, &body, resolve, text("as", &opts).as_deref()).map_err(e)?;
+            let t = local::reply(&id, &thread, &body, resolve, text("as", &opts).as_deref())
+                .map_err(e)?;
             println!("OK {id} {t}{}", if resolve { " resolved" } else { "" });
             return Ok(());
         }
@@ -364,27 +389,48 @@ fn diff_cmd(mut pos: Vec<String>, opts: Map<String, Value>, as_json: bool) -> Re
     let send_to = match (opts.contains_key("send_here"), text("send_to", &opts)) {
         (_, Some(t)) => Some(Some(t)),
         (true, None) => Some(Some(
-            caller.as_ref().and_then(|c| c["surface"].as_str()).map(str::to_string).ok_or("--send-here: not in an abromux terminal")?,
+            caller
+                .as_ref()
+                .and_then(|c| c["surface"].as_str())
+                .map(str::to_string)
+                .ok_or("--send-here: not in an abromux terminal")?,
         )),
         // Asked again without either: comments start agents again.
         (false, None) => Some(None),
     };
-    let open = local::Open { title: text("title", &opts), agent: text("agent", &opts), send_to };
+    let open = local::Open {
+        title: text("title", &opts),
+        agent: text("agent", &opts),
+        send_to,
+    };
     let id = local::create(&cwd, &spec, open).map_err(e)?;
     let s = local::load(&id).map_err(e)?;
     let host = local::host_of(&id);
     let focus = opts.get("focus").cloned().unwrap_or(json!(true));
     // Already open: that tab, fetched again.
     let tree = ipc::call("workspace.tree", json!({ "all": true })).map_err(|e| e.to_string())?;
-    let existing = tree.as_array().into_iter().flatten().flat_map(|w| w["panes"].as_array().into_iter().flatten()).find_map(|p| {
-        p["surfaces"].as_array()?.iter().find(|t| t["state"]["local"] == json!(id)).and_then(|t| t["ref"].as_str().map(str::to_string))
-    });
+    let existing = tree
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|w| w["panes"].as_array().into_iter().flatten())
+        .find_map(|p| {
+            p["surfaces"]
+                .as_array()?
+                .iter()
+                .find(|t| t["state"]["local"] == json!(id))
+                .and_then(|t| t["ref"].as_str().map(str::to_string))
+        });
     let surface = match existing {
         Some(r) => {
             if focus != json!(false) {
                 ipc::call("surface.focus", json!({ "surface": r })).map_err(|e| e.to_string())?;
             }
-            ipc::call("surface.plugin", json!({ "surface": r, "command": "refresh" })).map_err(|e| e.to_string())?;
+            ipc::call(
+                "surface.plugin",
+                json!({ "surface": r, "command": "refresh" }),
+            )
+            .map_err(|e| e.to_string())?;
             r
         }
         None => {
@@ -401,7 +447,8 @@ fn diff_cmd(mut pos: Vec<String>, opts: Map<String, Value>, as_json: bool) -> Re
                     ipc::call("surface.create", p).map_err(|e| e.to_string())?
                 }
                 None => {
-                    p["direction"] = json!(text("direction", &opts).unwrap_or_else(|| "right".into()));
+                    p["direction"] =
+                        json!(text("direction", &opts).unwrap_or_else(|| "right".into()));
                     ipc::call("surface.split", p).map_err(|e| e.to_string())?["surface"].clone()
                 }
             };
@@ -409,10 +456,20 @@ fn diff_cmd(mut pos: Vec<String>, opts: Map<String, Value>, as_json: bool) -> Re
         }
     };
     if as_json {
-        println!("{}", json!({ "id": id, "surface": surface, "repo": s.repo, "diff": s.describe(), "agent": s.agent, "send_to": s.send_to }));
+        println!(
+            "{}",
+            json!({ "id": id, "surface": surface, "repo": s.repo, "diff": s.describe(), "agent": s.agent, "send_to": s.send_to })
+        );
     } else {
-        let to = s.send_to.as_ref().map_or_else(|| format!("start `{}`", s.agent), |t| format!("go to {t}"));
-        println!("OK {surface} {id}  {} in {}  (comments {to})", s.describe(), s.repo);
+        let to = s
+            .send_to
+            .as_ref()
+            .map_or_else(|| format!("start `{}`", s.agent), |t| format!("go to {t}"));
+        println!(
+            "OK {surface} {id}  {} in {}  (comments {to})",
+            s.describe(),
+            s.repo
+        );
     }
     Ok(())
 }
@@ -430,17 +487,28 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
             .or_else(|| std::env::current_dir().ok().and_then(|d| folder::find(&d)))
             .ok_or_else(|| "not in a workspace folder (make one with ⇧⌘I)".to_string())
     };
-    let sub = if pos.is_empty() { "path".to_string() } else { pos.remove(0) };
+    let sub = if pos.is_empty() {
+        "path".to_string()
+    } else {
+        pos.remove(0)
+    };
     match sub.as_str() {
         "path" => println!("{}", current()?.display()),
-        "root" => println!("{}", folder::root(&settings::load().unwrap_or_default()).display()),
+        "root" => println!(
+            "{}",
+            folder::root(&settings::load().unwrap_or_default()).display()
+        ),
         "add" => {
             let src = pos.first().ok_or("folder add: missing <path>")?;
             let ws = current()?;
             let branch = opts.get("branch").and_then(Value::as_str);
             let c = folder::add(&ws, Path::new(src), branch)?;
             match &c.branch {
-                Some(b) => println!("OK {} (worktree of {} on {b})", ws.join(&c.path).display(), c.source),
+                Some(b) => println!(
+                    "OK {} (worktree of {} on {b})",
+                    ws.join(&c.path).display(),
+                    c.source
+                ),
                 None => println!("OK {} (copy of {})", ws.join(&c.path).display(), c.source),
             }
         }
@@ -448,7 +516,9 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
             let ws = current()?;
             let meta = folder::read_meta(&ws).unwrap_or_default();
             for c in meta.checkouts {
-                let how = c.branch.map_or("copy".to_string(), |b| format!("worktree {b}"));
+                let how = c
+                    .branch
+                    .map_or("copy".to_string(), |b| format!("worktree {b}"));
                 println!("{}  {how}  from {}", c.path, c.source);
             }
         }
@@ -464,10 +534,14 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
             let tag = folder::tag(&ws);
             match folder::docker_resources(&ws) {
                 Ok(found) if found.is_empty() => {
-                    println!("No Docker resources labelled abromux.workspace={tag} or in compose project {tag}.")
+                    println!(
+                        "No Docker resources labelled abromux.workspace={tag} or in compose project {tag}."
+                    )
                 }
                 Ok(found) => {
-                    println!("Docker (labelled abromux.workspace={tag} or in compose project {tag}):");
+                    println!(
+                        "Docker (labelled abromux.workspace={tag} or in compose project {tag}):"
+                    );
                     for line in found {
                         println!("  {line}");
                     }
@@ -479,7 +553,9 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
             // A folder given by path (one whose workspace is closed), else this one.
             let ws = match pos.first() {
                 Some(p) => {
-                    let p = Path::new(p).canonicalize().map_err(|e| format!("{p}: {e}"))?;
+                    let p = Path::new(p)
+                        .canonicalize()
+                        .map_err(|e| format!("{p}: {e}"))?;
                     folder::read_meta(&p)
                         .map(|_| p.clone())
                         .ok_or_else(|| format!("{}: not a workspace folder", p.display()))?
@@ -542,9 +618,7 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
             });
             let closed_only = opts.contains_key("closed");
             for (dir, meta) in folder::list(&folder::root(&settings::load().unwrap_or_default())) {
-                let is_open = open
-                    .as_ref()
-                    .map(|o| o.iter().any(|h| Path::new(h) == dir));
+                let is_open = open.as_ref().map(|o| o.iter().any(|h| Path::new(h) == dir));
                 if closed_only && is_open != Some(false) {
                     continue;
                 }
@@ -553,7 +627,12 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
                     Some(false) => "  closed",
                     None => "",
                 };
-                println!("{}  {}  ({} checked out){mark}", dir.display(), meta.name, meta.checkouts.len());
+                println!(
+                    "{}  {}  ({} checked out){mark}",
+                    dir.display(),
+                    meta.name,
+                    meta.checkouts.len()
+                );
             }
         }
         "repos" => {
@@ -561,7 +640,11 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
                 println!("{}", r.display());
             }
         }
-        s => return Err(format!("folder: unknown subcommand {s:?} (path, root, add, list, all, repos, resources, remove)")),
+        s => {
+            return Err(format!(
+                "folder: unknown subcommand {s:?} (path, root, add, list, all, repos, resources, remove)"
+            ));
+        }
     }
     Ok(())
 }
@@ -598,7 +681,11 @@ fn dispatch(
     // `link <sub> [arg]`, as `mr`.
     let mut link_sub = String::new();
     if cmd == "link" {
-        link_sub = if pos.is_empty() { "list".into() } else { pos.remove(0) };
+        link_sub = if pos.is_empty() {
+            "list".into()
+        } else {
+            pos.remove(0)
+        };
         if let Some(arg) = pos.first() {
             opts.insert("ref".into(), json!(arg));
         }
@@ -606,7 +693,11 @@ fn dispatch(
     // `mr <sub> [arg]`: the argument goes in by the subcommand's name.
     let mut mr_sub = String::new();
     if cmd == "mr" {
-        mr_sub = if pos.is_empty() { "list".into() } else { pos.remove(0) };
+        mr_sub = if pos.is_empty() {
+            "list".into()
+        } else {
+            pos.remove(0)
+        };
         let name = match mr_sub.as_str() {
             "list" | "ls" => "group",
             "panel" => "state",
@@ -795,7 +886,9 @@ fn dispatch(
                 opts.insert("url".into(), json!(url));
             }
             opts.insert("type".into(), json!("gitlab"));
-            ("surface.create", |v| format!("OK {} {}", s(&v["ref"]), s(&v["title"])))
+            ("surface.create", |v| {
+                format!("OK {} {}", s(&v["ref"]), s(&v["title"]))
+            })
         }
         "close-surface" => ("surface.close", |v| format!("OK {}", s(&v["closed"]))),
         "focus-surface" => ("surface.focus", |v| format!("OK {}", s(&v["ref"]))),
@@ -912,13 +1005,17 @@ fn dispatch(
             if !opts.contains_key("id") && !pos.is_empty() {
                 opts.insert("id".into(), json!(pos.remove(0)));
             }
-            ("notification.dismiss", |v| format!("OK dismissed {}", v["dismissed"]))
+            ("notification.dismiss", |v| {
+                format!("OK dismissed {}", v["dismissed"])
+            })
         }
         "mark-notification-read" => {
             if !opts.contains_key("id") && !pos.is_empty() {
                 opts.insert("id".into(), json!(pos.remove(0)));
             }
-            ("notification.mark_read", |v| format!("OK marked {}", v["marked"]))
+            ("notification.mark_read", |v| {
+                format!("OK marked {}", v["marked"])
+            })
         }
         "tab-action" => {
             surface_aliases(&mut opts);
@@ -1025,7 +1122,9 @@ fn dispatch(
                 if !opts.contains_key("ref") {
                     return Err("mr open: missing <url|group/project!iid>".into());
                 }
-                ("mr.open", |v| format!("OK {} {}", s(&v["ref"]), s(&v["surface"])))
+                ("mr.open", |v| {
+                    format!("OK {} {}", s(&v["ref"]), s(&v["surface"]))
+                })
             }
             "refresh" => ("mr.refresh", |_| "OK".into()),
             "panel" => ("mr.panel", |v| format!("OK visible={}", v["visible"])),
@@ -1038,10 +1137,25 @@ fn dispatch(
         "link" => match link_sub.as_str() {
             "list" | "ls" => ("link.list", |v| {
                 lines(v, |l| {
-                    let title = l["title"].as_str().map(|t| format!("  {t}")).unwrap_or_default();
-                    let from = if l["tracked"].as_bool() == Some(true) { "" } else { "  (branch)" };
-                    let tab = l["tab"].as_str().map(|t| format!("  [{t}]")).unwrap_or_default();
-                    format!("{:>2}  {:<5} {}{title}{from}{tab}", l["index"], s(&l["kind"]), s(&l["key"]))
+                    let title = l["title"]
+                        .as_str()
+                        .map(|t| format!("  {t}"))
+                        .unwrap_or_default();
+                    let from = if l["tracked"].as_bool() == Some(true) {
+                        ""
+                    } else {
+                        "  (branch)"
+                    };
+                    let tab = l["tab"]
+                        .as_str()
+                        .map(|t| format!("  [{t}]"))
+                        .unwrap_or_default();
+                    format!(
+                        "{:>2}  {:<5} {}{title}{from}{tab}",
+                        l["index"],
+                        s(&l["kind"]),
+                        s(&l["key"])
+                    )
                 })
             }),
             "add" | "track" => {
@@ -1049,7 +1163,11 @@ fn dispatch(
                     return Err("link add: missing <url|PAY-123|group/project!iid>".into());
                 }
                 ("link.add", |v| {
-                    let state = if v["added"].as_bool() == Some(true) { "tracked" } else { "already tracked" };
+                    let state = if v["added"].as_bool() == Some(true) {
+                        "tracked"
+                    } else {
+                        "already tracked"
+                    };
                     format!("OK {} {} {state}", s(&v["kind"]), s(&v["key"]))
                 })
             }
@@ -1072,7 +1190,9 @@ fn dispatch(
                 })
             }
             s => {
-                return Err(format!("link: unknown subcommand {s:?} (list, add, remove, open)"));
+                return Err(format!(
+                    "link: unknown subcommand {s:?} (list, add, remove, open)"
+                ));
             }
         },
         "quit" => ("app.quit", |_| "OK".into()),
@@ -1123,7 +1243,13 @@ fn dispatch(
 fn signal_file(name: &str) -> std::path::PathBuf {
     let safe: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "._-".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     std::env::temp_dir().join(format!("abromux-wait-for-{safe}.sig"))
 }
@@ -1179,9 +1305,15 @@ fn command_tree() -> Vec<(String, Vec<String>)> {
         }
     };
     let word = |w: &str| {
-        !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        !w.is_empty()
+            && w.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     };
-    for line in HELP.lines().skip_while(|l| !l.starts_with("Commands:")).skip(1) {
+    for line in HELP
+        .lines()
+        .skip_while(|l| !l.starts_with("Commands:"))
+        .skip(1)
+    {
         // Commands sit two spaces in; deeper lines continue the one above.
         let Some(rest) = line.strip_prefix("  ").filter(|r| !r.starts_with(' ')) else {
             continue;
@@ -1198,10 +1330,17 @@ fn command_tree() -> Vec<(String, Vec<String>)> {
         if !word(first) {
             continue;
         }
-        let second = words.next().filter(|w| !w.starts_with('[') && !w.starts_with('-') && !w.starts_with('<') && !w.starts_with('('));
+        let second = words.next().filter(|w| {
+            !w.starts_with('[') && !w.starts_with('-') && !w.starts_with('<') && !w.starts_with('(')
+        });
         match second {
             // `group rename|color|collapse ...`, `skills show [...]`
-            Some(subs) if matches!(first, "group" | "folder" | "config" | "hooks" | "skills" | "browser" | "sidebar") => {
+            Some(subs)
+                if matches!(
+                    first,
+                    "group" | "folder" | "config" | "hooks" | "skills" | "browser" | "sidebar"
+                ) =>
+            {
                 for sub in subs.split('|').filter(|w| word(w)) {
                     add(first, Some(sub));
                 }
@@ -1287,7 +1426,11 @@ complete -o default -F _abromux abromux
             }
             out
         }
-        s => return Err(format!("completion: unknown shell {s:?} (zsh, bash or fish)")),
+        s => {
+            return Err(format!(
+                "completion: unknown shell {s:?} (zsh, bash or fish)"
+            ));
+        }
     })
 }
 
@@ -1849,7 +1992,10 @@ fn open(pos: Vec<String>, opts: Map<String, Value>) -> Result<(), String> {
             o.insert("cwd".into(), json!(absolute(&target)));
             call("workspace.create", o)?
         } else if Path::new(&target).is_file() && crate::markdown::is_markdown(Path::new(&target)) {
-            o.insert("url".into(), json!(crate::markdown::url_for(Path::new(&absolute(&target)))));
+            o.insert(
+                "url".into(),
+                json!(crate::markdown::url_for(Path::new(&absolute(&target)))),
+            );
             call("browser.open", o)?
         } else {
             o.insert("url".into(), json!(target));
@@ -1880,9 +2026,17 @@ fn markdown(mut pos: Vec<String>, opts: Map<String, Value>) -> Result<(), String
             return Err(format!("markdown: no such file: {file}"));
         }
         let mut o = opts.clone();
-        o.insert("url".into(), json!(crate::markdown::url_for(Path::new(&path))));
+        o.insert(
+            "url".into(),
+            json!(crate::markdown::url_for(Path::new(&path))),
+        );
         let v = call("browser.open", o)?;
-        println!("OK {}", s(v.get("surface").and_then(|s| s.get("ref")).unwrap_or(&v["ref"])));
+        println!(
+            "OK {}",
+            s(v.get("surface")
+                .and_then(|s| s.get("ref"))
+                .unwrap_or(&v["ref"]))
+        );
     }
     Ok(())
 }
@@ -2095,8 +2249,17 @@ mod tests {
         let tree = command_tree();
         let has = |c: &str| tree.iter().any(|(x, _)| x == c);
         for c in [
-            "ping", "identify", "notify", "dismiss-notification", "mark-notification-read",
-            "tab-action", "read-selection", "wait-for", "completion", "browser", "rpc",
+            "ping",
+            "identify",
+            "notify",
+            "dismiss-notification",
+            "mark-notification-read",
+            "tab-action",
+            "read-selection",
+            "wait-for",
+            "completion",
+            "browser",
+            "rpc",
         ] {
             assert!(has(c), "{c} missing");
         }

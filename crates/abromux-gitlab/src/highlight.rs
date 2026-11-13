@@ -59,10 +59,10 @@ struct Lang {
 
 const RUST: Lang = Lang {
     keywords: &[
-        "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
-        "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
-        "ref", "return", "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where",
-        "while", "Self",
+        "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
+        "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
+        "mut", "pub", "ref", "return", "static", "struct", "super", "trait", "true", "type",
+        "unsafe", "use", "where", "while", "Self",
     ],
     line_comments: &["//"],
     block_comment: Some(("/*", "*/")),
@@ -78,13 +78,76 @@ const RUST: Lang = Lang {
 
 const C_LIKE: Lang = Lang {
     keywords: &[
-        "abstract", "async", "await", "break", "case", "catch", "class", "const", "continue", "default",
-        "defer", "delete", "do", "else", "enum", "export", "extends", "false", "final", "finally", "for",
-        "func", "function", "go", "if", "implements", "import", "in", "instanceof", "interface", "let",
-        "map", "new", "nil", "null", "package", "private", "protected", "public", "range", "return",
-        "static", "struct", "super", "switch", "this", "throw", "true", "try", "type", "typeof",
-        "undefined", "var", "void", "while", "yield", "int", "char", "long", "unsigned", "include",
-        "namespace", "template", "typename", "using", "virtual", "override", "fun", "val", "when",
+        "abstract",
+        "async",
+        "await",
+        "break",
+        "case",
+        "catch",
+        "class",
+        "const",
+        "continue",
+        "default",
+        "defer",
+        "delete",
+        "do",
+        "else",
+        "enum",
+        "export",
+        "extends",
+        "false",
+        "final",
+        "finally",
+        "for",
+        "func",
+        "function",
+        "go",
+        "if",
+        "implements",
+        "import",
+        "in",
+        "instanceof",
+        "interface",
+        "let",
+        "map",
+        "new",
+        "nil",
+        "null",
+        "package",
+        "private",
+        "protected",
+        "public",
+        "range",
+        "return",
+        "static",
+        "struct",
+        "super",
+        "switch",
+        "this",
+        "throw",
+        "true",
+        "try",
+        "type",
+        "typeof",
+        "undefined",
+        "var",
+        "void",
+        "while",
+        "yield",
+        "int",
+        "char",
+        "long",
+        "unsigned",
+        "include",
+        "namespace",
+        "template",
+        "typename",
+        "using",
+        "virtual",
+        "override",
+        "fun",
+        "val",
+        "when",
     ],
     line_comments: &["//"],
     block_comment: Some(("/*", "*/")),
@@ -100,11 +163,12 @@ const C_LIKE: Lang = Lang {
 
 const HASH: Lang = Lang {
     keywords: &[
-        "and", "as", "assert", "begin", "break", "case", "class", "continue", "def", "do", "done", "elif",
-        "else", "elsif", "end", "ensure", "esac", "except", "export", "False", "fi", "finally", "for",
-        "from", "function", "if", "import", "in", "lambda", "local", "module", "next", "nil", "None",
-        "not", "or", "pass", "raise", "require", "rescue", "return", "self", "then", "True", "try",
-        "unless", "until", "while", "with", "yield", "true", "false", "null",
+        "and", "as", "assert", "begin", "break", "case", "class", "continue", "def", "do", "done",
+        "elif", "else", "elsif", "end", "ensure", "esac", "except", "export", "False", "fi",
+        "finally", "for", "from", "function", "if", "import", "in", "lambda", "local", "module",
+        "next", "nil", "None", "not", "or", "pass", "raise", "require", "rescue", "return", "self",
+        "then", "True", "try", "unless", "until", "while", "with", "yield", "true", "false",
+        "null",
     ],
     line_comments: &["#"],
     block_comment: None,
@@ -152,9 +216,18 @@ const fn web(kind: web::Kind) -> Lang {
     }
 }
 
-const JS: Lang = web(web::Kind::Script { ts: false, jsx: true });
-const TS: Lang = web(web::Kind::Script { ts: true, jsx: false });
-const TSX: Lang = web(web::Kind::Script { ts: true, jsx: true });
+const JS: Lang = web(web::Kind::Script {
+    ts: false,
+    jsx: true,
+});
+const TS: Lang = web(web::Kind::Script {
+    ts: true,
+    jsx: false,
+});
+const TSX: Lang = web(web::Kind::Script {
+    ts: true,
+    jsx: true,
+});
 const CSS: Lang = web(web::Kind::Css { scss: false });
 const SCSS: Lang = web(web::Kind::Css { scss: true });
 const JSON: Lang = web(web::Kind::Json);
@@ -162,15 +235,87 @@ const MARKUP: Lang = web(web::Kind::Markup);
 
 const PHP: Lang = Lang {
     keywords: &[
-        "abstract", "and", "array", "as", "bool", "break", "callable", "case", "catch", "class", "clone",
-        "const", "continue", "declare", "default", "do", "echo", "else", "elseif", "empty", "enddeclare",
-        "endfor", "endforeach", "endif", "endswitch", "endwhile", "enum", "extends", "false", "final",
-        "finally", "float", "fn", "for", "foreach", "function", "global", "goto", "if", "implements",
-        "include", "include_once", "instanceof", "insteadof", "int", "interface", "isset", "iterable",
-        "list", "match", "mixed", "namespace", "never", "new", "null", "object", "or", "parent", "print",
-        "private", "protected", "public", "readonly", "require", "require_once", "return", "self",
-        "static", "string", "switch", "throw", "trait", "true", "try", "unset", "use", "var", "void",
-        "while", "xor", "yield",
+        "abstract",
+        "and",
+        "array",
+        "as",
+        "bool",
+        "break",
+        "callable",
+        "case",
+        "catch",
+        "class",
+        "clone",
+        "const",
+        "continue",
+        "declare",
+        "default",
+        "do",
+        "echo",
+        "else",
+        "elseif",
+        "empty",
+        "enddeclare",
+        "endfor",
+        "endforeach",
+        "endif",
+        "endswitch",
+        "endwhile",
+        "enum",
+        "extends",
+        "false",
+        "final",
+        "finally",
+        "float",
+        "fn",
+        "for",
+        "foreach",
+        "function",
+        "global",
+        "goto",
+        "if",
+        "implements",
+        "include",
+        "include_once",
+        "instanceof",
+        "insteadof",
+        "int",
+        "interface",
+        "isset",
+        "iterable",
+        "list",
+        "match",
+        "mixed",
+        "namespace",
+        "never",
+        "new",
+        "null",
+        "object",
+        "or",
+        "parent",
+        "print",
+        "private",
+        "protected",
+        "public",
+        "readonly",
+        "require",
+        "require_once",
+        "return",
+        "self",
+        "static",
+        "string",
+        "switch",
+        "throw",
+        "trait",
+        "true",
+        "try",
+        "unset",
+        "use",
+        "var",
+        "void",
+        "while",
+        "xor",
+        "yield",
     ],
     line_comments: &["//", "#"],
     block_comment: Some(("/*", "*/")),
@@ -198,12 +343,12 @@ fn lang_for(path: &str) -> &'static Lang {
         Some("lock") if name == "composer.lock" => &JSON,
         Some("html" | "htm" | "xhtml" | "vue" | "svelte" | "xml" | "svg") => &MARKUP,
         Some(
-            "go" | "java" | "kt" | "c" | "h" | "cc" | "cpp" | "hpp" | "cs" | "swift" | "scala" | "dart",
+            "go" | "java" | "kt" | "c" | "h" | "cc" | "cpp" | "hpp" | "cs" | "swift" | "scala"
+            | "dart",
         ) => &C_LIKE,
         Some("php" | "phtml" | "php5" | "php7" | "php8" | "phpt") => &PHP,
         Some("yml" | "yaml") => &YAML,
-        Some("py" | "rb" | "sh" | "bash" | "zsh" | "toml" | "pl" | "r" | "ex" | "exs")
-        | None
+        Some("py" | "rb" | "sh" | "bash" | "zsh" | "toml" | "pl" | "r" | "ex" | "exs") | None
             if !matches!(name, "README" | "LICENSE") =>
         {
             &HASH
@@ -213,7 +358,11 @@ fn lang_for(path: &str) -> &'static Lang {
         // `.yml.dist`, `.yaml.example`, `.php.dist`: what's before the last part.
         Some("dist" | "example" | "sample" | "tpl" | "template" | "j2") => {
             let inner = name.rsplit_once('.').map_or(name, |(n, _)| n);
-            if inner.contains('.') { lang_for(inner) } else { &PLAIN }
+            if inner.contains('.') {
+                lang_for(inner)
+            } else {
+                &PLAIN
+            }
         }
         _ => &PLAIN,
     }
@@ -308,7 +457,9 @@ impl Highlighter {
             let c = rest.chars().next().unwrap();
             if lang.php {
                 // `<?php`, `<?=` and `?>`.
-                let tag = ["<?php", "<?=", "<?", "?>"].iter().find(|t| rest.starts_with(**t));
+                let tag = ["<?php", "<?=", "<?", "?>"]
+                    .iter()
+                    .find(|t| rest.starts_with(**t));
                 if let Some(t) = tag {
                     push(&mut out, i..i + t.len(), Tok::Variable);
                     i += t.len();
@@ -317,7 +468,9 @@ impl Highlighter {
                 }
                 // `$name`, `$this`.
                 if c == '$' {
-                    let len = rest[1..].find(|ch: char| !(ch.is_alphanumeric() || ch == '_')).unwrap_or(rest.len() - 1);
+                    let len = rest[1..]
+                        .find(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+                        .unwrap_or(rest.len() - 1);
                     if len > 0 {
                         push(&mut out, i..i + 1 + len, Tok::Variable);
                         i += 1 + len;
@@ -353,7 +506,9 @@ impl Highlighter {
                 let word = &text[i..stop];
                 let after = &text[stop..];
                 let keyword = lang.keywords.contains(&word)
-                    || (lang.php && lang.keywords.contains(&word.to_ascii_lowercase().as_str()) && !after.starts_with('('));
+                    || (lang.php
+                        && lang.keywords.contains(&word.to_ascii_lowercase().as_str())
+                        && !after.starts_with('('));
                 // `->name` and `::name` are members, whatever they're called.
                 let member = lang.php && (text[..i].ends_with("->") || text[..i].ends_with("::"));
                 let tok = if member {
@@ -369,7 +524,10 @@ impl Highlighter {
                     continue;
                 } else if after.starts_with("::") {
                     Some(Tok::Namespace)
-                } else if lang.php && word.starts_with(|ch: char| ch.is_uppercase()) && word.chars().any(|ch| ch.is_lowercase()) {
+                } else if lang.php
+                    && word.starts_with(|ch: char| ch.is_uppercase())
+                    && word.chars().any(|ch| ch.is_lowercase())
+                {
                     // `new Request(`, `Foo $x`, `App\Models\User`: a class.
                     Some(Tok::Type)
                 } else if after.starts_with('(') {
@@ -434,7 +592,12 @@ fn yaml_line(text: &str) -> Spans {
         Some(c) if !matches!(c, '[' | '{' | '&' | '*' | '!' | '|' | '>' | '#') => {
             let mut found = None;
             for (j, ch) in rest.char_indices() {
-                if ch == ':' && rest[j + 1..].chars().next().is_none_or(|n| n == ' ' || n == '\t') {
+                if ch == ':'
+                    && rest[j + 1..]
+                        .chars()
+                        .next()
+                        .is_none_or(|n| n == ' ' || n == '\t')
+                {
                     found = Some(i + j);
                     break;
                 }
@@ -498,9 +661,16 @@ fn yaml_value(text: &str, start: usize, out: &mut Spans) {
                 continue;
             }
             '&' | '*' | '!' => {
-                let len = rest.find(|ch: char| ch.is_whitespace() || (flow > 0 && matches!(ch, ',' | ']' | '}'))).unwrap_or(rest.len());
+                let len = rest
+                    .find(|ch: char| {
+                        ch.is_whitespace() || (flow > 0 && matches!(ch, ',' | ']' | '}'))
+                    })
+                    .unwrap_or(rest.len());
                 if len > 1 || c == '!' {
-                    out.push((i..i + len, if c == '!' { Tok::Type } else { Tok::Namespace }));
+                    out.push((
+                        i..i + len,
+                        if c == '!' { Tok::Type } else { Tok::Namespace },
+                    ));
                     i += len;
                     continue;
                 }
@@ -520,7 +690,8 @@ fn yaml_value(text: &str, start: usize, out: &mut Spans) {
         let mut stop = text.len();
         for (j, ch) in rest.char_indices() {
             let comment = ch == '#' && j > 0 && rest.as_bytes()[j - 1] == b' ';
-            let split = flow > 0 && (matches!(ch, ',' | ']' | '}') || (ch == ':' && rest[j + 1..].starts_with(' ')));
+            let split = flow > 0
+                && (matches!(ch, ',' | ']' | '}') || (ch == ':' && rest[j + 1..].starts_with(' ')));
             if comment || split {
                 stop = i + j;
                 break;
@@ -536,7 +707,23 @@ fn yaml_value(text: &str, start: usize, out: &mut Spans) {
         let in_map_key = flow > 0 && text[stop..].starts_with(':');
         let tok = if in_map_key {
             Tok::Variable
-        } else if matches!(word, "true" | "false" | "null" | "~" | "yes" | "no" | "on" | "off" | "True" | "False" | "Null" | "TRUE" | "FALSE" | "NULL") {
+        } else if matches!(
+            word,
+            "true"
+                | "false"
+                | "null"
+                | "~"
+                | "yes"
+                | "no"
+                | "on"
+                | "off"
+                | "True"
+                | "False"
+                | "Null"
+                | "TRUE"
+                | "FALSE"
+                | "NULL"
+        ) {
             Tok::Keyword
         } else if yaml_number(word) {
             Tok::Number
@@ -557,7 +744,8 @@ fn yaml_number(word: &str) -> bool {
     if let Some(hex) = w.strip_prefix("0x") {
         return !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit());
     }
-    w.starts_with(|c: char| c.is_ascii_digit()) && w.parse::<f64>().is_ok() || w.replace('_', "").parse::<i64>().is_ok() && !w.is_empty()
+    w.starts_with(|c: char| c.is_ascii_digit()) && w.parse::<f64>().is_ok()
+        || w.replace('_', "").parse::<i64>().is_ok() && !w.is_empty()
 }
 
 /// Merge with the previous span when it's the same token right before.
@@ -575,7 +763,8 @@ fn push(out: &mut Spans, r: Range<usize>, t: Tok) {
 /// `'x'` or `'\n'`, not a lifetime.
 fn closes_soon(rest: &str) -> bool {
     let b = rest.as_bytes();
-    (b.len() > 2 && b[2] == b'\'') || (b.len() > 3 && b[1] == b'\\' && b[3] == b'\'')
+    (b.len() > 2 && b[2] == b'\'')
+        || (b.len() > 3 && b[1] == b'\\' && b[3] == b'\'')
         || rest.chars().nth(2) == Some('\'')
 }
 
@@ -603,13 +792,19 @@ mod tests {
         let mut h = Highlighter::new(path);
         // Leak for a 'static &str in test output: fine in tests.
         let line: &'static str = Box::leak(line.to_string().into_boxed_str());
-        h.line(line).into_iter().map(|(r, t)| (&line[r], t)).collect()
+        h.line(line)
+            .into_iter()
+            .map(|(r, t)| (&line[r], t))
+            .collect()
     }
 
     #[test]
     fn rust_like_gitlab() {
         assert_eq!(
-            toks("a.rs", "    Config { limit: std::env::var(\"LIMIT\").ok().unwrap_or(100) }"),
+            toks(
+                "a.rs",
+                "    Config { limit: std::env::var(\"LIMIT\").ok().unwrap_or(100) }"
+            ),
             [
                 ("std", Tok::Namespace),
                 ("env", Tok::Namespace),
@@ -622,13 +817,29 @@ mod tests {
         );
         assert_eq!(
             toks("a.rs", "pub fn load() -> Config {"),
-            [("pub", Tok::Keyword), ("fn", Tok::Keyword), ("load", Tok::Function), ("->", Tok::Operator)]
+            [
+                ("pub", Tok::Keyword),
+                ("fn", Tok::Keyword),
+                ("load", Tok::Function),
+                ("->", Tok::Operator)
+            ]
         );
-        assert_eq!(toks("a.rs", "/// Allows `x`"), [("/// Allows `x`", Tok::Comment)]);
-        assert_eq!(toks("a.rs", "println!(\"{}\", x)"), [("println!", Tok::Macro), ("\"{}\"", Tok::String)]);
+        assert_eq!(
+            toks("a.rs", "/// Allows `x`"),
+            [("/// Allows `x`", Tok::Comment)]
+        );
+        assert_eq!(
+            toks("a.rs", "println!(\"{}\", x)"),
+            [("println!", Tok::Macro), ("\"{}\"", Tok::String)]
+        );
         // A lifetime isn't a string; a char is.
         let t = toks("a.rs", "fn f<'a>(c: char) { 'x' }");
-        assert_eq!(t.iter().filter(|(_, k)| *k == Tok::String).collect::<Vec<_>>(), [&("'x'", Tok::String)]);
+        assert_eq!(
+            t.iter()
+                .filter(|(_, k)| *k == Tok::String)
+                .collect::<Vec<_>>(),
+            [&("'x'", Tok::String)]
+        );
     }
 
     #[test]
@@ -636,40 +847,147 @@ mod tests {
         let mut h = Highlighter::new("x.ts");
         assert_eq!(h.line("a /* b"), [(2..6, Tok::Comment)]);
         assert_eq!(h.line("still"), [(0..5, Tok::Comment)]);
-        assert_eq!(h.line("end */ return"), [(0..6, Tok::Comment), (7..13, Tok::Keyword)]);
+        assert_eq!(
+            h.line("end */ return"),
+            [(0..6, Tok::Comment), (7..13, Tok::Keyword)]
+        );
     }
 
     #[test]
     fn markdown_and_hash_languages() {
         assert_eq!(toks("README.md", "# Title"), [("# Title", Tok::Heading)]);
-        assert_eq!(toks("README.md", "Set `LIMIT` here"), [("`LIMIT`", Tok::String)]);
-        assert_eq!(toks("x.py", "def go(): # hi"), [("def", Tok::Keyword), ("go", Tok::Function), ("# hi", Tok::Comment)]);
+        assert_eq!(
+            toks("README.md", "Set `LIMIT` here"),
+            [("`LIMIT`", Tok::String)]
+        );
+        assert_eq!(
+            toks("x.py", "def go(): # hi"),
+            [
+                ("def", Tok::Keyword),
+                ("go", Tok::Function),
+                ("# hi", Tok::Comment)
+            ]
+        );
         assert_eq!(toks("notes.txt", "fn x() // y"), []);
     }
 
     #[test]
     fn yaml_keys_and_values() {
         use Tok::*;
-        assert_eq!(toks(".gitlab-ci.yml", "image: ruby:3.2 # base"), [("image", Variable), (":", Operator), ("ruby:3.2", String), ("# base", Comment)]);
-        assert_eq!(toks("a.yaml", "  - name: \"x: y\""), [("-", Operator), ("name", Variable), (":", Operator), ("\"x: y\"", String)]);
-        assert_eq!(toks("a.yml", "replicas: 3"), [("replicas", Variable), (":", Operator), ("3", Number)]);
-        assert_eq!(toks("a.yml", "enabled: true"), [("enabled", Variable), (":", Operator), ("true", Keyword)]);
-        assert_eq!(toks("a.yml", "stages:"), [("stages", Variable), (":", Operator)]);
-        assert_eq!(toks("a.yml", "    - bundle exec rspec"), [("-", Operator), ("bundle exec rspec", String)]);
-        assert_eq!(toks("a.yml", "# just a comment"), [("# just a comment", Comment)]);
+        assert_eq!(
+            toks(".gitlab-ci.yml", "image: ruby:3.2 # base"),
+            [
+                ("image", Variable),
+                (":", Operator),
+                ("ruby:3.2", String),
+                ("# base", Comment)
+            ]
+        );
+        assert_eq!(
+            toks("a.yaml", "  - name: \"x: y\""),
+            [
+                ("-", Operator),
+                ("name", Variable),
+                (":", Operator),
+                ("\"x: y\"", String)
+            ]
+        );
+        assert_eq!(
+            toks("a.yml", "replicas: 3"),
+            [("replicas", Variable), (":", Operator), ("3", Number)]
+        );
+        assert_eq!(
+            toks("a.yml", "enabled: true"),
+            [("enabled", Variable), (":", Operator), ("true", Keyword)]
+        );
+        assert_eq!(
+            toks("a.yml", "stages:"),
+            [("stages", Variable), (":", Operator)]
+        );
+        assert_eq!(
+            toks("a.yml", "    - bundle exec rspec"),
+            [("-", Operator), ("bundle exec rspec", String)]
+        );
+        assert_eq!(
+            toks("a.yml", "# just a comment"),
+            [("# just a comment", Comment)]
+        );
         assert_eq!(toks("a.yml", "---"), [("---", Namespace)]);
-        assert_eq!(toks("a.yml", "base: &base"), [("base", Variable), (":", Operator), ("&base", Namespace)]);
-        assert_eq!(toks("a.yml", "<<: *base"), [("<<", Variable), (":", Operator), ("*base", Namespace)]);
-        assert_eq!(toks("a.yml", "script: |"), [("script", Variable), (":", Operator), ("|", Operator)]);
-        assert_eq!(toks("a.yml", "only: [main, \"dev\"]"), [("only", Variable), (":", Operator), ("main", String), ("\"dev\"", String)]);
-        assert_eq!(toks("a.yml", "env: {A: 1, B: x}"), [("env", Variable), (":", Operator), ("A", Variable), ("1", Number), ("B", Variable), ("x", String)]);
-        assert_eq!(toks("a.yml", "url: http://x.test/a#b"), [("url", Variable), (":", Operator), ("http://x.test/a#b", String)]);
-        assert_eq!(toks("a.yml", "\"quoted key\": v"), [("\"quoted key\"", Variable), (":", Operator), ("v", String)]);
-        assert_eq!(toks("a.yml", "tag: !ruby/object x"), [("tag", Variable), (":", Operator), ("!ruby/object", Type), ("x", String)]);
+        assert_eq!(
+            toks("a.yml", "base: &base"),
+            [("base", Variable), (":", Operator), ("&base", Namespace)]
+        );
+        assert_eq!(
+            toks("a.yml", "<<: *base"),
+            [("<<", Variable), (":", Operator), ("*base", Namespace)]
+        );
+        assert_eq!(
+            toks("a.yml", "script: |"),
+            [("script", Variable), (":", Operator), ("|", Operator)]
+        );
+        assert_eq!(
+            toks("a.yml", "only: [main, \"dev\"]"),
+            [
+                ("only", Variable),
+                (":", Operator),
+                ("main", String),
+                ("\"dev\"", String)
+            ]
+        );
+        assert_eq!(
+            toks("a.yml", "env: {A: 1, B: x}"),
+            [
+                ("env", Variable),
+                (":", Operator),
+                ("A", Variable),
+                ("1", Number),
+                ("B", Variable),
+                ("x", String)
+            ]
+        );
+        assert_eq!(
+            toks("a.yml", "url: http://x.test/a#b"),
+            [
+                ("url", Variable),
+                (":", Operator),
+                ("http://x.test/a#b", String)
+            ]
+        );
+        assert_eq!(
+            toks("a.yml", "\"quoted key\": v"),
+            [("\"quoted key\"", Variable), (":", Operator), ("v", String)]
+        );
+        assert_eq!(
+            toks("a.yml", "tag: !ruby/object x"),
+            [
+                ("tag", Variable),
+                (":", Operator),
+                ("!ruby/object", Type),
+                ("x", String)
+            ]
+        );
         // `.yml.dist` is YAML too.
-        assert_eq!(toks("config.yml.dist", "a: 1"), [("a", Variable), (":", Operator), ("1", Number)]);
+        assert_eq!(
+            toks("config.yml.dist", "a: 1"),
+            [("a", Variable), (":", Operator), ("1", Number)]
+        );
         // Odd lines don't panic.
-        for l in ["", " ", "-", ":", "a:b", "- ", "?", "key: 'unclosed", "ž: ū", "[", "{a: [1, 2]}", "x: # c", "&", "- !"] {
+        for l in [
+            "",
+            " ",
+            "-",
+            ":",
+            "a:b",
+            "- ",
+            "?",
+            "key: 'unclosed",
+            "ž: ū",
+            "[",
+            "{a: [1, 2]}",
+            "x: # c",
+            "&",
+            "- !",
+        ] {
             let mut h = Highlighter::new("a.yml");
             for (r, _) in h.line(l) {
                 assert!(l.get(r).is_some(), "{l:?}");
@@ -682,19 +1000,64 @@ mod tests {
         use Tok::*;
         assert_eq!(toks("a.php", "<?php"), [("<?php", Variable)]);
         assert_eq!(
-            toks("a.php", "public function handle(Request $request): ?Response"),
-            [("public", Keyword), ("function", Keyword), ("handle", Function), ("Request", Type), ("$request", Variable), ("?", Operator), ("Response", Type)]
+            toks(
+                "a.php",
+                "public function handle(Request $request): ?Response"
+            ),
+            [
+                ("public", Keyword),
+                ("function", Keyword),
+                ("handle", Function),
+                ("Request", Type),
+                ("$request", Variable),
+                ("?", Operator),
+                ("Response", Type)
+            ]
         );
         assert_eq!(
             toks("a.php", "$this->repo->save($user); # done"),
-            [("$this", Variable), ("->", Operator), ("->", Operator), ("save", Function), ("$user", Variable), ("# done", Comment)]
+            [
+                ("$this", Variable),
+                ("->", Operator),
+                ("->", Operator),
+                ("save", Function),
+                ("$user", Variable),
+                ("# done", Comment)
+            ]
         );
-        assert_eq!(toks("a.php", "#[Route('/x')]"), [("Route", Type), ("'/x'", String)]);
-        assert_eq!(toks("a.php", "use App\\Models\\User;"), [("use", Keyword), ("App", Type), ("Models", Type), ("User", Type)]);
-        assert_eq!(toks("a.php", "return User::find(1) ?? NULL;"), [("return", Keyword), ("User", Namespace), ("find", Function), ("1", Number), ("??", Operator), ("NULL", Keyword)]);
-        assert_eq!(toks("a.php", "$x = array_map(fn ($a) => $a * 2, $list);")[..3], [("$x", Variable), ("=", Operator), ("array_map", Function)]);
+        assert_eq!(
+            toks("a.php", "#[Route('/x')]"),
+            [("Route", Type), ("'/x'", String)]
+        );
+        assert_eq!(
+            toks("a.php", "use App\\Models\\User;"),
+            [
+                ("use", Keyword),
+                ("App", Type),
+                ("Models", Type),
+                ("User", Type)
+            ]
+        );
+        assert_eq!(
+            toks("a.php", "return User::find(1) ?? NULL;"),
+            [
+                ("return", Keyword),
+                ("User", Namespace),
+                ("find", Function),
+                ("1", Number),
+                ("??", Operator),
+                ("NULL", Keyword)
+            ]
+        );
+        assert_eq!(
+            toks("a.php", "$x = array_map(fn ($a) => $a * 2, $list);")[..3],
+            [("$x", Variable), ("=", Operator), ("array_map", Function)]
+        );
         // A member named like a keyword is a member.
-        assert_eq!(toks("a.php", "$q->list()"), [("$q", Variable), ("->", Operator), ("list", Function)]);
+        assert_eq!(
+            toks("a.php", "$q->list()"),
+            [("$q", Variable), ("->", Operator), ("list", Function)]
+        );
         assert_eq!(toks("a.php", "self::DEFAULT"), [("self", Keyword)]);
     }
 }

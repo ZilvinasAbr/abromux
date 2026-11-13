@@ -120,8 +120,14 @@ impl Light {
             source_branch: mr.source_branch.clone(),
             target_branch: mr.target_branch.clone(),
             updated_at: mr.updated_at.clone(),
-            pipeline: mr.head_pipeline.as_ref().map(|p| p.status.to_ascii_lowercase()),
-            merge_status: mr.detailed_merge_status.as_ref().map(|s| s.to_ascii_lowercase()),
+            pipeline: mr
+                .head_pipeline
+                .as_ref()
+                .map(|p| p.status.to_ascii_lowercase()),
+            merge_status: mr
+                .detailed_merge_status
+                .as_ref()
+                .map(|s| s.to_ascii_lowercase()),
             approved: Some(r.approvals.approved).or(before.and_then(|b| b.approved)),
             notes: mr.user_notes_count as u64,
             head_sha: refs.map(|d| d.head_sha.clone()),
@@ -215,13 +221,18 @@ impl Mr {
 
     /// GitLab's id of its project, if known.
     pub fn project_id(&self) -> Option<u64> {
-        self.light.as_ref().map(|l| l.project_id).filter(|id| *id != 0)
+        self.light
+            .as_ref()
+            .map(|l| l.project_id)
+            .filter(|id| *id != 0)
     }
 
     /// The recorded review isn't what the cheap check last saw.
     pub fn review_stale(&self) -> bool {
         let Some(l) = &self.light else { return false };
-        self.review.as_ref().is_none_or(|r| r.signature != l.signature())
+        self.review
+            .as_ref()
+            .is_none_or(|r| r.signature != l.signature())
     }
 
     /// Its review should be fetched without anyone asking.
@@ -259,8 +270,7 @@ pub fn evict(mrs: &mut BTreeMap<MrKey, Mr>, keep: &Keep) -> Vec<(MrKey, Option<u
     }
     mrs.retain(|k, m| {
         let shown = keep.open.contains(k);
-        let wanted =
-            keep.pinned.contains(k) || m.roles.any() || m.inspected_at.is_some() || shown;
+        let wanted = keep.pinned.contains(k) || m.roles.any() || m.inspected_at.is_some() || shown;
         if (m.closed() && !shown) || !wanted {
             dropped.push((k.clone(), m.project_id()));
             false
@@ -269,14 +279,22 @@ pub fn evict(mrs: &mut BTreeMap<MrKey, Mr>, keep: &Keep) -> Vec<(MrKey, Option<u
         }
     });
     // Disk space: recent-only ones before yours, longest-unopened first.
-    let mut total: u64 = mrs.values().filter_map(|m| m.review.as_ref()).map(|d| d.bytes).sum();
+    let mut total: u64 = mrs
+        .values()
+        .filter_map(|m| m.review.as_ref())
+        .map(|d| d.bytes)
+        .sum();
     if total > keep.cache_bytes {
         let mut order: Vec<(bool, u64, String, MrKey)> = mrs
             .values()
             .filter(|m| m.review.is_some() && !keep.open.contains(&m.key))
             .map(|m| {
                 let kept = keep.pinned.contains(&m.key) || m.roles.any();
-                let updated = m.light.as_ref().map(|l| l.updated_at.clone()).unwrap_or_default();
+                let updated = m
+                    .light
+                    .as_ref()
+                    .map(|l| l.updated_at.clone())
+                    .unwrap_or_default();
                 (kept, m.inspected_at.unwrap_or(0), updated, m.key.clone())
             })
             .collect();
@@ -356,7 +374,10 @@ mod tests {
         let pinned = HashSet::new();
         let open: HashSet<_> = [MrKey::new("g/b", 2)].into();
         let dropped = evict(&mut mrs, &keep(&pinned, &open));
-        assert_eq!(mrs.keys().cloned().collect::<Vec<_>>(), vec![MrKey::new("g/b", 2)]);
+        assert_eq!(
+            mrs.keys().cloned().collect::<Vec<_>>(),
+            vec![MrKey::new("g/b", 2)]
+        );
         assert_eq!(dropped, vec![(MrKey::new("g/a", 1), None)]);
     }
 

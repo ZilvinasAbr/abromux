@@ -187,9 +187,8 @@ impl Kind {
             Kind::Gemini => env("GEMINI_CLI_HOME").unwrap_or(home).join(".gemini"),
             Kind::Droid => home.join(".factory"),
             Kind::Cursor => home.join(".cursor"),
-            Kind::OpenCode => env("OPENCODE_CONFIG_DIR").unwrap_or_else(|| {
-                crate::paths::xdg_config().join("opencode")
-            }),
+            Kind::OpenCode => env("OPENCODE_CONFIG_DIR")
+                .unwrap_or_else(|| crate::paths::xdg_config().join("opencode")),
             Kind::Pi => env("PI_CODING_AGENT_DIR").unwrap_or(home.join(".pi/agent")),
         };
         Ok(dir.is_dir().then_some(dir))
@@ -547,7 +546,9 @@ impl AgentEvent {
                 let message = s("message").map(String::from);
                 // Older Claude versions send no notification_type.
                 let idle = s("notification_type") == Some("idle_prompt")
-                    || message.as_deref().is_some_and(|m| m.contains("waiting for your input"));
+                    || message
+                        .as_deref()
+                        .is_some_and(|m| m.contains("waiting for your input"));
                 if event == "Notification" && idle {
                     return None;
                 }
@@ -668,7 +669,9 @@ pub fn title_for(kind: Kind, prompts: &[String], current: Option<&str>) -> Optio
         Kind::Claude | Kind::Codex => vec![kind],
         _ => vec![Kind::Claude, Kind::Codex],
     };
-    order.into_iter().find_map(|k| title_from(k, prompts, current))
+    order
+        .into_iter()
+        .find_map(|k| title_from(k, prompts, current))
 }
 
 /// [`title_for`], from `kind`'s CLI alone.
@@ -972,16 +975,33 @@ mod tests {
     #[test]
     fn decodes_reports() {
         let ev = |v: Value| AgentEvent::of_report(&v);
-        assert_eq!(ev(json!({ "event": "PostToolUse" })), Some(AgentEvent::Working));
-        assert_eq!(ev(json!({ "event": "Stop", "summary": "Done" })), Some(AgentEvent::Stopped(Some("Done".into()))));
+        assert_eq!(
+            ev(json!({ "event": "PostToolUse" })),
+            Some(AgentEvent::Working)
+        );
+        assert_eq!(
+            ev(json!({ "event": "Stop", "summary": "Done" })),
+            Some(AgentEvent::Stopped(Some("Done".into())))
+        );
         assert_eq!(
             ev(json!({ "event": "PermissionRequest", "message": "Asks to run ls" })),
             Some(AgentEvent::NeedsInput(Some("Asks to run ls".into())))
         );
-        assert_eq!(ev(json!({ "event": "Notification", "notification_type": "idle_prompt", "message": "x" })), None);
-        assert_eq!(ev(json!({ "event": "Notification", "message": "Claude is waiting for your input" })), None);
+        assert_eq!(
+            ev(
+                json!({ "event": "Notification", "notification_type": "idle_prompt", "message": "x" })
+            ),
+            None
+        );
+        assert_eq!(
+            ev(json!({ "event": "Notification", "message": "Claude is waiting for your input" })),
+            None
+        );
         assert_eq!(ev(json!({ "event": "SessionStart" })), None);
-        assert_eq!(ev(json!({ "event": "SessionEnd" })), Some(AgentEvent::Ended));
+        assert_eq!(
+            ev(json!({ "event": "SessionEnd" })),
+            Some(AgentEvent::Ended)
+        );
     }
 
     #[test]

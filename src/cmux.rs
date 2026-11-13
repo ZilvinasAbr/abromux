@@ -116,7 +116,6 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
     })
 }
 
-
 /// A layout node. `panes` counts panes in tree order, so `focused` can say
 /// which one holds the focused panel.
 fn node(

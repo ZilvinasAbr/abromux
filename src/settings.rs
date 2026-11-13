@@ -1238,7 +1238,10 @@ mod tests {
         assert!(!s.app.workspace_inherit_working_directory);
         assert!(s.app.keep_workspace_open_when_closing_last_surface);
         assert!(!AppSettings::default().keep_workspace_open_when_closing_last_surface);
-        assert!(AppSettings::default().reorder_on_notification, "on, as in cmux");
+        assert!(
+            AppSettings::default().reorder_on_notification,
+            "on, as in cmux"
+        );
         assert_eq!(s.app.new_workspace_placement, Placement::AfterCurrent);
         assert_eq!(s.sidebar.font_size, 14.);
         assert!(s.sidebar.hide_all_details && s.sidebar.show_log);
@@ -1267,7 +1270,10 @@ mod tests {
         );
         assert!(err(r#"{"workspaceColors": {"colors": {"X": "blue"}}}"#).contains("isn't #rrggbb"));
         // cmux takes a flag or a mode.
-        let reorder = |v: &str| parse(&format!(r#"{{"app": {{"reorderOnNotification": {v}}}}}"#)).map(|s| s.app.reorder_on_notification);
+        let reorder = |v: &str| {
+            parse(&format!(r#"{{"app": {{"reorderOnNotification": {v}}}}}"#))
+                .map(|s| s.app.reorder_on_notification)
+        };
         assert!(!reorder("false").unwrap());
         assert!(!reorder(r#""off""#).unwrap());
         assert!(reorder(r#""notifications""#).unwrap());

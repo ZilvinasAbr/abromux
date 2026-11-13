@@ -67,7 +67,9 @@ pub struct Link {
 impl Link {
     /// What the sidebar shows after the key.
     pub fn label(&self) -> Option<&str> {
-        self.title.as_deref().filter(|t| !t.is_empty() && *t != self.key)
+        self.title
+            .as_deref()
+            .filter(|t| !t.is_empty() && *t != self.key)
     }
 
     /// The key as the sidebar shows it: a merge request by its project's
@@ -182,9 +184,8 @@ pub fn parse(
         });
     }
     if let Some(k) = MrKey::parse(text) {
-        let url = mr_url(&k).ok_or_else(|| {
-            format!("{text}: GitLab isn't set up; give the merge request's URL")
-        })?;
+        let url = mr_url(&k)
+            .ok_or_else(|| format!("{text}: GitLab isn't set up; give the merge request's URL"))?;
         return Ok(Link {
             kind: Kind::Mr,
             key: k.reference(),
@@ -280,7 +281,13 @@ pub fn stack_order(branches: &[Option<(&str, &str, &str)>]) -> Vec<(usize, usize
             })
         })
         .collect();
-    fn visit(i: usize, depth: usize, parent: &[Option<usize>], seen: &mut [bool], out: &mut Vec<(usize, usize)>) {
+    fn visit(
+        i: usize,
+        depth: usize,
+        parent: &[Option<usize>],
+        seen: &mut [bool],
+        out: &mut Vec<(usize, usize)>,
+    ) {
         if seen[i] {
             return;
         }
@@ -308,12 +315,7 @@ pub fn stack_order(branches: &[Option<(&str, &str, &str)>]) -> Vec<(usize, usize
 
 // ---- in the app ------------------------------------------------------------
 
-use crate::{
-    AbroMux, Hints, gitlab, hint_pill,
-    settings::Settings,
-    theme::*,
-    workspace::Surface,
-};
+use crate::{AbroMux, Hints, gitlab, hint_pill, settings::Settings, theme::*, workspace::Surface};
 use gpui::{prelude::*, *};
 use gpui_component::WindowExt as _;
 use std::collections::HashSet;
@@ -357,7 +359,9 @@ impl AbroMux {
     pub(crate) fn parse_link(&self, text: &str, cx: &App) -> Result<Link, String> {
         let st = gitlab::store(cx).read(cx);
         let gitlab = !st.host.is_empty();
-        parse(text, self.jira_base(cx).as_deref(), &|k| gitlab.then(|| st.web_url(k)))
+        parse(text, self.jira_base(cx).as_deref(), &|k| {
+            gitlab.then(|| st.web_url(k))
+        })
     }
 
     /// Workspace `wi`'s links as the sidebar lists them: the tracked ones,
@@ -365,7 +369,10 @@ impl AbroMux {
     /// tabs or the merge request cache have now; a merge request stacked on
     /// another comes right after it.
     pub(crate) fn shown_links(&self, wi: usize, cx: &App) -> Vec<Link> {
-        self.stacked_links(wi, cx).into_iter().map(|(l, _)| l).collect()
+        self.stacked_links(wi, cx)
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect()
     }
 
     /// `shown_links`, each with how deep it's stacked (0: on no other).
@@ -374,7 +381,13 @@ impl AbroMux {
         let st = gitlab::store(cx).read(cx);
         let mut out = ws.links.clone();
         let gitlab_on = crate::plugins::enabled("gitlab", cx);
-        for k in st.pinned.get(&ws.id).into_iter().flatten().filter(|_| gitlab_on) {
+        for k in st
+            .pinned
+            .get(&ws.id)
+            .into_iter()
+            .flatten()
+            .filter(|_| gitlab_on)
+        {
             let key = k.reference();
             if !ws.hidden_links.contains(&key) && !out.iter().any(|l| l.key == key) {
                 out.push(Link {
@@ -400,7 +413,10 @@ impl AbroMux {
                 .and_then(|m| m.light.as_ref())
                 .map(|m| m.title.clone())
                 .filter(|t| !t.is_empty());
-            let live = tabs.iter().find(|(k, _)| *k == l.key).map(|(_, t)| t.clone());
+            let live = tabs
+                .iter()
+                .find(|(k, _)| *k == l.key)
+                .map(|(_, t)| t.clone());
             if let Some(t) = cached.or(live) {
                 l.title = Some(t);
             }
@@ -408,14 +424,23 @@ impl AbroMux {
         let branches: Vec<Option<(String, String, String)>> = out
             .iter()
             .map(|l| {
-                let k = (l.kind == Kind::Mr).then(|| MrKey::parse(&l.key)).flatten()?;
+                let k = (l.kind == Kind::Mr)
+                    .then(|| MrKey::parse(&l.key))
+                    .flatten()?;
                 let m = st.mrs.get(&k)?.light.as_ref()?;
-                Some((k.project.clone(), m.source_branch.clone(), m.target_branch.clone()))
+                Some((
+                    k.project.clone(),
+                    m.source_branch.clone(),
+                    m.target_branch.clone(),
+                ))
             })
             .collect();
         let refs: Vec<Option<(&str, &str, &str)>> = branches
             .iter()
-            .map(|b| b.as_ref().map(|(p, s, t)| (p.as_str(), s.as_str(), t.as_str())))
+            .map(|b| {
+                b.as_ref()
+                    .map(|(p, s, t)| (p.as_str(), s.as_str(), t.as_str()))
+            })
             .collect();
         stack_order(&refs)
             .into_iter()
@@ -494,7 +519,12 @@ impl AbroMux {
                         .map_or(url, |o| format!("{o}/browse/{key}")),
                     _ => url,
                 };
-                ws.links.push(Link { kind, key, url, title });
+                ws.links.push(Link {
+                    kind,
+                    key,
+                    url,
+                    title,
+                });
                 changed = true;
             }
         }
@@ -596,7 +626,12 @@ impl AbroMux {
         }
         let surface = match link.kind {
             Kind::Mr if crate::plugins::enabled("gitlab", cx) => self
-                .make_plugin("gitlab", &serde_json::json!({ "url": link.url }), window, cx)
+                .make_plugin(
+                    "gitlab",
+                    &serde_json::json!({ "url": link.url }),
+                    window,
+                    cx,
+                )
                 .unwrap_or_else(|_| self.make_browser(&link.url, window, cx)),
             _ => self.make_browser(&link.url, window, cx),
         };
@@ -605,7 +640,16 @@ impl AbroMux {
             Some(p) => self.add_tab_to(wi, p, surface, focus, window, cx),
             None => {
                 let from = self.workspaces[wi].focused_pane;
-                let new = self.split_pane(wi, from, Axis::Horizontal, false, surface, focus, window, cx);
+                let new = self.split_pane(
+                    wi,
+                    from,
+                    Axis::Horizontal,
+                    false,
+                    surface,
+                    focus,
+                    window,
+                    cx,
+                );
                 self.workspaces[wi].link_pane = new;
             }
         }
@@ -624,10 +668,14 @@ impl AbroMux {
     /// ⌥⌘T: track the focused tab's page; again, untrack it.
     pub(crate) fn toggle_track_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let wi = self.active;
-        let Some(s) = self.ws().focused_surface().cloned() else { return };
+        let Some(s) = self.ws().focused_surface().cloned() else {
+            return;
+        };
         let Some((kind, key, url)) = surface_link(&s, cx) else {
             window.push_notification(
-                gpui_component::notification::Notification::info("This tab shows no web page to track."),
+                gpui_component::notification::Notification::info(
+                    "This tab shows no web page to track.",
+                ),
                 cx,
             );
             return;
@@ -636,9 +684,17 @@ impl AbroMux {
             self.untrack_link(wi, &key, cx);
         } else {
             let title = clean_title(kind, &key, &s.title(cx));
-            self.track_link(wi, Link { kind, key, url, title }, cx);
-            self.workspaces[wi].link_pane = self
-                .workspaces[wi]
+            self.track_link(
+                wi,
+                Link {
+                    kind,
+                    key,
+                    url,
+                    title,
+                },
+                cx,
+            );
+            self.workspaces[wi].link_pane = self.workspaces[wi]
                 .panes()
                 .find(|p| p.tabs.iter().any(|t| t.entity_id() == s.entity_id()))
                 .map(|p| p.id);
@@ -647,7 +703,12 @@ impl AbroMux {
 
     /// Every link of workspace `wi`, each in its tab (made where missing);
     /// the first is brought forward.
-    pub(crate) fn show_all_links(&mut self, wi: usize, window: &mut Window, cx: &mut Context<Self>) -> Vec<EntityId> {
+    pub(crate) fn show_all_links(
+        &mut self,
+        wi: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<EntityId> {
         let links = self.shown_links(wi, cx);
         let ids: Vec<EntityId> = links
             .iter()
@@ -699,7 +760,9 @@ impl AbroMux {
                         Some(t) => format!("{} · {t}", l.key).into(),
                         None => l.key.clone().into(),
                     };
-                    move |window, cx| gpui_component::tooltip::Tooltip::new(full.clone()).build(window, cx)
+                    move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(full.clone()).build(window, cx)
+                    }
                 })
                 // Stacked on the one above: in from it, with a turn.
                 .when(depth > 0, |d| {
@@ -747,7 +810,9 @@ impl AbroMux {
                                 .children(l.label().map(str::to_string)),
                         ),
                 })
-                .when(hints && i < DIGITS, |d| d.child(hint_pill(format!("⌥⌘{}", i + 1))))
+                .when(hints && i < DIGITS, |d| {
+                    d.child(hint_pill(format!("⌥⌘{}", i + 1)))
+                })
                 .when(!hints, |d| {
                     d.child(
                         div()
@@ -799,7 +864,12 @@ mod tests {
     fn stacks_merge_requests() {
         let mr = |s: &'static str, t: &'static str| Some(("a/b", s, t));
         // 0 → main, 1 → feat-2 (on 2), 2 → feat-1 (on 0), 3 a ticket.
-        let order = stack_order(&[mr("feat-1", "main"), mr("feat-3", "feat-2"), mr("feat-2", "feat-1"), None]);
+        let order = stack_order(&[
+            mr("feat-1", "main"),
+            mr("feat-3", "feat-2"),
+            mr("feat-2", "feat-1"),
+            None,
+        ]);
         assert_eq!(order, [(0, 0), (2, 1), (1, 2), (3, 0)]);
         // Another project's branch of the same name isn't the base.
         let order = stack_order(&[Some(("x/y", "feat-1", "main")), mr("feat-2", "feat-1")]);
@@ -810,7 +880,10 @@ mod tests {
     }
 
     fn mr_url(k: &MrKey) -> Option<String> {
-        Some(format!("https://gitlab.acme.com/{}/-/merge_requests/{}", k.project, k.iid))
+        Some(format!(
+            "https://gitlab.acme.com/{}/-/merge_requests/{}",
+            k.project, k.iid
+        ))
     }
 
     #[test]
@@ -826,16 +899,24 @@ mod tests {
     #[test]
     fn keys_of_urls() {
         let k = |u| key_of_url(u).unwrap();
-        assert_eq!(k("https://acme.atlassian.net/browse/PAY-1423"), (Kind::Jira, "PAY-1423".into()));
         assert_eq!(
-            k("https://acme.atlassian.net/jira/software/projects/PAY/boards/3?selectedIssue=PAY-7&x=1"),
+            k("https://acme.atlassian.net/browse/PAY-1423"),
+            (Kind::Jira, "PAY-1423".into())
+        );
+        assert_eq!(
+            k(
+                "https://acme.atlassian.net/jira/software/projects/PAY/boards/3?selectedIssue=PAY-7&x=1"
+            ),
             (Kind::Jira, "PAY-7".into())
         );
         assert_eq!(
             k("https://gitlab.acme.com/acme/api/-/merge_requests/812/diffs#note_1"),
             (Kind::Mr, "acme/api!812".into())
         );
-        assert_eq!(k("https://docs.rs/serde/#derive"), (Kind::Web, "https://docs.rs/serde".into()));
+        assert_eq!(
+            k("https://docs.rs/serde/#derive"),
+            (Kind::Web, "https://docs.rs/serde".into())
+        );
         assert_eq!(key_of_url("about:blank"), None);
     }
 
@@ -845,15 +926,55 @@ mod tests {
         let l = parse("PAY-1423", jira, &mr_url).unwrap();
         assert_eq!(l.url, "https://acme.atlassian.net/browse/PAY-1423");
         assert!(parse("PAY-1423", None, &mr_url).is_err());
-        let l = parse("https://acme.atlassian.net/browse/PAY-9?focusedCommentId=1", None, &mr_url).unwrap();
-        assert_eq!((l.kind, &*l.key, &*l.url), (Kind::Jira, "PAY-9", "https://acme.atlassian.net/browse/PAY-9"));
+        let l = parse(
+            "https://acme.atlassian.net/browse/PAY-9?focusedCommentId=1",
+            None,
+            &mr_url,
+        )
+        .unwrap();
+        assert_eq!(
+            (l.kind, &*l.key, &*l.url),
+            (
+                Kind::Jira,
+                "PAY-9",
+                "https://acme.atlassian.net/browse/PAY-9"
+            )
+        );
         let l = parse("acme/api!812", None, &mr_url).unwrap();
-        assert_eq!((l.kind, &*l.url), (Kind::Mr, "https://gitlab.acme.com/acme/api/-/merge_requests/812"));
-        let l = parse("https://gitlab.acme.com/acme/api/-/merge_requests/812/diffs", None, &mr_url).unwrap();
-        assert_eq!((&*l.key, &*l.url), ("acme/api!812", "https://gitlab.acme.com/acme/api/-/merge_requests/812"));
+        assert_eq!(
+            (l.kind, &*l.url),
+            (
+                Kind::Mr,
+                "https://gitlab.acme.com/acme/api/-/merge_requests/812"
+            )
+        );
+        let l = parse(
+            "https://gitlab.acme.com/acme/api/-/merge_requests/812/diffs",
+            None,
+            &mr_url,
+        )
+        .unwrap();
+        assert_eq!(
+            (&*l.key, &*l.url),
+            (
+                "acme/api!812",
+                "https://gitlab.acme.com/acme/api/-/merge_requests/812"
+            )
+        );
         // A merge request on another GitLab keeps its own host.
-        let l = parse("https://git.other.org/acme/api/-/merge_requests/5#note_1", None, &mr_url).unwrap();
-        assert_eq!((l.kind, &*l.url), (Kind::Mr, "https://git.other.org/acme/api/-/merge_requests/5"));
+        let l = parse(
+            "https://git.other.org/acme/api/-/merge_requests/5#note_1",
+            None,
+            &mr_url,
+        )
+        .unwrap();
+        assert_eq!(
+            (l.kind, &*l.url),
+            (
+                Kind::Mr,
+                "https://git.other.org/acme/api/-/merge_requests/5"
+            )
+        );
         assert!(parse("hello", jira, &mr_url).is_err());
     }
 
@@ -865,7 +986,12 @@ mod tests {
         );
         assert_eq!(clean_title(Kind::Jira, "PAY-1", "PAY-1"), None);
         assert_eq!(
-            clean_title(Kind::Mr, "a/b!3", "Fix rounding (!3) · Merge requests · a / b · GitLab").as_deref(),
+            clean_title(
+                Kind::Mr,
+                "a/b!3",
+                "Fix rounding (!3) · Merge requests · a / b · GitLab"
+            )
+            .as_deref(),
             Some("Fix rounding")
         );
         assert_eq!(clean_title(Kind::Web, "x", "https://x.com"), None);
@@ -874,22 +1000,55 @@ mod tests {
     #[test]
     fn merge_request_titles() {
         let t = |s: &str| super::mr_title(s);
-        assert_eq!(t("Draft: PAY-1423 Refund fails"), ("Refund fails".into(), true, Some("PAY-1423".into())));
-        assert_eq!(t("[PAY-1423] Refund fails"), ("Refund fails".into(), false, Some("PAY-1423".into())));
-        assert_eq!(t("PAY-1423: Refund fails"), ("Refund fails".into(), false, Some("PAY-1423".into())));
-        assert_eq!(t("Draft: Resolve \"PAY-1 x\""), ("Resolve \"PAY-1 x\"".into(), true, None));
-        assert_eq!(t("[Draft] WIP: Fix rounding"), ("Fix rounding".into(), true, None));
-        assert_eq!(t("PAY-1423 - Refund – fails"), ("Refund – fails".into(), false, Some("PAY-1423".into())));
+        assert_eq!(
+            t("Draft: PAY-1423 Refund fails"),
+            ("Refund fails".into(), true, Some("PAY-1423".into()))
+        );
+        assert_eq!(
+            t("[PAY-1423] Refund fails"),
+            ("Refund fails".into(), false, Some("PAY-1423".into()))
+        );
+        assert_eq!(
+            t("PAY-1423: Refund fails"),
+            ("Refund fails".into(), false, Some("PAY-1423".into()))
+        );
+        assert_eq!(
+            t("Draft: Resolve \"PAY-1 x\""),
+            ("Resolve \"PAY-1 x\"".into(), true, None)
+        );
+        assert_eq!(
+            t("[Draft] WIP: Fix rounding"),
+            ("Fix rounding".into(), true, None)
+        );
+        assert_eq!(
+            t("PAY-1423 - Refund – fails"),
+            ("Refund – fails".into(), false, Some("PAY-1423".into()))
+        );
         // Not tickets, and a title that's only one.
-        assert_eq!(t("UTF-8 everywhere"), ("everywhere".into(), false, Some("UTF-8".into())));
+        assert_eq!(
+            t("UTF-8 everywhere"),
+            ("everywhere".into(), false, Some("UTF-8".into()))
+        );
         assert_eq!(t("PAY-1423"), ("PAY-1423".into(), false, None));
-        assert_eq!(t("Drafting the plan"), ("Drafting the plan".into(), false, None));
-        assert_eq!(t("[PAY-1423 Refund"), ("[PAY-1423 Refund".into(), false, None));
+        assert_eq!(
+            t("Drafting the plan"),
+            ("Drafting the plan".into(), false, None)
+        );
+        assert_eq!(
+            t("[PAY-1423 Refund"),
+            ("[PAY-1423 Refund".into(), false, None)
+        );
     }
 
     #[test]
     fn origins() {
-        assert_eq!(origin("acme.atlassian.net").as_deref(), Some("https://acme.atlassian.net"));
-        assert_eq!(origin("https://acme.atlassian.net/browse/X-1").as_deref(), Some("https://acme.atlassian.net"));
+        assert_eq!(
+            origin("acme.atlassian.net").as_deref(),
+            Some("https://acme.atlassian.net")
+        );
+        assert_eq!(
+            origin("https://acme.atlassian.net/browse/X-1").as_deref(),
+            Some("https://acme.atlassian.net")
+        );
     }
 }

@@ -70,7 +70,8 @@ pub fn host_key(host: &str) -> String {
 /// touched it (comments do), its head commit, its pipeline's status, and
 /// its comment count.
 pub fn signature(updated_at: &str, head_sha: &str, pipeline: &str, notes: u64) -> String {
-    let at = crate::time::parse(updated_at).map_or_else(|| updated_at.to_string(), |t| t.to_string());
+    let at =
+        crate::time::parse(updated_at).map_or_else(|| updated_at.to_string(), |t| t.to_string());
     format!("{at}|{head_sha}|{}|{notes}", pipeline.to_ascii_lowercase())
 }
 
@@ -86,7 +87,11 @@ pub fn review_signature(r: &Review) -> String {
 
 /// `group/project` of a loaded review.
 pub fn review_path(r: &Review) -> String {
-    r.mr.references.full.rsplit_once('!').map_or("", |(p, _)| p).to_string()
+    r.mr.references
+        .full
+        .rsplit_once('!')
+        .map_or("", |(p, _)| p)
+        .to_string()
 }
 
 // ---- in memory -------------------------------------------------------------
@@ -123,13 +128,19 @@ impl Shared {
     }
 
     pub fn project_id(&self, host: &str, path: &str) -> Option<u64> {
-        self.paths.get(&(host_key(host), path.to_ascii_lowercase())).copied()
+        self.paths
+            .get(&(host_key(host), path.to_ascii_lowercase()))
+            .copied()
     }
 
     /// Everything put since `serial` (exclusive), oldest first.
     pub fn since(&self, serial: u64) -> impl Iterator<Item = (&str, &Entry)> {
-        let mut v: Vec<(&str, &Entry)> =
-            self.entries.iter().filter(|(_, e)| e.serial > serial).map(|((h, _, _), e)| (h.as_str(), e)).collect();
+        let mut v: Vec<(&str, &Entry)> = self
+            .entries
+            .iter()
+            .filter(|(_, e)| e.serial > serial)
+            .map(|((h, _, _), e)| (h.as_str(), e))
+            .collect();
         v.sort_by_key(|(_, e)| e.serial);
         v.into_iter()
     }
@@ -145,7 +156,14 @@ pub fn shared(cx: &App) -> Option<&Shared> {
 
 /// `review` as the latest of its merge request. An older one than what's
 /// there (a slow load landing after a newer one) is dropped.
-pub fn put(cx: &mut App, host: &str, review: Rc<Review>, fetched: Instant, bytes: u64, replayed: bool) {
+pub fn put(
+    cx: &mut App,
+    host: &str,
+    review: Rc<Review>,
+    fetched: Instant,
+    bytes: u64,
+    replayed: bool,
+) {
     let key = (host_key(host), review.mr.project_id, review.mr.iid);
     let path = review_path(&review).to_ascii_lowercase();
     let s = cx.default_global::<Shared>();
@@ -161,7 +179,16 @@ pub fn put(cx: &mut App, host: &str, review: Rc<Review>, fetched: Instant, bytes
     }
     s.order.retain(|k| *k != key);
     s.order.push_back(key.clone());
-    s.entries.insert(key, Entry { review, fetched, serial, bytes, replayed });
+    s.entries.insert(
+        key,
+        Entry {
+            review,
+            fetched,
+            serial,
+            bytes,
+            replayed,
+        },
+    );
     while s.order.len() > IN_MEMORY {
         if let Some(k) = s.order.pop_front() {
             s.entries.remove(&k);
@@ -171,7 +198,9 @@ pub fn put(cx: &mut App, host: &str, review: Rc<Review>, fetched: Instant, bytes
 
 pub fn learn_project(cx: &mut App, host: &str, path: &str, id: u64) {
     if id != 0 && !path.is_empty() {
-        cx.default_global::<Shared>().paths.insert((host_key(host), path.to_ascii_lowercase()), id);
+        cx.default_global::<Shared>()
+            .paths
+            .insert((host_key(host), path.to_ascii_lowercase()), id);
     }
 }
 
@@ -232,7 +261,13 @@ pub(crate) fn root() -> Option<PathBuf> {
 fn file(host: &str, project: u64, iid: u64) -> Option<PathBuf> {
     let h: String = host_key(host)
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     Some(dir()?.join(h).join(format!("{project}-{iid}.json")))
 }
@@ -242,10 +277,18 @@ pub fn saved() -> Vec<(String, u64, u64, u64)> {
     let Some(dir) = dir() else { return vec![] };
     let mut out = vec![];
     for host in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        for f in std::fs::read_dir(host.path()).into_iter().flatten().flatten() {
+        for f in std::fs::read_dir(host.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
             let name = f.file_name().to_string_lossy().into_owned();
-            let Some((p, i)) = name.strip_suffix(".json").and_then(|n| n.split_once('-')) else { continue };
-            let (Ok(p), Ok(i)) = (p.parse(), i.parse()) else { continue };
+            let Some((p, i)) = name.strip_suffix(".json").and_then(|n| n.split_once('-')) else {
+                continue;
+            };
+            let (Ok(p), Ok(i)) = (p.parse(), i.parse()) else {
+                continue;
+            };
             let bytes = f.metadata().map_or(0, |m| m.len());
             // The host as recorded (the folder's name lost its punctuation).
             let host = read(&f.path()).map(|r| r.host).unwrap_or_default();
@@ -269,7 +312,12 @@ pub fn saved_at(host: &str, project: u64, iid: u64) -> Option<i64> {
 /// what GitLab answered on disk. Blocks. Gives the review and the
 /// recording's size.
 pub fn fetch(c: &Client, project: u64, iid: u64) -> anyhow::Result<(Review, u64)> {
-    let rec = Arc::new(Recorder { inner: c.transport(), limits: limits(), got: Default::default(), sizes: Default::default() });
+    let rec = Arc::new(Recorder {
+        inner: c.transport(),
+        limits: limits(),
+        got: Default::default(),
+        sizes: Default::default(),
+    });
     let r = load_review(&c.with_transport(rec.clone()), project, iid)?;
     let answers = std::mem::take(&mut *rec.got.lock().unwrap_or_else(|e| e.into_inner()));
     let bytes = save(&Recording {
@@ -324,8 +372,16 @@ impl Recorder {
             r.body = body;
         }
         if let Ok(body) = std::str::from_utf8(&r.body) {
-            let saved = Saved { status: r.status, next_page: r.next_page, total: r.total, body: body.to_string() };
-            self.got.lock().unwrap_or_else(|e| e.into_inner()).push((key, saved));
+            let saved = Saved {
+                status: r.status,
+                next_page: r.next_page,
+                total: r.total,
+                body: body.to_string(),
+            };
+            self.got
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((key, saved));
         }
         Ok(r)
     }
@@ -353,7 +409,9 @@ impl Recorder {
 
 /// `…/merge_requests/<iid>/diffs?…`: the review's diff, a page of it.
 fn is_diffs(url: &str) -> bool {
-    url.split('?').next().is_some_and(|p| p.ends_with("/diffs") && p.contains("/merge_requests/"))
+    url.split('?')
+        .next()
+        .is_some_and(|p| p.ends_with("/diffs") && p.contains("/merge_requests/"))
 }
 
 fn graphql_key(url: &str, body: &[u8]) -> String {
@@ -367,7 +425,10 @@ impl Transport for Recorder {
 
     fn get_many(&self, urls: &[String], token: &str) -> Vec<anyhow::Result<Response>> {
         let got = self.inner.get_many(urls, token);
-        urls.iter().zip(got).map(|(u, r)| self.keep(u.clone(), r)).collect()
+        urls.iter()
+            .zip(got)
+            .map(|(u, r)| self.keep(u.clone(), r))
+            .collect()
     }
 
     fn send(&self, method: &str, url: &str, token: &str, body: &[u8]) -> anyhow::Result<Response> {
@@ -385,7 +446,10 @@ struct Replay(HashMap<String, Saved>);
 
 impl Replay {
     fn answer(&self, key: &str) -> anyhow::Result<Response> {
-        let s = self.0.get(key).ok_or_else(|| anyhow::anyhow!("not in the cache: {key}"))?;
+        let s = self
+            .0
+            .get(key)
+            .ok_or_else(|| anyhow::anyhow!("not in the cache: {key}"))?;
         Ok(Response {
             status: s.status,
             next_page: s.next_page,
@@ -417,7 +481,10 @@ mod tests {
             signature("2026-11-06T10:20:30Z", "abc", "RUNNING", 3),
             signature("2026-11-06T10:20:30.123Z", "abc", "running", 3)
         );
-        assert_ne!(signature("2026-11-06T10:20:30Z", "abc", "", 3), signature("2026-11-06T10:20:31Z", "abc", "", 3));
+        assert_ne!(
+            signature("2026-11-06T10:20:30Z", "abc", "", 3),
+            signature("2026-11-06T10:20:31Z", "abc", "", 3)
+        );
     }
 
     #[test]
@@ -428,33 +495,69 @@ mod tests {
             got: Default::default(),
             sizes: Default::default(),
         };
-        let l = Limits { file_bytes: 10, mr_bytes: 25, mr_files: 4 };
+        let l = Limits {
+            file_bytes: 10,
+            mr_bytes: 25,
+            mr_files: 4,
+        };
         let page = |diffs: &[&str]| {
-            serde_json::to_vec(&diffs.iter().map(|d| serde_json::json!({ "new_path": "f", "diff": d })).collect::<Vec<_>>()).unwrap()
+            serde_json::to_vec(
+                &diffs
+                    .iter()
+                    .map(|d| serde_json::json!({ "new_path": "f", "diff": d }))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap()
         };
         let out = |b: Option<Vec<u8>>| -> Vec<(String, bool)> {
             let v: Vec<serde_json::Value> = serde_json::from_slice(&b.unwrap()).unwrap();
-            v.iter().map(|f| (f["diff"].as_str().unwrap().to_string(), f["too_large"].as_bool().unwrap_or(false))).collect()
+            v.iter()
+                .map(|f| {
+                    (
+                        f["diff"].as_str().unwrap().to_string(),
+                        f["too_large"].as_bool().unwrap_or(false),
+                    )
+                })
+                .collect()
         };
         // Too big a file; then the merge request's bytes run out on page 2,
         // and its file count.
         let got = out(rec.cap(&page(&["12345", "this one is too big", "1234567890"]), l));
-        assert_eq!(got, [("12345".into(), false), ("".into(), true), ("1234567890".into(), false)]);
+        assert_eq!(
+            got,
+            [
+                ("12345".into(), false),
+                ("".into(), true),
+                ("1234567890".into(), false)
+            ]
+        );
         // 25 bytes in 4 files: just fits; a 5th file doesn't.
         let got = out(rec.cap(&page(&["1234567890", "1"]), l));
         assert_eq!(got, [("1234567890".into(), false), ("".into(), true)]);
         assert_eq!(rec.cap(&page(&[]), l), None);
-        assert!(is_diffs("http://h/api/v4/projects/1/merge_requests/2/diffs?per_page=100&page=1"));
-        assert!(!is_diffs("http://h/api/v4/projects/1/merge_requests/2/discussions?page=1"));
+        assert!(is_diffs(
+            "http://h/api/v4/projects/1/merge_requests/2/diffs?per_page=100&page=1"
+        ));
+        assert!(!is_diffs(
+            "http://h/api/v4/projects/1/merge_requests/2/discussions?page=1"
+        ));
     }
 
     #[test]
     fn replays_what_was_recorded() {
         let rec = Recorder {
             inner: Arc::new(Replay(
-                [("http://h/api/v4/user".to_string(), Saved { status: 200, next_page: None, total: None, body: "{}".into() })]
-                    .into_iter()
-                    .collect(),
+                [(
+                    "http://h/api/v4/user".to_string(),
+                    Saved {
+                        status: 200,
+                        next_page: None,
+                        total: None,
+                        body: "{}".into(),
+                    },
+                )]
+                .into_iter()
+                .collect(),
             )),
             limits: None,
             got: Default::default(),

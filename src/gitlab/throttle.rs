@@ -67,7 +67,9 @@ impl Throttle {
         self.last_remaining = Some((remaining, limit));
         if limit > 0
             && (remaining as f64) < LOW * limit as f64
-            && self.raised.is_none_or(|t| now.duration_since(t) >= LOW_EVERY)
+            && self
+                .raised
+                .is_none_or(|t| now.duration_since(t) >= LOW_EVERY)
         {
             self.raise(1.5, now);
         }

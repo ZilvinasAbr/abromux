@@ -2,6 +2,8 @@
 //! tab bar, and the Overview (description, approval and merge widgets, the
 //! activity timeline, the sidebar) and Commits tabs.
 
+#[allow(unused_imports)]
+use crate::style::px;
 use crate::{
     Section,
     diff::Kind,
@@ -12,8 +14,6 @@ use crate::{
     view::GitLabView,
 };
 use gpui::{prelude::*, *};
-#[allow(unused_imports)]
-use crate::style::px;
 use std::rc::Rc;
 
 /// GitLab's activity filter.
@@ -49,7 +49,9 @@ impl Entry<'_> {
     fn at(&self) -> &str {
         match self {
             Entry::System(n) => &n.created_at,
-            Entry::General(d) | Entry::OnLine(_, _, _, d) | Entry::Outdated(d) => &d.notes[0].created_at,
+            Entry::General(d) | Entry::OnLine(_, _, _, d) | Entry::Outdated(d) => {
+                &d.notes[0].created_at
+            }
         }
     }
 }
@@ -62,14 +64,20 @@ fn pushed(body: &str) -> (Vec<String>, Option<(String, u64)>) {
     let mut rest = body;
     while let Some(at) = rest.find("<li>") {
         let after = &rest[at + 4..];
-        let Some(end) = after.find("</li>") else { break };
+        let Some(end) = after.find("</li>") else {
+            break;
+        };
         commits.push(after[..end].trim().to_string());
         rest = &after[end + 5..];
     }
     let compare = body.split("](").nth(1).and_then(|link| {
         let link = link.split(')').next()?;
         let query = link.split_once('?')?.1;
-        let param = |k: &str| query.split('&').find_map(|p| p.strip_prefix(k)?.strip_prefix('=').map(str::to_string));
+        let param = |k: &str| {
+            query
+                .split('&')
+                .find_map(|p| p.strip_prefix(k)?.strip_prefix('=').map(str::to_string))
+        };
         Some((param("start_sha")?, param("diff_id")?.parse().ok()?))
     });
     (commits, compare)
@@ -86,8 +94,20 @@ impl GitLabView {
             "thumbsdown" => r.mr.downvotes as usize,
             _ => 0,
         };
-        let pills = self.award_pills(AwardOn::Mr, &r.awards, &["thumbsup", "thumbsdown"], &votes, open, cx);
-        div().flex().flex_wrap().gap_2().children(pills).when(open, |d| d.child(self.add_reaction(AwardOn::Mr, cx)))
+        let pills = self.award_pills(
+            AwardOn::Mr,
+            &r.awards,
+            &["thumbsup", "thumbsdown"],
+            &votes,
+            open,
+            cx,
+        );
+        div()
+            .flex()
+            .flex_wrap()
+            .gap_2()
+            .children(pills)
+            .when(open, |d| d.child(self.add_reaction(AwardOn::Mr, cx)))
     }
 
     /// A comment's reactions, under its text; none, nothing.
@@ -118,13 +138,27 @@ impl GitLabView {
             }
         }
         let pill = |name: &str, cx: &mut Context<Self>| {
-            let who: Vec<&str> = awards.iter().filter(|a| a.name == name).map(|a| a.user.name.as_str()).collect();
-            let n = if who.is_empty() { fallback(name) } else { who.len() };
-            let mine = awards.iter().any(|a| a.name == name && Some(a.user.id) == me);
+            let who: Vec<&str> = awards
+                .iter()
+                .filter(|a| a.name == name)
+                .map(|a| a.user.name.as_str())
+                .collect();
+            let n = if who.is_empty() {
+                fallback(name)
+            } else {
+                who.len()
+            };
+            let mine = awards
+                .iter()
+                .any(|a| a.name == name && Some(a.user.id) == me);
             let tip = match who.len() {
                 0 => String::new(),
                 1 => format!("{} reacted with :{name}:", who[0]),
-                _ => format!("{} and {} reacted with :{name}:", who[..who.len() - 1].join(", "), who[who.len() - 1]),
+                _ => format!(
+                    "{} and {} reacted with :{name}:",
+                    who[..who.len() - 1].join(", "),
+                    who[who.len() - 1]
+                ),
             };
             let emoji = crate::emoji::of(name).map_or_else(|| format!(":{name}:"), str::to_string);
             let name = name.to_string();
@@ -149,8 +183,16 @@ impl GitLabView {
                 .hover(|s| s.bg(ca(0x89888d99)))
                 .child(emoji)
                 .child(n.to_string())
-                .when(!tip.is_empty(), |d| d.tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx)))
-                .when(open, |d| d.on_click(cx.listener(move |v, _, window, cx| v.toggle_award(on, &name, window, cx))))
+                .when(!tip.is_empty(), |d| {
+                    d.tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+                    })
+                })
+                .when(open, |d| {
+                    d.on_click(
+                        cx.listener(move |v, _, window, cx| v.toggle_award(on, &name, window, cx)),
+                    )
+                })
         };
         names.iter().map(|n| pill(n, cx)).collect()
     }
@@ -172,7 +214,9 @@ impl GitLabView {
                     .cursor_pointer()
                     .hover(|s| s.bg(c(RAISED)))
                     .child(emoji)
-                    .on_click(cx.listener(move |v, _, window, cx| v.toggle_award(on, name, window, cx)))
+                    .on_click(
+                        cx.listener(move |v, _, window, cx| v.toggle_award(on, name, window, cx)),
+                    )
             };
             let choices: Vec<_> = crate::emoji::picks().map(|p| choice(p, cx)).collect();
             deferred(
@@ -211,12 +255,20 @@ impl GitLabView {
                 if note {
                     d.size(px(28.)).child(icon("smile-plus", 16., c(MUTED)))
                 } else {
-                    d.size(px(32.)).bg(ca(0x89888d66)).child(icon("smile-plus", 16., c(TEXT)))
+                    d.size(px(32.))
+                        .bg(ca(0x89888d66))
+                        .child(icon("smile-plus", 16., c(TEXT)))
                 }
             })
-            .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("Add reaction").build(window, cx))
+            .tooltip(|window, cx| {
+                gpui_component::tooltip::Tooltip::new("Add reaction").build(window, cx)
+            })
             .on_click(cx.listener(move |v, _, _, cx| {
-                v.emoji_picker = if v.emoji_picker == Some(on) { None } else { Some(on) };
+                v.emoji_picker = if v.emoji_picker == Some(on) {
+                    None
+                } else {
+                    Some(on)
+                };
                 cx.notify();
             }));
         div().relative().child(button).children(picker)
@@ -261,12 +313,18 @@ fn merge_status(status: &str) -> MergeState {
         "draft_status" => Blocked("Merge request must not be draft."),
         "discussions_not_resolved" => Blocked("All threads must be resolved."),
         "conflict" => Blocked("Merge conflicts must be resolved."),
-        "need_rebase" => Blocked("Merge request must be rebased, because a fast-forward merge is not possible."),
+        "need_rebase" => {
+            Blocked("Merge request must be rebased, because a fast-forward merge is not possible.")
+        }
         "ci_must_pass" => Blocked("Pipeline must succeed."),
-        "ci_still_running" => Blocked("Pipeline must succeed. It's waiting for a manual action or still running."),
+        "ci_still_running" => {
+            Blocked("Pipeline must succeed. It's waiting for a manual action or still running.")
+        }
         "blocked_status" => Blocked("Merge request dependencies must be merged."),
         "not_open" => Blocked("Merge request must be open."),
-        "jira_association_missing" => Blocked("Either the title or description must reference a Jira issue."),
+        "jira_association_missing" => {
+            Blocked("Either the title or description must reference a Jira issue.")
+        }
         "requested_changes" => Blocked("The change requests must be completed or resolved."),
         _ => Blocked("Merge request can't be merged."),
     }
@@ -282,7 +340,11 @@ pub(crate) fn commit_author(r: &Review, cm: &crate::types::Commit) -> User {
         .chain(&r.members)
         .find(|u| u.username == local)
         .cloned()
-        .unwrap_or_else(|| User { id: cm.author_email.len() as u64, name: cm.author_name.clone(), ..Default::default() })
+        .unwrap_or_else(|| User {
+            id: cm.author_email.len() as u64,
+            name: cm.author_name.clone(),
+            ..Default::default()
+        })
 }
 
 /// A title without its draft marker, as "Mark as ready" leaves it.
@@ -306,8 +368,12 @@ impl GitLabView {
         if keys.is_empty() {
             return SharedString::from(title.to_string()).into_any_element();
         }
-        let link = HighlightStyle { color: Some(c(LINK)), ..Default::default() };
-        let text = StyledText::new(title.to_string()).with_highlights(keys.iter().map(|(r, _)| (r.clone(), link)));
+        let link = HighlightStyle {
+            color: Some(c(LINK)),
+            ..Default::default()
+        };
+        let text = StyledText::new(title.to_string())
+            .with_highlights(keys.iter().map(|(r, _)| (r.clone(), link)));
         let ranges: Vec<_> = keys.iter().map(|(r, _)| r.clone()).collect();
         InteractiveText::new(id, text)
             .on_click(ranges, move |i, window, cx| {
@@ -330,17 +396,31 @@ impl GitLabView {
         let unresolved = r.unresolved();
         let local = self.is_local();
         // Built before the tabs, which hold `cx` till the end.
-        let stack = if local { None } else { self.stack_button(r, mono.clone(), cx) };
+        let stack = if local {
+            None
+        } else {
+            self.stack_button(r, mono.clone(), cx)
+        };
         let actions = self.mr_actions(r, cx);
         let sections = [
-            (Section::Overview, "Overview", r.mr.user_notes_count as usize),
+            (
+                Section::Overview,
+                "Overview",
+                r.mr.user_notes_count as usize,
+            ),
             (Section::Commits, "Commits", r.commits.len()),
             (Section::Pipelines, "Pipelines", r.pipelines.len()),
             // What the Changes tab shows: a commit or a version's files, as GitLab counts them.
-            (Section::Changes, "Changes", self.shown().map_or(r.files.len(), |s| s.files.len())),
+            (
+                Section::Changes,
+                "Changes",
+                self.shown().map_or(r.files.len(), |s| s.files.len()),
+            ),
         ];
         // A local diff has no pipelines.
-        let sections = sections.into_iter().filter(|(s, ..)| !(local && *s == Section::Pipelines));
+        let sections = sections
+            .into_iter()
+            .filter(|(s, ..)| !(local && *s == Section::Pipelines));
         let tabs = sections.map(|(s, label, n)| {
             let on = self.loc.section == s;
             div()
@@ -378,7 +458,14 @@ impl GitLabView {
                         .gap_2()
                         .pt_2()
                         .text_color(c(MUTED))
-                        .when(!local, |d| d.child(badge(state, c(bg), c(fg)).child(icon("merge", 12., c(fg))).flex_row_reverse().flex_none()))
+                        .when(!local, |d| {
+                            d.child(
+                                badge(state, c(bg), c(fg))
+                                    .child(icon("merge", 12., c(fg)))
+                                    .flex_row_reverse()
+                                    .flex_none(),
+                            )
+                        })
                         .child(
                             div()
                                 .min_w(px(0.))
@@ -388,7 +475,11 @@ impl GitLabView {
                                 .child(self.linked_title("gl-title-folded", &m.title, cx)),
                         )
                         .child(branch(&m.source_branch, mono.clone()).flex_none())
-                        .child(div().flex_none().child(if local { "against" } else { "into" }))
+                        .child(
+                            div()
+                                .flex_none()
+                                .child(if local { "against" } else { "into" }),
+                        )
                         .child(branch(&m.target_branch, mono).flex_none()),
                 )
                 .child(
@@ -399,7 +490,14 @@ impl GitLabView {
                         .border_color(c(RAISED))
                         .children(tabs)
                         .child(div().flex_1())
-                        .child(div().flex().items_center().gap_2().children(self.thread_nav(r, unresolved, cx)).children(self.review_button(r, cx))),
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .children(self.thread_nav(r, unresolved, cx))
+                                .children(self.review_button(r, cx)),
+                        ),
                 );
         }
         div()
@@ -434,10 +532,20 @@ impl GitLabView {
                     .text_color(c(MUTED))
                     // A local diff: "<head> compared with <base>", no state or author.
                     .when(!local, |d| {
-                        d.child(badge(state, c(bg), c(fg)).child(icon("merge", 12., c(fg))).flex_row_reverse())
-                            .child(div().ml_1().font_weight(FontWeight::SEMIBOLD).text_color(c(TEXT)).child(m.author.name.clone()))
-                            .child("requested to merge")
-                            .children(stack)
+                        d.child(
+                            badge(state, c(bg), c(fg))
+                                .child(icon("merge", 12., c(fg)))
+                                .flex_row_reverse(),
+                        )
+                        .child(
+                            div()
+                                .ml_1()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(c(TEXT))
+                                .child(m.author.name.clone()),
+                        )
+                        .child("requested to merge")
+                        .children(stack)
                     })
                     .child(branch(&m.source_branch, mono.clone()))
                     // GitLab's "Copy branch name".
@@ -451,7 +559,9 @@ impl GitLabView {
                             .hover(|s| s.bg(ca(0x89888d66)))
                             .child(icon("copy", 14., c(MUTED)))
                             .tooltip(hint("Copy branch name"))
-                            .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(name.clone())))
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(name.clone()))
+                            })
                     })
                     .child(if local { "compared with" } else { "into" })
                     .child(branch(&m.target_branch, mono))
@@ -466,7 +576,14 @@ impl GitLabView {
                     .border_color(c(RAISED))
                     .children(tabs)
                     .child(div().flex_1())
-                    .child(div().flex().items_center().gap_2().children(self.thread_nav(r, unresolved, cx)).children(self.review_button(r, cx))),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .children(self.thread_nav(r, unresolved, cx))
+                            .children(self.review_button(r, cx)),
+                    ),
             )
     }
 
@@ -492,12 +609,20 @@ impl GitLabView {
                     .px_3()
                     .py_2()
                     .when(!me, |d| {
-                        d.cursor_pointer().hover(|s| s.bg(c(RAISED))).on_click(cx.listener(move |v, _, _, cx| {
-                            v.stack_menu = false;
-                            v.open_mr(project, iid, cx);
-                        }))
+                        d.cursor_pointer()
+                            .hover(|s| s.bg(c(RAISED)))
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                v.stack_menu = false;
+                                v.open_mr(project, iid, cx);
+                            }))
                     })
-                    .child(div().w(px(20.)).pt(px(2.)).flex_none().when(me, |d| d.child(icon("arrow-right", 16., c(TEXT)))))
+                    .child(
+                        div()
+                            .w(px(20.))
+                            .pt(px(2.))
+                            .flex_none()
+                            .when(me, |d| d.child(icon("arrow-right", 16., c(TEXT)))),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -505,7 +630,15 @@ impl GitLabView {
                             .flex()
                             .flex_col()
                             .child(div().text_color(c(TEXT)).child(m.title.clone()))
-                            .child(div().flex().gap_1().text_size(px(12.)).text_color(c(MUTED)).child(state).child(when(&m.created_at))),
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_1()
+                                    .text_size(px(12.))
+                                    .text_color(c(MUTED))
+                                    .child(state)
+                                    .child(when(&m.created_at)),
+                            ),
                     )
                     .child(
                         div()
@@ -517,12 +650,24 @@ impl GitLabView {
                             .text_color(c(MUTED))
                             .child(icon("file-diff", 14., c(MUTED)))
                             .child(m.files.to_string())
-                            .child(div().ml_1().text_color(c(GREEN)).child(format!("+{}", m.additions)))
-                            .child(div().text_color(c(RED)).child(format!("\u{2212}{}", m.deletions))),
+                            .child(
+                                div()
+                                    .ml_1()
+                                    .text_color(c(GREEN))
+                                    .child(format!("+{}", m.additions)),
+                            )
+                            .child(
+                                div()
+                                    .text_color(c(RED))
+                                    .child(format!("\u{2212}{}", m.deletions)),
+                            ),
                     )
             };
             let rows: Vec<_> = stack.iter().rev().map(|m| row(m, cx)).collect();
-            let bottom = stack.first().map(|m| m.target_branch.clone()).unwrap_or_default();
+            let bottom = stack
+                .first()
+                .map(|m| m.target_branch.clone())
+                .unwrap_or_default();
             deferred(
                 div()
                     .id("gl-stack-menu")
@@ -564,7 +709,14 @@ impl GitLabView {
                             .text_size(px(12.))
                             .text_color(c(MUTED))
                             .child("Bottom of stack merges into")
-                            .child(branch(&bottom, mono).child(app_icon("git-branch", 12., c(0xc8e0f9))).flex().items_center().gap_1().flex_row_reverse())
+                            .child(
+                                branch(&bottom, mono)
+                                    .child(app_icon("git-branch", 12., c(0xc8e0f9)))
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .flex_row_reverse(),
+                            )
                             .child("first."),
                     ),
             )
@@ -601,38 +753,51 @@ impl GitLabView {
         if !r.has_resolvable() {
             return None;
         }
-        Some(div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .h(px(32.))
-            .px_3()
-            .rounded(px(8.))
-            .bg(c(RAISED))
-            .text_color(c(TEXT))
-            .when(unresolved > 0, |d| {
-                let arrow = |id: &'static str, name: &'static str, forward: bool, cx: &mut Context<Self>| {
-                    div()
-                        .id(id)
-                        .size(px(24.))
-                        .rounded(px(4.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(ca(0x89888d66)))
-                        .child(app_icon(name, 16., c(TEXT)))
-                        .on_click(cx.listener(move |v, _, _, cx| v.jump_thread(forward, cx)))
-                };
-                d.child(icon("comment", 16., c(TEXT)))
-                    .child(unresolved.to_string())
-                    .child(arrow("gl-thread-prev", "chevron-up", false, cx))
-                    .child(arrow("gl-thread-next", "chevron-down", true, cx))
-            })
-            .when(unresolved == 0, |d| d.child(icon("check-circle", 16., c(GREEN))).child("All threads resolved")))
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .h(px(32.))
+                .px_3()
+                .rounded(px(8.))
+                .bg(c(RAISED))
+                .text_color(c(TEXT))
+                .when(unresolved > 0, |d| {
+                    let arrow = |id: &'static str,
+                                 name: &'static str,
+                                 forward: bool,
+                                 cx: &mut Context<Self>| {
+                        div()
+                            .id(id)
+                            .size(px(24.))
+                            .rounded(px(4.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(ca(0x89888d66)))
+                            .child(app_icon(name, 16., c(TEXT)))
+                            .on_click(cx.listener(move |v, _, _, cx| v.jump_thread(forward, cx)))
+                    };
+                    d.child(icon("comment", 16., c(TEXT)))
+                        .child(unresolved.to_string())
+                        .child(arrow("gl-thread-prev", "chevron-up", false, cx))
+                        .child(arrow("gl-thread-next", "chevron-down", true, cx))
+                })
+                .when(unresolved == 0, |d| {
+                    d.child(icon("check-circle", 16., c(GREEN)))
+                        .child("All threads resolved")
+                }),
+        )
     }
 
-    pub(crate) fn overview_page(&self, r: &Rc<Review>, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn overview_page(
+        &self,
+        r: &Rc<Review>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let wide = self.sidebar_fits();
         let _ = window;
         // The list's length follows the activity's filter.
@@ -641,10 +806,13 @@ impl GitLabView {
         if self.overview_list.item_count() != n {
             self.overview_list.reset(n);
         }
-        let main = list(self.overview_list.clone(), cx.processor(|v, ix: usize, window, cx| v.overview_item(ix, window, cx)))
-            .flex_1()
-            .min_w(px(0.))
-            .h_full();
+        let main = list(
+            self.overview_list.clone(),
+            cx.processor(|v, ix: usize, window, cx| v.overview_item(ix, window, cx)),
+        )
+        .flex_1()
+        .min_w(px(0.))
+        .h_full();
         div()
             .size_full()
             .flex()
@@ -667,13 +835,22 @@ impl GitLabView {
 
     /// The description; GitLab shows nothing at all for an empty one.
     fn description(&self, r: &Review, window: &mut Window, cx: &mut Context<Self>) -> Option<Div> {
-        let d = r.mr.description.as_deref().map(str::trim).filter(|d| !d.is_empty())?;
+        let d =
+            r.mr.description
+                .as_deref()
+                .map(str::trim)
+                .filter(|d| !d.is_empty())?;
         Some(self.markdown(("description", r.mr.id as usize), d, &[], None, window, cx))
     }
 
     /// GitLab's pipeline widget: "Pipeline #5 pending" and what it ran on.
     /// `id` tells two apart: the source's and, merged, the target's.
-    fn pipeline(&self, p: &crate::types::Pipeline, id: &'static str, cx: &mut Context<Self>) -> Div {
+    fn pipeline(
+        &self,
+        p: &crate::types::Pipeline,
+        id: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let (word, _) = p.label();
         let status_icon = |size: f32| pipeline_icon(p, size);
         let mono = self.mono(cx);
@@ -709,7 +886,9 @@ impl GitLabView {
                                         .cursor_pointer()
                                         .hover(|s| s.underline())
                                         .child(format!("#{}", p.id))
-                                        .on_click(move |_, window, cx| abromux_plugin::open_url(&url, window, cx)),
+                                        .on_click(move |_, window, cx| {
+                                            abromux_plugin::open_url(&url, window, cx)
+                                        }),
                                 )
                                 .child(word),
                         )
@@ -723,7 +902,12 @@ impl GitLabView {
                                 .line_height(px(18.))
                                 .text_color(c(MUTED))
                                 .child(format!("Pipeline {word} for"))
-                                .child(div().font_family(mono.clone()).text_color(c(TEXT)).child(short))
+                                .child(
+                                    div()
+                                        .font_family(mono.clone())
+                                        .text_color(c(TEXT))
+                                        .child(short),
+                                )
                                 .child("on")
                                 .child(branch(&p.git_ref, mono)),
                         ),
@@ -737,7 +921,17 @@ impl GitLabView {
         let approvers: Vec<&User> = r.approvals.approved_by.iter().map(|a| &a.user).collect();
         let me = self.me.as_ref().map(|u| u.id);
         let approved_by_me = approvers.iter().any(|u| Some(u.id) == me);
-        let card = || div().flex().items_center().gap_3().px_4().py_3().rounded(px(12.)).bg(c(RAISED)).text_color(c(TEXT));
+        let card = || {
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .px_4()
+                .py_3()
+                .rounded(px(12.))
+                .bg(c(RAISED))
+                .text_color(c(TEXT))
+        };
         // GitLab's Approve / Revoke approval leads the card; only while open.
         let button = (r.mr.state == "opened").then(|| self.approve_button(approved_by_me, cx));
         let approval = if approvers.is_empty() {
@@ -749,19 +943,33 @@ impl GitLabView {
             card()
                 .children(button)
                 .child(icon("check-circle", 16., c(GREEN)))
-                .child(div().font_weight(FontWeight::SEMIBOLD).child(if approved_by_me {
-                    "Approved by you".to_string()
-                } else {
-                    "Approved by".to_string()
-                }))
-                .child(div().flex().gap_1().children(approvers.iter().map(|u| self.avatars.of(u, 24.))))
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(if approved_by_me {
+                            "Approved by you".to_string()
+                        } else {
+                            "Approved by".to_string()
+                        }),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_1()
+                        .children(approvers.iter().map(|u| self.avatars.of(u, 24.))),
+                )
         };
         let status = merge_status(r.mr.detailed_merge_status.as_deref().unwrap_or(""));
         let n = r.commits.len();
         let line = || div().flex().flex_wrap().gap_x_1();
         let bold = |s: String| div().font_weight(FontWeight::BOLD).child(s);
         let link = |id: &'static str, s: &'static str| {
-            div().id(id).text_color(c(LINK)).cursor_pointer().hover(|s| s.underline()).child(s)
+            div()
+                .id(id)
+                .text_color(c(LINK))
+                .cursor_pointer()
+                .hover(|s| s.underline())
+                .child(s)
         };
         let mut facts: Vec<Div> = vec![];
         // GitLab's "The source branch is 2 commits behind the target branch."
@@ -777,8 +985,13 @@ impl GitLabView {
                             .text_color(c(LINK))
                             .underline()
                             .cursor_pointer()
-                            .child(format!("{behind} commit{} behind", if behind == 1 { "" } else { "s" }))
-                            .on_click(move |_, window, cx| abromux_plugin::open_url(&url, window, cx)),
+                            .child(format!(
+                                "{behind} commit{} behind",
+                                if behind == 1 { "" } else { "s" }
+                            ))
+                            .on_click(move |_, window, cx| {
+                                abromux_plugin::open_url(&url, window, cx)
+                            }),
                     )
                     .child("the target branch.")
                     .when(r.mr.state == "opened", |d| {
@@ -800,7 +1013,11 @@ impl GitLabView {
                 .child(
                     div()
                         .flex()
-                        .child(div().font_family(mono.clone()).child(r.mr.target_branch.clone()))
+                        .child(
+                            div()
+                                .font_family(mono.clone())
+                                .child(r.mr.target_branch.clone()),
+                        )
                         .child("."),
                 ),
         );
@@ -808,51 +1025,75 @@ impl GitLabView {
             facts.push(line().child("Source branch will be deleted."));
         }
         // Merging: who may, and whether it waits for a pipeline still going.
-        let can_merge = self.me.is_some() && r.mr.state == "opened" && r.mr.user.as_ref().is_some_and(|u| u.can_merge);
-        let running = r.mr.head_pipeline.as_ref().is_some_and(|p| crate::edit::pipeline_active(&p.status));
-        let waits = matches!(r.mr.detailed_merge_status.as_deref(), Some("ci_still_running" | "ci_must_pass"));
+        let can_merge = self.me.is_some()
+            && r.mr.state == "opened"
+            && r.mr.user.as_ref().is_some_and(|u| u.can_merge);
+        let running =
+            r.mr.head_pipeline
+                .as_ref()
+                .is_some_and(|p| crate::edit::pipeline_active(&p.status));
+        let waits = matches!(
+            r.mr.detailed_merge_status.as_deref(),
+            Some("ci_still_running" | "ci_must_pass")
+        );
         let auto_set = r.mr.merge_when_pipeline_succeeds;
-        let controls = (can_merge && !auto_set && (matches!(status, MergeState::Ready) || (running && waits))).then(|| {
-            let remove = self.merge_remove(r);
-            let auto = running;
+        let controls = (can_merge
+            && !auto_set
+            && (matches!(status, MergeState::Ready) || (running && waits)))
+            .then(|| {
+                let remove = self.merge_remove(r);
+                let auto = running;
+                let (label, live) = crate::edit::busy_label(
+                    self.busy,
+                    crate::edit::Write::Merge,
+                    if auto { "Set to auto-merge" } else { "Merge" },
+                    if auto { "Setting…" } else { "Merging…" },
+                );
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_4()
+                    .px_4()
+                    .py_3()
+                    .border_t_1()
+                    .border_color(c(BG))
+                    .child(
+                        crate::edit::primary("gl-merge", label, live).when(live, |d| {
+                            d.on_click(
+                                cx.listener(move |v, _, window, cx| v.merge(auto, window, cx)),
+                            )
+                        }),
+                    )
+                    .child(
+                        crate::edit::checkbox("gl-merge-remove", remove, "Delete source branch")
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                v.merge_ticks.1 = Some(!remove);
+                                cx.notify();
+                            })),
+                    )
+                    .when(!r.mr.squash_on_merge, |d| {
+                        d.child(
+                            crate::edit::checkbox("gl-merge-squash", squash, "Squash commits")
+                                .on_click(cx.listener(move |v, _, _, cx| {
+                                    v.merge_ticks.0 = Some(!squash);
+                                    cx.notify();
+                                })),
+                        )
+                    })
+            });
+        // Set to auto-merge: who did, and GitLab's Cancel auto-merge.
+        let auto_line = (auto_set && r.mr.state == "opened").then(|| {
+            let who =
+                r.mr.merge_user
+                    .as_ref()
+                    .map_or_else(|| "someone".to_string(), |u| u.name.clone());
             let (label, live) = crate::edit::busy_label(
                 self.busy,
                 crate::edit::Write::Merge,
-                if auto { "Set to auto-merge" } else { "Merge" },
-                if auto { "Setting…" } else { "Merging…" },
+                "Cancel auto-merge",
+                "Canceling…",
             );
-            div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap_4()
-                .px_4()
-                .py_3()
-                .border_t_1()
-                .border_color(c(BG))
-                .child(
-                    crate::edit::primary("gl-merge", label, live)
-                        .when(live, |d| d.on_click(cx.listener(move |v, _, window, cx| v.merge(auto, window, cx)))),
-                )
-                .child(crate::edit::checkbox("gl-merge-remove", remove, "Delete source branch").on_click(cx.listener(
-                    move |v, _, _, cx| {
-                        v.merge_ticks.1 = Some(!remove);
-                        cx.notify();
-                    },
-                )))
-                .when(!r.mr.squash_on_merge, |d| {
-                    d.child(crate::edit::checkbox("gl-merge-squash", squash, "Squash commits").on_click(cx.listener(
-                        move |v, _, _, cx| {
-                            v.merge_ticks.0 = Some(!squash);
-                            cx.notify();
-                        },
-                    )))
-                })
-        });
-        // Set to auto-merge: who did, and GitLab's Cancel auto-merge.
-        let auto_line = (auto_set && r.mr.state == "opened").then(|| {
-            let who = r.mr.merge_user.as_ref().map_or_else(|| "someone".to_string(), |u| u.name.clone());
-            let (label, live) = crate::edit::busy_label(self.busy, crate::edit::Write::Merge, "Cancel auto-merge", "Canceling…");
             div()
                 .flex()
                 .items_center()
@@ -864,12 +1105,17 @@ impl GitLabView {
                     div()
                         .flex_1()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(format!("Set by {who} to be merged automatically when all merge checks pass")),
+                        .child(format!(
+                            "Set by {who} to be merged automatically when all merge checks pass"
+                        )),
                 )
                 .when(self.me.is_some(), |d| {
                     d.child(
-                        crate::edit::secondary("gl-cancel-auto-merge", label)
-                            .when(live, |d| d.on_click(cx.listener(|v, _, window, cx| v.cancel_auto_merge(window, cx)))),
+                        crate::edit::secondary("gl-cancel-auto-merge", label).when(live, |d| {
+                            d.on_click(
+                                cx.listener(|v, _, window, cx| v.cancel_auto_merge(window, cx)),
+                            )
+                        }),
                     )
                 })
         });
@@ -880,25 +1126,29 @@ impl GitLabView {
             .bg(c(RAISED))
             .text_color(c(TEXT))
             .children(auto_line)
-            .when(!auto_set, |d| d.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .px_4()
-                    .py_3()
-                    .child(match status {
-                        MergeState::Ready => icon("check-circle-filled", 18., c(GREEN)),
-                        MergeState::Checking => icon("loader", 18., c(MUTED)),
-                        MergeState::Blocked(_) => icon("minus-circle-filled", 18., c(RED)),
-                    })
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(match status {
-                        MergeState::Ready if can_merge => "Ready to merge!",
-                        MergeState::Ready => "Ready to merge by members who can write to the target branch.",
-                        MergeState::Checking => "Checking if merge request can be merged…",
-                        MergeState::Blocked(_) => "Merge blocked: 1 check failed",
-                    })),
-            ))
+            .when(!auto_set, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_4()
+                        .py_3()
+                        .child(match status {
+                            MergeState::Ready => icon("check-circle-filled", 18., c(GREEN)),
+                            MergeState::Checking => icon("loader", 18., c(MUTED)),
+                            MergeState::Blocked(_) => icon("minus-circle-filled", 18., c(RED)),
+                        })
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child(match status {
+                            MergeState::Ready if can_merge => "Ready to merge!",
+                            MergeState::Ready => {
+                                "Ready to merge by members who can write to the target branch."
+                            }
+                            MergeState::Checking => "Checking if merge request can be merged…",
+                            MergeState::Blocked(_) => "Merge blocked: 1 check failed",
+                        })),
+                )
+            })
             .children(controls)
             // The failed check, with GitLab's fix for a draft.
             .when_some(
@@ -907,7 +1157,8 @@ impl GitLabView {
                     _ => None,
                 },
                 |d, check| {
-                    let draft = r.mr.detailed_merge_status.as_deref() == Some("draft_status") && self.me.is_some();
+                    let draft = r.mr.detailed_merge_status.as_deref() == Some("draft_status")
+                        && self.me.is_some();
                     d.child(
                         div()
                             .flex()
@@ -923,7 +1174,9 @@ impl GitLabView {
                             .when(draft, |d| {
                                 d.child(
                                     crate::edit::secondary("gl-mark-ready", "Mark as ready")
-                                        .on_click(cx.listener(|v, _, window, cx| v.set_draft(false, window, cx))),
+                                        .on_click(cx.listener(|v, _, window, cx| {
+                                            v.set_draft(false, window, cx)
+                                        })),
                                 )
                             }),
                     )
@@ -944,8 +1197,20 @@ impl GitLabView {
                         .line_height(px(18.))
                         .gap_0p5()
                         // Blocked, GitLab heads the facts "Merge details".
-                        .when(blocked, |d| d.child(div().pb_1().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child("Merge details")))
-                        .children(facts.into_iter().map(|f| div().flex().gap_2().child("•").child(f.flex_1()))),
+                        .when(blocked, |d| {
+                            d.child(
+                                div()
+                                    .pb_1()
+                                    .text_size(px(14.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Merge details"),
+                            )
+                        })
+                        .children(
+                            facts
+                                .into_iter()
+                                .map(|f| div().flex().gap_2().child("•").child(f.flex_1())),
+                        ),
                 )
             });
         let merge = match r.mr.state.as_str() {
@@ -960,7 +1225,11 @@ impl GitLabView {
     fn outcome(&self, r: &Review, mono: SharedString) -> Div {
         let m = &r.mr;
         let merged = m.state == "merged";
-        let (who, when) = if merged { (&m.merged_by, &m.merged_at) } else { (&m.closed_by, &m.closed_at) };
+        let (who, when) = if merged {
+            (&m.merged_by, &m.merged_at)
+        } else {
+            (&m.closed_by, &m.closed_at)
+        };
         let mut facts: Vec<Div> = vec![];
         let code = |s: &str| div().font_family(mono.clone()).child(s.to_string());
         if merged {
@@ -974,7 +1243,10 @@ impl GitLabView {
                     .child(code(&m.target_branch))
                     .when_some(sha, |d, s| {
                         d.child("with").child(
-                            div().flex().child(code(s.get(..8).unwrap_or(s)).text_color(c(LINK))).child("."),
+                            div()
+                                .flex()
+                                .child(code(s.get(..8).unwrap_or(s)).text_color(c(LINK)))
+                                .child("."),
                         )
                     })
                     .when(sha.is_none(), |d| d.child(".")),
@@ -1007,10 +1279,18 @@ impl GitLabView {
                     .py_3()
                     .bg(c(if merged { 0x22306a } else { 0x641c28 }))
                     .child(icon("merge", 16., c(TEXT)))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(if merged { "Merged by" } else { "Closed by" }))
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(if merged {
+                        "Merged by"
+                    } else {
+                        "Closed by"
+                    }))
                     .when_some(who.as_ref(), |d, u| {
-                        d.child(self.avatars.of(u, 16.))
-                            .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(LINK)).child(u.name.clone()))
+                        d.child(self.avatars.of(u, 16.)).child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(c(LINK))
+                                .child(u.name.clone()),
+                        )
                     })
                     .when_some(when.as_ref(), |d, t| d.child(crate::style::when(t))),
             )
@@ -1022,14 +1302,22 @@ impl GitLabView {
                     .pl(px(48.))
                     .pr_4()
                     .py_3()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Merge details"))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Merge details"),
+                    )
                     .child(
                         div()
                             .flex()
                             .flex_col()
                             .text_size(px(12.))
                             .line_height(px(18.))
-                            .children(facts.into_iter().map(|f| div().flex().gap_2().child("•").child(f))),
+                            .children(
+                                facts
+                                    .into_iter()
+                                    .map(|f| div().flex().gap_2().child("•").child(f)),
+                            ),
                     ),
             )
     }
@@ -1039,7 +1327,11 @@ impl GitLabView {
         let mut entries: Vec<Entry> = r.system.iter().map(Entry::System).collect();
         entries.extend(r.general.iter().map(Entry::General));
         for f in &r.files {
-            entries.extend(f.threads.iter().map(|(h, l, d)| Entry::OnLine(f, *h, *l, d)));
+            entries.extend(
+                f.threads
+                    .iter()
+                    .map(|(h, l, d)| Entry::OnLine(f, *h, *l, d)),
+            );
             entries.extend(f.outdated.iter().map(Entry::Outdated));
         }
         entries.extend(r.outdated.iter().map(Entry::Outdated));
@@ -1070,7 +1362,9 @@ impl GitLabView {
                     .py_1()
                     .cursor_pointer()
                     .hover(|s| s.bg(c(RAISED)))
-                    .child(div().w(px(14.)).when(self.activity == f, |d| d.child(app_icon("check", 14., c(TEXT)))))
+                    .child(div().w(px(14.)).when(self.activity == f, |d| {
+                        d.child(app_icon("check", 14., c(TEXT)))
+                    }))
                     .child(div().text_color(c(TEXT)).child(f.label()))
                     .on_click(cx.listener(move |v, _, _, cx| {
                         v.activity = f;
@@ -1133,8 +1427,20 @@ impl GitLabView {
                 control("gl-activity-sort")
                     .rounded_r(px(8.))
                     // GitLab's sort icon: oldest first reads upward.
-                    .child(icon(if self.newest_first { "sort-desc" } else { "sort-asc" }, 16., c(TEXT)))
-                    .tooltip(hint(if self.newest_first { "Sort direction: Descending" } else { "Sort direction: Ascending" }))
+                    .child(icon(
+                        if self.newest_first {
+                            "sort-desc"
+                        } else {
+                            "sort-asc"
+                        },
+                        16.,
+                        c(TEXT),
+                    ))
+                    .tooltip(hint(if self.newest_first {
+                        "Sort direction: Descending"
+                    } else {
+                        "Sort direction: Ascending"
+                    }))
                     .on_click(cx.listener(|v, _, _, cx| {
                         v.newest_first = !v.newest_first;
                         cx.notify();
@@ -1160,7 +1466,12 @@ impl GitLabView {
     /// One row of the overview's list: 0 is everything above the activity
     /// (description, widgets, the Activity heading), then one per entry.
     /// Only the rows on screen are laid out, as in the Changes tab.
-    fn overview_item(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn overview_item(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(r) = self.review.ready().cloned() else {
             return div().into_any_element();
         };
@@ -1175,23 +1486,37 @@ impl GitLabView {
                 .gap_4()
                 .children(self.write_alert(cx))
                 .when(self.editing_mr, |d| d.child(self.mr_edit_form(cx)))
-                .when(!self.editing_mr, |d| d.children(self.description(&r, window, cx)))
+                .when(!self.editing_mr, |d| {
+                    d.children(self.description(&r, window, cx))
+                })
                 // Reactions, pipelines, approving and merging are GitLab's;
                 // a local diff has none of them.
                 .when(!self.is_local(), |d| {
                     d.child(self.awards(&r, cx))
-                        .children(r.mr.head_pipeline.as_ref().map(|p| self.pipeline(p, "gl-pipeline-link", cx)))
+                        .children(
+                            r.mr.head_pipeline
+                                .as_ref()
+                                .map(|p| self.pipeline(p, "gl-pipeline-link", cx)),
+                        )
                         .child(self.widgets(&r, self.mono(cx), cx))
                 })
                 // Merged, GitLab follows with the merge commit's pipeline on the target.
-                .children(r.merge_pipeline.as_ref().map(|p| self.pipeline(p, "gl-merge-pipeline-link", cx)))
+                .children(
+                    r.merge_pipeline
+                        .as_ref()
+                        .map(|p| self.pipeline(p, "gl-merge-pipeline-link", cx)),
+                )
                 .child(self.activity_header(cx))
                 .into_any_element();
         }
         let entries = self.activity_entries(&r);
         // After the activity: GitLab's comment form.
         if ix == entries.len() + 1 {
-            return pad(div()).pt_2().pb_6().child(self.comment_form(cx)).into_any_element();
+            return pad(div())
+                .pt_2()
+                .pb_6()
+                .child(self.comment_form(cx))
+                .into_any_element();
         }
         let Some(e) = entries.get(ix - 1) else {
             return div().into_any_element();
@@ -1202,7 +1527,15 @@ impl GitLabView {
                     .relative()
                     .pb_4()
                     // The timeline's line, under the avatars.
-                    .child(div().absolute().left(px(15.)).top_0().bottom_0().w(px(2.)).bg(c(RAISED)))
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(15.))
+                            .top_0()
+                            .bottom_0()
+                            .w(px(2.))
+                            .bg(c(RAISED)),
+                    )
                     .child(self.entry(e, window, cx)),
             )
             .into_any_element()
@@ -1229,7 +1562,9 @@ impl GitLabView {
                             .flex_col()
                             .children(self.thread_notes(d, None, false, true, window, cx))
                             // A thread (not a lone comment) takes replies.
-                            .when(!d.individual_note, |el| el.child(self.reply_bar(&d.id, d.resolvable(), d.resolved(), cx))),
+                            .when(!d.individual_note, |el| {
+                                el.child(self.reply_bar(&d.id, d.resolvable(), d.resolved(), cx))
+                            }),
                     )
                     .into_any_element()
             }
@@ -1250,25 +1585,48 @@ impl GitLabView {
             } else if let Some(label) = word.strip_prefix('~').filter(|l| !l.is_empty()) {
                 // A label, in its colours (the project's, by name).
                 let name = crate::review::untoken(label);
-                let full = self.review.ready().and_then(|r| r.labels.iter().find(|l| l.name == name).cloned());
-                body.child(label_pill(&full.unwrap_or(crate::types::Label { name, ..Default::default() })))
+                let full = self
+                    .review
+                    .ready()
+                    .and_then(|r| r.labels.iter().find(|l| l.name == name).cloned());
+                body.child(label_pill(&full.unwrap_or(crate::types::Label {
+                    name,
+                    ..Default::default()
+                })))
             } else if let Some(ms) = word.strip_prefix('%').filter(|m| !m.is_empty()) {
-                body.child(div().text_color(c(LINK)).child(format!("%{}", crate::review::untoken(ms))))
+                body.child(
+                    div()
+                        .text_color(c(LINK))
+                        .child(format!("%{}", crate::review::untoken(ms))),
+                )
             } else {
                 // A commit's full sha, shortened as GitLab shows it.
-                let short = (word.len() == 40 && word.bytes().all(|b| b.is_ascii_hexdigit())).then(|| &word[..8]);
+                let short = (word.len() == 40 && word.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .then(|| &word[..8]);
                 // GitLab's own markdown in its notes: "marked … as **ready**".
                 let strong = word.strip_prefix("**").and_then(|w| {
                     let (inner, rest) = w.split_once("**")?;
                     Some((inner.to_string(), rest.to_string()))
                 });
                 match (short, strong) {
-                    (Some(s), _) => body.child(div().font_family(self.mono(cx)).text_color(c(LINK)).child(s.to_string())),
+                    (Some(s), _) => body.child(
+                        div()
+                            .font_family(self.mono(cx))
+                            .text_color(c(LINK))
+                            .child(s.to_string()),
+                    ),
                     (None, Some((inner, rest))) => body.child(
                         div()
                             .flex()
-                            .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(TEXT)).child(inner))
-                            .when(!rest.is_empty(), |d| d.child(div().text_color(c(MUTED)).child(rest))),
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(c(TEXT))
+                                    .child(inner),
+                            )
+                            .when(!rest.is_empty(), |d| {
+                                d.child(div().text_color(c(MUTED)).child(rest))
+                            }),
                     ),
                     (None, None) => body.child(div().text_color(c(MUTED)).child(word.to_string())),
                 }
@@ -1276,7 +1634,15 @@ impl GitLabView {
         }
         // GitLab marks an approval with a green check, merging and closing
         // with the merge icon in blue or red; other notes with a dot.
-        let circle = |bg: u32| div().size(px(20.)).rounded_full().bg(c(bg)).flex().items_center().justify_center();
+        let circle = |bg: u32| {
+            div()
+                .size(px(20.))
+                .rounded_full()
+                .bg(c(bg))
+                .flex()
+                .items_center()
+                .justify_center()
+        };
         let marker = if text.starts_with("approved this merge request") {
             circle(0x0d532a).child(app_icon("check", 12., c(0x91d4a8)))
         } else if text == "merged" || text.starts_with("merged ") {
@@ -1284,20 +1650,37 @@ impl GitLabView {
         } else if text == "closed" || text.starts_with("closed ") {
             circle(0x641c28).child(icon("merge", 12., c(0xfdd4cd)))
         } else {
-            div().size(px(8.)).rounded_full().bg(c(0x89888d)).border_2().border_color(c(BG))
+            div()
+                .size(px(8.))
+                .rounded_full()
+                .bg(c(0x89888d))
+                .border_2()
+                .border_color(c(BG))
         };
         let line = div()
             .flex()
             .items_center()
             .gap_3()
-            .child(div().w(px(32.)).flex_none().flex().justify_center().child(marker))
+            .child(
+                div()
+                    .w(px(32.))
+                    .flex_none()
+                    .flex()
+                    .justify_center()
+                    .child(marker),
+            )
             .child(
                 div()
                     .flex()
                     .flex_wrap()
                     .items_center()
                     .gap_1()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(TEXT)).child(n.author.name.clone()))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(TEXT))
+                            .child(n.author.name.clone()),
+                    )
                     .child(body)
                     .child(when(&n.created_at).text_color(c(MUTED))),
             );
@@ -1310,13 +1693,25 @@ impl GitLabView {
         let versions: Vec<(u64, String)> = self
             .review
             .ready()
-            .map(|r| r.versions.iter().map(|v| (v.id, v.head_commit_sha.clone())).collect())
+            .map(|r| {
+                r.versions
+                    .iter()
+                    .map(|v| (v.id, v.head_commit_sha.clone()))
+                    .collect()
+            })
             .unwrap_or_default();
         let pick = compare.and_then(|(start, diff_id)| {
             // The previous version, by its head commit; this note's version, by id.
-            let base = versions.iter().find(|(_, sha)| sha.starts_with(&start) || start.starts_with(sha.as_str()))?.0;
+            let base = versions
+                .iter()
+                .find(|(_, sha)| sha.starts_with(&start) || start.starts_with(sha.as_str()))?
+                .0;
             let head = versions.iter().find(|(id, _)| *id == diff_id)?.0;
-            Some(crate::Compare { base: Some(base), head: Some(head), commit: None })
+            Some(crate::Compare {
+                base: Some(base),
+                head: Some(head),
+                commit: None,
+            })
         });
         div().flex().flex_col().gap_1().child(line).child(
             div()
@@ -1329,10 +1724,11 @@ impl GitLabView {
                 .children(commits.into_iter().map(|cm| {
                     let (sha, title) = cm.split_once(" - ").unwrap_or((&cm, ""));
                     // A link to the commit's changes, while it's still in the merge request.
-                    let index = self
-                        .review
-                        .ready()
-                        .and_then(|r| r.commits.iter().position(|x| !sha.is_empty() && x.id.starts_with(sha)));
+                    let index = self.review.ready().and_then(|r| {
+                        r.commits
+                            .iter()
+                            .position(|x| !sha.is_empty() && x.id.starts_with(sha))
+                    });
                     let sha_el = div()
                         .id(SharedString::from(format!("note-commit-{}-{sha}", n.id)))
                         .font_family(mono.clone())
@@ -1400,7 +1796,12 @@ impl GitLabView {
                     .items_center()
                     .gap_1()
                     .text_color(c(MUTED))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(TEXT)).child(first.author.name.clone()))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(TEXT))
+                            .child(first.author.name.clone()),
+                    )
                     .child(format!("@{}", first.author.username))
                     .child("started a thread on")
                     .child(match at {
@@ -1416,7 +1817,10 @@ impl GitLabView {
                                 .on_click(cx.listener(move |v, _, _, cx| v.show_thread(&id, cx)))
                                 .into_any_element()
                         }
-                        None => div().text_color(c(TEXT)).child("an old version of the diff").into_any_element(),
+                        None => div()
+                            .text_color(c(TEXT))
+                            .child("an old version of the diff")
+                            .into_any_element(),
                     })
                     .child(when(&first.created_at)),
             )
@@ -1426,7 +1830,11 @@ impl GitLabView {
                         .text_size(px(12.))
                         .line_height(px(18.))
                         .text_color(c(MUTED))
-                        .child(format!("Resolved {} by {}", time::ago(when, time::now()), who.name)),
+                        .child(format!(
+                            "Resolved {} by {}",
+                            time::ago(when, time::now()),
+                            who.name
+                        )),
                 )
             });
         let path = at
@@ -1446,8 +1854,22 @@ impl GitLabView {
             .when(!open, |e| e.rounded_b(px(8.)))
             .cursor_pointer()
             .text_color(c(LINK))
-            .child(app_icon(if open { "chevron-down" } else { "chevron-right" }, 14., c(LINK)))
-            .when(open, |e| e.child(if resolved { "Hide thread" } else { "Collapse replies" }))
+            .child(app_icon(
+                if open {
+                    "chevron-down"
+                } else {
+                    "chevron-right"
+                },
+                14.,
+                c(LINK),
+            ))
+            .when(open, |e| {
+                e.child(if resolved {
+                    "Hide thread"
+                } else {
+                    "Collapse replies"
+                })
+            })
             .when(!open, |e| {
                 let last = d.notes.last().unwrap();
                 let n = d.notes.len();
@@ -1461,7 +1883,11 @@ impl GitLabView {
             })
             .on_click(cx.listener(move |v, _, _, cx| {
                 // Resolved threads open on request; the rest fold on request.
-                let set = if resolved { &mut v.open_resolved } else { &mut v.collapsed_replies };
+                let set = if resolved {
+                    &mut v.open_resolved
+                } else {
+                    &mut v.collapsed_replies
+                };
                 if !set.remove(&id) {
                     set.insert(id.clone());
                 }
@@ -1496,17 +1922,25 @@ impl GitLabView {
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(c(TEXT))
                             .when(at.is_some(), |el| {
-                                el.cursor_pointer()
-                                    .hover(|s| s.underline())
-                                    .on_click(cx.listener(move |v, _, _, cx| v.show_thread(&id, cx)))
+                                el.cursor_pointer().hover(|s| s.underline()).on_click(
+                                    cx.listener(move |v, _, _, cx| v.show_thread(&id, cx)),
+                                )
                             })
                             .child(path.clone())
                     })
                     .child(icon("copy", 14., c(MUTED)))
                     .when_some(at.map(|(f, _, _)| f), |e, f| {
-                        e.when(f.meta.a_mode != f.meta.b_mode && !f.meta.a_mode.is_empty(), |e| {
-                            e.child(div().text_size(px(12.)).text_color(c(TEXT)).child(format!("{} → {}", f.meta.a_mode, f.meta.b_mode)))
-                        })
+                        e.when(
+                            f.meta.a_mode != f.meta.b_mode && !f.meta.a_mode.is_empty(),
+                            |e| {
+                                e.child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(c(TEXT))
+                                        .child(format!("{} → {}", f.meta.a_mode, f.meta.b_mode)),
+                                )
+                            },
+                        )
                     }),
             );
             if let Some((f, h, l)) = at {
@@ -1535,7 +1969,10 @@ impl GitLabView {
                     .flex()
                     .flex_col()
                     .children(self.thread_notes(d, Some(&path), true, false, window, cx))
-                    .child(self.reply_bar(&d.id, d.resolvable(), d.resolved(), cx).rounded_b(px(8.))),
+                    .child(
+                        self.reply_bar(&d.id, d.resolvable(), d.resolved(), cx)
+                            .rounded_b(px(8.)),
+                    ),
             );
         }
         div()
@@ -1552,9 +1989,17 @@ impl GitLabView {
     /// GitLab's "Run pipeline" over a merge request's pipelines.
     fn run_pipeline_button(&self, r: &Review, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         (self.me.is_some() && r.mr.state == "opened").then(|| {
-            let (label, live) = crate::edit::busy_label(self.busy, crate::edit::Write::Pipeline, "Run pipeline", "Starting…");
-            crate::edit::secondary("gl-run-pipeline", label)
-                .when(live, |d| d.on_click(cx.listener(|v, _, window, cx| v.pipeline_action(None, true, window, cx))))
+            let (label, live) = crate::edit::busy_label(
+                self.busy,
+                crate::edit::Write::Pipeline,
+                "Run pipeline",
+                "Starting…",
+            );
+            crate::edit::secondary("gl-run-pipeline", label).when(live, |d| {
+                d.on_click(
+                    cx.listener(|v, _, window, cx| v.pipeline_action(None, true, window, cx)),
+                )
+            })
         })
     }
 
@@ -1568,20 +2013,39 @@ impl GitLabView {
             .flex_none()
             .flex()
             .justify_end()
-            .when(self.me.is_some() && self.busy != Some(crate::edit::Write::Pipeline), |d| {
-                d.when(retry, |d| {
-                    d.child(
-                        crate::edit::icon_button(SharedString::from(format!("pipeline-retry-{id}")), app_icon("rotate-cw", 16., c(TEXT)), "Retry")
-                            .on_click(cx.listener(move |v, _, window, cx| v.pipeline_action(Some(id), true, window, cx))),
-                    )
-                })
-                .when(active, |d| {
-                    d.child(
-                        crate::edit::icon_button(SharedString::from(format!("pipeline-cancel-{id}")), app_icon("x", 16., c(RED)), "Cancel pipeline")
-                            .on_click(cx.listener(move |v, _, window, cx| v.pipeline_action(Some(id), false, window, cx))),
-                    )
-                })
-            })
+            .when(
+                self.me.is_some() && self.busy != Some(crate::edit::Write::Pipeline),
+                |d| {
+                    d.when(retry, |d| {
+                        d.child(
+                            crate::edit::icon_button(
+                                SharedString::from(format!("pipeline-retry-{id}")),
+                                app_icon("rotate-cw", 16., c(TEXT)),
+                                "Retry",
+                            )
+                            .on_click(cx.listener(
+                                move |v, _, window, cx| {
+                                    v.pipeline_action(Some(id), true, window, cx)
+                                },
+                            )),
+                        )
+                    })
+                    .when(active, |d| {
+                        d.child(
+                            crate::edit::icon_button(
+                                SharedString::from(format!("pipeline-cancel-{id}")),
+                                app_icon("x", 16., c(RED)),
+                                "Cancel pipeline",
+                            )
+                            .on_click(cx.listener(
+                                move |v, _, window, cx| {
+                                    v.pipeline_action(Some(id), false, window, cx)
+                                },
+                            )),
+                        )
+                    })
+                },
+            )
     }
 
     pub(crate) fn pipelines_page(&self, r: &Review, cx: &mut Context<Self>) -> AnyElement {
@@ -1635,7 +2099,11 @@ impl GitLabView {
                 }
                 w
             };
-            let title = r.commits.iter().find(|cm| cm.id == p.sha).map(|cm| cm.title.clone());
+            let title = r
+                .commits
+                .iter()
+                .find(|cm| cm.id == p.sha)
+                .map(|cm| cm.title.clone());
             let url = p.web_url.clone();
             let title_url = p.web_url.clone();
             let source = match p.source.as_str() {
@@ -1659,9 +2127,11 @@ impl GitLabView {
                         .flex_col()
                         .gap_1()
                         .child(
-                            div()
-                                .flex()
-                                .child(badge(label, c(bg), c(fg)).child(pipeline_icon(p, 12.)).flex_row_reverse()),
+                            div().flex().child(
+                                badge(label, c(bg), c(fg))
+                                    .child(pipeline_icon(p, 12.))
+                                    .flex_row_reverse(),
+                            ),
                         )
                         .child(when(&p.created_at).text_size(px(12.)).text_color(c(MUTED))),
                 )
@@ -1681,7 +2151,9 @@ impl GitLabView {
                                 .cursor_pointer()
                                 .hover(|s| s.underline())
                                 .child(format!("#{}", p.id))
-                                .on_click(move |_, window, cx| abromux_plugin::open_url(&url, window, cx)),
+                                .on_click(move |_, window, cx| {
+                                    abromux_plugin::open_url(&url, window, cx)
+                                }),
                         )
                         .when_some(title, |d, t| {
                             d.child(
@@ -1692,7 +2164,9 @@ impl GitLabView {
                                     .cursor_pointer()
                                     .hover(|s| s.underline())
                                     .child(t)
-                                    .on_click(move |_, window, cx| abromux_plugin::open_url(&title_url, window, cx)),
+                                    .on_click(move |_, window, cx| {
+                                        abromux_plugin::open_url(&title_url, window, cx)
+                                    }),
                             )
                         })
                         .child(
@@ -1702,14 +2176,21 @@ impl GitLabView {
                                 .items_center()
                                 .gap_1()
                                 .child(chip(p.git_ref.clone(), mono.clone()))
-                                .child(chip(p.sha.get(..8).unwrap_or_default().to_string(), mono.clone())),
+                                .child(chip(
+                                    p.sha.get(..8).unwrap_or_default().to_string(),
+                                    mono.clone(),
+                                )),
                         )
                         .child(
                             div()
                                 .flex()
                                 .gap_1()
-                                .when(i == 0, |d| d.child(badge("latest", c(0x0d532a), c(0x91d4a8))))
-                                .when(!source.is_empty(), |d| d.child(badge(source.to_string(), c(0x064787), c(0xcbe2f9)))),
+                                .when(i == 0, |d| {
+                                    d.child(badge("latest", c(0x0d532a), c(0x91d4a8)))
+                                })
+                                .when(!source.is_empty(), |d| {
+                                    d.child(badge(source.to_string(), c(0x064787), c(0xcbe2f9)))
+                                }),
                         ),
                 )
                 .child(div().w(px(120.)).flex_none().child(pipeline_icon(p, 20.)))
@@ -1741,7 +2222,11 @@ impl GitLabView {
         let mono = self.mono(cx);
         let mut days: Vec<(String, Vec<&crate::types::Commit>)> = vec![];
         for cm in &r.commits {
-            let date = if cm.authored_date.is_empty() { &cm.created_at } else { &cm.authored_date };
+            let date = if cm.authored_date.is_empty() {
+                &cm.created_at
+            } else {
+                &cm.authored_date
+            };
             let day = time::day(date);
             match days.last_mut() {
                 Some((d, list)) if *d == day => list.push(cm),
@@ -1766,7 +2251,11 @@ impl GitLabView {
                     let author = user_of(cm);
                     let sha = cm.id.clone();
                     let index = r.commits.iter().position(|x| x.id == cm.id).unwrap_or(0);
-                    let when = if cm.authored_date.is_empty() { &cm.created_at } else { &cm.authored_date };
+                    let when = if cm.authored_date.is_empty() {
+                        &cm.created_at
+                    } else {
+                        &cm.authored_date
+                    };
                     let group = ca(0x89888d66);
                     div()
                         .flex()
@@ -1798,14 +2287,19 @@ impl GitLabView {
                                                 .cursor_pointer()
                                                 .hover(|s| s.underline())
                                                 .child(cm.title.clone())
-                                                .on_click(cx.listener(move |v, _, _, cx| v.open_commit(index, cx))),
+                                                .on_click(cx.listener(move |v, _, _, cx| {
+                                                    v.open_commit(index, cx)
+                                                })),
                                         )
                                         // GitLab's ⋯ for the rest of the message.
                                         .when(cm.body().is_some(), |d| {
                                             let id = cm.id.clone();
                                             d.child(
                                                 div()
-                                                    .id(SharedString::from(format!("body-{}", cm.id)))
+                                                    .id(SharedString::from(format!(
+                                                        "body-{}",
+                                                        cm.id
+                                                    )))
                                                     .flex_none()
                                                     .px_1()
                                                     .rounded(px(4.))
@@ -1832,20 +2326,32 @@ impl GitLabView {
                                         .text_size(px(12.))
                                         .line_height(px(18.))
                                         .child(div().text_color(c(TEXT)).child(author.name.clone()))
-                                        .child(div().text_color(c(MUTED)).child(format!("authored {}", time::ago(when, time::now())))),
+                                        .child(div().text_color(c(MUTED)).child(format!(
+                                            "authored {}",
+                                            time::ago(when, time::now())
+                                        ))),
                                 )
-                                .when_some(cm.body().filter(|_| self.open_bodies.contains(&cm.id)), |d, body| {
-                                    d.child(
-                                        div()
-                                            .mt_2()
-                                            .font_family(mono.clone())
-                                            .text_size(px(12.))
-                                            .line_height(px(18.))
-                                            .text_color(c(TEXT))
-                                            .whitespace_normal()
-                                            .children(body.lines().map(|l| div().child(if l.is_empty() { " ".to_string() } else { l.to_string() }))),
-                                    )
-                                }),
+                                .when_some(
+                                    cm.body().filter(|_| self.open_bodies.contains(&cm.id)),
+                                    |d, body| {
+                                        d.child(
+                                            div()
+                                                .mt_2()
+                                                .font_family(mono.clone())
+                                                .text_size(px(12.))
+                                                .line_height(px(18.))
+                                                .text_color(c(TEXT))
+                                                .whitespace_normal()
+                                                .children(body.lines().map(|l| {
+                                                    div().child(if l.is_empty() {
+                                                        " ".to_string()
+                                                    } else {
+                                                        l.to_string()
+                                                    })
+                                                })),
+                                        )
+                                    },
+                                ),
                         )
                         // The commit's latest pipeline, as GitLab shows it
                         // left of the SHA; a click opens it.
@@ -1861,8 +2367,13 @@ impl GitLabView {
                                     .px_2()
                                     .cursor_pointer()
                                     .child(pipeline_icon(p, 20.))
-                                    .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
-                                    .on_click(move |_, window, cx| abromux_plugin::open_url(&url, window, cx)),
+                                    .tooltip(move |window, cx| {
+                                        gpui_component::tooltip::Tooltip::new(tip.clone())
+                                            .build(window, cx)
+                                    })
+                                    .on_click(move |_, window, cx| {
+                                        abromux_plugin::open_url(&url, window, cx)
+                                    }),
                             )
                         })
                         .child(
@@ -1895,7 +2406,11 @@ impl GitLabView {
                                         .cursor_pointer()
                                         .hover(|s| s.bg(ca(0x89888d99)))
                                         .child(icon("copy", 16., c(TEXT)))
-                                        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(sha.clone()))),
+                                        .on_click(move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                sha.clone(),
+                                            ))
+                                        }),
                                 ),
                         )
                 }))
@@ -1904,7 +2419,15 @@ impl GitLabView {
             .id("gl-commits")
             .size_full()
             .overflow_y_scroll()
-            .child(div().flex().flex_col().gap_4().px_4().py_2().children(groups))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .px_4()
+                    .py_2()
+                    .children(groups),
+            )
             .into_any_element()
     }
 }

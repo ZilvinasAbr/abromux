@@ -32,7 +32,10 @@ fn dot(color: u32) -> Div {
 /// The merge request a GitLab tab shows, if it's on the cache's GitLab.
 pub fn tab_mr(s: &Surface, st: &Store, cx: &App) -> Option<MrKey> {
     let Surface::Plugin(p) = s else { return None };
-    let v = p.view().downcast::<abromux_gitlab::view::GitLabView>().ok()?;
+    let v = p
+        .view()
+        .downcast::<abromux_gitlab::view::GitLabView>()
+        .ok()?;
     let (host, project, path, iid) = v.read(cx).showing()?;
     if abromux_gitlab::cache::host_key(&host) != st.host {
         return None;
@@ -76,10 +79,12 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<MrKey> {
-        let key = MrKey::parse(text)
-            .ok_or_else(|| anyhow::anyhow!("not a merge request: give its URL or group/project!iid"))?;
-        let elsewhere = abromux_gitlab::api::parse_mr_url(text)
-            .is_some_and(|(host, ..)| abromux_gitlab::cache::host_key(&host) != store(cx).read(cx).host);
+        let key = MrKey::parse(text).ok_or_else(|| {
+            anyhow::anyhow!("not a merge request: give its URL or group/project!iid")
+        })?;
+        let elsewhere = abromux_gitlab::api::parse_mr_url(text).is_some_and(|(host, ..)| {
+            abromux_gitlab::cache::host_key(&host) != store(cx).read(cx).host
+        });
         if elsewhere {
             self.open_plugin_link("gitlab", text.trim(), window, cx);
         } else {
@@ -99,7 +104,9 @@ impl AbroMux {
             for p in ws.panes() {
                 for t in &p.tabs {
                     if let Some(k) = tab_mr(t, st, cx) {
-                        let active = p.active_surface().is_some_and(|a| a.entity_id() == t.entity_id());
+                        let active = p
+                            .active_surface()
+                            .is_some_and(|a| a.entity_id() == t.entity_id());
                         if wi == self.active && active && ws.shows(p.id) {
                             shown.insert(k.clone());
                         }
@@ -118,10 +125,7 @@ impl AbroMux {
             .workspaces
             .iter()
             .map(|ws| {
-                let cwds: Vec<String> = ws
-                    .surfaces()
-                    .filter_map(|s| s.cwd(cx))
-                    .collect();
+                let cwds: Vec<String> = ws.surfaces().filter_map(|s| s.cwd(cx)).collect();
                 (ws.id, places(ws.home.as_deref(), &cwds))
             })
             .collect();
@@ -134,7 +138,11 @@ impl AbroMux {
         let mut sections: Vec<AnyElement> = vec![];
         let mut listed: HashSet<MrKey> = HashSet::new();
         let configured = configured(cx);
-        let section = |title: &str, mrs: Vec<&Mr>, empty: &str, sections: &mut Vec<AnyElement>, cx: &Context<Self>| {
+        let section = |title: &str,
+                       mrs: Vec<&Mr>,
+                       empty: &str,
+                       sections: &mut Vec<AnyElement>,
+                       cx: &Context<Self>| {
             sections.push(section_title(title, mrs.len()).into_any_element());
             if mrs.is_empty() {
                 sections.push(
@@ -166,12 +174,20 @@ impl AbroMux {
                 &mut sections,
                 cx,
             );
-            let mine: Vec<&Mr> = st.mine().into_iter().filter(|m| !listed.contains(&m.key)).collect();
+            let mine: Vec<&Mr> = st
+                .mine()
+                .into_iter()
+                .filter(|m| !listed.contains(&m.key))
+                .collect();
             listed.extend(mine.iter().map(|m| m.key.clone()));
             section(
                 "Mine",
                 mine,
-                if st.lists_ok { "Nothing open." } else { "Loading…" },
+                if st.lists_ok {
+                    "Nothing open."
+                } else {
+                    "Loading…"
+                },
                 &mut sections,
                 cx,
             );
@@ -185,11 +201,17 @@ impl AbroMux {
         let status: Option<(String, u32)> = if !configured {
             None
         } else if let Some(p) = st.paused() {
-            Some((format!("Rate-limited; resuming in {}s", p.as_secs().max(1)), RED_TEXT))
+            Some((
+                format!("Rate-limited; resuming in {}s", p.as_secs().max(1)),
+                RED_TEXT,
+            ))
         } else if let Some(e) = &st.error {
             Some((e.clone(), RED_TEXT))
         } else if st.slowdown() > 1.01 {
-            Some((format!("Checking {:.1}× less often (rate limit)", st.slowdown()), MUTED))
+            Some((
+                format!("Checking {:.1}× less often (rate limit)", st.slowdown()),
+                MUTED,
+            ))
         } else {
             None
         };
@@ -225,12 +247,12 @@ impl AbroMux {
                             store(cx).update(cx, |s, cx| s.refresh_all(cx));
                         }),
                     )
-                    .child(
-                        icon_button("mrs-close", "x").on_click(cx.listener(|this, _, _, cx| {
+                    .child(icon_button("mrs-close", "x").on_click(cx.listener(
+                        |this, _, _, cx| {
                             this.mr_panel = false;
                             cx.notify();
-                        })),
-                    ),
+                        },
+                    ))),
             )
             .when_some(status, |d, (text, color)| {
                 d.child(
@@ -347,7 +369,11 @@ fn mr_row(m: &Mr, refreshing: bool, cx: &Context<AbroMux>) -> Stateful<Div> {
                         .text_size(px(12.5))
                         .truncate()
                         .when(draft, |d| d.text_color(rgb(MUTED)))
-                        .child(if draft { format!("Draft: {}", title.trim_start_matches("Draft: ")) } else { title }),
+                        .child(if draft {
+                            format!("Draft: {}", title.trim_start_matches("Draft: "))
+                        } else {
+                            title
+                        }),
                 )
                 .child(
                     div()
