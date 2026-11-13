@@ -8,6 +8,8 @@
 //! what GitLab has. A failure takes its effect back, says why above the
 //! overview and puts what was typed back in its box.
 
+#[allow(unused_imports)]
+use crate::style::px;
 use crate::{
     api::Client,
     mr::AwardOn,
@@ -17,11 +19,9 @@ use crate::{
     types::DiffRefs,
     view::{GitLabView, Load},
 };
-use std::rc::Rc;
 use gpui::{prelude::*, *};
-#[allow(unused_imports)]
-use crate::style::px;
 use gpui_component::input::{Input, InputState};
+use std::rc::Rc;
 
 /// A line a new thread goes on: (file index, old line, new line).
 pub type LineKey = (usize, Option<u32>, Option<u32>);
@@ -52,8 +52,17 @@ pub enum Write {
 
 /// A button's label and whether it's live, given what's being written:
 /// `doing` while its own write `w` is under way, else `idle`.
-pub fn busy_label(busy: Option<Write>, w: Write, idle: &'static str, doing: &'static str) -> (&'static str, bool) {
-    if busy == Some(w) { (doing, false) } else { (idle, true) }
+pub fn busy_label(
+    busy: Option<Write>,
+    w: Write,
+    idle: &'static str,
+    doing: &'static str,
+) -> (&'static str, bool) {
+    if busy == Some(w) {
+        (doing, false)
+    } else {
+        (idle, true)
+    }
 }
 
 /// The text fields writing uses, made once per tab.
@@ -76,7 +85,12 @@ pub struct Boxes {
 impl Boxes {
     pub fn new(window: &mut Window, cx: &mut App) -> Self {
         let field = |placeholder: &'static str, window: &mut Window, cx: &mut App| {
-            cx.new(|cx| InputState::new(window, cx).multi_line(true).auto_grow(3, 12).placeholder(placeholder))
+            cx.new(|cx| {
+                InputState::new(window, cx)
+                    .multi_line(true)
+                    .auto_grow(3, 12)
+                    .placeholder(placeholder)
+            })
         };
         Boxes {
             comment: field("Write a comment…", window, cx),
@@ -84,16 +98,31 @@ impl Boxes {
             line: field("Write a comment on this line…", window, cx),
             search: cx.new(|cx| InputState::new(window, cx).placeholder("Search")),
             title: cx.new(|cx| InputState::new(window, cx).placeholder("Title")),
-            description: cx.new(|cx| InputState::new(window, cx).multi_line(true).auto_grow(6, 24).placeholder("Describe the goal of the changes and what reviewers should be aware of.")),
+            description: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .multi_line(true)
+                    .auto_grow(6, 24)
+                    .placeholder(
+                        "Describe the goal of the changes and what reviewers should be aware of.",
+                    )
+            }),
             note: field("Edit comment…", window, cx),
         }
     }
 
     /// One of them has the keys: the tab's shortcuts stand aside.
     pub fn typing(&self, window: &Window, cx: &App) -> bool {
-        [&self.comment, &self.reply, &self.line, &self.search, &self.title, &self.description, &self.note]
-            .iter()
-            .any(|b| b.read(cx).focus_handle(cx).is_focused(window))
+        [
+            &self.comment,
+            &self.reply,
+            &self.line,
+            &self.search,
+            &self.title,
+            &self.description,
+            &self.note,
+        ]
+        .iter()
+        .any(|b| b.read(cx).focus_handle(cx).is_focused(window))
     }
 }
 
@@ -200,7 +229,11 @@ pub fn checkbox(id: impl Into<ElementId>, on: bool, label: &'static str) -> Stat
         .items_center()
         .gap_2()
         .cursor_pointer()
-        .child(icon(if on { "square-check" } else { "square" }, 16., c(if on { FOCUS } else { MUTED })))
+        .child(icon(
+            if on { "square-check" } else { "square" },
+            16.,
+            c(if on { FOCUS } else { MUTED }),
+        ))
         .child(label)
 }
 
@@ -229,22 +262,36 @@ pub fn draft_title(title: &str, draft: bool) -> String {
             break;
         }
     }
-    if draft { format!("Draft: {bare}") } else { bare.to_string() }
+    if draft {
+        format!("Draft: {bare}")
+    } else {
+        bare.to_string()
+    }
 }
 
 /// Whether a pipeline in this status is still to finish: auto-merge waits
 /// for it, Cancel stops it.
 pub fn pipeline_active(status: &str) -> bool {
-    matches!(status, "created" | "waiting_for_resource" | "preparing" | "pending" | "running" | "scheduled")
+    matches!(
+        status,
+        "created" | "waiting_for_resource" | "preparing" | "pending" | "running" | "scheduled"
+    )
 }
 
 impl GitLabView {
     /// Show `r` as GitLab sent it, fetched at `fetched`: the patches of
     /// writes that landed before then are in it now, the rest go on top.
-    pub(crate) fn set_review(&mut self, r: Rc<Review>, fetched: Option<std::time::Instant>, cx: &mut Context<Self>) {
+    pub(crate) fn set_review(
+        &mut self,
+        r: Rc<Review>,
+        fetched: Option<std::time::Instant>,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(at) = fetched {
             let key = (r.mr.project_id, r.mr.iid);
-            self.writes.shown.retain(|s| s.mr != key || s.landed.is_none_or(|l| l > at));
+            self.writes
+                .shown
+                .retain(|s| s.mr != key || s.landed.is_none_or(|l| l > at));
         }
         self.writes.base = Some(r);
         self.present(cx);
@@ -258,7 +305,9 @@ impl GitLabView {
 
     /// The last review GitLab sent, with the writes not yet in it on top.
     fn present(&mut self, cx: &mut Context<Self>) {
-        let Some(base) = self.writes.base.clone() else { return };
+        let Some(base) = self.writes.base.clone() else {
+            return;
+        };
         let key = (base.mr.project_id, base.mr.iid);
         let mut on: Vec<&Shown> = self.writes.shown.iter().filter(|s| s.mr == key).collect();
         let shown = match (&self.me, on.is_empty()) {
@@ -296,17 +345,29 @@ impl GitLabView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (Some(_), Some(p), Some(iid)) = (self.client.as_ref(), self.loc.project, self.loc.iid) else {
+        let (Some(_), Some(p), Some(iid)) = (self.client.as_ref(), self.loc.project, self.loc.iid)
+        else {
             return;
         };
         self.writes.next += 1;
         let n = self.writes.next;
         self.write_error = None;
         if let Some(patch) = patch {
-            self.writes.shown.push(Shown { n, mr: (p, iid), patch, landed: None });
+            self.writes.shown.push(Shown {
+                n,
+                mr: (p, iid),
+                patch,
+                landed: None,
+            });
             self.present(cx);
         }
-        self.writes.queue.push_back(Job { what, n, mr: (p, iid), f: Box::new(f), failed: Box::new(failed) });
+        self.writes.queue.push_back(Job {
+            what,
+            n,
+            mr: (p, iid),
+            f: Box::new(f),
+            failed: Box::new(failed),
+        });
         self.pump(window, cx);
         cx.notify();
     }
@@ -317,7 +378,16 @@ impl GitLabView {
             return;
         }
         let Some(c) = self.client.clone() else { return };
-        let Some(Job { what, n, mr: (p, iid), f, failed }) = self.writes.queue.pop_front() else { return };
+        let Some(Job {
+            what,
+            n,
+            mr: (p, iid),
+            f,
+            failed,
+        }) = self.writes.queue.pop_front()
+        else {
+            return;
+        };
         self.busy = Some(what);
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
@@ -340,7 +410,9 @@ impl GitLabView {
                         }
                     }
                     // The last of a burst: what GitLab has now.
-                    if v.writes.queue.is_empty() && (v.loc.project, v.loc.iid) == (Some(p), Some(iid)) {
+                    if v.writes.queue.is_empty()
+                        && (v.loc.project, v.loc.iid) == (Some(p), Some(iid))
+                    {
                         v.refresh_quietly(cx);
                     }
                     v.pump(window, cx);
@@ -360,7 +432,9 @@ impl GitLabView {
         if body.is_empty() {
             return;
         }
-        self.boxes.comment.update(cx, |b, cx| b.set_value("", window, cx));
+        self.boxes
+            .comment
+            .update(cx, |b, cx| b.set_value("", window, cx));
         let back = body.clone();
         self.write(
             Write::Comment,
@@ -378,7 +452,9 @@ impl GitLabView {
             return;
         }
         if self.replying.as_deref() != Some(id) {
-            self.boxes.reply.update(cx, |b, cx| b.set_value("", window, cx));
+            self.boxes
+                .reply
+                .update(cx, |b, cx| b.set_value("", window, cx));
         }
         self.replying = Some(id.to_string());
         self.boxes.reply.update(cx, |b, cx| b.focus(window, cx));
@@ -393,18 +469,31 @@ impl GitLabView {
     /// Send the open reply, and with `resolve`, resolve the thread too
     /// ("Reply and resolve" isn't a GitLab button, but resolving after
     /// replying is what its checkbox does).
-    pub(crate) fn send_reply(&mut self, resolve: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.replying.clone() else { return };
+    pub(crate) fn send_reply(
+        &mut self,
+        resolve: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = self.replying.clone() else {
+            return;
+        };
         let body = self.boxes.reply.read(cx).value().trim().to_string();
         if body.is_empty() {
             return;
         }
-        self.boxes.reply.update(cx, |b, cx| b.set_value("", window, cx));
+        self.boxes
+            .reply
+            .update(cx, |b, cx| b.set_value("", window, cx));
         self.replying = None;
         let (thread, back) = (id.clone(), body.clone());
         self.write(
             Write::Reply,
-            Some(Patch::Reply { thread: id.clone(), body: body.clone(), resolve }),
+            Some(Patch::Reply {
+                thread: id.clone(),
+                body: body.clone(),
+                resolve,
+            }),
             move |c, p, iid| {
                 c.reply(p, iid, &id, &body)?;
                 if resolve {
@@ -426,14 +515,23 @@ impl GitLabView {
     }
 
     /// Resolve, or reopen, thread `id`.
-    pub(crate) fn set_resolved(&mut self, id: &str, resolved: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn set_resolved(
+        &mut self,
+        id: &str,
+        resolved: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if is_pending_thread(id) {
             return;
         }
         let id = id.to_string();
         self.write(
             Write::Resolve,
-            Some(Patch::Resolve { thread: id.clone(), resolved }),
+            Some(Patch::Resolve {
+                thread: id.clone(),
+                resolved,
+            }),
             move |c, p, iid| c.resolve(p, iid, &id, resolved).map(|_| ()),
             |_, _, _| {},
             window,
@@ -441,28 +539,56 @@ impl GitLabView {
         );
     }
 
-    pub(crate) fn set_approved(&mut self, approve: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.write(Write::Approve, Some(Patch::Approve { approve }), move |c, p, iid| c.approve(p, iid, approve), |_, _, _| {}, window, cx);
+    pub(crate) fn set_approved(
+        &mut self,
+        approve: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.write(
+            Write::Approve,
+            Some(Patch::Approve { approve }),
+            move |c, p, iid| c.approve(p, iid, approve),
+            |_, _, _| {},
+            window,
+            cx,
+        );
     }
 
     /// GitLab's reaction toggle, on the merge request or a comment: take
     /// back mine of `name`, or add it.
-    pub(crate) fn toggle_award(&mut self, on: AwardOn, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_award(
+        &mut self,
+        on: AwardOn,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(r) = self.review.ready() else { return };
         let me = self.me.as_ref().map(|u| u.id);
         let name = name.to_string();
         self.emoji_picker = None;
         match on {
             AwardOn::Mr => {
-                let mine = r.awards.iter().find(|a| a.name == name && Some(a.user.id) == me).map(|a| a.id);
+                let mine = r
+                    .awards
+                    .iter()
+                    .find(|a| a.name == name && Some(a.user.id) == me)
+                    .map(|a| a.id);
                 self.write(
                     Write::Award,
-                    Some(Patch::Award { name: name.clone(), add: mine.is_none() }),
+                    Some(Patch::Award {
+                        name: name.clone(),
+                        add: mine.is_none(),
+                    }),
                     move |c, p, iid| match mine {
                         // Added here and not yet back from GitLab: its id is
                         // GitLab's to tell (it's in by now: writes go in order).
                         Some(id) if is_pending_note(id) => {
-                            let a = c.awards(p, iid)?.into_iter().find(|a| a.name == name && Some(a.user.id) == me);
+                            let a = c
+                                .awards(p, iid)?
+                                .into_iter()
+                                .find(|a| a.name == name && Some(a.user.id) == me);
                             a.map_or(Ok(()), |a| c.unaward(p, iid, a.id))
                         }
                         Some(id) => c.unaward(p, iid, id),
@@ -477,10 +603,17 @@ impl GitLabView {
                 if is_pending_note(note) {
                     return;
                 }
-                let mine = r.note_awards.get(&note).is_some_and(|aw| aw.iter().any(|a| a.name == name && Some(a.user.id) == me));
+                let mine = r
+                    .note_awards
+                    .get(&note)
+                    .is_some_and(|aw| aw.iter().any(|a| a.name == name && Some(a.user.id) == me));
                 self.write(
                     Write::Award,
-                    Some(Patch::NoteAward { note, name: name.clone(), add: !mine }),
+                    Some(Patch::NoteAward {
+                        note,
+                        name: name.clone(),
+                        add: !mine,
+                    }),
                     move |c, p, iid| match (mine, me) {
                         (true, Some(me)) => c.note_unaward(p, iid, note, &name, me),
                         _ => c.note_award(p, iid, note, &name),
@@ -494,13 +627,27 @@ impl GitLabView {
     }
 
     pub(crate) fn rebase(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.write(Write::Rebase, None, |c, p, iid| c.rebase(p, iid), |_, _, _| {}, window, cx);
+        self.write(
+            Write::Rebase,
+            None,
+            |c, p, iid| c.rebase(p, iid),
+            |_, _, _| {},
+            window,
+            cx,
+        );
     }
 
     /// Open the new-thread box under a line of the diff.
-    pub(crate) fn open_line_comment(&mut self, key: LineKey, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_line_comment(
+        &mut self,
+        key: LineKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.commenting != Some(key) {
-            self.boxes.line.update(cx, |b, cx| b.set_value("", window, cx));
+            self.boxes
+                .line
+                .update(cx, |b, cx| b.set_value("", window, cx));
         }
         self.commenting = Some(key);
         self.boxes.line.update(cx, |b, cx| b.focus(window, cx));
@@ -515,32 +662,56 @@ impl GitLabView {
     /// Start the thread on the line: on the latest version, as GitLab
     /// starts new threads (comparing older versions is for reading).
     /// `draft`: add it to your review instead ("Start a review").
-    pub(crate) fn send_line_comment(&mut self, draft: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((fi, old, new)) = self.commenting else { return };
+    pub(crate) fn send_line_comment(
+        &mut self,
+        draft: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((fi, old, new)) = self.commenting else {
+            return;
+        };
         let body = self.boxes.line.read(cx).value().trim().to_string();
-        let Some(r) = self.review.ready().cloned() else { return };
-        let (Some(f), Some(refs)) = (r.files.get(fi), r.mr.diff_refs.clone()) else { return };
+        let Some(r) = self.review.ready().cloned() else {
+            return;
+        };
+        let (Some(f), Some(refs)) = (r.files.get(fi), r.mr.diff_refs.clone()) else {
+            return;
+        };
         if body.is_empty() {
             return;
         }
         let (old_path, new_path) = (f.meta.old_path.clone(), f.meta.new_path.clone());
-        self.boxes.line.update(cx, |b, cx| b.set_value("", window, cx));
+        self.boxes
+            .line
+            .update(cx, |b, cx| b.set_value("", window, cx));
         self.commenting = None;
         let back = body.clone();
         let patch = if draft {
             Patch::Draft { body: body.clone() }
         } else {
-            Patch::LineComment { file: fi, old, new, body: body.clone() }
+            Patch::LineComment {
+                file: fi,
+                old,
+                new,
+                body: body.clone(),
+            }
         };
         self.write(
-            if draft { Write::LineDraft } else { Write::LineComment },
+            if draft {
+                Write::LineDraft
+            } else {
+                Write::LineComment
+            },
             Some(patch),
             move |c, p, iid| {
                 let refs: DiffRefs = refs;
                 if draft {
-                    c.draft_line_comment(p, iid, &refs, &old_path, &new_path, old, new, &body).map(|_| ())
+                    c.draft_line_comment(p, iid, &refs, &old_path, &new_path, old, new, &body)
+                        .map(|_| ())
                 } else {
-                    c.line_comment(p, iid, &refs, &old_path, &new_path, old, new, &body).map(|_| ())
+                    c.line_comment(p, iid, &refs, &old_path, &new_path, old, new, &body)
+                        .map(|_| ())
                 }
             },
             // The box open on the line again, with the text.
@@ -563,13 +734,18 @@ impl GitLabView {
             Write::SubmitReview,
             None,
             |c, p, iid| {
-                let pending: Vec<String> = c.draft_notes(p, iid)?.into_iter().map(|d| d.note).collect();
+                let pending: Vec<String> =
+                    c.draft_notes(p, iid)?.into_iter().map(|d| d.note).collect();
                 c.publish_drafts(p, iid)?;
                 // GitLab publishes in the background: wait (a little) until
                 // the comments are threads, so the refresh after shows them.
                 for _ in 0..10 {
                     let shown = c.discussions(p, iid)?;
-                    let bodies: Vec<&str> = shown.iter().flat_map(|d| &d.notes).map(|n| n.body.as_str()).collect();
+                    let bodies: Vec<&str> = shown
+                        .iter()
+                        .flat_map(|d| &d.notes)
+                        .map(|n| n.body.as_str())
+                        .collect();
                     if pending.iter().all(|b| bodies.contains(&b.as_str())) {
                         break;
                     }
@@ -585,10 +761,19 @@ impl GitLabView {
 
     /// GitLab's header button while a review is pending: how many comments
     /// it holds, a click submits them.
-    pub(crate) fn review_button(&self, r: &crate::review::Review, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    pub(crate) fn review_button(
+        &self,
+        r: &crate::review::Review,
+        cx: &mut Context<Self>,
+    ) -> Option<Stateful<Div>> {
         let n = r.drafts.len();
         (n > 0 && self.me.is_some()).then(|| {
-            let (label, live) = busy_label(self.busy, Write::SubmitReview, "Submit review", "Submitting…");
+            let (label, live) = busy_label(
+                self.busy,
+                Write::SubmitReview,
+                "Submit review",
+                "Submitting…",
+            );
             primary("gl-submit-review", label, live)
                 .flex()
                 .items_center()
@@ -608,11 +793,25 @@ impl GitLabView {
             auto,
             sha: r.mr.sha.clone(),
         };
-        self.write(Write::Merge, None, move |c, p, iid| c.merge(p, iid, &opts).map(|_| ()), |_, _, _| {}, window, cx);
+        self.write(
+            Write::Merge,
+            None,
+            move |c, p, iid| c.merge(p, iid, &opts).map(|_| ()),
+            |_, _, _| {},
+            window,
+            cx,
+        );
     }
 
     pub(crate) fn cancel_auto_merge(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.write(Write::Merge, None, |c, p, iid| c.cancel_auto_merge(p, iid), |_, _, _| {}, window, cx);
+        self.write(
+            Write::Merge,
+            None,
+            |c, p, iid| c.cancel_auto_merge(p, iid),
+            |_, _, _| {},
+            window,
+            cx,
+        );
     }
 
     /// The widget's "Squash commits": what was ticked, else the author's
@@ -623,7 +822,9 @@ impl GitLabView {
 
     /// The widget's "Delete source branch": ticked, else the author's choice.
     pub(crate) fn merge_remove(&self, r: &crate::review::Review) -> bool {
-        self.merge_ticks.1.unwrap_or(r.mr.force_remove_source_branch || r.mr.should_remove_source_branch.unwrap_or(false))
+        self.merge_ticks.1.unwrap_or(
+            r.mr.force_remove_source_branch || r.mr.should_remove_source_branch.unwrap_or(false),
+        )
     }
 
     /// Close or reopen the merge request.
@@ -646,7 +847,10 @@ impl GitLabView {
         self.mr_menu = false;
         self.write(
             Write::MrState,
-            Some(Patch::Fields { fields: fields.clone(), people: vec![] }),
+            Some(Patch::Fields {
+                fields: fields.clone(),
+                people: vec![],
+            }),
             move |c, p, iid| c.update(p, iid, fields).map(|_| ()),
             |_, _, _| {},
             window,
@@ -657,11 +861,17 @@ impl GitLabView {
     /// GitLab's Edit: the title and description in fields, at the top of
     /// the Overview.
     pub(crate) fn open_edit_mr(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(r) = self.review.ready().cloned() else { return };
+        let Some(r) = self.review.ready().cloned() else {
+            return;
+        };
         self.mr_menu = false;
         self.editing_mr = true;
-        self.boxes.title.update(cx, |b, cx| b.set_value(r.mr.title.clone(), window, cx));
-        self.boxes.description.update(cx, |b, cx| b.set_value(r.mr.description.clone().unwrap_or_default(), window, cx));
+        self.boxes
+            .title
+            .update(cx, |b, cx| b.set_value(r.mr.title.clone(), window, cx));
+        self.boxes.description.update(cx, |b, cx| {
+            b.set_value(r.mr.description.clone().unwrap_or_default(), window, cx)
+        });
         self.set_section(crate::Section::Overview, cx);
         self.overview_list.scroll_to(gpui::ListOffset::default());
         self.boxes.title.update(cx, |b, cx| b.focus(window, cx));
@@ -685,12 +895,19 @@ impl GitLabView {
         let fields = serde_json::json!({ "title": title, "description": description });
         self.write(
             Write::EditMr,
-            Some(Patch::Fields { fields: fields.clone(), people: vec![] }),
+            Some(Patch::Fields {
+                fields: fields.clone(),
+                people: vec![],
+            }),
             move |c, p, iid| c.update(p, iid, fields).map(|_| ()),
             move |v, window, cx| {
                 v.editing_mr = true;
-                v.boxes.title.update(cx, |b, cx| b.set_value(title, window, cx));
-                v.boxes.description.update(cx, |b, cx| b.set_value(description, window, cx));
+                v.boxes
+                    .title
+                    .update(cx, |b, cx| b.set_value(title, window, cx));
+                v.boxes
+                    .description
+                    .update(cx, |b, cx| b.set_value(description, window, cx));
             },
             window,
             cx,
@@ -698,7 +915,13 @@ impl GitLabView {
     }
 
     /// Edit your comment `note`: its text in a field, in place.
-    pub(crate) fn open_edit_note(&mut self, note: u64, body: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_edit_note(
+        &mut self,
+        note: u64,
+        body: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if is_pending_note(note) {
             return;
         }
@@ -720,7 +943,9 @@ impl GitLabView {
     /// Save the comment being edited: the new text shows at once, and comes
     /// back to its field if GitLab turns it down.
     pub(crate) fn save_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(note) = self.editing_note else { return };
+        let Some(note) = self.editing_note else {
+            return;
+        };
         let body = self.boxes.note.read(cx).value().trim().to_string();
         if body.is_empty() {
             return;
@@ -729,11 +954,16 @@ impl GitLabView {
         let back = body.clone();
         self.write(
             Write::EditNote,
-            Some(Patch::EditNote { note, body: body.clone() }),
+            Some(Patch::EditNote {
+                note,
+                body: body.clone(),
+            }),
             move |c, p, iid| c.edit_note(p, iid, note, &body).map(|_| ()),
             move |v, window, cx| {
                 v.editing_note = Some(note);
-                v.boxes.note.update(cx, |b, cx| b.set_value(back, window, cx));
+                v.boxes
+                    .note
+                    .update(cx, |b, cx| b.set_value(back, window, cx));
             },
             window,
             cx,
@@ -742,7 +972,13 @@ impl GitLabView {
 
     /// Ask, then (with `sure`) delete your comment `note`: it goes at once,
     /// and comes back if GitLab turns that down.
-    pub(crate) fn delete_note(&mut self, note: u64, sure: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn delete_note(
+        &mut self,
+        note: u64,
+        sure: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if is_pending_note(note) {
             return;
         }
@@ -768,7 +1004,13 @@ impl GitLabView {
     }
 
     /// Retry or cancel pipeline `id`, or (`None`) run a new one.
-    pub(crate) fn pipeline_action(&mut self, id: Option<u64>, retry: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn pipeline_action(
+        &mut self,
+        id: Option<u64>,
+        retry: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.write(
             Write::Pipeline,
             None,
@@ -787,7 +1029,11 @@ impl GitLabView {
 
     /// The header's buttons right of the title, as GitLab has them: Edit,
     /// and ⋮ with Mark as draft or ready, Close or Reopen, Copy reference.
-    pub(crate) fn mr_actions(&self, r: &crate::review::Review, cx: &mut Context<Self>) -> Option<Div> {
+    pub(crate) fn mr_actions(
+        &self,
+        r: &crate::review::Review,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
         if self.is_local() {
             return None;
         }
@@ -810,25 +1056,47 @@ impl GitLabView {
             let items = div()
                 .when(writes && open, |d| {
                     d.child(
-                        item("gl-mr-draft", if draft { "Mark as ready" } else { "Mark as draft" }.into(), false)
-                            .on_click(cx.listener(move |v, _, window, cx| v.set_draft(!draft, window, cx))),
+                        item(
+                            "gl-mr-draft",
+                            if draft {
+                                "Mark as ready"
+                            } else {
+                                "Mark as draft"
+                            }
+                            .into(),
+                            false,
+                        )
+                        .on_click(
+                            cx.listener(move |v, _, window, cx| v.set_draft(!draft, window, cx)),
+                        ),
                     )
                 })
                 .when(writes, |d| {
                     d.child(
-                        item("gl-mr-state", if open { "Close merge request" } else { "Reopen merge request" }.into(), open)
-                            .on_click(cx.listener(move |v, _, window, cx| v.set_open(!open, window, cx))),
+                        item(
+                            "gl-mr-state",
+                            if open {
+                                "Close merge request"
+                            } else {
+                                "Reopen merge request"
+                            }
+                            .into(),
+                            open,
+                        )
+                        .on_click(
+                            cx.listener(move |v, _, window, cx| v.set_open(!open, window, cx)),
+                        ),
                     )
                 })
                 .when(!reference.is_empty(), |d| {
                     d.child(
-                        item("gl-mr-copy-ref", "Copy reference".into(), false).on_click(cx.listener(
-                            move |v, _, _, cx| {
+                        item("gl-mr-copy-ref", "Copy reference".into(), false).on_click(
+                            cx.listener(move |v, _, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(reference.clone()));
                                 v.mr_menu = false;
                                 cx.notify();
-                            },
-                        )),
+                            }),
+                        ),
                     )
                 });
             deferred(
@@ -861,7 +1129,10 @@ impl GitLabView {
                 .gap_2()
                 .flex_none()
                 .when(writes, |d| {
-                    d.child(secondary("gl-mr-edit", "Edit").on_click(cx.listener(|v, _, window, cx| v.open_edit_mr(window, cx))))
+                    d.child(
+                        secondary("gl-mr-edit", "Edit")
+                            .on_click(cx.listener(|v, _, window, cx| v.open_edit_mr(window, cx))),
+                    )
                 })
                 .child(
                     secondary("gl-mr-more", "")
@@ -882,8 +1153,19 @@ impl GitLabView {
         let empty = self.boxes.title.read(cx).value().trim().is_empty();
         let (label, live) = busy_label(self.busy, Write::EditMr, "Save changes", "Saving…");
         let enabled = !empty && live;
-        let field = |d: Div| d.p_2().rounded(px(8.)).border_1().border_color(c(BORDER)).bg(c(CARD));
-        let heading = |s: &'static str| div().font_weight(FontWeight::SEMIBOLD).text_color(c(HEADING)).child(s);
+        let field = |d: Div| {
+            d.p_2()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(c(BORDER))
+                .bg(c(CARD))
+        };
+        let heading = |s: &'static str| {
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(c(HEADING))
+                .child(s)
+        };
         div()
             .flex()
             .flex_col()
@@ -909,9 +1191,18 @@ impl GitLabView {
     }
 
     /// Your comment's Edit and Delete buttons.
-    pub(crate) fn note_owner_actions(&self, n: &crate::types::Note, cx: &mut Context<Self>) -> Option<Div> {
+    pub(crate) fn note_owner_actions(
+        &self,
+        n: &crate::types::Note,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
         let mine = self.me.as_ref().is_some_and(|me| me.id == n.author.id);
-        if !mine || n.system || is_pending_note(n.id) || self.is_local() || self.review.ready().is_some_and(|r| r.mr.state == "locked") {
+        if !mine
+            || n.system
+            || is_pending_note(n.id)
+            || self.is_local()
+            || self.review.ready().is_some_and(|r| r.mr.state == "locked")
+        {
             return None;
         }
         let (id, body) = (n.id, n.body.clone());
@@ -920,12 +1211,26 @@ impl GitLabView {
                 .flex()
                 .items_center()
                 .child(
-                    icon_button(SharedString::from(format!("note-edit-{id}")), app_icon("pencil", 14., c(MUTED)), "Edit comment")
-                        .on_click(cx.listener(move |v, _, window, cx| v.open_edit_note(id, &body, window, cx))),
+                    icon_button(
+                        SharedString::from(format!("note-edit-{id}")),
+                        app_icon("pencil", 14., c(MUTED)),
+                        "Edit comment",
+                    )
+                    .on_click(
+                        cx.listener(move |v, _, window, cx| {
+                            v.open_edit_note(id, &body, window, cx)
+                        }),
+                    ),
                 )
                 .child(
-                    icon_button(SharedString::from(format!("note-delete-{id}")), icon("remove", 15., c(MUTED)), "Delete comment")
-                        .on_click(cx.listener(move |v, _, window, cx| v.delete_note(id, false, window, cx))),
+                    icon_button(
+                        SharedString::from(format!("note-delete-{id}")),
+                        icon("remove", 15., c(MUTED)),
+                        "Delete comment",
+                    )
+                    .on_click(
+                        cx.listener(move |v, _, window, cx| v.delete_note(id, false, window, cx)),
+                    ),
                 ),
         )
     }
@@ -953,11 +1258,13 @@ impl GitLabView {
                     .flex()
                     .items_center()
                     .gap_2()
+                    .child(primary("gl-note-save", label, enabled).when(enabled, |d| {
+                        d.on_click(cx.listener(|v, _, window, cx| v.save_note(window, cx)))
+                    }))
                     .child(
-                        primary("gl-note-save", label, enabled)
-                            .when(enabled, |d| d.on_click(cx.listener(|v, _, window, cx| v.save_note(window, cx)))),
-                    )
-                    .child(secondary("gl-note-cancel", "Cancel").on_click(cx.listener(|v, _, _, cx| v.close_edit_note(cx)))),
+                        secondary("gl-note-cancel", "Cancel")
+                            .on_click(cx.listener(|v, _, _, cx| v.close_edit_note(cx))),
+                    ),
             )
     }
 
@@ -974,12 +1281,28 @@ impl GitLabView {
             .bg(c(0x3e1d22))
             .border_1()
             .border_color(c(0x7a2e3a))
-            .child(div().flex_1().text_color(c(TEXT)).child("Are you sure you want to delete this comment?"))
             .child(
-                danger(SharedString::from(format!("note-delete-sure-{note}")), label, live)
-                    .when(live, |d| d.on_click(cx.listener(move |v, _, window, cx| v.delete_note(note, true, window, cx)))),
+                div()
+                    .flex_1()
+                    .text_color(c(TEXT))
+                    .child("Are you sure you want to delete this comment?"),
             )
-            .child(secondary("gl-note-delete-cancel", "Cancel").on_click(cx.listener(|v, _, _, cx| v.cancel_delete_note(cx))))
+            .child(
+                danger(
+                    SharedString::from(format!("note-delete-sure-{note}")),
+                    label,
+                    live,
+                )
+                .when(live, |d| {
+                    d.on_click(
+                        cx.listener(move |v, _, window, cx| v.delete_note(note, true, window, cx)),
+                    )
+                }),
+            )
+            .child(
+                secondary("gl-note-delete-cancel", "Cancel")
+                    .on_click(cx.listener(|v, _, _, cx| v.cancel_delete_note(cx))),
+            )
     }
 
     /// What went wrong with the last write, in GitLab's alert.
@@ -998,10 +1321,14 @@ impl GitLabView {
                 .text_color(c(TEXT))
                 .child(app_icon("circle-x", 16., c(RED)))
                 .child(div().flex_1().min_w(px(0.)).child(e))
-                .child(secondary("gl-write-dismiss", "Dismiss").on_click(cx.listener(|v, _, _, cx| {
-                    v.write_error = None;
-                    cx.notify();
-                }))),
+                .child(
+                    secondary("gl-write-dismiss", "Dismiss").on_click(cx.listener(
+                        |v, _, _, cx| {
+                            v.write_error = None;
+                            cx.notify();
+                        },
+                    )),
+                ),
         )
     }
 
@@ -1029,27 +1356,51 @@ impl GitLabView {
                     .border_1()
                     .border_color(c(BORDER))
                     .bg(c(CARD))
-                    .child(self.mention_input(crate::mention::Field::Comment, Input::new(&self.boxes.comment).appearance(false), cx))
+                    .child(self.mention_input(
+                        crate::mention::Field::Comment,
+                        Input::new(&self.boxes.comment).appearance(false),
+                        cx,
+                    ))
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(div().flex_1().text_size(px(12.)).text_color(c(MUTED)).child("Markdown is supported."))
                             .child(
-                                primary("gl-comment", label, enabled)
-                                    .when(enabled, |d| d.on_click(cx.listener(|v, _, window, cx| v.post_comment(window, cx)))),
-                            ),
+                                div()
+                                    .flex_1()
+                                    .text_size(px(12.))
+                                    .text_color(c(MUTED))
+                                    .child("Markdown is supported."),
+                            )
+                            .child(primary("gl-comment", label, enabled).when(enabled, |d| {
+                                d.on_click(
+                                    cx.listener(|v, _, window, cx| v.post_comment(window, cx)),
+                                )
+                            })),
                     ),
             )
     }
 
     /// Under a thread: the reply placeholder (or the open reply box) and
     /// "Resolve thread" / "Reopen thread", as GitLab has them.
-    pub(crate) fn reply_bar(&self, id: &str, resolvable: bool, resolved: bool, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn reply_bar(
+        &self,
+        id: &str,
+        resolvable: bool,
+        resolved: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
         // Made here, not yet GitLab's: nothing to reply to or resolve yet.
         if is_pending_thread(id) {
-            return div().px_4().py_3().border_t_1().border_color(c(RAISED)).bg(c(CARD)).text_color(c(MUTED)).child("Sending…");
+            return div()
+                .px_4()
+                .py_3()
+                .border_t_1()
+                .border_color(c(RAISED))
+                .bg(c(CARD))
+                .text_color(c(MUTED))
+                .child("Sending…");
         }
         let open = self.replying.as_deref() == Some(id);
         let reply_label = "Reply";
@@ -1057,10 +1408,16 @@ impl GitLabView {
             let thread = id.to_string();
             secondary(
                 SharedString::from(format!("resolve-{id}")),
-                if resolved { "Reopen thread" } else { "Resolve thread" },
+                if resolved {
+                    "Reopen thread"
+                } else {
+                    "Resolve thread"
+                },
             )
             .flex_none()
-            .on_click(cx.listener(move |v, _, window, cx| v.set_resolved(&thread, !resolved, window, cx)))
+            .on_click(
+                cx.listener(move |v, _, window, cx| v.set_resolved(&thread, !resolved, window, cx)),
+            )
         });
         if !open {
             let thread = id.to_string();
@@ -1088,7 +1445,9 @@ impl GitLabView {
                         .cursor_text()
                         .text_color(c(MUTED))
                         .child("Reply…")
-                        .on_click(cx.listener(move |v, _, window, cx| v.open_reply(&thread, window, cx))),
+                        .on_click(
+                            cx.listener(move |v, _, window, cx| v.open_reply(&thread, window, cx)),
+                        ),
                 )
                 .children(resolve_button);
         }
@@ -1110,7 +1469,11 @@ impl GitLabView {
                     .border_1()
                     .border_color(c(0x1068bf))
                     .bg(c(BG))
-                    .child(self.mention_input(crate::mention::Field::Reply, Input::new(&self.boxes.reply).appearance(false), cx)),
+                    .child(self.mention_input(
+                        crate::mention::Field::Reply,
+                        Input::new(&self.boxes.reply).appearance(false),
+                        cx,
+                    )),
             )
             .child(
                 div()
@@ -1118,17 +1481,35 @@ impl GitLabView {
                     .items_center()
                     .gap_2()
                     .child(
-                        primary(SharedString::from(format!("send-{id}")), reply_label, enabled)
-                            .when(enabled, |d| d.on_click(cx.listener(|v, _, window, cx| v.send_reply(false, window, cx)))),
+                        primary(
+                            SharedString::from(format!("send-{id}")),
+                            reply_label,
+                            enabled,
+                        )
+                        .when(enabled, |d| {
+                            d.on_click(
+                                cx.listener(|v, _, window, cx| v.send_reply(false, window, cx)),
+                            )
+                        }),
                     )
                     .when(resolvable && !resolved, |d| {
                         d.child(
-                            secondary(SharedString::from(format!("send-resolve-{id}")), "Reply and resolve")
-                                .when(enabled, |d| d.on_click(cx.listener(|v, _, window, cx| v.send_reply(true, window, cx)))),
+                            secondary(
+                                SharedString::from(format!("send-resolve-{id}")),
+                                "Reply and resolve",
+                            )
+                            .when(enabled, |d| {
+                                d.on_click(
+                                    cx.listener(|v, _, window, cx| v.send_reply(true, window, cx)),
+                                )
+                            }),
                         )
                     })
                     .child(div().flex_1())
-                    .child(secondary(SharedString::from(format!("cancel-{id}")), "Cancel").on_click(cx.listener(|v, _, _, cx| v.close_reply(cx)))),
+                    .child(
+                        secondary(SharedString::from(format!("cancel-{id}")), "Cancel")
+                            .on_click(cx.listener(|v, _, _, cx| v.close_reply(cx))),
+                    ),
             )
     }
 
@@ -1153,7 +1534,11 @@ impl GitLabView {
                     .border_1()
                     .border_color(c(0x1068bf))
                     .bg(c(CARD))
-                    .child(self.mention_input(crate::mention::Field::Line, Input::new(&self.boxes.line).appearance(false), cx)),
+                    .child(self.mention_input(
+                        crate::mention::Field::Line,
+                        Input::new(&self.boxes.line).appearance(false),
+                        cx,
+                    )),
             )
             .child(
                 div()
@@ -1164,23 +1549,41 @@ impl GitLabView {
                     .child(
                         primary(
                             "gl-line-draft",
-                            if self.review.ready().is_some_and(|r| !r.drafts.is_empty()) { "Add to review" } else { "Start a review" },
+                            if self.review.ready().is_some_and(|r| !r.drafts.is_empty()) {
+                                "Add to review"
+                            } else {
+                                "Start a review"
+                            },
                             enabled,
                         )
-                        .when(enabled, |d| d.on_click(cx.listener(|v, _, window, cx| v.send_line_comment(true, window, cx)))),
+                        .when(enabled, |d| {
+                            d.on_click(
+                                cx.listener(|v, _, window, cx| {
+                                    v.send_line_comment(true, window, cx)
+                                }),
+                            )
+                        }),
                     )
-                    .child(
-                        secondary("gl-line-send", send_label)
-                            .when(enabled, |d| d.on_click(cx.listener(|v, _, window, cx| v.send_line_comment(false, window, cx)))),
-                    )
+                    .child(secondary("gl-line-send", send_label).when(enabled, |d| {
+                        d.on_click(
+                            cx.listener(|v, _, window, cx| v.send_line_comment(false, window, cx)),
+                        )
+                    }))
                     .child(div().flex_1())
-                    .child(secondary("gl-line-cancel", "Cancel").on_click(cx.listener(|v, _, _, cx| v.close_line_comment(cx)))),
+                    .child(
+                        secondary("gl-line-cancel", "Cancel")
+                            .on_click(cx.listener(|v, _, _, cx| v.close_line_comment(cx))),
+                    ),
             )
     }
 
     /// The approval widget's button: "Approve", or "Revoke approval" once
     /// you have.
-    pub(crate) fn approve_button(&self, approved_by_me: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+    pub(crate) fn approve_button(
+        &self,
+        approved_by_me: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         if approved_by_me {
             secondary("gl-unapprove", "Revoke approval")
                 .on_click(cx.listener(|v, _, window, cx| v.set_approved(false, window, cx)))
@@ -1193,27 +1596,65 @@ impl GitLabView {
 
 #[cfg(test)]
 mod tests {
-    use super::{busy_label, Write};
+    use super::{Write, busy_label};
 
     /// Only the write under way shows it: resolving a thread or sending a
     /// reply mustn't turn Approve into "Approving…".
     #[test]
     fn only_the_running_write_says_so() {
-        for other in [Write::Comment, Write::Reply, Write::Resolve, Write::Award, Write::Rebase, Write::LineComment, Write::Sidebar] {
-            assert_eq!(busy_label(Some(other), Write::Approve, "Approve", "Approving…"), ("Approve", true), "{other:?}");
+        for other in [
+            Write::Comment,
+            Write::Reply,
+            Write::Resolve,
+            Write::Award,
+            Write::Rebase,
+            Write::LineComment,
+            Write::Sidebar,
+        ] {
+            assert_eq!(
+                busy_label(Some(other), Write::Approve, "Approve", "Approving…"),
+                ("Approve", true),
+                "{other:?}"
+            );
         }
-        assert_eq!(busy_label(None, Write::Approve, "Approve", "Approving…"), ("Approve", true));
-        assert_eq!(busy_label(Some(Write::Approve), Write::Approve, "Approve", "Approving…"), ("Approving…", false));
-        assert_eq!(busy_label(Some(Write::Approve), Write::Reply, "Reply", "Replying…"), ("Reply", true));
+        assert_eq!(
+            busy_label(None, Write::Approve, "Approve", "Approving…"),
+            ("Approve", true)
+        );
+        assert_eq!(
+            busy_label(
+                Some(Write::Approve),
+                Write::Approve,
+                "Approve",
+                "Approving…"
+            ),
+            ("Approving…", false)
+        );
+        assert_eq!(
+            busy_label(Some(Write::Approve), Write::Reply, "Reply", "Replying…"),
+            ("Reply", true)
+        );
     }
 
     #[test]
     fn draft_marker_comes_and_goes() {
         use super::draft_title;
-        assert_eq!(draft_title("Fix the limiter", true), "Draft: Fix the limiter");
-        assert_eq!(draft_title("Draft: Fix the limiter", true), "Draft: Fix the limiter");
-        assert_eq!(draft_title("[Draft] Fix the limiter", true), "Draft: Fix the limiter");
-        assert_eq!(draft_title("Draft: Fix the limiter", false), "Fix the limiter");
+        assert_eq!(
+            draft_title("Fix the limiter", true),
+            "Draft: Fix the limiter"
+        );
+        assert_eq!(
+            draft_title("Draft: Fix the limiter", true),
+            "Draft: Fix the limiter"
+        );
+        assert_eq!(
+            draft_title("[Draft] Fix the limiter", true),
+            "Draft: Fix the limiter"
+        );
+        assert_eq!(
+            draft_title("Draft: Fix the limiter", false),
+            "Fix the limiter"
+        );
         assert_eq!(draft_title("Drafting notes", true), "Draft: Drafting notes");
     }
 }

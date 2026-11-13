@@ -296,9 +296,7 @@ impl Node {
         else {
             return None;
         };
-        let child = children
-            .iter()
-            .find(|c| c.panes().any(|p| p.id == pane))?;
+        let child = children.iter().find(|c| c.panes().any(|p| p.id == pane))?;
         child
             .split_along(pane, axis)
             .or((*a == axis).then_some(*id))
@@ -551,9 +549,7 @@ impl Workspace {
     pub fn last_pane(&mut self) -> Option<usize> {
         self.track_focus();
         let prev = self.prev_pane?;
-        self.panes()
-            .any(|p| p.id == prev)
-            .then_some(prev)
+        self.panes().any(|p| p.id == prev).then_some(prev)
     }
 
     /// Swap pane `id`'s tabs with those of the pane next to it in `dir`, as
@@ -580,8 +576,7 @@ impl Workspace {
     }
 
     pub fn focused(&self) -> Option<&Pane> {
-        self.panes()
-            .find(|p| p.id == self.focused_pane)
+        self.panes().find(|p| p.id == self.focused_pane)
     }
 
     /// The zoomed pane, if zoom still applies: it is the focused pane and
@@ -782,16 +777,14 @@ impl Workspace {
 
     /// cwd of the focused terminal, or of any terminal in the workspace.
     pub fn cwd(&self, cx: &App) -> Option<String> {
-        self.focused_surface().and_then(|s| s.cwd(cx)).or_else(|| {
-            self.surfaces()
-                .find_map(|s| s.cwd(cx))
-        })
+        self.focused_surface()
+            .and_then(|s| s.cwd(cx))
+            .or_else(|| self.surfaces().find_map(|s| s.cwd(cx)))
     }
 
     /// Claude Code is working in one of its terminals.
     pub fn claude_running(&self, cx: &App) -> bool {
-        self.surfaces()
-            .any(|s| s.claude_running(cx))
+        self.surfaces().any(|s| s.claude_running(cx))
     }
 
     pub fn name(&self, cx: &App) -> String {
@@ -810,10 +803,11 @@ impl Workspace {
             }
             Surface::Browser(_) | Surface::Plugin(_) => None,
         };
-        if let Some(t) = self.focused_surface().and_then(title).or_else(|| {
-            self.surfaces()
-                .find_map(title)
-        }) {
+        if let Some(t) = self
+            .focused_surface()
+            .and_then(title)
+            .or_else(|| self.surfaces().find_map(title))
+        {
             return t;
         }
         self.cwd(cx)

@@ -22,9 +22,7 @@ use futures::{
     channel::{mpsc, oneshot},
     future::{Either, LocalBoxFuture, select},
 };
-use gpui::{
-    App, AsyncApp, Axis, Context, Entity, EntityId, Keystroke, Timer, Window,
-};
+use gpui::{App, AsyncApp, Axis, Context, Entity, EntityId, Keystroke, Timer, Window};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Write},
@@ -286,9 +284,15 @@ fn notification_id(p: &Value) -> anyhow::Result<Option<usize>> {
 
 /// A page zoom: `1.25`, or `125%`.
 fn parse_zoom(z: &str) -> anyhow::Result<f64> {
-    let bad = || anyhow!("bad zoom {z:?}: use in, out, reset, a factor like 1.25 or a percentage like 125%");
+    let bad = || {
+        anyhow!("bad zoom {z:?}: use in, out, reset, a factor like 1.25 or a percentage like 125%")
+    };
     match z.strip_suffix('%') {
-        Some(pct) => pct.trim().parse::<f64>().map(|p| p / 100.).map_err(|_| bad()),
+        Some(pct) => pct
+            .trim()
+            .parse::<f64>()
+            .map(|p| p / 100.)
+            .map_err(|_| bad()),
         None => z.trim().parse().map_err(|_| bad()),
     }
 }
@@ -483,14 +487,27 @@ impl AbroMux {
             "folder.remove" => {
                 let path = std::path::PathBuf::from(str_param(p, "path").context("missing path")?);
                 let same = |h: &std::path::Path| {
-                    h == path || h.canonicalize().is_ok_and(|h| path.canonicalize().is_ok_and(|p| h == p))
+                    h == path
+                        || h.canonicalize()
+                            .is_ok_and(|h| path.canonicalize().is_ok_and(|p| h == p))
                 };
-                match self.workspaces.iter().position(|w| w.home.as_deref().is_some_and(same)) {
+                match self
+                    .workspaces
+                    .iter()
+                    .position(|w| w.home.as_deref().is_some_and(same))
+                {
                     Some(wi) => {
                         let r = self.ws_ref(wi);
                         let id = self.workspaces[wi].id;
                         let gone = gone.clone();
-                        self.remove_folder_later(id, path, bool_param(p, "force", false), gone, window, cx);
+                        self.remove_folder_later(
+                            id,
+                            path,
+                            bool_param(p, "force", false),
+                            gone,
+                            window,
+                            cx,
+                        );
                         json!({ "workspace": r })
                     }
                     None => json!({ "workspace": null }),
@@ -737,10 +754,7 @@ impl AbroMux {
             "surface.list" => {
                 let (wi, pane) = self.pane_target(p)?;
                 let ws = &self.workspaces[wi];
-                let pane = ws
-                    .panes()
-                    .find(|x| x.id == pane)
-                    .context("no such pane")?;
+                let pane = ws.panes().find(|x| x.id == pane).context("no such pane")?;
                 json!(
                     pane.tabs
                         .iter()
@@ -862,9 +876,7 @@ impl AbroMux {
                 };
                 let at = match (&anchor, index) {
                     (Some(((_, _, a), after)), _) => {
-                        let pane = self.workspaces[dwi]
-                            .panes()
-                            .find(|x| x.id == dpane);
+                        let pane = self.workspaces[dwi].panes().find(|x| x.id == dpane);
                         let i = pane
                             .and_then(|x| {
                                 x.tabs.iter().position(|t| t.entity_id() == a.entity_id())
@@ -1335,7 +1347,8 @@ impl AbroMux {
                     .to_string();
                 let color = str_param(p, "color")
                     .map(|c| {
-                        parse_color(c).with_context(|| format!("bad color {c:?} (use #rgb or #rrggbb)"))
+                        parse_color(c)
+                            .with_context(|| format!("bad color {c:?} (use #rgb or #rrggbb)"))
                     })
                     .transpose()?;
                 let icon = str_param(p, "icon").map(String::from);
@@ -1520,8 +1533,11 @@ impl AbroMux {
             }
             "link.list" => {
                 let wi = self.workspace_target(p)?;
-                let tracked: Vec<String> =
-                    self.workspaces[wi].links.iter().map(|l| l.key.clone()).collect();
+                let tracked: Vec<String> = self.workspaces[wi]
+                    .links
+                    .iter()
+                    .map(|l| l.key.clone())
+                    .collect();
                 let list: Vec<Value> = self
                     .shown_links(wi, cx)
                     .into_iter()
@@ -1570,7 +1586,9 @@ impl AbroMux {
                             l
                         }
                     };
-                    self.show_link(wi, &link, focus, window, cx).into_iter().collect()
+                    self.show_link(wi, &link, focus, window, cx)
+                        .into_iter()
+                        .collect()
                 };
                 let refs: Vec<Value> = ids
                     .iter()
@@ -2072,7 +2090,9 @@ impl AbroMux {
         };
         let (label, title) = (kind.label(), kind.title());
         match event {
-            AgentEvent::Working => self.set_agent_status(surface, label, Some(("Running", RUNNING)), cx),
+            AgentEvent::Working => {
+                self.set_agent_status(surface, label, Some(("Running", RUNNING)), cx)
+            }
             AgentEvent::NeedsInput(message) => {
                 let message = message.unwrap_or_else(|| format!("{label} needs your attention"));
                 self.set_agent_status(surface, label, Some(("Needs input", WARNING)), cx);
@@ -2155,7 +2175,9 @@ impl AbroMux {
                 let new = self.make_surface(wi, &q, window, cx)?;
                 let nid = new.entity_id();
                 let ws = &mut self.workspaces[wi];
-                let was = ws.pane_mut(pane).and_then(|x| x.active_surface().map(|s| s.entity_id()));
+                let was = ws
+                    .pane_mut(pane)
+                    .and_then(|x| x.active_surface().map(|s| s.entity_id()));
                 if ws.insert_tab(pane, at + 1, new).is_err() {
                     bail!("pane:{pane} is gone");
                 }
@@ -2248,7 +2270,10 @@ impl AbroMux {
                 .and_then(|i| links.get(i).cloned())
                 .with_context(|| format!("no link {n}: the workspace has {}", links.len()));
         }
-        let key = self.parse_link(r, cx).map(|l| l.key).unwrap_or_else(|_| r.to_string());
+        let key = self
+            .parse_link(r, cx)
+            .map(|l| l.key)
+            .unwrap_or_else(|_| r.to_string());
         links
             .into_iter()
             .find(|l| l.key == key)
@@ -2331,10 +2356,7 @@ impl AbroMux {
         };
         ws.focused_surface()
             .and_then(browser)
-            .or_else(|| {
-                ws.surfaces()
-                    .find_map(browser)
-            })
+            .or_else(|| ws.surfaces().find_map(browser))
             .context("no browser surface in this workspace (open one with `abromux browser open`)")
     }
 
@@ -2346,11 +2368,11 @@ impl AbroMux {
             return Ok((wi, pane));
         };
         match parse_sel(s, "pane")? {
-            Sel::Ref(id) => self.workspaces.iter().enumerate().find_map(|(wi, w)| {
-                w.panes()
-                    .any(|p| p.id == id)
-                    .then_some((wi, id))
-            }),
+            Sel::Ref(id) => self
+                .workspaces
+                .iter()
+                .enumerate()
+                .find_map(|(wi, w)| w.panes().any(|p| p.id == id).then_some((wi, id))),
             Sel::Index(i) => {
                 let wi = self.workspace_target(p)?;
                 self.workspaces[wi].panes().nth(i).map(|p| (wi, p.id))
@@ -2418,7 +2440,9 @@ impl AbroMux {
             // line in what was typed.
             let t = t.downgrade();
             cx.spawn(async move |_, cx| {
-                cx.background_executor().timer(std::time::Duration::from_millis(150)).await;
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(150))
+                    .await;
                 let _ = t.update(cx, |t, cx| {
                     t.send(b"\r");
                     cx.notify();
@@ -2428,7 +2452,13 @@ impl AbroMux {
             return Ok(());
         }
         let (wi, pane) = match run.beside.and_then(|id| Some((self.workspace_of(id)?, id))) {
-            Some((wi, id)) => (wi, self.workspaces[wi].tab_position(id).context("the tab is gone")?.0),
+            Some((wi, id)) => (
+                wi,
+                self.workspaces[wi]
+                    .tab_position(id)
+                    .context("the tab is gone")?
+                    .0,
+            ),
             None => (self.active, self.workspaces[self.active].focused_pane),
         };
         let p = json!({ "type": "terminal", "cwd": run.cwd, "command": run.command });
@@ -2439,7 +2469,10 @@ impl AbroMux {
         let new_id = s.entity_id();
         let panes: Vec<usize> = self.workspaces[wi].panes().map(|p| p.id).collect();
         let at = panes.iter().position(|p| *p == pane).unwrap_or(0);
-        let other = panes.get(at + 1).or(at.checked_sub(1).and_then(|i| panes.get(i))).copied();
+        let other = panes
+            .get(at + 1)
+            .or(at.checked_sub(1).and_then(|i| panes.get(i)))
+            .copied();
         match other {
             Some(o) => {
                 self.add_tab_to(wi, o, s, false, window, cx);
@@ -2451,8 +2484,17 @@ impl AbroMux {
                 }
             }
             None => {
-                self.split_pane(wi, pane, gpui::Axis::Horizontal, false, s, false, window, cx)
-                    .context("pane not found")?;
+                self.split_pane(
+                    wi,
+                    pane,
+                    gpui::Axis::Horizontal,
+                    false,
+                    s,
+                    false,
+                    window,
+                    cx,
+                )
+                .context("pane not found")?;
             }
         }
         cx.notify();
@@ -2472,7 +2514,12 @@ impl AbroMux {
                 let cwd = str_param(p, "cwd")
                     .map(String::from)
                     .or_else(|| self.workspaces[wi].cwd(cx));
-                let s = self.make_terminal(self.workspaces[wi].id, crate::TerminalOpts::cwd(cwd), window, cx);
+                let s = self.make_terminal(
+                    self.workspaces[wi].id,
+                    crate::TerminalOpts::cwd(cwd),
+                    window,
+                    cx,
+                );
                 if let (Some(cmd), Surface::Terminal(t)) = (str_param(p, "command"), &s) {
                     t.update(cx, |t, _| t.send(format!("{cmd}\r").as_bytes()));
                 }
@@ -2489,9 +2536,14 @@ impl AbroMux {
                 }
             }
             "markdown" => {
-                let path = str_param(p, "path").context("missing path (the Markdown file to show)")?;
+                let path =
+                    str_param(p, "path").context("missing path (the Markdown file to show)")?;
                 let path = std::path::Path::new(path);
-                anyhow::ensure!(path.is_absolute(), "the path must be absolute: {}", path.display());
+                anyhow::ensure!(
+                    path.is_absolute(),
+                    "the path must be absolute: {}",
+                    path.display()
+                );
                 anyhow::ensure!(path.exists(), "no such file: {}", path.display());
                 self.make_builtin_browser(&crate::markdown::url_for(path), window, cx)
             }
@@ -2712,7 +2764,6 @@ impl AbroMux {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2723,7 +2774,8 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded();
         let served = std::thread::spawn(move || serve(app_end, tx));
         let mut w = caller.try_clone().unwrap();
-        w.write_all(b"{\"id\":1,\"method\":\"system.ping\"}\n").unwrap();
+        w.write_all(b"{\"id\":1,\"method\":\"system.ping\"}\n")
+            .unwrap();
         let (_, reply, gone) = futures::executor::block_on(rx.next()).unwrap();
         reply.send(ipc::ok(&json!(1), json!("pong"))).unwrap();
         let mut line = String::new();
@@ -2734,7 +2786,10 @@ mod tests {
         drop(w);
         drop(caller);
         served.join().unwrap();
-        assert!(futures::executor::block_on(gone).is_err(), "resolves (sender dropped)");
+        assert!(
+            futures::executor::block_on(gone).is_err(),
+            "resolves (sender dropped)"
+        );
     }
 
     #[test]
@@ -2742,7 +2797,10 @@ mod tests {
         assert_eq!(parse_zoom("1.25").unwrap(), 1.25);
         assert_eq!(parse_zoom("150%").unwrap(), 1.5);
         assert!(parse_zoom("big").is_err());
-        assert_eq!(notification_id(&json!({ "id": "notification:4" })).unwrap(), Some(4));
+        assert_eq!(
+            notification_id(&json!({ "id": "notification:4" })).unwrap(),
+            Some(4)
+        );
         assert_eq!(notification_id(&json!({ "id": 7 })).unwrap(), Some(7));
         assert_eq!(notification_id(&json!({})).unwrap(), None);
         assert!(notification_id(&json!({ "id": "x" })).is_err());

@@ -11,8 +11,8 @@
 
 pub mod api;
 pub mod auth;
-pub mod cache;
 mod avatars;
+pub mod cache;
 mod changes;
 pub mod diff;
 mod discussion;
@@ -24,12 +24,12 @@ pub mod local;
 mod mention;
 mod mr;
 mod optimistic;
-mod search;
 mod projects;
+pub mod review;
+mod search;
 mod select;
 mod side;
 mod style;
-pub mod review;
 pub mod time;
 pub mod types;
 pub mod view;
@@ -173,7 +173,13 @@ impl Section {
     /// Changes, `…/1/commits` the Commits, anything else the Overview.
     pub fn of_url(url: &str) -> Section {
         let after = url.split_once("/-/merge_requests/").map_or("", |(_, a)| a);
-        match after.split(['?', '#']).next().unwrap_or_default().split('/').nth(1) {
+        match after
+            .split(['?', '#'])
+            .next()
+            .unwrap_or_default()
+            .split('/')
+            .nth(1)
+        {
             Some("diffs") => Section::Changes,
             Some("commits") => Section::Commits,
             Some("pipelines") => Section::Pipelines,
@@ -194,7 +200,12 @@ pub enum ListSort {
 }
 
 impl ListSort {
-    pub const ALL: [ListSort; 4] = [ListSort::Created, ListSort::Updated, ListSort::Title, ListSort::Popularity];
+    pub const ALL: [ListSort; 4] = [
+        ListSort::Created,
+        ListSort::Updated,
+        ListSort::Title,
+        ListSort::Popularity,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -211,7 +222,11 @@ impl ListSort {
             ListSort::Created => mrs.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
             ListSort::Updated => mrs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)),
             ListSort::Title => mrs.sort_by_key(|m| std::cmp::Reverse(m.title.to_lowercase())),
-            ListSort::Popularity => mrs.sort_by(|a, b| b.upvotes.cmp(&a.upvotes).then(b.created_at.cmp(&a.created_at))),
+            ListSort::Popularity => mrs.sort_by(|a, b| {
+                b.upvotes
+                    .cmp(&a.upvotes)
+                    .then(b.created_at.cmp(&a.created_at))
+            }),
         }
         if ascending {
             mrs.reverse();
@@ -256,21 +271,34 @@ impl Location {
 
 /// `params`: a saved [`Location`], or `{"url": "<merge request URL>"}`.
 fn open(params: &Value, window: &mut Window, cx: &mut App) -> anyhow::Result<TabHandle> {
-    let url = params.get("url").and_then(Value::as_str).map(str::to_string);
+    let url = params
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let mut loc: Location = serde_json::from_value(params.clone()).unwrap_or_default();
     // A project's merge requests link: the list of those.
     let project_list = url.as_deref().and_then(api::parse_project_mrs_url);
     if let Some((host, path)) = &project_list {
         loc.host = Some(host.clone());
-        loc.browse = Some(Browse { id: 0, path: path.clone() });
+        loc.browse = Some(Browse {
+            id: 0,
+            path: path.clone(),
+        });
     } else if let Some(u) = &url {
-        let (host, _, _) = api::parse_mr_url(u).ok_or_else(|| anyhow::anyhow!("not a merge request URL: {u}"))?;
+        let (host, _, _) =
+            api::parse_mr_url(u).ok_or_else(|| anyhow::anyhow!("not a merge request URL: {u}"))?;
         loc.host = Some(host);
     }
     let view = cx.new(|cx| {
         let mut v = view::GitLabView::new(loc, window, cx);
         if let Some(u) = url.as_ref().filter(|_| project_list.is_none()) {
-            let _ = abromux_plugin::Tab::command(&mut v, "open", &serde_json::json!({ "url": u }), window, cx);
+            let _ = abromux_plugin::Tab::command(
+                &mut v,
+                "open",
+                &serde_json::json!({ "url": u }),
+                window,
+                cx,
+            );
         }
         v
     });
@@ -295,25 +323,28 @@ pub fn load_review(c: &api::Client, project: u64, iid: u64) -> anyhow::Result<re
         let multiple = s.spawn(|| c.allows_multiple(project, iid));
         let note_awards = s.spawn(|| c.note_awards(project, iid));
         c.prefetch([
-        mrp("?include_diverged_commits_count=true"),
-        first_page(&mrp("/diffs")),
-        first_page(&mrp("/discussions")),
-        mrp("/approvals"),
-        first_page(&mrp("/commits")),
-        first_page(&pp("members/all")),
-        first_page(&mrp("/versions")),
-        first_page(&pp("labels")),
-        first_page(&pp("milestones?state=active")),
-        first_page(&mrp("/award_emoji")),
-        first_page(&mrp("/closes_issues")),
-        first_page(&mrp("/draft_notes")),
-        first_page(&mrp("/reviewers")),
-        first_page(&mrp("/pipelines")),
-        first_page(&mrp("/resource_state_events")),
-        first_page(&mrp("/resource_label_events")),
-        first_page(&mrp("/resource_milestone_events")),
+            mrp("?include_diverged_commits_count=true"),
+            first_page(&mrp("/diffs")),
+            first_page(&mrp("/discussions")),
+            mrp("/approvals"),
+            first_page(&mrp("/commits")),
+            first_page(&pp("members/all")),
+            first_page(&mrp("/versions")),
+            first_page(&pp("labels")),
+            first_page(&pp("milestones?state=active")),
+            first_page(&mrp("/award_emoji")),
+            first_page(&mrp("/closes_issues")),
+            first_page(&mrp("/draft_notes")),
+            first_page(&mrp("/reviewers")),
+            first_page(&mrp("/pipelines")),
+            first_page(&mrp("/resource_state_events")),
+            first_page(&mrp("/resource_label_events")),
+            first_page(&mrp("/resource_milestone_events")),
         ]);
-        (multiple.join().ok().and_then(Result::ok), note_awards.join().ok().and_then(Result::ok))
+        (
+            multiple.join().ok().and_then(Result::ok),
+            note_awards.join().ok().and_then(Result::ok),
+        )
     });
     lap("batch");
     let r = load_prefetched(c, project, iid, multiple, &lap).map(|mut r| {
@@ -334,7 +365,13 @@ fn load_prefetched(
 ) -> anyhow::Result<review::Review> {
     let mr = c.merge_request(project, iid)?;
     // The stack it's in, from GraphQL beside the rest: a round trip a level.
-    let full = mr.references.full.split('!').next().unwrap_or_default().to_string();
+    let full = mr
+        .references
+        .full
+        .split('!')
+        .next()
+        .unwrap_or_default()
+        .to_string();
     let (source, target) = (mr.source_branch.clone(), mr.target_branch.clone());
     std::thread::scope(|s| {
         let stack = s.spawn(|| c.merge_request_stack(&full, iid, &source, &target));
@@ -362,10 +399,16 @@ fn load_rest(
     );
     // Role badges are a nicety: a token that can't list members still reviews.
     if let Ok((members, more)) = c.members_first(project) {
-        r.roles = members.iter().filter_map(|m| Some((m.id, m.role()?))).collect();
+        r.roles = members
+            .iter()
+            .filter_map(|m| Some((m.id, m.role()?)))
+            .collect();
         // members/all lists someone once per group they're in.
         let mut people: Vec<types::User> = vec![];
-        for m in members.iter().filter(|m| m.state.is_empty() || m.state == "active") {
+        for m in members
+            .iter()
+            .filter(|m| m.state.is_empty() || m.state == "active")
+        {
             if !people.iter().any(|p| p.id == m.id) {
                 people.push(m.user());
             }
@@ -388,17 +431,43 @@ fn load_rest(
     r.awards = c.awards(project, iid).unwrap_or_default();
     r.closes = c.closes_issues(project, iid).unwrap_or_default();
     r.drafts = c.draft_notes(project, iid).unwrap_or_default();
-    r.review_states = c.reviewers(project, iid).unwrap_or_default().into_iter().map(|rv| (rv.user.id, rv.state)).collect();
+    r.review_states = c
+        .reviewers(project, iid)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|rv| (rv.user.id, rv.state))
+        .collect();
     r.pipelines = c.pipelines(project, iid).unwrap_or_default();
-    if let Some(sha) = r.mr.merge_commit_sha.clone().or_else(|| r.mr.squash_commit_sha.clone()).filter(|_| r.mr.state == "merged") {
-        r.merge_pipeline = c.pipeline_for_sha(project, &sha, &r.mr.target_branch).ok().flatten();
+    if let Some(sha) =
+        r.mr.merge_commit_sha
+            .clone()
+            .or_else(|| r.mr.squash_commit_sha.clone())
+            .filter(|_| r.mr.state == "merged")
+    {
+        r.merge_pipeline = c
+            .pipeline_for_sha(project, &sha, &r.mr.target_branch)
+            .ok()
+            .flatten();
     }
     // The roles of whoever commented that the first hundred members don't
     // cover: one short request each, together.
-    let path = r.mr.references.full.split('!').next().unwrap_or_default().to_string();
+    let path =
+        r.mr.references
+            .full
+            .split('!')
+            .next()
+            .unwrap_or_default()
+            .to_string();
     let authors: Vec<u64> = {
-        let threads = r.general.iter().chain(&r.outdated).chain(r.files.iter().flat_map(|f| f.threads.iter().map(|(_, _, d)| d)));
-        let mut ids: Vec<u64> = threads.flat_map(|d| d.notes.iter().map(|n| n.author.id)).chain([r.mr.author.id]).collect();
+        let threads = r.general.iter().chain(&r.outdated).chain(
+            r.files
+                .iter()
+                .flat_map(|f| f.threads.iter().map(|(_, _, d)| d)),
+        );
+        let mut ids: Vec<u64> = threads
+            .flat_map(|d| d.notes.iter().map(|n| n.author.id))
+            .chain([r.mr.author.id])
+            .collect();
         ids.sort_unstable();
         ids.dedup();
         ids.retain(|id| *id != 0 && !r.roles.contains_key(id));
@@ -406,7 +475,10 @@ fn load_rest(
     };
     lap("built");
     c.prefetch(authors.iter().map(|id| api::member_path(project, *id)));
-    let roles: Vec<(u64, &'static str)> = authors.iter().filter_map(|id| Some((*id, c.member(project, *id).ok()?.role()?))).collect();
+    let roles: Vec<(u64, &'static str)> = authors
+        .iter()
+        .filter_map(|id| Some((*id, c.member(project, *id).ok()?.role()?)))
+        .collect();
     // Unknown (an old GitLab): let it pick several and show what GitLab kept.
     r.multiple = multiple.unwrap_or((true, true));
     r.roles.extend(roles);
@@ -441,7 +513,11 @@ fn load_rest(
         let title = review::token(&m.title);
         r.system.push(types::Note {
             id: e.id,
-            body: if e.action == "remove" { format!("removed milestone %{title}") } else { format!("changed milestone to %{title}") },
+            body: if e.action == "remove" {
+                format!("removed milestone %{title}")
+            } else {
+                format!("changed milestone to %{title}")
+            },
             author: e.user.unwrap_or_default(),
             created_at: e.created_at,
             system: true,
@@ -456,25 +532,44 @@ fn load_rest(
 /// `Pending`, with GitLab's line counts, fetched when shown.
 fn fill_in(c: &api::Client, r: &mut review::Review, full_path: &str) {
     use diff::Body;
-    let capped = r.files.len() >= 1000 || r.mr.changes_count.as_deref().is_some_and(|n| n.ends_with('+'));
-    let short = r.files.iter().any(|f| matches!(f.body, Body::TooLarge | Body::Collapsed));
+    let capped = r.files.len() >= 1000
+        || r.mr
+            .changes_count
+            .as_deref()
+            .is_some_and(|n| n.ends_with('+'));
+    let short = r
+        .files
+        .iter()
+        .any(|f| matches!(f.body, Body::TooLarge | Body::Collapsed));
     if !capped && !short {
         return;
     }
-    let Ok(stats) = c.diff_stats(full_path, r.mr.iid) else { return };
+    let Ok(stats) = c.diff_stats(full_path, r.mr.iid) else {
+        return;
+    };
     for f in &mut r.files {
         if matches!(f.body, Body::TooLarge | Body::Collapsed) {
             f.body = Body::Pending;
-            f.stats = stats.iter().find(|s| s.0 == f.meta.new_path).map(|s| (s.1, s.2));
+            f.stats = stats
+                .iter()
+                .find(|s| s.0 == f.meta.new_path)
+                .map(|s| (s.1, s.2));
         }
     }
-    let known: std::collections::HashSet<&str> =
-        r.files.iter().flat_map(|f| [f.meta.new_path.as_str(), f.meta.old_path.as_str()]).collect();
+    let known: std::collections::HashSet<&str> = r
+        .files
+        .iter()
+        .flat_map(|f| [f.meta.new_path.as_str(), f.meta.old_path.as_str()])
+        .collect();
     let missing: Vec<review::File> = stats
         .iter()
         .filter(|(path, _, _)| !known.contains(path.as_str()))
         .map(|(path, added, removed)| {
-            let meta = types::FileDiff { old_path: path.clone(), new_path: path.clone(), ..Default::default() };
+            let meta = types::FileDiff {
+                old_path: path.clone(),
+                new_path: path.clone(),
+                ..Default::default()
+            };
             let mut f = review::File::new(meta, Body::Pending);
             f.stats = Some((*added, *removed));
             f
@@ -490,20 +585,35 @@ fn label_notes(events: &[types::LabelEvent]) -> Vec<(&types::LabelEvent, String)
     for e in events {
         let Some(l) = &e.label else { continue };
         let who = e.user.as_ref().map(|u| u.id);
-        let same = out.last().is_some_and(|(f, _, _)| f.user.as_ref().map(|u| u.id) == who && f.created_at.get(..19) == e.created_at.get(..19));
+        let same = out.last().is_some_and(|(f, _, _)| {
+            f.user.as_ref().map(|u| u.id) == who && f.created_at.get(..19) == e.created_at.get(..19)
+        });
         if !same {
             out.push((e, vec![], vec![]));
         }
         let (_, added, removed) = out.last_mut().unwrap();
         let name = format!("~{}", review::token(&l.name));
-        if e.action == "remove" { removed.push(name) } else { added.push(name) }
+        if e.action == "remove" {
+            removed.push(name)
+        } else {
+            added.push(name)
+        }
     }
     let part = |verb: &str, names: &[String]| {
-        (!names.is_empty()).then(|| format!("{verb} {} label{}", names.join(" "), if names.len() == 1 { "" } else { "s" }))
+        (!names.is_empty()).then(|| {
+            format!(
+                "{verb} {} label{}",
+                names.join(" "),
+                if names.len() == 1 { "" } else { "s" }
+            )
+        })
     };
     out.into_iter()
         .map(|(first, added, removed)| {
-            let parts: Vec<String> = [part("added", &added), part("removed", &removed)].into_iter().flatten().collect();
+            let parts: Vec<String> = [part("added", &added), part("removed", &removed)]
+                .into_iter()
+                .flatten()
+                .collect();
             (first, parts.join(" and "))
         })
         .collect()
@@ -521,16 +631,28 @@ pub struct Compare {
 
 /// The review of `compare` instead of the latest version: the same merge
 /// request with those diffs, and no threads (they belong to the latest). Blocks.
-pub fn load_compare(c: &api::Client, r: &review::Review, compare: Compare) -> anyhow::Result<review::Review> {
+pub fn load_compare(
+    c: &api::Client,
+    r: &review::Review,
+    compare: Compare,
+) -> anyhow::Result<review::Review> {
     let (p, iid) = (r.mr.project_id, r.mr.iid);
     // One commit: its diff, its text, and its parent's for the old side.
     if let Some(i) = compare.commit {
-        let commit = r.commits.get(i).ok_or_else(|| anyhow::anyhow!("no commit {i}"))?;
+        let commit = r
+            .commits
+            .get(i)
+            .ok_or_else(|| anyhow::anyhow!("no commit {i}"))?;
         let diffs = c.commit_diff(p, &commit.id)?;
         let mut mr = r.mr.clone();
         let parent = format!("{}~1", commit.id);
-        mr.diff_refs = Some(types::DiffRefs { base_sha: parent.clone(), start_sha: parent, head_sha: commit.id.clone() });
-        let mut out = review::Review::build(mr, diffs, vec![], r.approvals.clone(), r.commits.clone());
+        mr.diff_refs = Some(types::DiffRefs {
+            base_sha: parent.clone(),
+            start_sha: parent,
+            head_sha: commit.id.clone(),
+        });
+        let mut out =
+            review::Review::build(mr, diffs, vec![], r.approvals.clone(), r.commits.clone());
         out.roles = r.roles.clone();
         out.versions = r.versions.clone();
         return Ok(out);
@@ -556,7 +678,11 @@ pub fn load_compare(c: &api::Client, r: &review::Review, compare: Compare) -> an
             Some(b) => sha(b)?,
             None => h.base_commit_sha.clone(),
         };
-        mr.diff_refs = Some(types::DiffRefs { base_sha: base.clone(), start_sha: base, head_sha: h.head_commit_sha.clone() });
+        mr.diff_refs = Some(types::DiffRefs {
+            base_sha: base.clone(),
+            start_sha: base,
+            head_sha: h.head_commit_sha.clone(),
+        });
     }
     let mut out = review::Review::build(mr, diffs, vec![], r.approvals.clone(), r.commits.clone());
     out.roles = r.roles.clone();
@@ -573,9 +699,15 @@ mod tests {
     fn label_events_read_as_gitlab_words_them() {
         let ev = |id, user: u64, at: &str, name: &str, action: &str| LabelEvent {
             id,
-            user: Some(User { id: user, ..Default::default() }),
+            user: Some(User {
+                id: user,
+                ..Default::default()
+            }),
             created_at: at.into(),
-            label: Some(Label { name: name.into(), ..Default::default() }),
+            label: Some(Label {
+                name: name.into(),
+                ..Default::default()
+            }),
             action: action.into(),
         };
         let events = [
@@ -587,12 +719,18 @@ mod tests {
             ev(5, 2, "2026-11-06T06:05:00.000Z", "bug", "remove"),
             ev(6, 2, "2026-11-06T06:09:00.000Z", "docs", "remove"),
         ];
-        let notes: Vec<(u64, String)> = label_notes(&events).into_iter().map(|(e, b)| (e.id, b)).collect();
+        let notes: Vec<(u64, String)> = label_notes(&events)
+            .into_iter()
+            .map(|(e, b)| (e.id, b))
+            .collect();
         assert_eq!(
             notes,
             [
                 (1, "added ~bug ~docs labels".to_string()),
-                (3, "added ~backend ~needs\u{a0}review labels and removed ~bug label".to_string()),
+                (
+                    3,
+                    "added ~backend ~needs\u{a0}review labels and removed ~bug label".to_string()
+                ),
                 (6, "removed ~docs label".to_string()),
             ]
         );
@@ -607,11 +745,18 @@ mod tests {
             upvotes: up,
             ..Default::default()
         };
-        let all = [mr("b", "2026-01-02", 0), mr("a", "2026-01-03", 2), mr("c", "2026-01-01", 1)];
+        let all = [
+            mr("b", "2026-01-02", 0),
+            mr("a", "2026-01-03", 2),
+            mr("c", "2026-01-01", 1),
+        ];
         let order = |s: ListSort, asc: bool| {
             let mut v: Vec<&types::MergeRequest> = all.iter().collect();
             s.apply(&mut v, asc);
-            v.iter().map(|m| m.title.as_str()).collect::<Vec<_>>().join("")
+            v.iter()
+                .map(|m| m.title.as_str())
+                .collect::<Vec<_>>()
+                .join("")
         };
         assert_eq!(order(ListSort::Created, false), "abc");
         assert_eq!(order(ListSort::Created, true), "cba");
@@ -624,12 +769,21 @@ mod tests {
     fn section_from_url() {
         let mr = "http://gl.test/a/b/-/merge_requests/1";
         assert_eq!(Section::of_url(mr), Section::Overview);
-        assert_eq!(Section::of_url(&format!("{mr}/diffs?file=x#note_1")), Section::Changes);
+        assert_eq!(
+            Section::of_url(&format!("{mr}/diffs?file=x#note_1")),
+            Section::Changes
+        );
         assert_eq!(Section::of_url(&format!("{mr}/commits")), Section::Commits);
-        assert_eq!(Section::of_url(&format!("{mr}/pipelines")), Section::Pipelines);
+        assert_eq!(
+            Section::of_url(&format!("{mr}/pipelines")),
+            Section::Pipelines
+        );
         assert_eq!(Section::of_url(&format!("{mr}#note_3")), Section::Overview);
         // A project named "diffs" isn't the Changes tab.
-        assert_eq!(Section::of_url("http://gl.test/diffs/-/merge_requests/2"), Section::Overview);
+        assert_eq!(
+            Section::of_url("http://gl.test/diffs/-/merge_requests/2"),
+            Section::Overview
+        );
     }
 
     #[test]
@@ -637,7 +791,10 @@ mod tests {
         let loc = Location {
             host: Some("http://gl.test".into()),
             scope: ListScope::All,
-            browse: Some(super::Browse { id: 7, path: "g/p".into() }),
+            browse: Some(super::Browse {
+                id: 7,
+                path: "g/p".into(),
+            }),
             state: MrState::Merged,
             sort: ListSort::Title,
             ascending: true,

@@ -27,7 +27,9 @@ impl ApiError {
 
     /// The status GitLab gave, anywhere in `e`'s chain (contexts included).
     pub fn status_of(e: &anyhow::Error) -> Option<u16> {
-        e.chain().find_map(|c| c.downcast_ref::<ApiError>()).map(|a| a.status)
+        e.chain()
+            .find_map(|c| c.downcast_ref::<ApiError>())
+            .map(|a| a.status)
     }
 }
 
@@ -105,7 +107,10 @@ impl Transport for Curl {
                 // One line a transfer: which file it went to, and what we use of its headers.
                 .args(["-w", "%{filename_effective}\t%{http_code}\t%header{x-next-page}\t%header{x-total}\t%{errormsg}\t%header{retry-after}\t%header{ratelimit-remaining}\t%header{ratelimit-limit}\n"]);
             for (i, url) in urls.iter().enumerate() {
-                cmd.arg("-o").arg(dir.join(i.to_string())).arg("--url").arg(url);
+                cmd.arg("-o")
+                    .arg(dir.join(i.to_string()))
+                    .arg("--url")
+                    .arg(url);
             }
             let mut child = cmd
                 .stdin(std::process::Stdio::piped())
@@ -118,14 +123,27 @@ impl Transport for Curl {
                 writeln!(stdin, "PRIVATE-TOKEN: {token}")?;
             }
             let out = child.wait_with_output()?;
-            let mut got: Vec<Option<anyhow::Result<Response>>> = urls.iter().map(|_| None).collect();
+            let mut got: Vec<Option<anyhow::Result<Response>>> =
+                urls.iter().map(|_| None).collect();
             for line in String::from_utf8_lossy(&out.stdout).lines() {
                 let f: Vec<&str> = line.split('\t').collect();
-                let Some(i) = f.first().and_then(|p| p.rsplit('/').next()).and_then(|n| n.parse::<usize>().ok()) else { continue };
+                let Some(i) = f
+                    .first()
+                    .and_then(|p| p.rsplit('/').next())
+                    .and_then(|n| n.parse::<usize>().ok())
+                else {
+                    continue;
+                };
                 let Some(slot) = got.get_mut(i) else { continue };
                 let status: u16 = f.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
                 *slot = Some(if status == 0 {
-                    Err(anyhow::anyhow!("{}", f.get(4).copied().filter(|e| !e.is_empty()).unwrap_or("no answer")))
+                    Err(anyhow::anyhow!(
+                        "{}",
+                        f.get(4)
+                            .copied()
+                            .filter(|e| !e.is_empty())
+                            .unwrap_or("no answer")
+                    ))
                 } else {
                     Ok(Response {
                         status,
@@ -138,10 +156,24 @@ impl Transport for Curl {
                     })
                 });
             }
-            let stderr = String::from_utf8_lossy(&out.stderr).trim().trim_start_matches("curl: ").to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr)
+                .trim()
+                .trim_start_matches("curl: ")
+                .to_string();
             Ok(got
                 .into_iter()
-                .map(|g| g.unwrap_or_else(|| Err(anyhow::anyhow!("{}", if stderr.is_empty() { "no answer" } else { &stderr }))))
+                .map(|g| {
+                    g.unwrap_or_else(|| {
+                        Err(anyhow::anyhow!(
+                            "{}",
+                            if stderr.is_empty() {
+                                "no answer"
+                            } else {
+                                &stderr
+                            }
+                        ))
+                    })
+                })
                 .collect())
         };
         let got = run();
@@ -153,14 +185,30 @@ impl Transport for Curl {
         // The body goes through a file only we can read: stdin carries the token.
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("abromux-gitlab-{}-{n}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("abromux-gitlab-{}-{n}.json", std::process::id()));
         {
             use std::os::unix::fs::OpenOptionsExt;
-            let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)?;
             f.write_all(body)?;
         }
         let data = format!("@{}", path.display());
-        let out = curl(&["-X", method, "-H", "Content-Type: application/json", "--data-binary", &data], url, token);
+        let out = curl(
+            &[
+                "-X",
+                method,
+                "-H",
+                "Content-Type: application/json",
+                "--data-binary",
+                &data,
+            ],
+            url,
+            token,
+        );
         let _ = std::fs::remove_file(&path);
         out
     }
@@ -172,14 +220,25 @@ fn batch_dir() -> anyhow::Result<std::path::PathBuf> {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("abromux-gitlab-{}-batch-{n}", std::process::id()));
-    std::fs::DirBuilder::new().mode(0o700).create(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&dir)
+        .with_context(|| format!("creating {}", dir.display()))?;
     Ok(dir)
 }
 
 fn curl(extra: &[&str], url: &str, token: &str) -> anyhow::Result<Response> {
     {
         let mut child = Command::new("/usr/bin/curl")
-            .args(["-sS", "-i", "--compressed", "--connect-timeout", "10", "--max-time", "60"])
+            .args([
+                "-sS",
+                "-i",
+                "--compressed",
+                "--connect-timeout",
+                "10",
+                "--max-time",
+                "60",
+            ])
             .args(extra)
             .args(["-A", "abromux-gitlab", "-H", "@-", "--", url])
             .stdin(std::process::Stdio::piped())
@@ -193,7 +252,12 @@ fn curl(extra: &[&str], url: &str, token: &str) -> anyhow::Result<Response> {
         }
         let out = child.wait_with_output()?;
         if !out.status.success() {
-            bail!("{}", String::from_utf8_lossy(&out.stderr).trim().trim_start_matches("curl: "));
+            bail!(
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+                    .trim()
+                    .trim_start_matches("curl: ")
+            );
         }
         parse_response(&out.stdout)
     }
@@ -219,7 +283,9 @@ fn parse_response(raw: &[u8]) -> anyhow::Result<Response> {
         let header = |name: &str| {
             head.lines().find_map(|l| {
                 let (k, v) = l.split_once(':')?;
-                k.trim().eq_ignore_ascii_case(name).then(|| v.trim().to_string())
+                k.trim()
+                    .eq_ignore_ascii_case(name)
+                    .then(|| v.trim().to_string())
             })
         };
         return Ok(Response {
@@ -265,7 +331,11 @@ impl Client {
     pub fn prefetch(&self, paths: impl IntoIterator<Item = String>) {
         let urls: Vec<String> = {
             let ahead = self.ahead.lock().unwrap_or_else(|e| e.into_inner());
-            let mut urls: Vec<String> = paths.into_iter().map(|p| self.url(&p)).filter(|u| !ahead.contains_key(u)).collect();
+            let mut urls: Vec<String> = paths
+                .into_iter()
+                .map(|p| self.url(&p))
+                .filter(|u| !ahead.contains_key(u))
+                .collect();
             urls.dedup();
             urls
         };
@@ -337,7 +407,12 @@ impl Client {
 
     fn fetch(&self, path: &str) -> anyhow::Result<Response> {
         let url = self.url(path);
-        if let Some(r) = self.ahead.lock().unwrap_or_else(|e| e.into_inner()).remove(&url) {
+        if let Some(r) = self
+            .ahead
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&url)
+        {
             return self.check(r, &url);
         }
         let r = self
@@ -348,7 +423,12 @@ impl Client {
     }
 
     /// `method` `path` with `body`, the answer as `T`.
-    fn write<T: DeserializeOwned>(&self, method: &str, path: &str, body: serde_json::Value) -> anyhow::Result<T> {
+    fn write<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        path: &str,
+        body: serde_json::Value,
+    ) -> anyhow::Result<T> {
         let url = format!("{}/api/v4/{path}", self.host);
         let r = self
             .transport
@@ -361,7 +441,11 @@ impl Client {
             }
             _ => self.check(r, &url)?,
         };
-        let body = if r.body.trim_ascii().is_empty() { b"null".as_slice() } else { &r.body };
+        let body = if r.body.trim_ascii().is_empty() {
+            b"null".as_slice()
+        } else {
+            &r.body
+        };
         decode(body, path)
     }
 
@@ -393,12 +477,18 @@ impl Client {
     /// that merge request; `!12` those numbered 12 in `projects` (a number
     /// only means something within a project); else merge requests anywhere
     /// you can see with it in their title or description.
-    pub fn search_merge_requests(&self, query: &str, projects: &[u64]) -> anyhow::Result<Vec<MergeRequest>> {
+    pub fn search_merge_requests(
+        &self,
+        query: &str,
+        projects: &[u64],
+    ) -> anyhow::Result<Vec<MergeRequest>> {
         let q = query.trim();
         let enc = |s: &str| -> String {
             s.bytes()
                 .map(|b| match b {
-                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
+                        (b as char).to_string()
+                    }
                     _ => format!("%{b:02X}"),
                 })
                 .collect()
@@ -407,9 +497,14 @@ impl Client {
             && let Ok(iid) = n.parse::<u64>()
         {
             if !path.is_empty() {
-                return Ok(vec![self.get(&format!("projects/{}/merge_requests/{iid}", enc(path)))?]);
+                return Ok(vec![
+                    self.get(&format!("projects/{}/merge_requests/{iid}", enc(path)))?,
+                ]);
             }
-            let paths: Vec<String> = projects.iter().map(|p| format!("projects/{p}/merge_requests/{iid}")).collect();
+            let paths: Vec<String> = projects
+                .iter()
+                .map(|p| format!("projects/{p}/merge_requests/{iid}"))
+                .collect();
             self.prefetch(paths.clone());
             let found = paths.iter().filter_map(|p| self.get(p).ok()).collect();
             return Ok(found);
@@ -421,7 +516,11 @@ impl Client {
     }
 
     /// The same, in `state`: opened, merged, closed or all.
-    pub fn merge_requests_in(&self, scope: Scope, state: &str) -> anyhow::Result<Vec<MergeRequest>> {
+    pub fn merge_requests_in(
+        &self,
+        scope: Scope,
+        state: &str,
+    ) -> anyhow::Result<Vec<MergeRequest>> {
         self.get_all(&list_path(&scope, state))
     }
 
@@ -448,7 +547,9 @@ impl Client {
     }
 
     pub fn merge_request(&self, project: u64, iid: u64) -> anyhow::Result<MergeRequest> {
-        self.get(&format!("projects/{project}/merge_requests/{iid}?include_diverged_commits_count=true"))
+        self.get(&format!(
+            "projects/{project}/merge_requests/{iid}?include_diverged_commits_count=true"
+        ))
     }
 
     pub fn diffs(&self, project: u64, iid: u64) -> anyhow::Result<Vec<FileDiff>> {
@@ -461,15 +562,21 @@ impl Client {
 
     /// When it was closed, reopened or merged, and by whom.
     pub fn label_events(&self, project: u64, iid: u64) -> anyhow::Result<Vec<LabelEvent>> {
-        self.get_all(&format!("projects/{project}/merge_requests/{iid}/resource_label_events"))
+        self.get_all(&format!(
+            "projects/{project}/merge_requests/{iid}/resource_label_events"
+        ))
     }
 
     pub fn milestone_events(&self, project: u64, iid: u64) -> anyhow::Result<Vec<MilestoneEvent>> {
-        self.get_all(&format!("projects/{project}/merge_requests/{iid}/resource_milestone_events"))
+        self.get_all(&format!(
+            "projects/{project}/merge_requests/{iid}/resource_milestone_events"
+        ))
     }
 
     pub fn state_events(&self, project: u64, iid: u64) -> anyhow::Result<Vec<StateEvent>> {
-        self.get_all(&format!("projects/{project}/merge_requests/{iid}/resource_state_events"))
+        self.get_all(&format!(
+            "projects/{project}/merge_requests/{iid}/resource_state_events"
+        ))
     }
 
     /// The merge request's versions, newest first.
@@ -478,8 +585,17 @@ impl Client {
     }
 
     /// One version's diffs against the target branch.
-    pub fn version_diffs(&self, project: u64, iid: u64, version: u64) -> anyhow::Result<Vec<FileDiff>> {
-        Ok(self.get::<Diffs>(&format!("projects/{project}/merge_requests/{iid}/versions/{version}"))?.diffs)
+    pub fn version_diffs(
+        &self,
+        project: u64,
+        iid: u64,
+        version: u64,
+    ) -> anyhow::Result<Vec<FileDiff>> {
+        Ok(self
+            .get::<Diffs>(&format!(
+                "projects/{project}/merge_requests/{iid}/versions/{version}"
+            ))?
+            .diffs)
     }
 
     /// What one commit changed.
@@ -489,25 +605,48 @@ impl Client {
 
     /// The diffs between two commits (one version against another).
     pub fn compare(&self, project: u64, from: &str, to: &str) -> anyhow::Result<Vec<FileDiff>> {
-        Ok(self.get::<Diffs>(&format!("projects/{project}/repository/compare?from={from}&to={to}&straight=true"))?.diffs)
+        Ok(self
+            .get::<Diffs>(&format!(
+                "projects/{project}/repository/compare?from={from}&to={to}&straight=true"
+            ))?
+            .diffs)
     }
 
     // ---- writing ------------------------------------------------------
 
     /// A comment on the merge request (the Overview's "Add a comment").
     pub fn comment(&self, project: u64, iid: u64, body: &str) -> anyhow::Result<Note> {
-        self.write("POST", &format!("projects/{project}/merge_requests/{iid}/notes"), serde_json::json!({ "body": body }))
+        self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/notes"),
+            serde_json::json!({ "body": body }),
+        )
     }
 
     /// A reply in thread `discussion`.
-    pub fn reply(&self, project: u64, iid: u64, discussion: &str, body: &str) -> anyhow::Result<Note> {
-        let path = format!("projects/{project}/merge_requests/{iid}/discussions/{discussion}/notes");
+    pub fn reply(
+        &self,
+        project: u64,
+        iid: u64,
+        discussion: &str,
+        body: &str,
+    ) -> anyhow::Result<Note> {
+        let path =
+            format!("projects/{project}/merge_requests/{iid}/discussions/{discussion}/notes");
         self.write("POST", &path, serde_json::json!({ "body": body }))
     }
 
     /// Resolve or unresolve thread `discussion`.
-    pub fn resolve(&self, project: u64, iid: u64, discussion: &str, resolved: bool) -> anyhow::Result<Discussion> {
-        let path = format!("projects/{project}/merge_requests/{iid}/discussions/{discussion}?resolved={resolved}");
+    pub fn resolve(
+        &self,
+        project: u64,
+        iid: u64,
+        discussion: &str,
+        resolved: bool,
+    ) -> anyhow::Result<Discussion> {
+        let path = format!(
+            "projects/{project}/merge_requests/{iid}/discussions/{discussion}?resolved={resolved}"
+        );
         self.write("PUT", &path, serde_json::json!({}))
     }
 
@@ -543,18 +682,27 @@ impl Client {
             position["new_line"] = n.into();
         }
         let path = format!("projects/{project}/merge_requests/{iid}/draft_notes");
-        self.write("POST", &path, serde_json::json!({ "note": body, "position": position }))
+        self.write(
+            "POST",
+            &path,
+            serde_json::json!({ "note": body, "position": position }),
+        )
     }
 
     /// Your review's comments not yet submitted.
     pub fn draft_notes(&self, project: u64, iid: u64) -> anyhow::Result<Vec<DraftNote>> {
-        self.get_all(&format!("projects/{project}/merge_requests/{iid}/draft_notes"))
+        self.get_all(&format!(
+            "projects/{project}/merge_requests/{iid}/draft_notes"
+        ))
     }
 
     /// Submit your review: every pending comment at once.
     pub fn publish_drafts(&self, project: u64, iid: u64) -> anyhow::Result<()> {
-        let _: serde_json::Value =
-            self.write("POST", &format!("projects/{project}/merge_requests/{iid}/draft_notes/bulk_publish"), serde_json::json!({}))?;
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/draft_notes/bulk_publish"),
+            serde_json::json!({}),
+        )?;
         Ok(())
     }
 
@@ -585,49 +733,73 @@ impl Client {
             position["new_line"] = n.into();
         }
         let path = format!("projects/{project}/merge_requests/{iid}/discussions");
-        self.write("POST", &path, serde_json::json!({ "body": body, "position": position }))
+        self.write(
+            "POST",
+            &path,
+            serde_json::json!({ "body": body, "position": position }),
+        )
     }
 
     /// Approve, or take back the approval.
     pub fn approve(&self, project: u64, iid: u64, approve: bool) -> anyhow::Result<()> {
         let what = if approve { "approve" } else { "unapprove" };
-        let _: serde_json::Value = self.write("POST", &format!("projects/{project}/merge_requests/{iid}/{what}"), serde_json::json!({}))?;
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/{what}"),
+            serde_json::json!({}),
+        )?;
         Ok(())
     }
 
     /// The issues merging it closes.
     pub fn closes_issues(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Issue>> {
-        self.get_all(&format!("projects/{project}/merge_requests/{iid}/closes_issues"))
+        self.get_all(&format!(
+            "projects/{project}/merge_requests/{iid}/closes_issues"
+        ))
     }
 
     /// Each reviewer's review state.
     pub fn reviewers(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Reviewer>> {
-        self.get_all(&format!("projects/{project}/merge_requests/{iid}/reviewers"))
+        self.get_all(&format!(
+            "projects/{project}/merge_requests/{iid}/reviewers"
+        ))
     }
 
     /// The emoji reactions on the merge request.
     pub fn awards(&self, project: u64, iid: u64) -> anyhow::Result<Vec<AwardEmoji>> {
-        self.get_all(&format!("projects/{project}/merge_requests/{iid}/award_emoji"))
+        self.get_all(&format!(
+            "projects/{project}/merge_requests/{iid}/award_emoji"
+        ))
     }
 
     /// React with `name` (thumbsup, tada).
     pub fn award(&self, project: u64, iid: u64, name: &str) -> anyhow::Result<()> {
-        let _: serde_json::Value =
-            self.write("POST", &format!("projects/{project}/merge_requests/{iid}/award_emoji"), serde_json::json!({ "name": name }))?;
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/award_emoji"),
+            serde_json::json!({ "name": name }),
+        )?;
         Ok(())
     }
 
     /// Take back reaction `id`.
     pub fn unaward(&self, project: u64, iid: u64, id: u64) -> anyhow::Result<()> {
-        let _: serde_json::Value =
-            self.write("DELETE", &format!("projects/{project}/merge_requests/{iid}/award_emoji/{id}"), serde_json::json!({}))?;
+        let _: serde_json::Value = self.write(
+            "DELETE",
+            &format!("projects/{project}/merge_requests/{iid}/award_emoji/{id}"),
+            serde_json::json!({}),
+        )?;
         Ok(())
     }
 
     /// The emoji reactions on each comment of the merge request, by note id
     /// (only notes with some). REST has them per note only, so one GraphQL
     /// query a hundred notes. By the project's id, as [`Self::allows_multiple`].
-    pub fn note_awards(&self, project: u64, iid: u64) -> anyhow::Result<std::collections::HashMap<u64, Vec<AwardEmoji>>> {
+    pub fn note_awards(
+        &self,
+        project: u64,
+        iid: u64,
+    ) -> anyhow::Result<std::collections::HashMap<u64, Vec<AwardEmoji>>> {
         let url = format!("{}/api/graphql", self.host);
         let mut out = std::collections::HashMap::new();
         let mut after = String::new();
@@ -638,12 +810,22 @@ impl Client {
                  notes(first: 100{after}) {{ pageInfo {{ hasNextPage endCursor }} \
                  nodes {{ id awardEmoji {{ nodes {{ name user {{ id username name avatarUrl }} }} }} }} }} }} }} }} }}"
             );
-            let r = self.transport.send("POST", &url, &self.token, serde_json::json!({ "query": q }).to_string().as_bytes())?;
+            let r = self.transport.send(
+                "POST",
+                &url,
+                &self.token,
+                serde_json::json!({ "query": q }).to_string().as_bytes(),
+            )?;
             let v: serde_json::Value = decode(&r.body, &url)?;
             let notes = &v["data"]["projects"]["nodes"][0]["mergeRequest"]["notes"];
-            let nodes = notes["nodes"].as_array().context("no notes in GitLab's answer")?;
+            let nodes = notes["nodes"]
+                .as_array()
+                .context("no notes in GitLab's answer")?;
             out.extend(nodes.iter().filter_map(note_awards_of));
-            match notes["pageInfo"]["endCursor"].as_str().filter(|_| notes["pageInfo"]["hasNextPage"].as_bool() == Some(true)) {
+            match notes["pageInfo"]["endCursor"]
+                .as_str()
+                .filter(|_| notes["pageInfo"]["hasNextPage"].as_bool() == Some(true))
+            {
                 Some(cursor) => after = format!(", after: {cursor:?}"),
                 None => break,
             }
@@ -654,24 +836,40 @@ impl Client {
     /// React to comment `note` with `name`.
     pub fn note_award(&self, project: u64, iid: u64, note: u64, name: &str) -> anyhow::Result<()> {
         let path = format!("projects/{project}/merge_requests/{iid}/notes/{note}/award_emoji");
-        let _: serde_json::Value = self.write("POST", &path, serde_json::json!({ "name": name }))?;
+        let _: serde_json::Value =
+            self.write("POST", &path, serde_json::json!({ "name": name }))?;
         Ok(())
     }
 
     /// Take back user `me`'s `name` on comment `note`. GraphQL doesn't give
     /// a reaction's id, so this looks it up first.
-    pub fn note_unaward(&self, project: u64, iid: u64, note: u64, name: &str, me: u64) -> anyhow::Result<()> {
+    pub fn note_unaward(
+        &self,
+        project: u64,
+        iid: u64,
+        note: u64,
+        name: &str,
+        me: u64,
+    ) -> anyhow::Result<()> {
         let path = format!("projects/{project}/merge_requests/{iid}/notes/{note}/award_emoji");
         let all: Vec<AwardEmoji> = self.get_all(&path)?;
-        let a = all.iter().find(|a| a.name == name && a.user.id == me).context("that reaction is gone already")?;
-        let _: serde_json::Value = self.write("DELETE", &format!("{path}/{}", a.id), serde_json::json!({}))?;
+        let a = all
+            .iter()
+            .find(|a| a.name == name && a.user.id == me)
+            .context("that reaction is gone already")?;
+        let _: serde_json::Value =
+            self.write("DELETE", &format!("{path}/{}", a.id), serde_json::json!({}))?;
         Ok(())
     }
 
     /// Rebase the source branch onto the target, as GitLab's "Rebase source
     /// branch" does. GitLab answers at once and rebases in the background.
     pub fn rebase(&self, project: u64, iid: u64) -> anyhow::Result<()> {
-        let _: serde_json::Value = self.write("PUT", &format!("projects/{project}/merge_requests/{iid}/rebase"), serde_json::json!({}))?;
+        let _: serde_json::Value = self.write(
+            "PUT",
+            &format!("projects/{project}/merge_requests/{iid}/rebase"),
+            serde_json::json!({}),
+        )?;
         Ok(())
     }
 
@@ -679,7 +877,12 @@ impl Client {
     /// refuses if a push came since), squashing and deleting the source
     /// branch as ticked. With `auto`, set it to merge once its checks pass
     /// instead ("Set to auto-merge").
-    pub fn merge(&self, project: u64, iid: u64, opts: &MergeOptions) -> anyhow::Result<MergeRequest> {
+    pub fn merge(
+        &self,
+        project: u64,
+        iid: u64,
+        opts: &MergeOptions,
+    ) -> anyhow::Result<MergeRequest> {
         let path = format!("projects/{project}/merge_requests/{iid}/merge");
         let mut body = serde_json::json!({
             "squash": opts.squash,
@@ -702,55 +905,90 @@ impl Client {
 
     /// Take back auto-merge ("Cancel auto-merge").
     pub fn cancel_auto_merge(&self, project: u64, iid: u64) -> anyhow::Result<()> {
-        let path = format!("projects/{project}/merge_requests/{iid}/cancel_merge_when_pipeline_succeeds");
+        let path =
+            format!("projects/{project}/merge_requests/{iid}/cancel_merge_when_pipeline_succeeds");
         let _: serde_json::Value = self.write("POST", &path, serde_json::json!({}))?;
         Ok(())
     }
 
     /// Close or reopen it.
     pub fn set_open(&self, project: u64, iid: u64, open: bool) -> anyhow::Result<MergeRequest> {
-        self.update(project, iid, serde_json::json!({ "state_event": if open { "reopen" } else { "close" } }))
+        self.update(
+            project,
+            iid,
+            serde_json::json!({ "state_event": if open { "reopen" } else { "close" } }),
+        )
     }
 
     /// Change comment `note`'s text (yours).
     pub fn edit_note(&self, project: u64, iid: u64, note: u64, body: &str) -> anyhow::Result<Note> {
-        self.write("PUT", &format!("projects/{project}/merge_requests/{iid}/notes/{note}"), serde_json::json!({ "body": body }))
+        self.write(
+            "PUT",
+            &format!("projects/{project}/merge_requests/{iid}/notes/{note}"),
+            serde_json::json!({ "body": body }),
+        )
     }
 
     /// Delete comment `note` (yours).
     pub fn delete_note(&self, project: u64, iid: u64, note: u64) -> anyhow::Result<()> {
-        let _: serde_json::Value = self.write("DELETE", &format!("projects/{project}/merge_requests/{iid}/notes/{note}"), serde_json::json!({}))?;
+        let _: serde_json::Value = self.write(
+            "DELETE",
+            &format!("projects/{project}/merge_requests/{iid}/notes/{note}"),
+            serde_json::json!({}),
+        )?;
         Ok(())
     }
 
     /// Run pipeline `id`'s failed and canceled jobs again ("Retry").
     pub fn retry_pipeline(&self, project: u64, id: u64) -> anyhow::Result<()> {
-        let _: serde_json::Value = self.write("POST", &format!("projects/{project}/pipelines/{id}/retry"), serde_json::json!({}))?;
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/pipelines/{id}/retry"),
+            serde_json::json!({}),
+        )?;
         Ok(())
     }
 
     /// Stop pipeline `id`'s running and pending jobs ("Cancel pipeline").
     pub fn cancel_pipeline(&self, project: u64, id: u64) -> anyhow::Result<()> {
-        let _: serde_json::Value = self.write("POST", &format!("projects/{project}/pipelines/{id}/cancel"), serde_json::json!({}))?;
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/pipelines/{id}/cancel"),
+            serde_json::json!({}),
+        )?;
         Ok(())
     }
 
     /// Run a new pipeline for the merge request ("Run pipeline").
     pub fn run_pipeline(&self, project: u64, iid: u64) -> anyhow::Result<()> {
-        let _: serde_json::Value = self.write("POST", &format!("projects/{project}/merge_requests/{iid}/pipelines"), serde_json::json!({}))?;
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/pipelines"),
+            serde_json::json!({}),
+        )?;
         Ok(())
     }
 
     /// The merge request's pipelines, newest first: each commit's status.
     pub fn pipelines(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Pipeline>> {
-        self.get_all(&format!("projects/{project}/merge_requests/{iid}/pipelines"))
+        self.get_all(&format!(
+            "projects/{project}/merge_requests/{iid}/pipelines"
+        ))
     }
 
     /// The latest pipeline that ran on commit `sha`, if any.
     /// On `git_ref` only: another branch made from the same commit runs
     /// pipelines on it too.
-    pub fn pipeline_for_sha(&self, project: u64, sha: &str, git_ref: &str) -> anyhow::Result<Option<Pipeline>> {
-        let all: Vec<Pipeline> = self.get(&format!("projects/{project}/pipelines?sha={sha}&ref={}&per_page=1", query_value(git_ref)))?;
+    pub fn pipeline_for_sha(
+        &self,
+        project: u64,
+        sha: &str,
+        git_ref: &str,
+    ) -> anyhow::Result<Option<Pipeline>> {
+        let all: Vec<Pipeline> = self.get(&format!(
+            "projects/{project}/pipelines?sha={sha}&ref={}&per_page=1",
+            query_value(git_ref)
+        ))?;
         Ok(all.into_iter().next())
     }
 
@@ -785,28 +1023,55 @@ impl Client {
             "{{ projects(ids: [\"gid://gitlab/Project/{project}\"]) {{ nodes {{ mergeRequest(iid: \"{iid}\") {{ allowsMultipleAssignees allowsMultipleReviewers }} }} }} }}"
         );
         let url = format!("{}/api/graphql", self.host);
-        let r = self.transport.send("POST", &url, &self.token, serde_json::json!({ "query": q }).to_string().as_bytes())?;
+        let r = self.transport.send(
+            "POST",
+            &url,
+            &self.token,
+            serde_json::json!({ "query": q }).to_string().as_bytes(),
+        )?;
         let v: serde_json::Value = decode(&r.body, &url)?;
         let mr = &v["data"]["projects"]["nodes"][0]["mergeRequest"];
-        let flag = |k: &str| mr[k].as_bool().with_context(|| format!("no {k} in GitLab's answer"));
-        Ok((flag("allowsMultipleAssignees")?, flag("allowsMultipleReviewers")?))
+        let flag = |k: &str| {
+            mr[k]
+                .as_bool()
+                .with_context(|| format!("no {k} in GitLab's answer"))
+        };
+        Ok((
+            flag("allowsMultipleAssignees")?,
+            flag("allowsMultipleReviewers")?,
+        ))
     }
 
     /// Every changed file's path with lines added and removed, past the
     /// 1000 files the REST diff stops at. Only GraphQL lists them all.
-    pub fn diff_stats(&self, full_path: &str, iid: u64) -> anyhow::Result<Vec<(String, usize, usize)>> {
+    pub fn diff_stats(
+        &self,
+        full_path: &str,
+        iid: u64,
+    ) -> anyhow::Result<Vec<(String, usize, usize)>> {
         let q = format!(
             "{{ project(fullPath: {full_path:?}) {{ mergeRequest(iid: \"{iid}\") {{ diffStats {{ path additions deletions }} }} }} }}"
         );
         let url = format!("{}/api/graphql", self.host);
-        let r = self.transport.send("POST", &url, &self.token, serde_json::json!({ "query": q }).to_string().as_bytes())?;
+        let r = self.transport.send(
+            "POST",
+            &url,
+            &self.token,
+            serde_json::json!({ "query": q }).to_string().as_bytes(),
+        )?;
         let v: serde_json::Value = decode(&r.body, &url)?;
-        let stats = v["data"]["project"]["mergeRequest"]["diffStats"].as_array().context("no diffStats in GitLab's answer")?;
+        let stats = v["data"]["project"]["mergeRequest"]["diffStats"]
+            .as_array()
+            .context("no diffStats in GitLab's answer")?;
         Ok(stats
             .iter()
             .filter_map(|s| {
                 let n = |k: &str| s[k].as_u64().unwrap_or(0) as usize;
-                Some((s["path"].as_str()?.to_string(), n("additions"), n("deletions")))
+                Some((
+                    s["path"].as_str()?.to_string(),
+                    n("additions"),
+                    n("deletions"),
+                ))
             })
             .collect())
     }
@@ -816,9 +1081,20 @@ impl Client {
     /// whose target is its source (stacked on it), whose source is its
     /// target (it's stacked on them), and so on, bottom first, with it.
     /// Empty when it's on no stack. GraphQL, one query a level.
-    pub fn merge_request_stack(&self, full_path: &str, iid: u64, source: &str, target: &str) -> anyhow::Result<Vec<StackedMr>> {
+    pub fn merge_request_stack(
+        &self,
+        full_path: &str,
+        iid: u64,
+        source: &str,
+        target: &str,
+    ) -> anyhow::Result<Vec<StackedMr>> {
         let url = format!("{}/api/graphql", self.host);
-        let list = |bs: &[String]| bs.iter().map(|b| format!("{b:?}")).collect::<Vec<_>>().join(", ");
+        let list = |bs: &[String]| {
+            bs.iter()
+                .map(|b| format!("{b:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         let mut me: Option<StackedMr> = None;
         let mut found: Vec<StackedMr> = vec![];
         let (mut ups, mut downs) = (vec![target.to_string()], vec![source.to_string()]);
@@ -830,10 +1106,16 @@ impl Client {
             if ups.is_empty() && downs.is_empty() {
                 break;
             }
-            asked.extend(ups.iter().map(|b| format!("u{b}")).chain(downs.iter().map(|b| format!("d{b}"))));
+            asked.extend(
+                ups.iter()
+                    .map(|b| format!("u{b}"))
+                    .chain(downs.iter().map(|b| format!("d{b}"))),
+            );
             let mut parts = vec![];
             if level == 0 {
-                parts.push(format!("me: mergeRequest(iid: \"{iid}\") {{ {STACK_FIELDS} }}"));
+                parts.push(format!(
+                    "me: mergeRequest(iid: \"{iid}\") {{ {STACK_FIELDS} }}"
+                ));
             }
             if !ups.is_empty() {
                 parts.push(format!("u: mergeRequests(state: opened, sourceBranches: [{}], first: 20) {{ nodes {{ {STACK_FIELDS} }} }}", list(&ups)));
@@ -841,8 +1123,16 @@ impl Client {
             if !downs.is_empty() {
                 parts.push(format!("d: mergeRequests(state: opened, targetBranches: [{}], first: 20) {{ nodes {{ {STACK_FIELDS} }} }}", list(&downs)));
             }
-            let q = format!("{{ project(fullPath: {full_path:?}) {{ {} }} }}", parts.join(" "));
-            let r = self.transport.send("POST", &url, &self.token, serde_json::json!({ "query": q }).to_string().as_bytes())?;
+            let q = format!(
+                "{{ project(fullPath: {full_path:?}) {{ {} }} }}",
+                parts.join(" ")
+            );
+            let r = self.transport.send(
+                "POST",
+                &url,
+                &self.token,
+                serde_json::json!({ "query": q }).to_string().as_bytes(),
+            )?;
             let v: serde_json::Value = decode(&r.body, &url)?;
             let p = &v["data"]["project"];
             anyhow::ensure!(p.is_object(), "no project in GitLab's answer");
@@ -850,11 +1140,25 @@ impl Client {
                 me = StackedMr::from_graphql(&p["me"]);
             }
             let nodes = |k: &str| -> Vec<StackedMr> {
-                p[k]["nodes"].as_array().into_iter().flatten().filter_map(StackedMr::from_graphql).filter(|m| m.iid != iid).collect()
+                p[k]["nodes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(StackedMr::from_graphql)
+                    .filter(|m| m.iid != iid)
+                    .collect()
             };
             let (u, d) = (nodes("u"), nodes("d"));
-            ups = u.iter().filter(|m| !found.iter().any(|f| f.iid == m.iid)).map(|m| m.target_branch.clone()).collect();
-            downs = d.iter().filter(|m| !found.iter().any(|f| f.iid == m.iid)).map(|m| m.source_branch.clone()).collect();
+            ups = u
+                .iter()
+                .filter(|m| !found.iter().any(|f| f.iid == m.iid))
+                .map(|m| m.target_branch.clone())
+                .collect();
+            downs = d
+                .iter()
+                .filter(|m| !found.iter().any(|f| f.iid == m.iid))
+                .map(|m| m.source_branch.clone())
+                .collect();
             for m in u.into_iter().chain(d) {
                 if !found.iter().any(|f| f.iid == m.iid) {
                     found.push(m);
@@ -872,7 +1176,12 @@ impl Client {
     }
 
     /// A file's bytes at `sha`, or `None` when it isn't there (added or deleted).
-    pub fn raw_maybe(&self, project: u64, path: &str, sha: &str) -> anyhow::Result<Option<Vec<u8>>> {
+    pub fn raw_maybe(
+        &self,
+        project: u64,
+        path: &str,
+        sha: &str,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
         match self.raw_bytes(project, path, sha) {
             Ok(b) => Ok(Some(b)),
             Err(e) if ApiError::status_of(&e) == Some(404) => Ok(None),
@@ -887,8 +1196,17 @@ impl Client {
 
     /// Change the merge request's fields: `reviewer_ids`, `assignee_ids`,
     /// `labels` ("a,b"), `milestone_id` (0 for none). GitLab's sidebar.
-    pub fn update(&self, project: u64, iid: u64, fields: serde_json::Value) -> anyhow::Result<MergeRequest> {
-        self.write("PUT", &format!("projects/{project}/merge_requests/{iid}"), fields)
+    pub fn update(
+        &self,
+        project: u64,
+        iid: u64,
+        fields: serde_json::Value,
+    ) -> anyhow::Result<MergeRequest> {
+        self.write(
+            "PUT",
+            &format!("projects/{project}/merge_requests/{iid}"),
+            fields,
+        )
     }
 
     /// Everyone with access to the project, inherited too, with their role.
@@ -915,11 +1233,15 @@ impl Client {
         let q: String = query
             .bytes()
             .map(|b| match b {
-                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
+                    (b as char).to_string()
+                }
                 _ => format!("%{b:02X}"),
             })
             .collect();
-        self.get(&format!("projects/{project}/members/all?query={q}&per_page=20"))
+        self.get(&format!(
+            "projects/{project}/members/all?query={q}&per_page=20"
+        ))
     }
 
     /// A file's text at commit `sha`.
@@ -932,11 +1254,17 @@ impl Client {
         let path: String = path
             .bytes()
             .map(|b| match b {
-                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    (b as char).to_string()
+                }
                 _ => format!("%{b:02X}"),
             })
             .collect();
-        Ok(self.fetch(&format!("projects/{project}/repository/files/{path}/raw?ref={sha}"))?.body)
+        Ok(self
+            .fetch(&format!(
+                "projects/{project}/repository/files/{path}/raw?ref={sha}"
+            ))?
+            .body)
     }
 
     pub fn approvals(&self, project: u64, iid: u64) -> anyhow::Result<Approvals> {
@@ -971,7 +1299,9 @@ fn scope_query(scope: &Scope) -> String {
 fn query_value(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => (b as char).to_string(),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                (b as char).to_string()
+            }
             _ => format!("%{b:02X}"),
         })
         .collect()
@@ -992,8 +1322,13 @@ pub struct MergeOptions {
 pub fn list_path(scope: &Scope, state: &str) -> String {
     match scope {
         // A project's own list is under it.
-        Scope::Project(id) => format!("projects/{id}/merge_requests?state={state}&order_by=created_at&with_labels_details=true"),
-        s => format!("merge_requests?state={state}&order_by=created_at&with_labels_details=true&{}", scope_query(s)),
+        Scope::Project(id) => format!(
+            "projects/{id}/merge_requests?state={state}&order_by=created_at&with_labels_details=true"
+        ),
+        s => format!(
+            "merge_requests?state={state}&order_by=created_at&with_labels_details=true&{}",
+            scope_query(s)
+        ),
     }
 }
 
@@ -1012,7 +1347,9 @@ pub fn projects_path(search: &str) -> String {
             .trim()
             .bytes()
             .map(|b| match b {
-                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
+                    (b as char).to_string()
+                }
                 _ => format!("%{b:02X}"),
             })
             .collect();
@@ -1059,7 +1396,8 @@ pub fn parse_project_mrs_url(url: &str) -> Option<(String, String)> {
     let (authority, path) = rest.split_once('/')?;
     let (project, after) = path.split_once("/-/merge_requests")?;
     let after = after.split(['?', '#']).next()?;
-    (!project.is_empty() && after.trim_end_matches('/').is_empty()).then(|| (format!("{scheme}://{authority}"), project.to_string()))
+    (!project.is_empty() && after.trim_end_matches('/').is_empty())
+        .then(|| (format!("{scheme}://{authority}"), project.to_string()))
 }
 
 /// A merge request's web URL, `https://host[:port]/group/project/-/merge_requests/12[/diffs…]`,
@@ -1149,7 +1487,10 @@ mod tests {
     fn parses_curl_output_with_a_continue_block() {
         let raw = b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nX-Next-Page: 3\r\nX-Total: 9\r\nContent-Type: application/json\r\n\r\n[1]";
         let r = parse_response(raw).unwrap();
-        assert_eq!((r.status, r.next_page, r.total, r.body.as_slice()), (200, Some(3), Some(9), &b"[1]"[..]));
+        assert_eq!(
+            (r.status, r.next_page, r.total, r.body.as_slice()),
+            (200, Some(3), Some(9), &b"[1]"[..])
+        );
         let r = parse_response(b"HTTP/2 404 \r\nx-next-page: \r\n\r\n{}").unwrap();
         assert_eq!((r.status, r.next_page), (404, None));
     }
@@ -1157,8 +1498,14 @@ mod tests {
     #[test]
     fn parses_mr_urls() {
         assert_eq!(
-            parse_mr_url("http://localhost:8929/alice/review-fixtures/-/merge_requests/1/diffs?x#y"),
-            Some(("http://localhost:8929".into(), "alice/review-fixtures".into(), 1))
+            parse_mr_url(
+                "http://localhost:8929/alice/review-fixtures/-/merge_requests/1/diffs?x#y"
+            ),
+            Some((
+                "http://localhost:8929".into(),
+                "alice/review-fixtures".into(),
+                1
+            ))
         );
         assert_eq!(
             parse_mr_url("https://gl.example.com/a/b/c/-/merge_requests/42"),
@@ -1174,40 +1521,78 @@ mod tests {
             parse_project_mrs_url("https://gl.example.com/a/b/-/merge_requests?state=merged"),
             Some(("https://gl.example.com".into(), "a/b".into()))
         );
-        assert_eq!(parse_project_mrs_url("https://gl.example.com/a/b/-/merge_requests/"), Some(("https://gl.example.com".into(), "a/b".into())));
+        assert_eq!(
+            parse_project_mrs_url("https://gl.example.com/a/b/-/merge_requests/"),
+            Some(("https://gl.example.com".into(), "a/b".into()))
+        );
         // One merge request isn't the list.
-        assert_eq!(parse_project_mrs_url("https://gl.example.com/a/b/-/merge_requests/3"), None);
+        assert_eq!(
+            parse_project_mrs_url("https://gl.example.com/a/b/-/merge_requests/3"),
+            None
+        );
         assert_eq!(parse_project_mrs_url("https://gl.example.com/a/b"), None);
     }
 
     #[test]
     fn search_reads_merge_request_references() {
-        let mr = |p: u64| ok(&format!(r#"{{"iid":12,"project_id":{p},"title":"t"}}"#), None);
+        let mr = |p: u64| {
+            ok(
+                &format!(r#"{{"iid":12,"project_id":{p},"title":"t"}}"#),
+                None,
+            )
+        };
         let canned = Arc::new(Canned {
             answers: vec![
                 ("projects/a%2Fb/merge_requests/12".into(), mr(9)),
                 ("projects/3/merge_requests/12".into(), mr(3)),
                 // Project 4 has no !12.
-                ("projects/4/merge_requests/12".into(), Response { status: 404, ..Default::default() }),
+                (
+                    "projects/4/merge_requests/12".into(),
+                    Response {
+                        status: 404,
+                        ..Default::default()
+                    },
+                ),
                 ("&search=rate%20limit".into(), ok("[]", None)),
             ],
             ..Default::default()
         });
         let c = Client::new("http://gl.test", "t", canned.clone());
         // group/project!12: that one.
-        assert_eq!(c.search_merge_requests("a/b!12", &[]).unwrap()[0].project_id, 9);
+        assert_eq!(
+            c.search_merge_requests("a/b!12", &[]).unwrap()[0].project_id,
+            9
+        );
         // !12: in each project at hand that has one.
         let found = c.search_merge_requests("!12", &[3, 4]).unwrap();
         assert_eq!(found.iter().map(|m| m.project_id).collect::<Vec<_>>(), [3]);
         // Words: GitLab's search, everywhere.
-        assert!(c.search_merge_requests(" rate limit ", &[3]).unwrap().is_empty());
-        assert!(canned.asked.lock().unwrap().last().unwrap().contains("merge_requests?scope=all&state=all"));
+        assert!(
+            c.search_merge_requests(" rate limit ", &[3])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            canned
+                .asked
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .contains("merge_requests?scope=all&state=all")
+        );
     }
 
     #[test]
     fn list_paths_by_scope() {
-        assert_eq!(count_path(&Scope::Project(7), "opened"), "projects/7/merge_requests?state=opened&per_page=1");
-        assert!(list_path(&Scope::ToReview("bob".into()), "merged").ends_with("&reviewer_username=bob&scope=all"));
+        assert_eq!(
+            count_path(&Scope::Project(7), "opened"),
+            "projects/7/merge_requests?state=opened&per_page=1"
+        );
+        assert!(
+            list_path(&Scope::ToReview("bob".into()), "merged")
+                .ends_with("&reviewer_username=bob&scope=all")
+        );
         assert_eq!(first_page("x?a=1"), "x?a=1&per_page=100&page=1");
         assert_eq!(first_page("x"), "x?per_page=100&page=1");
     }
@@ -1231,7 +1616,13 @@ mod tests {
 
     #[test]
     fn the_rest_of_a_list_comes_in_one_batch() {
-        let page = |n: u32| Response { status: 200, next_page: (n < 3).then_some(n + 1), total: Some(250), body: format!("[{n}]").into_bytes(), ..Default::default() };
+        let page = |n: u32| Response {
+            status: 200,
+            next_page: (n < 3).then_some(n + 1),
+            total: Some(250),
+            body: format!("[{n}]").into_bytes(),
+            ..Default::default()
+        };
         let canned = Arc::new(Canned {
             answers: (1..=3).map(|n| (format!("&page={n}"), page(n))).collect(),
             ..Default::default()
@@ -1242,7 +1633,11 @@ mod tests {
         // Pages 2 and 3 were asked for together, after page 1, each once.
         let asked = canned.asked.lock().unwrap().clone();
         assert_eq!(asked.len(), 3);
-        assert!(asked[0].ends_with("page=1") && asked[1].ends_with("page=2") && asked[2].ends_with("page=3"));
+        assert!(
+            asked[0].ends_with("page=1")
+                && asked[1].ends_with("page=2")
+                && asked[2].ends_with("page=3")
+        );
     }
 
     #[test]
@@ -1268,10 +1663,18 @@ mod tests {
     #[test]
     fn explains_errors() {
         let t = Arc::new(Canned {
-            answers: vec![("user".into(), Response { status: 401, ..Default::default() })],
+            answers: vec![(
+                "user".into(),
+                Response {
+                    status: 401,
+                    ..Default::default()
+                },
+            )],
             ..Default::default()
         });
-        let e = Client::new("http://gl.test", "t", t).current_user().unwrap_err();
+        let e = Client::new("http://gl.test", "t", t)
+            .current_user()
+            .unwrap_err();
         assert!(format!("{e:#}").contains("rejected the token"), "{e:#}");
         assert_eq!(ApiError::status_of(&e), Some(401));
     }
@@ -1304,15 +1707,28 @@ mod tests {
     #[test]
     fn note_awards_by_note_across_pages() {
         let t = Arc::new(Pages(Mutex::new(vec![])));
-        let got = Client::new("http://gl.test", "t", t.clone()).note_awards(4, 9).unwrap();
-        let names = |id: u64| got[&id].iter().map(|a| format!("{}:{}", a.user.username, a.name)).collect::<Vec<_>>();
+        let got = Client::new("http://gl.test", "t", t.clone())
+            .note_awards(4, 9)
+            .unwrap();
+        let names = |id: u64| {
+            got[&id]
+                .iter()
+                .map(|a| format!("{}:{}", a.user.username, a.name))
+                .collect::<Vec<_>>()
+        };
         assert_eq!(names(5), ["bob:thumbsup", "carol:tada"]);
         assert_eq!(got[&5][0].user.id, 2);
-        assert_eq!(names(7), ["carol:eyes"], "a diff note, from the second page");
+        assert_eq!(
+            names(7),
+            ["carol:eyes"],
+            "a diff note, from the second page"
+        );
         assert!(!got.contains_key(&6), "no reactions, no entry");
         let asked = t.0.lock().unwrap();
         assert_eq!(asked.len(), 2);
-        assert!(asked[0].contains(r#"gid://gitlab/Project/4"#) && asked[0].contains(r#"iid: \"9\""#));
+        assert!(
+            asked[0].contains(r#"gid://gitlab/Project/4"#) && asked[0].contains(r#"iid: \"9\""#)
+        );
         assert!(asked[1].contains(r#"after: \"abc\""#), "{}", asked[1]);
     }
 }

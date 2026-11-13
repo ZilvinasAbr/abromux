@@ -159,20 +159,24 @@ impl AbroMux {
         let input = notify_hook::Input {
             id,
             workspace: ws.map(|w| format!("workspace:{}", w.id)),
-            surface: self.surface_refs.get(&surface).map(|r| format!("surface:{r}")),
+            surface: self
+                .surface_refs
+                .get(&surface)
+                .map(|r| format!("surface:{r}")),
             title: title.into(),
             body: body.into(),
             cwd: ws.and_then(|w| w.cwd(cx)),
             app_focused: window.is_window_active(),
             focused_panel: viewing,
-            socket: self.socket.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            socket: self
+                .socket
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
         };
         let task = cx.background_spawn(async move { notify_hook::run(&hooks, &input) });
         cx.spawn_in(window, async move |this, cx| {
             let out = task.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.apply_hooks(id, out, window, cx)
-            });
+            let _ = this.update_in(cx, |this, window, cx| this.apply_hooks(id, out, window, cx));
         })
         .detach();
     }
@@ -276,7 +280,10 @@ impl AbroMux {
             .rev()
             .filter(|n| !n.read)
             .take(MENU_RECENT)
-            .map(|n| menubar::Entry { id: n.id, text: n.text() })
+            .map(|n| menubar::Entry {
+                id: n.id,
+                text: n.text(),
+            })
             .collect();
         let mut key = format!("{show} {unread}");
         for e in &recent {
@@ -341,7 +348,11 @@ impl AbroMux {
     /// Mark everything from `surface` read, a manual mark included.
     pub(crate) fn mark_surface_read(&mut self, surface: EntityId) {
         self.manual_unread.remove(&surface);
-        for n in self.notifications.iter_mut().filter(|n| n.surface == surface) {
+        for n in self
+            .notifications
+            .iter_mut()
+            .filter(|n| n.surface == surface)
+        {
             n.read = true;
         }
     }
@@ -349,7 +360,12 @@ impl AbroMux {
     /// Mark `surface` unread: its newest notification, or the surface itself
     /// if it has none.
     pub(crate) fn mark_surface_unread(&mut self, surface: EntityId) {
-        match self.notifications.iter_mut().rev().find(|n| n.surface == surface) {
+        match self
+            .notifications
+            .iter_mut()
+            .rev()
+            .find(|n| n.surface == surface)
+        {
             Some(n) => n.read = false,
             None => {
                 self.manual_unread.insert(surface);
@@ -418,7 +434,12 @@ impl AbroMux {
     }
 
     /// Select `surface`'s workspace and tab, and mark it read.
-    fn open_surface(&mut self, surface: EntityId, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn open_surface(
+        &mut self,
+        surface: EntityId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(wi) = self.workspaces.iter().position(|w| w.contains(surface)) else {
             return false;
         };

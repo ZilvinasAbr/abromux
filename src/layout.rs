@@ -246,13 +246,19 @@ impl AbroMux {
         let mut setup = spec.setup.clone();
         // `check` keeps panes from being empty; if one were, it would
         // collapse away, and with nothing left the workspace gets a shell.
-        let root = match self.build_layout(layout, id, &dir, spec, &mut setup, &mut focus, window, cx) {
-            Some(root) => root,
-            None => {
-                let t = self.make_terminal(id, crate::TerminalOpts::cwd(Some(dir.to_string_lossy().into_owned())), window, cx);
-                self.leaf_node(vec![t], 0).expect("one tab")
-            }
-        };
+        let root =
+            match self.build_layout(layout, id, &dir, spec, &mut setup, &mut focus, window, cx) {
+                Some(root) => root,
+                None => {
+                    let t = self.make_terminal(
+                        id,
+                        crate::TerminalOpts::cwd(Some(dir.to_string_lossy().into_owned())),
+                        window,
+                        cx,
+                    );
+                    self.leaf_node(vec![t], 0).expect("one tab")
+                }
+            };
         let panes: Vec<usize> = root.panes().map(|p| p.id).collect();
         let focused = focus.unwrap_or(panes[0]);
         let name = spec.name.clone().or(name);
@@ -286,7 +292,11 @@ impl AbroMux {
             LayoutNode::Pane { pane } => {
                 // The first surface asking for focus, in this pane if no
                 // earlier pane had one.
-                let wants = pane.surfaces.iter().position(|s| s.focus).filter(|_| focus.is_none());
+                let wants = pane
+                    .surfaces
+                    .iter()
+                    .position(|s| s.focus)
+                    .filter(|_| focus.is_none());
                 let tabs = pane
                     .surfaces
                     .iter()
@@ -339,7 +349,16 @@ impl AbroMux {
                     .chain(&s.env)
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
-                let surface = self.make_terminal(ws, crate::TerminalOpts { cwd, env, ..Default::default() }, window, cx);
+                let surface = self.make_terminal(
+                    ws,
+                    crate::TerminalOpts {
+                        cwd,
+                        env,
+                        ..Default::default()
+                    },
+                    window,
+                    cx,
+                );
                 if let Surface::Terminal(t) = &surface {
                     // The shell reads these once it starts.
                     let text: String = setup

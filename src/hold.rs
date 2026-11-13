@@ -117,13 +117,21 @@ pub fn serve(path: &Path) -> io::Result<()> {
         // What to wait on: new connections, requests, and the PTYs nobody holds.
         let mut fds = vec![pollfd(listener.as_raw_fd())];
         let client_ids: Vec<u64> = clients.keys().copied().collect();
-        fds.extend(client_ids.iter().map(|c| pollfd(clients[c].stream.as_raw_fd())));
+        fds.extend(
+            client_ids
+                .iter()
+                .map(|c| pollfd(clients[c].stream.as_raw_fd())),
+        );
         let term_ids: Vec<String> = terms
             .iter()
             .filter(|(_, t)| t.client.is_none() && !t.eof)
             .map(|(id, _)| id.clone())
             .collect();
-        fds.extend(term_ids.iter().filter_map(|id| Some(pollfd(terms[id].master.as_raw_fd()?))));
+        fds.extend(
+            term_ids
+                .iter()
+                .filter_map(|id| Some(pollfd(terms[id].master.as_raw_fd()?))),
+        );
         // SAFETY: `fds` is a valid array of pollfd for its length.
         let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, 1000) };
         if n <= 0 {
@@ -150,7 +158,9 @@ pub fn serve(path: &Path) -> io::Result<()> {
             if !ready(1 + i) {
                 continue;
             }
-            let Some(c) = clients.get_mut(cid) else { continue };
+            let Some(c) = clients.get_mut(cid) else {
+                continue;
+            };
             let gone = match c.stream.read(&mut buf) {
                 Ok(0) | Err(_) => true,
                 Ok(n) => {
@@ -180,7 +190,9 @@ pub fn serve(path: &Path) -> io::Result<()> {
                 continue;
             }
             let Some(t) = terms.get_mut(id) else { continue };
-            let Some(fd) = t.master.as_raw_fd() else { continue };
+            let Some(fd) = t.master.as_raw_fd() else {
+                continue;
+            };
             // SAFETY: reads into `buf`, which is valid for its length.
             let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
             if n < 0
@@ -232,7 +244,13 @@ fn handle(
                 let fd = t.master.as_raw_fd().unwrap_or(-1);
                 if send_with_fd(&c.stream, format!("{reply}\n").as_bytes(), fd).is_ok() {
                     c.term = Some(id.clone());
-                    terms.insert(id, Term { client: Some(cid), ..t });
+                    terms.insert(
+                        id,
+                        Term {
+                            client: Some(cid),
+                            ..t
+                        },
+                    );
                 }
             }
             Err(e) => fail(c, e),
@@ -242,7 +260,9 @@ fn handle(
             let Some(t) = terms.get_mut(&id) else {
                 return fail(c, format!("no terminal {id}"));
             };
-            let busy = t.client.is_some_and(|other| other != cid && clients.contains_key(&other));
+            let busy = t
+                .client
+                .is_some_and(|other| other != cid && clients.contains_key(&other));
             let c = clients.get_mut(&cid).unwrap();
             if busy {
                 return fail(c, format!("{id} is attached elsewhere"));
@@ -557,14 +577,21 @@ mod tests {
             let mut buf = [0u8; 4096];
             let end = Instant::now() + Duration::from_secs(5);
             while !String::from_utf8_lossy(&seen).contains(want) {
-                assert!(Instant::now() < end, "never saw {want:?}: {}", String::from_utf8_lossy(&seen));
+                assert!(
+                    Instant::now() < end,
+                    "never saw {want:?}: {}",
+                    String::from_utf8_lossy(&seen)
+                );
                 let n = unsafe { libc::read(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
                 assert!(n > 0);
                 seen.extend_from_slice(&buf[..n as usize]);
             }
         };
 
-        let env = [("PROBE".to_string(), "held".to_string()), ("PATH".into(), "/bin:/usr/bin".into())];
+        let env = [
+            ("PROBE".to_string(), "held".to_string()),
+            ("PATH".into(), "/bin:/usr/bin".into()),
+        ];
         let argv = ["/bin/sh".to_string()];
         let h = Held::spawn(&argv, "/tmp", &env, (80, 24)).unwrap();
         assert!(h.pid > 0);
@@ -579,7 +606,11 @@ mod tests {
         drop(h);
         std::thread::sleep(Duration::from_millis(800));
         let mut h = Held::attach(&id).unwrap();
-        assert!(String::from_utf8_lossy(&h.backlog).contains("later-2"), "{:?}", String::from_utf8_lossy(&h.backlog));
+        assert!(
+            String::from_utf8_lossy(&h.backlog).contains("later-2"),
+            "{:?}",
+            String::from_utf8_lossy(&h.backlog)
+        );
         write(&h.fd, "echo again\n");
         read_until(&h.fd, "again");
         assert!(Held::attach(&id).is_err(), "only one holder of a terminal");

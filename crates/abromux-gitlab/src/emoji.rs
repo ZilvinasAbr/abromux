@@ -51,7 +51,10 @@ pub fn of(name: &str) -> Option<&'static str> {
 
 /// What the reaction picker offers: each emoji once, by its main name.
 pub fn picks() -> impl Iterator<Item = (&'static str, &'static str)> {
-    CODES.iter().copied().filter(|(k, _)| !matches!(*k, "+1" | "-1" | "smiley"))
+    CODES
+        .iter()
+        .copied()
+        .filter(|(k, _)| !matches!(*k, "+1" | "-1" | "smiley"))
 }
 
 /// `text` with each known `:code:` replaced by its emoji.
@@ -62,9 +65,17 @@ pub fn expand(text: &str) -> String {
         out.push_str(&rest[..start]);
         let after = &rest[start + 1..];
         let end = after.find(':').filter(|&e| {
-            e > 0 && after[..e].chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '+' || c == '-')
+            e > 0
+                && after[..e]
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '+' || c == '-')
         });
-        match end.and_then(|e| CODES.iter().find(|(k, _)| *k == &after[..e]).map(|(_, v)| (e, *v))) {
+        match end.and_then(|e| {
+            CODES
+                .iter()
+                .find(|(k, _)| *k == &after[..e])
+                .map(|(_, v)| (e, *v))
+        }) {
             Some((e, emoji)) => {
                 out.push_str(emoji);
                 rest = &after[e + 1..];

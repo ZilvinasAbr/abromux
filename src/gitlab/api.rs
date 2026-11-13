@@ -75,7 +75,13 @@ pub struct Paced {
 
 impl Paced {
     fn check(&self) -> anyhow::Result<()> {
-        if self.throttle.lock().unwrap().paused(Instant::now()).is_some() {
+        if self
+            .throttle
+            .lock()
+            .unwrap()
+            .paused(Instant::now())
+            .is_some()
+        {
             return Err(Paused.into());
         }
         Ok(())
@@ -125,12 +131,21 @@ impl Transport for Paced {
 pub fn graphql(c: &Client, query: &str) -> Result<Value, Error> {
     let url = format!("{}/api/graphql", c.host());
     let body = json!({ "query": query }).to_string();
-    let r = c.transport().send("POST", &url, c.token(), body.as_bytes()).map_err(|e| Error::of(&e))?;
+    let r = c
+        .transport()
+        .send("POST", &url, c.token(), body.as_bytes())
+        .map_err(|e| Error::of(&e))?;
     if !(200..=299).contains(&r.status) {
         let message = match r.status {
             401 => format!("{} didn't accept the token", c.host()),
             403 => "the token can't read that (needs read_api)".into(),
-            s => format!("GitLab answered {s}: {}", String::from_utf8_lossy(&r.body).chars().take(200).collect::<String>()),
+            s => format!(
+                "GitLab answered {s}: {}",
+                String::from_utf8_lossy(&r.body)
+                    .chars()
+                    .take(200)
+                    .collect::<String>()
+            ),
         };
         return Err(Error::of_status(Some(r.status), message));
     }
@@ -282,8 +297,10 @@ pub fn parse_checked(data: &Value, keys: &[MrKey], lists: Option<&Lists>) -> Che
             c.assigned = Some(nodes(&me["assigned"]));
         }
         for (j, (project, _)) in l.branches.iter().enumerate() {
-            c.branches
-                .push((project.clone(), nodes(&data[format!("p{j}")]["mergeRequests"])));
+            c.branches.push((
+                project.clone(),
+                nodes(&data[format!("p{j}")]["mergeRequests"]),
+            ));
         }
     }
     c
@@ -346,20 +363,28 @@ mod tests {
         assert!(matches!(Error::of(&api(500)), Error::Other(_)));
         assert_eq!(Error::of(&anyhow::Error::from(Paused)), Error::Throttled);
         // A message that merely mentions a status is not that status.
-        assert!(matches!(Error::of(&anyhow::anyhow!("curl: (401) something")), Error::Other(_)));
+        assert!(matches!(
+            Error::of(&anyhow::anyhow!("curl: (401) something")),
+            Error::Other(_)
+        ));
     }
 
     /// The plugin client's error for `status`, as its `check` makes it.
     fn abromux_gitlab_status(status: u16) -> anyhow::Error {
         let t = Arc::new(Canned(status));
-        Client::new("http://gl.test", "t", t).current_user().unwrap_err()
+        Client::new("http://gl.test", "t", t)
+            .current_user()
+            .unwrap_err()
     }
 
     struct Canned(u16);
 
     impl Transport for Canned {
         fn get(&self, _: &str, _: &str) -> anyhow::Result<Response> {
-            Ok(Response { status: self.0, ..Default::default() })
+            Ok(Response {
+                status: self.0,
+                ..Default::default()
+            })
         }
     }
 }

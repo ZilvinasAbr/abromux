@@ -92,8 +92,7 @@ fn support_dir_of(flavor: Option<&str>) -> PathBuf {
         Some("") => "abromux-nightly".into(),
         Some(name) => format!("abromux-nightly-{name}"),
     };
-    home.join("Library/Application Support")
-        .join(dir)
+    home.join("Library/Application Support").join(dir)
 }
 
 #[cfg(test)]

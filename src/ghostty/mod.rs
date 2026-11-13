@@ -390,7 +390,9 @@ impl Terminal {
     pub fn snapshot(&mut self) -> Option<Vec<u8>> {
         let encode = |raw| unsafe {
             let (mut out, mut len) = (ptr::null_mut(), 0);
-            if ghostty_snapshot_encode_alloc(raw, ptr::null(), &mut out, &mut len) != GHOSTTY_SUCCESS {
+            if ghostty_snapshot_encode_alloc(raw, ptr::null(), &mut out, &mut len)
+                != GHOSTTY_SUCCESS
+            {
                 return None;
             }
             let bytes = std::slice::from_raw_parts(out, len).to_vec();
@@ -407,14 +409,27 @@ impl Terminal {
     pub fn from_snapshot(bytes: &[u8]) -> anyhow::Result<Self> {
         unsafe {
             let mut dec = ptr::null_mut();
-            check(ghostty_snapshot_decoder_new_buf(ptr::null(), &mut dec, bytes.as_ptr(), bytes.len()))?;
+            check(ghostty_snapshot_decoder_new_buf(
+                ptr::null(),
+                &mut dec,
+                bytes.as_ptr(),
+                bytes.len(),
+            ))?;
             let mut raw = ptr::null_mut();
             let r = ghostty_snapshot_decoder_decode(dec, &mut raw);
             ghostty_snapshot_decoder_free(dec);
             check(r)?;
             let (mut cols, mut rows) = (0u16, 0u16);
-            ghostty_terminal_get(raw, GHOSTTY_TERMINAL_DATA_COLS, &mut cols as *mut _ as *mut c_void);
-            ghostty_terminal_get(raw, GHOSTTY_TERMINAL_DATA_ROWS, &mut rows as *mut _ as *mut c_void);
+            ghostty_terminal_get(
+                raw,
+                GHOSTTY_TERMINAL_DATA_COLS,
+                &mut cols as *mut _ as *mut c_void,
+            );
+            ghostty_terminal_get(
+                raw,
+                GHOSTTY_TERMINAL_DATA_ROWS,
+                &mut rows as *mut _ as *mut c_void,
+            );
             Self::wrap(raw, cols.max(1), rows.max(1))
         }
     }
@@ -1070,8 +1085,12 @@ impl Terminal {
         if !has {
             return None;
         }
-        Some(self.format(GHOSTTY_FORMATTER_FORMAT_PLAIN, Some(&sel), GHOSTTY_FORMATTER_EXTRAS_NONE))
-            .filter(|t| !t.is_empty())
+        Some(self.format(
+            GHOSTTY_FORMATTER_FORMAT_PLAIN,
+            Some(&sel),
+            GHOSTTY_FORMATTER_EXTRAS_NONE,
+        ))
+        .filter(|t| !t.is_empty())
     }
 
     /// Plain text of the whole screen, scrollback included.
@@ -1104,13 +1123,24 @@ impl Terminal {
             }
             let (unwrap, trim) = (true, true);
             let set = |opt, v: *const c_void| ghostty_formatter_set(f, opt, v) == GHOSTTY_SUCCESS;
-            let ok = set(GHOSTTY_FORMATTER_OPT_EMIT, &emit as *const _ as *const c_void)
-                && set(GHOSTTY_FORMATTER_OPT_UNWRAP, &unwrap as *const _ as *const c_void)
-                && set(GHOSTTY_FORMATTER_OPT_TRIM, &trim as *const _ as *const c_void)
-                && set(GHOSTTY_FORMATTER_OPT_EXTRAS, &extras as *const _ as *const c_void)
-                && selection.is_none_or(|sel| {
-                    set(GHOSTTY_FORMATTER_OPT_SELECTION, sel as *const _ as *const c_void)
-                });
+            let ok = set(
+                GHOSTTY_FORMATTER_OPT_EMIT,
+                &emit as *const _ as *const c_void,
+            ) && set(
+                GHOSTTY_FORMATTER_OPT_UNWRAP,
+                &unwrap as *const _ as *const c_void,
+            ) && set(
+                GHOSTTY_FORMATTER_OPT_TRIM,
+                &trim as *const _ as *const c_void,
+            ) && set(
+                GHOSTTY_FORMATTER_OPT_EXTRAS,
+                &extras as *const _ as *const c_void,
+            ) && selection.is_none_or(|sel| {
+                set(
+                    GHOSTTY_FORMATTER_OPT_SELECTION,
+                    sel as *const _ as *const c_void,
+                )
+            });
             let mut out: *mut u8 = ptr::null_mut();
             let mut len = 0usize;
             let ok = ok
@@ -1379,12 +1409,8 @@ impl Terminal {
                     y: cursor.viewport_y,
                     style: match cursor.visual_style {
                         GHOSTTY_CURSOR_STYLE_BAR => CursorStyle::Bar,
-                        GHOSTTY_CURSOR_STYLE_UNDERLINE => {
-                            CursorStyle::Underline
-                        }
-                        GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW => {
-                            CursorStyle::BlockHollow
-                        }
+                        GHOSTTY_CURSOR_STYLE_UNDERLINE => CursorStyle::Underline,
+                        GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW => CursorStyle::BlockHollow,
                         _ => CursorStyle::Block,
                     },
                 });
@@ -1598,9 +1624,7 @@ impl Terminal {
                     continue;
                 }
                 im.layer = match layer {
-                    GHOSTTY_IMAGE_LAYER_BELOW_BACKGROUND => {
-                        ImageLayer::BelowBackground
-                    }
+                    GHOSTTY_IMAGE_LAYER_BELOW_BACKGROUND => ImageLayer::BelowBackground,
                     GHOSTTY_IMAGE_LAYER_ABOVE_TEXT => ImageLayer::AboveText,
                     _ => ImageLayer::BelowText,
                 };
@@ -1881,19 +1905,35 @@ mod tests {
             String::from_utf8(t.encode_key_action(action, GHOSTTY_KEY_META_LEFT, mods, None, 0))
                 .unwrap()
         };
-        assert_eq!(cmd(&mut t, GHOSTTY_KEY_ACTION_PRESS, sup), "", "plain programs get nothing");
+        assert_eq!(
+            cmd(&mut t, GHOSTTY_KEY_ACTION_PRESS, sup),
+            "",
+            "plain programs get nothing"
+        );
         // terminal-browser's flags: all keys as escape codes, with releases.
         t.write(b"\x1b[>27u");
         assert_eq!(cmd(&mut t, GHOSTTY_KEY_ACTION_PRESS, sup), "\x1b[57444;9u");
-        assert_eq!(cmd(&mut t, GHOSTTY_KEY_ACTION_RELEASE, 0), "\x1b[57444;1:3u");
+        assert_eq!(
+            cmd(&mut t, GHOSTTY_KEY_ACTION_RELEASE, 0),
+            "\x1b[57444;1:3u"
+        );
 
         // ⌘L, a held key's repeat and its release, as terminal-browser gets them.
         let mut key = |t: &mut Terminal, action, k, mods, cp: char| {
             String::from_utf8(t.encode_key_action(action, k, mods, None, cp as u32)).unwrap()
         };
-        assert_eq!(key(&mut t, GHOSTTY_KEY_ACTION_PRESS, GHOSTTY_KEY_L, sup, 'l'), "\x1b[108;9u");
-        assert_eq!(key(&mut t, GHOSTTY_KEY_ACTION_REPEAT, GHOSTTY_KEY_A, 0, 'a'), "\x1b[97;1:2u");
-        assert_eq!(key(&mut t, GHOSTTY_KEY_ACTION_RELEASE, GHOSTTY_KEY_A, 0, 'a'), "\x1b[97;1:3u");
+        assert_eq!(
+            key(&mut t, GHOSTTY_KEY_ACTION_PRESS, GHOSTTY_KEY_L, sup, 'l'),
+            "\x1b[108;9u"
+        );
+        assert_eq!(
+            key(&mut t, GHOSTTY_KEY_ACTION_REPEAT, GHOSTTY_KEY_A, 0, 'a'),
+            "\x1b[97;1:2u"
+        );
+        assert_eq!(
+            key(&mut t, GHOSTTY_KEY_ACTION_RELEASE, GHOSTTY_KEY_A, 0, 'a'),
+            "\x1b[97;1:3u"
+        );
     }
 
     #[test]
@@ -2194,7 +2234,13 @@ mod tests {
         t.select((6, 0), (10, 0));
         assert_eq!(t.selection_text().as_deref(), Some("world"));
         assert_eq!(
-            t.encode_key_action(GHOSTTY_KEY_ACTION_PRESS, ffi::GHOSTTY_KEY_ARROW_UP, 0, None, 0),
+            t.encode_key_action(
+                GHOSTTY_KEY_ACTION_PRESS,
+                ffi::GHOSTTY_KEY_ARROW_UP,
+                0,
+                None,
+                0
+            ),
             b"\x1b[A"
         );
         assert_eq!(

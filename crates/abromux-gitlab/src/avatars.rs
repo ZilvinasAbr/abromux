@@ -2,10 +2,10 @@
 //! client). Until one arrives, or if it can't, GitLab's own fallback shows:
 //! the name's initial on a color picked by user id.
 
-use crate::{style::*, types::User};
-use gpui::{prelude::*, *};
 #[allow(unused_imports)]
 use crate::style::px;
+use crate::{style::*, types::User};
+use gpui::{prelude::*, *};
 use std::{collections::HashMap, process::Command, sync::Arc};
 
 enum Slot {
@@ -39,7 +39,9 @@ impl Avatars {
                 let u = url.clone();
                 let got = cx.background_spawn(async move { fetch(&u) }).await;
                 this.update(cx, |v, cx| {
-                    store(v).slots.insert(url, got.map_or(Slot::Failed, |i| Slot::Ready(Arc::new(i))));
+                    store(v)
+                        .slots
+                        .insert(url, got.map_or(Slot::Failed, |i| Slot::Ready(Arc::new(i))));
                     cx.notify();
                 })
                 .ok();
@@ -66,17 +68,31 @@ impl Avatars {
             .id(("avatar", u.id as usize))
             .flex_none()
             .child(self.picture(u, size))
-            .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(name.clone()).build(window, cx))
+            .tooltip(move |window, cx| {
+                gpui_component::tooltip::Tooltip::new(name.clone()).build(window, cx)
+            })
             .into_any_element()
     }
 
     fn picture(&self, u: &User, size: f32) -> AnyElement {
         if let Some(i) = self.image(u) {
-            return img(i).size(px(size)).flex_none().rounded_full().into_any_element();
+            return img(i)
+                .size(px(size))
+                .flex_none()
+                .rounded_full()
+                .into_any_element();
         }
         // GitLab's identicon fallback colors.
-        const COLORS: [u32; 7] = [0x5c2b8c, 0x2b5c8c, 0x2b8c6e, 0x8c6e2b, 0x8c2b4e, 0x4e8c2b, 0x2b8c8c];
-        let initial = u.name.chars().next().unwrap_or('?').to_uppercase().to_string();
+        const COLORS: [u32; 7] = [
+            0x5c2b8c, 0x2b5c8c, 0x2b8c6e, 0x8c6e2b, 0x8c2b4e, 0x4e8c2b, 0x2b8c8c,
+        ];
+        let initial = u
+            .name
+            .chars()
+            .next()
+            .unwrap_or('?')
+            .to_uppercase()
+            .to_string();
         div()
             .size(px(size))
             .flex_none()

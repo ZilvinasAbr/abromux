@@ -46,17 +46,26 @@ fn civil(days: i64) -> (i64, i64, i64) {
 pub fn iso(secs: i64) -> String {
     let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
     let (y, m, d) = civil(days);
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.000Z", rem / 3600, rem % 3600 / 60, rem % 60)
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.000Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
 
 pub fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 /// timeago.js's words, as GitLab shows them: "just now", "5 minutes ago",
 /// "1 hour ago", "3 days ago", "2 weeks ago", "1 month ago", "2 years ago".
 pub fn ago(iso: &str, now: i64) -> String {
-    let Some(t) = parse(iso) else { return iso.to_string() };
+    let Some(t) = parse(iso) else {
+        return iso.to_string();
+    };
     let secs = (now - t).max(0);
     let unit = |n: i64, u: &str| format!("{n} {u}{} ago", if n == 1 { "" } else { "s" });
     match secs {
@@ -82,11 +91,15 @@ pub fn ago_short(secs: i64) -> String {
 
 /// GitLab's hover text for a time, in UTC: `Nov 5, 2026, 7:36 PM UTC`.
 pub fn exact(iso: &str) -> String {
-    let Some(t) = parse(iso) else { return iso.to_string() };
+    let Some(t) = parse(iso) else {
+        return iso.to_string();
+    };
     let days = t.div_euclid(86400);
     let secs = t.rem_euclid(86400);
     let (y, m, d) = civil(days);
-    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
     let (h, mi) = (secs / 3600, secs % 3600 / 60);
     let (h12, ampm) = match h {
         0 => (12, "AM"),
@@ -94,12 +107,17 @@ pub fn exact(iso: &str) -> String {
         12 => (12, "PM"),
         _ => (h - 12, "PM"),
     };
-    format!("{} {d}, {y}, {h12}:{mi:02} {ampm} UTC", MONTHS[(m - 1) as usize])
+    format!(
+        "{} {d}, {y}, {h12}:{mi:02} {ampm} UTC",
+        MONTHS[(m - 1) as usize]
+    )
 }
 
 /// `Nov 05, 2026`, for the commit list's day headings.
 pub fn day(iso: &str) -> String {
-    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
     let m: usize = iso.get(5..7).and_then(|m| m.parse().ok()).unwrap_or(0);
     match (MONTHS.get(m.wrapping_sub(1)), iso.get(8..10), iso.get(0..4)) {
         (Some(mon), Some(d), Some(y)) => format!("{mon} {d}, {y}"),
@@ -113,7 +131,12 @@ mod tests {
 
     #[test]
     fn iso_round_trips() {
-        for t in ["2026-11-05T19:36:28.000Z", "2000-02-29T00:00:00.000Z", "1970-01-01T00:00:00.000Z", "2024-12-31T23:59:59.000Z"] {
+        for t in [
+            "2026-11-05T19:36:28.000Z",
+            "2000-02-29T00:00:00.000Z",
+            "1970-01-01T00:00:00.000Z",
+            "2024-12-31T23:59:59.000Z",
+        ] {
             assert_eq!(iso(parse(t).unwrap()), t);
         }
     }
@@ -129,12 +152,26 @@ mod tests {
         assert_eq!(ago("2026-11-05T19:36:28Z", t + 3 * 86400), "3 days ago");
         assert_eq!(ago("2026-11-05T19:36:28Z", t + 14 * 86400), "2 weeks ago");
         assert_eq!(ago("junk", t), "junk");
-        assert_eq!([ago_short(5), ago_short(120), ago_short(7200), ago_short(200_000)], ["now", "2m", "2h", "2d"]);
+        assert_eq!(
+            [
+                ago_short(5),
+                ago_short(120),
+                ago_short(7200),
+                ago_short(200_000)
+            ],
+            ["now", "2m", "2h", "2d"]
+        );
         assert_eq!(parse("1970-01-01T00:00:00Z"), Some(0));
         assert_eq!(parse("nope"), None);
         assert_eq!(day("2026-11-05T19:36:28Z"), "Nov 05, 2026");
-        assert_eq!(exact("2026-11-05T19:36:28.973Z"), "Nov 5, 2026, 7:36 PM UTC");
-        assert_eq!(exact("2026-11-06T00:05:00+02:00"), "Nov 5, 2026, 10:05 PM UTC");
+        assert_eq!(
+            exact("2026-11-05T19:36:28.973Z"),
+            "Nov 5, 2026, 7:36 PM UTC"
+        );
+        assert_eq!(
+            exact("2026-11-06T00:05:00+02:00"),
+            "Nov 5, 2026, 10:05 PM UTC"
+        );
         assert_eq!(exact("2024-02-29T00:00:00Z"), "Feb 29, 2024, 12:00 AM UTC");
     }
 }

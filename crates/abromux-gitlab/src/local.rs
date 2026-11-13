@@ -54,7 +54,9 @@ fn dir() -> PathBuf {
     if let Some(d) = std::env::var_os("ABROMUX_LOCAL_DIFFS_DIR").filter(|d| !d.is_empty()) {
         return PathBuf::from(d);
     }
-    DIR.get().cloned().unwrap_or_else(|| std::env::temp_dir().join("abromux-local-diffs"))
+    DIR.get()
+        .cloned()
+        .unwrap_or_else(|| std::env::temp_dir().join("abromux-local-diffs"))
 }
 
 pub fn is_local(host: &str) -> bool {
@@ -66,7 +68,9 @@ pub fn host_of(id: &str) -> String {
 }
 
 pub fn id_of(host: &str) -> Option<&str> {
-    host.strip_prefix(SCHEME).map(|h| h.trim_end_matches('/')).filter(|h| !h.is_empty())
+    host.strip_prefix(SCHEME)
+        .map(|h| h.trim_end_matches('/'))
+        .filter(|h| !h.is_empty())
 }
 
 // ---- the store ----------------------------------------------------------------
@@ -95,7 +99,10 @@ pub struct Pos {
 
 impl Pos {
     pub fn path(&self) -> &str {
-        self.new_path.as_deref().or(self.old_path.as_deref()).unwrap_or_default()
+        self.new_path
+            .as_deref()
+            .or(self.old_path.as_deref())
+            .unwrap_or_default()
     }
 }
 
@@ -131,7 +138,12 @@ impl Thread {
     }
 
     pub fn resolved(&self) -> bool {
-        self.notes.iter().any(|n| n.resolvable) && self.notes.iter().filter(|n| n.resolvable).all(|n| n.resolved)
+        self.notes.iter().any(|n| n.resolvable)
+            && self
+                .notes
+                .iter()
+                .filter(|n| n.resolvable)
+                .all(|n| n.resolved)
     }
 }
 
@@ -180,7 +192,9 @@ impl Store {
     }
 
     pub fn thread(&self, id: &str) -> Option<&Thread> {
-        self.threads.iter().find(|t| t.id == id || t.id.starts_with(id) && id.len() >= 4)
+        self.threads
+            .iter()
+            .find(|t| t.id == id || t.id.starts_with(id) && id.len() >= 4)
     }
 
     fn thread_mut(&mut self, id: &str) -> Option<&mut Thread> {
@@ -226,7 +240,8 @@ fn prompt_dir(id: &str) -> PathBuf {
 
 pub fn load(id: &str) -> anyhow::Result<Store> {
     let p = path(id);
-    let bytes = std::fs::read(&p).with_context(|| format!("no local review {id} ({})", p.display()))?;
+    let bytes =
+        std::fs::read(&p).with_context(|| format!("no local review {id} ({})", p.display()))?;
     serde_json::from_slice(&bytes).with_context(|| format!("reading {}", p.display()))
 }
 
@@ -258,7 +273,11 @@ impl Lock {
         let p = dir().join(format!("{id}.lock"));
         let started = Instant::now();
         loop {
-            match std::fs::OpenOptions::new().write(true).create_new(true).open(&p) {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&p)
+            {
                 Ok(_) => return Ok(Lock(p)),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     // A writer that died leaves it: a stale one is taken over.
@@ -297,22 +316,46 @@ pub struct Spec {
 /// HEAD forked from X, so a branch's commits and what isn't committed yet.
 pub fn parse_spec(spec: &str) -> Spec {
     let spec = spec.trim();
-    let side = |s: &str| if s.is_empty() { "HEAD".to_string() } else { s.to_string() };
+    let side = |s: &str| {
+        if s.is_empty() {
+            "HEAD".to_string()
+        } else {
+            s.to_string()
+        }
+    };
     if let Some(base) = spec.strip_prefix("--merge-base") {
-        return Spec { base: side(base.trim()), head: None, merge_base: true };
+        return Spec {
+            base: side(base.trim()),
+            head: None,
+            merge_base: true,
+        };
     }
     if let Some((a, b)) = spec.split_once("...") {
-        return Spec { base: side(a), head: Some(side(b)), merge_base: true };
+        return Spec {
+            base: side(a),
+            head: Some(side(b)),
+            merge_base: true,
+        };
     }
     if let Some((a, b)) = spec.split_once("..") {
-        return Spec { base: side(a), head: Some(side(b)), merge_base: false };
+        return Spec {
+            base: side(a),
+            head: Some(side(b)),
+            merge_base: false,
+        };
     }
-    Spec { base: side(spec), head: None, merge_base: false }
+    Spec {
+        base: side(spec),
+        head: None,
+        merge_base: false,
+    }
 }
 
 /// FNV-1a, for ids that stay the same from run to run.
 fn hash(s: &str) -> u64 {
-    s.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3))
+    s.bytes().fold(0xcbf29ce484222325u64, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x100000001b3)
+    })
 }
 
 /// What a new or reopened local review takes.
@@ -332,10 +375,24 @@ pub fn create(cwd: &Path, spec: &str, open: Open) -> anyhow::Result<String> {
     let parsed = parse_spec(spec);
     // Check the revisions now: a typo fails here, not in the tab.
     for rev in std::iter::once(&parsed.base).chain(&parsed.head) {
-        git(Path::new(&repo), &["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")])
-            .with_context(|| format!("{rev:?} isn't a commit in {repo}"))?;
+        git(
+            Path::new(&repo),
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{rev}^{{commit}}"),
+            ],
+        )
+        .with_context(|| format!("{rev:?} isn't a commit in {repo}"))?;
     }
-    let id = format!("{:012x}", hash(&format!("{repo}\0{}\0{:?}\0{}", parsed.base, parsed.head, parsed.merge_base)) & 0xffff_ffff_ffff);
+    let id = format!(
+        "{:012x}",
+        hash(&format!(
+            "{repo}\0{}\0{:?}\0{}",
+            parsed.base, parsed.head, parsed.merge_base
+        )) & 0xffff_ffff_ffff
+    );
     let _lock = Lock::take(&id)?;
     let mut s = load(&id).unwrap_or_else(|_| Store {
         id: id.clone(),
@@ -365,20 +422,56 @@ pub fn create(cwd: &Path, spec: &str, open: Open) -> anyhow::Result<String> {
 /// (`--merge-base origin/main`); on the default branch itself, or without
 /// one to be found, the uncommitted changes (the empty spec).
 pub fn work_spec(cwd: &Path) -> String {
-    let rev = |r: &str| git_text(cwd, &["rev-parse", "--verify", "--quiet", &format!("{r}^{{commit}}")]).ok();
-    let default = git_text(cwd, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+    let rev = |r: &str| {
+        git_text(
+            cwd,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{r}^{{commit}}"),
+            ],
+        )
         .ok()
-        .filter(|b| !b.is_empty() && rev(b).is_some())
-        .or_else(|| ["origin/main", "origin/master", "main", "master"].into_iter().find(|b| rev(b).is_some()).map(str::to_string));
-    let Some(base) = default else { return String::new() };
-    let (Some(head), Ok(fork)) = (rev("HEAD"), git_text(cwd, &["merge-base", &base, "HEAD"])) else { return String::new() };
+    };
+    let default = git_text(
+        cwd,
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+    )
+    .ok()
+    .filter(|b| !b.is_empty() && rev(b).is_some())
+    .or_else(|| {
+        ["origin/main", "origin/master", "main", "master"]
+            .into_iter()
+            .find(|b| rev(b).is_some())
+            .map(str::to_string)
+    });
+    let Some(base) = default else {
+        return String::new();
+    };
+    let (Some(head), Ok(fork)) = (rev("HEAD"), git_text(cwd, &["merge-base", &base, "HEAD"]))
+    else {
+        return String::new();
+    };
     // Nothing committed since the fork: the uncommitted changes say it all.
-    if fork == head { String::new() } else { format!("--merge-base {base}") }
+    if fork == head {
+        String::new()
+    } else {
+        format!("--merge-base {base}")
+    }
 }
 
 /// `$ABROMUX_DIFF_AGENT`, else Claude Code.
 pub fn default_agent() -> String {
-    std::env::var("ABROMUX_DIFF_AGENT").ok().filter(|a| !a.trim().is_empty()).unwrap_or_else(|| "claude".into())
+    std::env::var("ABROMUX_DIFF_AGENT")
+        .ok()
+        .filter(|a| !a.trim().is_empty())
+        .unwrap_or_else(|| "claude".into())
 }
 
 /// Every local review on disk, newest first.
@@ -399,7 +492,11 @@ pub fn find(id: &str) -> anyhow::Result<String> {
     if path(id).exists() {
         return Ok(id.to_string());
     }
-    let hits: Vec<String> = all().into_iter().map(|s| s.id).filter(|s| s.starts_with(id)).collect();
+    let hits: Vec<String> = all()
+        .into_iter()
+        .map(|s| s.id)
+        .filter(|s| s.starts_with(id))
+        .collect();
     match hits.as_slice() {
         [one] => Ok(one.clone()),
         [] => bail!("no local review {id} (`abromux diff list`)"),
@@ -409,11 +506,25 @@ pub fn find(id: &str) -> anyhow::Result<String> {
 
 /// The agent's answer in thread `thread`: a reply, and with `resolve` the
 /// thread resolved. `as_name` signs it (else the agent's name).
-pub fn reply(id: &str, thread: &str, body: &str, resolve: bool, as_name: Option<&str>) -> anyhow::Result<String> {
+pub fn reply(
+    id: &str,
+    thread: &str,
+    body: &str,
+    resolve: bool,
+    as_name: Option<&str>,
+) -> anyhow::Result<String> {
     update(id, |s| {
-        let agent = Person { id: AGENT_ID, username: "agent".into(), name: as_name.map(str::to_string).unwrap_or_else(|| s.agent_name()) };
+        let agent = Person {
+            id: AGENT_ID,
+            username: "agent".into(),
+            name: as_name
+                .map(str::to_string)
+                .unwrap_or_else(|| s.agent_name()),
+        };
         let note_id = s.next();
-        let t = s.thread_mut(thread).with_context(|| format!("no thread {thread} in this review"))?;
+        let t = s
+            .thread_mut(thread)
+            .with_context(|| format!("no thread {thread} in this review"))?;
         let resolvable = t.notes.first().is_some_and(|n| n.resolvable);
         let body = body.trim();
         if !body.is_empty() {
@@ -491,12 +602,30 @@ pub fn launch(job: &AgentJob, exe: &str) -> anyhow::Result<Launch> {
     let file = dir.join(format!("prompt-{n}.md"));
     std::fs::write(&file, &prompt)?;
     let quoted = shell_quote(&file.to_string_lossy());
-    let what = if job.threads.len() == 1 { "a review comment" } else { "review comments" };
-    let title = format!("{} · {}", s.agent_name(), s.title.clone().unwrap_or_else(|| s.describe()));
+    let what = if job.threads.len() == 1 {
+        "a review comment"
+    } else {
+        "review comments"
+    };
+    let title = format!(
+        "{} · {}",
+        s.agent_name(),
+        s.title.clone().unwrap_or_else(|| s.describe())
+    );
     if let Some(t) = &s.send_to {
         // One line: a newline would send it half-typed.
-        let text = format!("Please handle {what} on the local diff: read {} and do what it says.", file.display());
-        return Ok(Launch { cwd: s.repo.clone(), command: None, send_to: Some(t.clone()), text: Some(text), title, prompt_file: file });
+        let text = format!(
+            "Please handle {what} on the local diff: read {} and do what it says.",
+            file.display()
+        );
+        return Ok(Launch {
+            cwd: s.repo.clone(),
+            command: None,
+            send_to: Some(t.clone()),
+            text: Some(text),
+            title,
+            prompt_file: file,
+        });
     }
     let arg = format!("\"$(cat {quoted})\"");
     let command = if s.agent.contains("{prompt_file}") {
@@ -506,7 +635,14 @@ pub fn launch(job: &AgentJob, exe: &str) -> anyhow::Result<Launch> {
     } else {
         format!("{} {arg}", s.agent)
     };
-    Ok(Launch { cwd: s.repo.clone(), command: Some(command), send_to: None, text: None, title, prompt_file: file })
+    Ok(Launch {
+        cwd: s.repo.clone(),
+        command: Some(command),
+        send_to: None,
+        text: None,
+        title,
+        prompt_file: file,
+    })
 }
 
 pub fn shell_quote(s: &str) -> String {
@@ -523,11 +659,20 @@ pub fn prompt(s: &Store, job: &AgentJob, exe: &str) -> anyhow::Result<String> {
     out.push_str(&format!(
         "{} left {} on a diff they're reviewing in AbroMux.\n\n",
         me().name,
-        if many { "review comments" } else if job.reply { "a reply to a review thread" } else { "a review comment" }
+        if many {
+            "review comments"
+        } else if job.reply {
+            "a reply to a review thread"
+        } else {
+            "a review comment"
+        }
     ));
     out.push_str(&format!("- Repository: {}\n", s.repo));
     let cmd = match &s.head {
-        None => format!("git diff {} (the working tree, untracked files too)", short(&r.base_sha)),
+        None => format!(
+            "git diff {} (the working tree, untracked files too)",
+            short(&r.base_sha)
+        ),
         Some(_) => format!("git diff {}..{}", short(&r.base_sha), short(&r.head_sha)),
     };
     out.push_str(&format!("- The diff: {} — `{cmd}`\n", s.describe()));
@@ -539,12 +684,23 @@ pub fn prompt(s: &Store, job: &AgentJob, exe: &str) -> anyhow::Result<String> {
         let Some(t) = s.thread(tid) else { continue };
         let heading = match t.position() {
             Some(p) => {
-                let line = p.new_line.map(|n| format!("line {n}")).or(p.old_line.map(|o| format!("removed line {o} (old side)")));
+                let line = p
+                    .new_line
+                    .map(|n| format!("line {n}"))
+                    .or(p.old_line.map(|o| format!("removed line {o} (old side)")));
                 format!("on `{}`, {}", p.path(), line.unwrap_or_default())
             }
             None => "on the whole diff".into(),
         };
-        out.push_str(&format!("## {}Thread {} {heading}\n\n", if many { format!("{}. ", i + 1) } else { String::new() }, t.id));
+        out.push_str(&format!(
+            "## {}Thread {} {heading}\n\n",
+            if many {
+                format!("{}. ", i + 1)
+            } else {
+                String::new()
+            },
+            t.id
+        ));
         if let Some(p) = t.position()
             && let Some(code) = excerpt(&files, p)
         {
@@ -559,11 +715,19 @@ pub fn prompt(s: &Store, job: &AgentJob, exe: &str) -> anyhow::Result<String> {
     out.push_str("## What to do\n\n");
     out.push_str(&format!(
         "- If a comment asks for a change, make it in {repo}{}. Keep to what's asked.\n",
-        if s.head.is_none() { " (in the working tree; don't commit unless asked)" } else { "" }
+        if s.head.is_none() {
+            " (in the working tree; don't commit unless asked)"
+        } else {
+            ""
+        }
     ));
     out.push_str("- If it's a question, answer it; don't change code unless asked.\n");
     out.push_str("- Then answer in its thread, so the reviewer sees it beside the code:\n\n");
-    let first = job.threads.first().map(String::as_str).unwrap_or("<thread>");
+    let first = job
+        .threads
+        .first()
+        .map(String::as_str)
+        .unwrap_or("<thread>");
     out.push_str(&format!(
         "```sh\n{} diff reply {} {first} --resolve <<'EOF'\nWhat you changed, or the answer.\nEOF\n```\n\n",
         shell_quote(exe),
@@ -600,7 +764,11 @@ fn excerpt(files: &[Value], p: &Pos) -> Option<String> {
                 crate::diff::Kind::Context => ' ',
                 crate::diff::Kind::NoNewline => continue,
             };
-            let mark = if from + i == at { "   <-- this line" } else { "" };
+            let mark = if from + i == at {
+                "   <-- this line"
+            } else {
+                ""
+            };
             out.push_str(&format!("{sign}{}{mark}\n", l.text));
         }
         return Some(out);
@@ -619,7 +787,9 @@ pub fn git(repo: &Path, args: &[&str]) -> anyhow::Result<Vec<u8>> {
 }
 
 fn git_text(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
-    Ok(String::from_utf8_lossy(&git(repo, args)?).trim().to_string())
+    Ok(String::from_utf8_lossy(&git(repo, args)?)
+        .trim()
+        .to_string())
 }
 
 /// The diff's two sides, as shas (the new one `WORKTREE` for the working tree).
@@ -631,13 +801,22 @@ pub struct Resolved {
 
 pub fn resolve(s: &Store) -> anyhow::Result<Resolved> {
     let repo = Path::new(&s.repo);
-    let commit = |rev: &str| git_text(repo, &["rev-parse", "--verify", &format!("{rev}^{{commit}}")]);
+    let commit = |rev: &str| {
+        git_text(
+            repo,
+            &["rev-parse", "--verify", &format!("{rev}^{{commit}}")],
+        )
+    };
     let head_sha = match &s.head {
         Some(h) => commit(h)?,
         None => WORKTREE.to_string(),
     };
     let base_sha = if s.merge_base {
-        let h = if head_sha == WORKTREE { "HEAD".to_string() } else { head_sha.clone() };
+        let h = if head_sha == WORKTREE {
+            "HEAD".to_string()
+        } else {
+            head_sha.clone()
+        };
         git_text(repo, &["merge-base", &s.base, &h])?
     } else {
         commit(&s.base)?
@@ -652,7 +831,16 @@ pub fn diffs(s: &Store, r: &Resolved) -> anyhow::Result<Vec<Value>> {
 
 /// `git diff from to` (to `WORKTREE`: the working tree, untracked files too).
 fn diff_between(repo: &Path, from: &str, to: &str) -> anyhow::Result<Vec<Value>> {
-    let mut args = vec!["diff", "--no-ext-diff", "--no-textconv", "-M", "--full-index", "--src-prefix=a/", "--dst-prefix=b/", from];
+    let mut args = vec![
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "-M",
+        "--full-index",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        from,
+    ];
     if to != WORKTREE {
         args.push(to);
     }
@@ -694,7 +882,9 @@ fn untracked(repo: &Path, path: &str) -> Value {
 
 /// `"a/x y"` → `x y`, undoing git's C-style quoting of odd names.
 fn unquote(p: &str) -> String {
-    let Some(inner) = p.strip_prefix('"').and_then(|p| p.strip_suffix('"')) else { return p.to_string() };
+    let Some(inner) = p.strip_prefix('"').and_then(|p| p.strip_suffix('"')) else {
+        return p.to_string();
+    };
     let mut out = String::new();
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {
@@ -740,16 +930,23 @@ pub fn parse_git_diff(text: &str) -> Vec<Value> {
             // `a/x b/x`: both halves the same unless renamed (then the
             // `rename` lines say), so the middle is the split.
             let (old, new) = match rest.len() % 2 {
-                1 if rest[..rest.len() / 2].strip_prefix("a/") == rest[rest.len() / 2 + 1..].strip_prefix("b/") => {
+                1 if rest[..rest.len() / 2].strip_prefix("a/")
+                    == rest[rest.len() / 2 + 1..].strip_prefix("b/") =>
+                {
                     let p = rest[2..rest.len() / 2].to_string();
                     (p.clone(), p)
                 }
                 _ => match rest.split_once(" b/") {
-                    Some((a, b)) => (unquote(a).trim_start_matches("a/").to_string(), b.to_string()),
+                    Some((a, b)) => (
+                        unquote(a).trim_start_matches("a/").to_string(),
+                        b.to_string(),
+                    ),
                     None => (rest.to_string(), rest.to_string()),
                 },
             };
-            out.push(json!({ "old_path": old, "new_path": new, "a_mode": "", "b_mode": "", "diff": "" }));
+            out.push(
+                json!({ "old_path": old, "new_path": new, "a_mode": "", "b_mode": "", "diff": "" }),
+            );
             continue;
         }
         let Some(f) = out.last_mut() else { continue };
@@ -785,7 +982,9 @@ pub fn parse_git_diff(text: &str) -> Vec<Value> {
             }
         } else if bare.starts_with("Binary files ") {
             f["diff"] = json!(line);
-        } else if let Some(m) = bare.strip_prefix("index ").and_then(|i| i.split_whitespace().nth(1))
+        } else if let Some(m) = bare
+            .strip_prefix("index ")
+            .and_then(|i| i.split_whitespace().nth(1))
             && f["a_mode"] == ""
         {
             f["a_mode"] = json!(m);
@@ -798,9 +997,21 @@ pub fn parse_git_diff(text: &str) -> Vec<Value> {
 
 /// The commits on the new side and not the old, newest first.
 fn commits(s: &Store, r: &Resolved) -> anyhow::Result<Vec<Value>> {
-    let head = if r.head_sha == WORKTREE { "HEAD" } else { &r.head_sha };
+    let head = if r.head_sha == WORKTREE {
+        "HEAD"
+    } else {
+        &r.head_sha
+    };
     let range = format!("{}..{head}", r.base_sha);
-    let out = git(Path::new(&s.repo), &["log", "--max-count=500", "--format=%H%x1f%h%x1f%s%x1f%B%x1f%an%x1f%ae%x1f%aI%x1f%cI%x1e", &range])?;
+    let out = git(
+        Path::new(&s.repo),
+        &[
+            "log",
+            "--max-count=500",
+            "--format=%H%x1f%h%x1f%s%x1f%B%x1f%an%x1f%ae%x1f%aI%x1f%cI%x1e",
+            &range,
+        ],
+    )?;
     Ok(String::from_utf8_lossy(&out)
         .split('\x1e')
         .filter_map(|rec| {
@@ -820,7 +1031,10 @@ fn raw(repo: &Path, path: &str, sha: &str) -> Option<Vec<u8>> {
     if sha == WORKTREE {
         let p = repo.join(path);
         // Only inside the repository.
-        let inside = p.canonicalize().ok()?.starts_with(repo.canonicalize().ok()?);
+        let inside = p
+            .canonicalize()
+            .ok()?
+            .starts_with(repo.canonicalize().ok()?);
         return inside.then(|| std::fs::read(p).ok()).flatten();
     }
     git(repo, &["show", &format!("{sha}:{path}")]).ok()
@@ -829,9 +1043,19 @@ fn raw(repo: &Path, path: &str, sha: &str) -> Option<Vec<u8>> {
 /// Something that changes when the review would look different: the store,
 /// the revisions, and (diffing the working tree) the files changed.
 pub fn signature(id: &str) -> String {
-    let Ok(s) = load(id) else { return String::new() };
+    let Ok(s) = load(id) else {
+        return String::new();
+    };
     let stamp = |p: &Path| {
-        std::fs::metadata(p).ok().map(|m| (m.len(), m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos())))
+        std::fs::metadata(p).ok().map(|m| {
+            (
+                m.len(),
+                m.modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_nanos()),
+            )
+        })
     };
     let mut sig = format!("{:?}", stamp(&path(id)));
     if let Ok(r) = resolve(&s) {
@@ -839,7 +1063,10 @@ pub fn signature(id: &str) -> String {
     }
     if s.head.is_none() {
         let repo = Path::new(&s.repo);
-        if let Ok(st) = git(repo, &["status", "--porcelain=v1", "-z", "--untracked-files=all"]) {
+        if let Ok(st) = git(
+            repo,
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        ) {
             let st = String::from_utf8_lossy(&st).into_owned();
             sig.push_str(&format!("|{}", hash(&st)));
             for entry in st.split('\0').filter(|e| e.len() > 3) {
@@ -860,7 +1087,11 @@ fn me() -> Person {
             .ok()
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| username.clone());
-        Person { id: ME_ID, username, name }
+        Person {
+            id: ME_ID,
+            username,
+            name,
+        }
     })
     .clone()
 }
@@ -887,18 +1118,29 @@ pub struct LocalGitLab {
 
 impl LocalGitLab {
     pub fn new(id: &str) -> Self {
-        Self { id: id.to_string(), snap: Mutex::new(None) }
+        Self {
+            id: id.to_string(),
+            snap: Mutex::new(None),
+        }
     }
 
     fn snapshot<T>(&self, f: impl FnOnce(&Snapshot) -> T) -> anyhow::Result<T> {
         let mut snap = self.snap.lock().unwrap_or_else(|e| e.into_inner());
         let store = load(&self.id)?;
-        let fresh = snap.as_ref().is_some_and(|s| s.at.elapsed() < Duration::from_secs(2) && s.store == store);
+        let fresh = snap
+            .as_ref()
+            .is_some_and(|s| s.at.elapsed() < Duration::from_secs(2) && s.store == store);
         if !fresh {
             let resolved = resolve(&store)?;
             let diffs = diffs(&store, &resolved)?;
             let commits = commits(&store, &resolved).unwrap_or_default();
-            *snap = Some(Snapshot { at: Instant::now(), store, resolved, diffs, commits });
+            *snap = Some(Snapshot {
+                at: Instant::now(),
+                store,
+                resolved,
+                diffs,
+                commits,
+            });
         }
         Ok(f(snap.as_ref().unwrap()))
     }
@@ -909,17 +1151,33 @@ impl LocalGitLab {
 
     fn mr(&self, s: &Snapshot) -> Value {
         let st = &s.store;
-        let repo_name = Path::new(&st.repo).file_name().map_or("repo".into(), |n| n.to_string_lossy().into_owned());
-        let unresolved = st.threads.iter().filter(|t| t.notes.iter().any(|n| n.resolvable) && !t.resolved()).count();
+        let repo_name = Path::new(&st.repo)
+            .file_name()
+            .map_or("repo".into(), |n| n.to_string_lossy().into_owned());
+        let unresolved = st
+            .threads
+            .iter()
+            .filter(|t| t.notes.iter().any(|n| n.resolvable) && !t.resolved())
+            .count();
         let notes: usize = st.threads.iter().map(|t| t.notes.len()).sum();
-        let title = st.title.clone().unwrap_or_else(|| match (&st.head, s.commits.len()) {
-            (Some(_), 1) => s.commits[0]["title"].as_str().unwrap_or_default().to_string(),
-            _ => st.describe(),
-        });
+        let title = st
+            .title
+            .clone()
+            .unwrap_or_else(|| match (&st.head, s.commits.len()) {
+                (Some(_), 1) => s.commits[0]["title"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                _ => st.describe(),
+            });
         let cmd = match &st.head {
             None if st.merge_base => format!("git diff --merge-base {}", st.base),
             None => format!("git diff {}", st.base),
-            Some(h) => format!("git diff {}{}{h}", st.base, if st.merge_base { "..." } else { ".." }),
+            Some(h) => format!(
+                "git diff {}{}{h}",
+                st.base,
+                if st.merge_base { "..." } else { ".." }
+            ),
         };
         let agent = match &st.send_to {
             Some(t) => format!("sent to the agent in `{t}`"),
@@ -952,7 +1210,9 @@ impl LocalGitLab {
     }
 
     fn project(&self, s: &Snapshot) -> Value {
-        let name = Path::new(&s.store.repo).file_name().map_or("repo".into(), |n| n.to_string_lossy().into_owned());
+        let name = Path::new(&s.store.repo)
+            .file_name()
+            .map_or("repo".into(), |n| n.to_string_lossy().into_owned());
         json!({
             "id": PROJECT, "name": name, "name_with_namespace": format!("local / {name}"),
             "path_with_namespace": format!("local/{name}"), "default_branch": s.store.base, "web_url": "",
@@ -967,9 +1227,17 @@ impl LocalGitLab {
     /// GET `path` (after `/api/v4/`, query kept).
     fn answer(&self, path: &str) -> anyhow::Result<Answer> {
         let (route, query) = path.split_once('?').unwrap_or((path, ""));
-        let q = |k: &str| query.split('&').find_map(|kv| kv.strip_prefix(k)?.strip_prefix('=')).map(decode);
+        let q = |k: &str| {
+            query
+                .split('&')
+                .find_map(|kv| kv.strip_prefix(k)?.strip_prefix('='))
+                .map(decode)
+        };
         // Lists come whole on their first page.
-        if q("page").and_then(|p| p.parse::<u32>().ok()).is_some_and(|p| p > 1) {
+        if q("page")
+            .and_then(|p| p.parse::<u32>().ok())
+            .is_some_and(|p| p > 1)
+        {
             return Ok(Answer::List(vec![]));
         }
         let parts: Vec<&str> = route.split('/').collect();
@@ -1034,22 +1302,45 @@ impl LocalGitLab {
         let (route, query) = path.split_once('?').unwrap_or((path, ""));
         let parts: Vec<&str> = route.split('/').collect();
         let text = |k: &str| body[k].as_str().unwrap_or_default().trim().to_string();
-        let position = || serde_json::from_value::<Pos>(body["position"].clone()).ok().filter(|_| body["position"].is_object());
+        let position = || {
+            serde_json::from_value::<Pos>(body["position"].clone())
+                .ok()
+                .filter(|_| body["position"].is_object())
+        };
         let id = self.id.clone();
         self.forget();
         let out = match (method, parts.as_slice()) {
             // A comment on the whole diff: a thread, so the agent can answer in it.
             ("POST", ["projects", _, "merge_requests", _, "notes"]) => {
                 let t = update(&id, |s| Ok(new_thread(s, text("body"), None)))?;
-                queue(AgentJob { review: id, threads: vec![t.id.clone()], reply: false });
+                queue(AgentJob {
+                    review: id,
+                    threads: vec![t.id.clone()],
+                    reply: false,
+                });
                 Answer::One(json!(t.notes[0]))
             }
             ("POST", ["projects", _, "merge_requests", _, "discussions"]) => {
                 let t = update(&id, |s| Ok(new_thread(s, text("body"), position())))?;
-                queue(AgentJob { review: id, threads: vec![t.id.clone()], reply: false });
+                queue(AgentJob {
+                    review: id,
+                    threads: vec![t.id.clone()],
+                    reply: false,
+                });
                 Answer::One(json!(t))
             }
-            ("POST", ["projects", _, "merge_requests", _, "discussions", thread, "notes"]) => {
+            (
+                "POST",
+                [
+                    "projects",
+                    _,
+                    "merge_requests",
+                    _,
+                    "discussions",
+                    thread,
+                    "notes",
+                ],
+            ) => {
                 let thread = decode(thread);
                 let note = update(&id, |s| {
                     let n = s.next();
@@ -1066,7 +1357,11 @@ impl LocalGitLab {
                     t.notes.push(note.clone());
                     Ok(note)
                 })?;
-                queue(AgentJob { review: id, threads: vec![thread], reply: true });
+                queue(AgentJob {
+                    review: id,
+                    threads: vec![thread],
+                    reply: true,
+                });
                 Answer::One(json!(note))
             }
             ("PUT", ["projects", _, "merge_requests", _, "discussions", thread]) => {
@@ -1081,7 +1376,11 @@ impl LocalGitLab {
             }
             ("POST", ["projects", _, "merge_requests", _, "draft_notes"]) => {
                 let d = update(&id, |s| {
-                    let d = Draft { id: s.next(), note: text("note"), position: position() };
+                    let d = Draft {
+                        id: s.next(),
+                        note: text("note"),
+                        position: position(),
+                    };
                     s.drafts.push(d.clone());
                     Ok(d)
                 })?;
@@ -1096,17 +1395,43 @@ impl LocalGitLab {
                 Answer::One(Value::Null)
             }
             // Submitting a review: its comments become threads, for one agent.
-            ("POST", ["projects", _, "merge_requests", _, "draft_notes", "bulk_publish"]) => {
+            (
+                "POST",
+                [
+                    "projects",
+                    _,
+                    "merge_requests",
+                    _,
+                    "draft_notes",
+                    "bulk_publish",
+                ],
+            ) => {
                 let ids = update(&id, |s| {
                     let drafts = std::mem::take(&mut s.drafts);
-                    Ok(drafts.into_iter().map(|d| new_thread(s, d.note, d.position).id).collect::<Vec<_>>())
+                    Ok(drafts
+                        .into_iter()
+                        .map(|d| new_thread(s, d.note, d.position).id)
+                        .collect::<Vec<_>>())
                 })?;
                 if !ids.is_empty() {
-                    queue(AgentJob { review: id, threads: ids, reply: false });
+                    queue(AgentJob {
+                        review: id,
+                        threads: ids,
+                        reply: false,
+                    });
                 }
                 Answer::One(Value::Null)
             }
-            ("POST", ["projects", _, "merge_requests", _, what @ ("approve" | "unapprove")]) => {
+            (
+                "POST",
+                [
+                    "projects",
+                    _,
+                    "merge_requests",
+                    _,
+                    what @ ("approve" | "unapprove"),
+                ],
+            ) => {
                 let approve = *what == "approve";
                 update(&id, |s| {
                     s.approved = approve;
@@ -1124,7 +1449,9 @@ impl LocalGitLab {
                 }
                 Answer::One(self.snapshot(|s| self.mr(s))?)
             }
-            ("POST" | "DELETE", ["projects", _, "merge_requests", _, "award_emoji", ..]) => Answer::One(json!({})),
+            ("POST" | "DELETE", ["projects", _, "merge_requests", _, "award_emoji", ..]) => {
+                Answer::One(json!({}))
+            }
             (_, ["graphql"]) => Answer::One(json!({ "data": {} })),
             _ => bail!("a local diff can't do that ({method} {route})"),
         };
@@ -1133,21 +1460,36 @@ impl LocalGitLab {
 
     fn route<'a>(&self, url: &'a str) -> anyhow::Result<&'a str> {
         let host = host_of(&self.id);
-        let rest = url.strip_prefix(&host).with_context(|| format!("{url} isn't on {host}"))?;
-        Ok(rest.strip_prefix("/api/v4/").or_else(|| rest.strip_prefix("/api/")).unwrap_or(rest))
+        let rest = url
+            .strip_prefix(&host)
+            .with_context(|| format!("{url} isn't on {host}"))?;
+        Ok(rest
+            .strip_prefix("/api/v4/")
+            .or_else(|| rest.strip_prefix("/api/"))
+            .unwrap_or(rest))
     }
 }
 
 /// A new thread in `s`, by you.
 fn new_thread(s: &mut Store, body: String, position: Option<Pos>) -> Thread {
     let n = s.next();
-    let id = format!("{:x}", hash(&format!("{}-{n}-{}", s.id, now_iso())) & 0xffff_ffff);
+    let id = format!(
+        "{:x}",
+        hash(&format!("{}-{n}-{}", s.id, now_iso())) & 0xffff_ffff
+    );
     let t = Thread {
         id,
         individual_note: false,
         notes: vec![StoredNote {
             id: n,
-            kind: Some(if position.is_some() { "DiffNote" } else { "DiscussionNote" }.into()),
+            kind: Some(
+                if position.is_some() {
+                    "DiffNote"
+                } else {
+                    "DiscussionNote"
+                }
+                .into(),
+            ),
             body,
             author: me(),
             created_at: now_iso(),
@@ -1171,7 +1513,10 @@ fn decode(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         match b[i] {
-            b'%' if i + 2 < b.len() => match std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
+            b'%' if i + 2 < b.len() => match std::str::from_utf8(&b[i + 1..i + 3])
+                .ok()
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+            {
                 Some(v) => {
                     out.push(v);
                     i += 3;
@@ -1197,10 +1542,27 @@ enum Answer {
 impl Answer {
     fn response(self) -> Response {
         match self {
-            Answer::One(v) => Response { status: 200, body: v.to_string().into_bytes(), ..Default::default() },
-            Answer::List(v) => Response { status: 200, total: Some(v.len() as u64), body: Value::Array(v).to_string().into_bytes(), ..Default::default() },
-            Answer::Bytes(b) => Response { status: 200, body: b, ..Default::default() },
-            Answer::Missing => Response { status: 404, body: br#"{"message":"404 Not found"}"#.to_vec(), ..Default::default() },
+            Answer::One(v) => Response {
+                status: 200,
+                body: v.to_string().into_bytes(),
+                ..Default::default()
+            },
+            Answer::List(v) => Response {
+                status: 200,
+                total: Some(v.len() as u64),
+                body: Value::Array(v).to_string().into_bytes(),
+                ..Default::default()
+            },
+            Answer::Bytes(b) => Response {
+                status: 200,
+                body: b,
+                ..Default::default()
+            },
+            Answer::Missing => Response {
+                status: 404,
+                body: br#"{"message":"404 Not found"}"#.to_vec(),
+                ..Default::default()
+            },
         }
     }
 }
@@ -1224,12 +1586,54 @@ mod tests {
 
     #[test]
     fn specs() {
-        assert_eq!(parse_spec(""), Spec { base: "HEAD".into(), head: None, merge_base: false });
-        assert_eq!(parse_spec("main"), Spec { base: "main".into(), head: None, merge_base: false });
-        assert_eq!(parse_spec("main..x"), Spec { base: "main".into(), head: Some("x".into()), merge_base: false });
-        assert_eq!(parse_spec("main...x"), Spec { base: "main".into(), head: Some("x".into()), merge_base: true });
-        assert_eq!(parse_spec("..x"), Spec { base: "HEAD".into(), head: Some("x".into()), merge_base: false });
-        assert_eq!(parse_spec("--merge-base origin/main"), Spec { base: "origin/main".into(), head: None, merge_base: true });
+        assert_eq!(
+            parse_spec(""),
+            Spec {
+                base: "HEAD".into(),
+                head: None,
+                merge_base: false
+            }
+        );
+        assert_eq!(
+            parse_spec("main"),
+            Spec {
+                base: "main".into(),
+                head: None,
+                merge_base: false
+            }
+        );
+        assert_eq!(
+            parse_spec("main..x"),
+            Spec {
+                base: "main".into(),
+                head: Some("x".into()),
+                merge_base: false
+            }
+        );
+        assert_eq!(
+            parse_spec("main...x"),
+            Spec {
+                base: "main".into(),
+                head: Some("x".into()),
+                merge_base: true
+            }
+        );
+        assert_eq!(
+            parse_spec("..x"),
+            Spec {
+                base: "HEAD".into(),
+                head: Some("x".into()),
+                merge_base: false
+            }
+        );
+        assert_eq!(
+            parse_spec("--merge-base origin/main"),
+            Spec {
+                base: "origin/main".into(),
+                head: None,
+                merge_base: true
+            }
+        );
     }
 
     #[test]
@@ -1242,8 +1646,18 @@ diff --git a/img.png b/img.png\nnew file mode 100644\nindex 000..444\nBinary fil
         assert_eq!(f.len(), 4);
         assert_eq!(f[0]["new_path"], "src/a b.rs");
         assert_eq!(f[0]["diff"], "@@ -1,2 +1,2 @@\n a\n-b\n+c\n");
-        assert_eq!((f[1]["old_path"].as_str(), f[1]["new_path"].as_str(), f[1]["renamed_file"].as_bool()), (Some("old.txt"), Some("new.txt"), Some(true)));
-        assert_eq!((f[2]["old_path"].as_str(), f[2]["deleted_file"].as_bool()), (Some("gone"), Some(true)));
+        assert_eq!(
+            (
+                f[1]["old_path"].as_str(),
+                f[1]["new_path"].as_str(),
+                f[1]["renamed_file"].as_bool()
+            ),
+            (Some("old.txt"), Some("new.txt"), Some(true))
+        );
+        assert_eq!(
+            (f[2]["old_path"].as_str(), f[2]["deleted_file"].as_bool()),
+            (Some("gone"), Some(true))
+        );
         assert!(f[3]["diff"].as_str().unwrap().starts_with("Binary files"));
         assert_eq!(f[3]["new_file"], true);
     }

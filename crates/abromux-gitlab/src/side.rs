@@ -6,6 +6,8 @@
 //! A milestone is one pick, saved at once. "assign yourself" and a label's
 //! × save straight away too.
 
+#[allow(unused_imports)]
+use crate::style::px;
 use crate::{
     review::Review,
     style::*,
@@ -13,8 +15,6 @@ use crate::{
     view::GitLabView,
 };
 use gpui::{prelude::*, *};
-#[allow(unused_imports)]
-use crate::style::px;
 use gpui_component::input::Input;
 use serde_json::json;
 use std::time::{Duration, Instant};
@@ -62,12 +62,21 @@ pub struct Pick {
 
 impl GitLabView {
     /// Open dropdown `m` with what's set now ticked (or close it if open).
-    pub(crate) fn toggle_side_menu(&mut self, m: SideMenu, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_side_menu(
+        &mut self,
+        m: SideMenu,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.side_menu == Some(m) {
             self.close_side_menu(window, cx);
             return;
         }
-        if self.pick.closed.is_some_and(|(c, at)| c == m && at.elapsed() < Duration::from_millis(300)) {
+        if self
+            .pick
+            .closed
+            .is_some_and(|(c, at)| c == m && at.elapsed() < Duration::from_millis(300))
+        {
             return;
         }
         if self.side_menu.is_some() {
@@ -90,15 +99,27 @@ impl GitLabView {
 
     /// Close the open dropdown, saving its picks if they changed.
     pub(crate) fn close_side_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(m) = self.side_menu.take() else { return };
+        let Some(m) = self.side_menu.take() else {
+            return;
+        };
         window.focus(&self.focus);
         cx.notify();
         let Some(r) = self.review.ready() else { return };
         let ids = |us: &[User]| us.iter().map(|u| u.id).collect::<Vec<_>>();
         let fields = match m {
-            SideMenu::Assignees if ids(&r.mr.assignees) != self.pick.people => json!({ "assignee_ids": self.pick.people }),
-            SideMenu::Reviewers if ids(&r.mr.reviewers) != self.pick.people => json!({ "reviewer_ids": self.pick.people }),
-            SideMenu::Labels if r.mr.labels.iter().map(|l| &l.name).ne(self.pick.labels.iter()) => {
+            SideMenu::Assignees if ids(&r.mr.assignees) != self.pick.people => {
+                json!({ "assignee_ids": self.pick.people })
+            }
+            SideMenu::Reviewers if ids(&r.mr.reviewers) != self.pick.people => {
+                json!({ "reviewer_ids": self.pick.people })
+            }
+            SideMenu::Labels
+                if r.mr
+                    .labels
+                    .iter()
+                    .map(|l| &l.name)
+                    .ne(self.pick.labels.iter()) =>
+            {
                 json!({ "labels": self.pick.labels.join(",") })
             }
             _ => return,
@@ -107,11 +128,30 @@ impl GitLabView {
     }
 
     /// PUT the merge request's `fields` (shown at once), then fetch it again.
-    pub(crate) fn save_side(&mut self, fields: serde_json::Value, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn save_side(
+        &mut self,
+        fields: serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Who the picker found by searching GitLab, for the ids it names.
-        let people = self.people_found.as_ref().map(|(_, p)| p.clone()).unwrap_or_default();
-        let patch = crate::optimistic::Patch::Fields { fields: fields.clone(), people };
-        self.write(crate::edit::Write::Sidebar, Some(patch), move |c, p, iid| c.update(p, iid, fields).map(|_| ()), |_, _, _| {}, window, cx);
+        let people = self
+            .people_found
+            .as_ref()
+            .map(|(_, p)| p.clone())
+            .unwrap_or_default();
+        let patch = crate::optimistic::Patch::Fields {
+            fields: fields.clone(),
+            people,
+        };
+        self.write(
+            crate::edit::Write::Sidebar,
+            Some(patch),
+            move |c, p, iid| c.update(p, iid, fields).map(|_| ()),
+            |_, _, _| {},
+            window,
+            cx,
+        );
     }
 
     /// Tick or untick a person or a label in the open dropdown; pick a
@@ -120,11 +160,16 @@ impl GitLabView {
         // One allowed (GitLab's free tier): a pick replaces, and saves.
         let multiple = self.review.ready().map(|r| r.multiple);
         let single = match (self.side_menu, multiple) {
-            (Some(SideMenu::Assignees), Some((m, _))) | (Some(SideMenu::Reviewers), Some((_, m))) => !m,
+            (Some(SideMenu::Assignees), Some((m, _)))
+            | (Some(SideMenu::Reviewers), Some((_, m))) => !m,
             _ => false,
         };
         if single {
-            self.pick.people = if self.pick.people == [id] { vec![] } else { vec![id] };
+            self.pick.people = if self.pick.people == [id] {
+                vec![]
+            } else {
+                vec![id]
+            };
             self.close_side_menu(window, cx);
             return;
         }
@@ -154,8 +199,13 @@ impl GitLabView {
     /// The people picker's search, on a project with more members than were
     /// loaded: asked of GitLab, the latest query's answer kept.
     pub(crate) fn search_people(&mut self, cx: &mut Context<Self>) {
-        let people = matches!(self.side_menu, Some(SideMenu::Assignees | SideMenu::Reviewers));
-        let (Some(r), Some(c)) = (self.review.ready().cloned(), self.client.clone()) else { return };
+        let people = matches!(
+            self.side_menu,
+            Some(SideMenu::Assignees | SideMenu::Reviewers)
+        );
+        let (Some(r), Some(c)) = (self.review.ready().cloned(), self.client.clone()) else {
+            return;
+        };
         let query = self.boxes.search.read(cx).value().trim().to_lowercase();
         if !people || !r.members_more || query.is_empty() {
             self.people_found = None;
@@ -164,16 +214,22 @@ impl GitLabView {
         let project = r.mr.project_id;
         self._people_task = Some(cx.spawn(async move |this, cx| {
             let q = query.clone();
-            let got = cx.background_spawn(async move { c.search_members(project, &q) }).await;
+            let got = cx
+                .background_spawn(async move { c.search_members(project, &q) })
+                .await;
             this.update(cx, |v, cx| {
                 if let Ok(found) = got {
                     let mut people: Vec<User> = vec![];
-                    for m in found.iter().filter(|m| m.state.is_empty() || m.state == "active") {
+                    for m in found
+                        .iter()
+                        .filter(|m| m.state.is_empty() || m.state == "active")
+                    {
                         if !people.iter().any(|p| p.id == m.id) {
                             people.push(m.user());
                         }
                     }
-                    v.avatars.want(people.iter().collect::<Vec<_>>(), cx, |v| &mut v.avatars);
+                    v.avatars
+                        .want(people.iter().collect::<Vec<_>>(), cx, |v| &mut v.avatars);
                     v.people_found = Some((query, people));
                     cx.notify();
                 }
@@ -193,7 +249,9 @@ impl GitLabView {
         let person = |u: &User, review: Option<&str>| {
             let state = review.map(|s| match s {
                 "approved" => ("check-circle", c(GREEN), "Reviewer approved changes"),
-                "requested_changes" => ("minus-circle-filled", c(RED), "Reviewer requested changes"),
+                "requested_changes" => {
+                    ("minus-circle-filled", c(RED), "Reviewer requested changes")
+                }
                 "reviewed" => ("comment-lines", c(LINK), "Reviewer commented"),
                 "review_started" => ("comment", c(LINK), "Reviewer started review"),
                 _ => ("circle-dashed", c(MUTED), "Awaiting review"),
@@ -217,84 +275,131 @@ impl GitLabView {
         // GitLab's participants: the author, who's on it, who commented, and
         // whoever its own notes name as acting ("Administrator added 1 commit").
         let mut participants: Vec<&User> = vec![&r.mr.author];
-        let threads = r.general.iter().chain(r.outdated.iter()).chain(r.files.iter().flat_map(|f| f.threads.iter().map(|(_, _, d)| d)));
-        let commenters = threads.flat_map(|d| d.notes.iter()).chain(&r.system).map(|n| &n.author);
-        for u in r.mr.assignees.iter().chain(&r.mr.reviewers).chain(commenters) {
+        let threads = r.general.iter().chain(r.outdated.iter()).chain(
+            r.files
+                .iter()
+                .flat_map(|f| f.threads.iter().map(|(_, _, d)| d)),
+        );
+        let commenters = threads
+            .flat_map(|d| d.notes.iter())
+            .chain(&r.system)
+            .map(|n| &n.author);
+        for u in
+            r.mr.assignees
+                .iter()
+                .chain(&r.mr.reviewers)
+                .chain(commenters)
+        {
             if u.id != 0 && !participants.iter().any(|p| p.id == u.id) {
                 participants.push(u);
             }
         }
         let me = self.me.clone();
         // "None - assign yourself", as GitLab offers.
-        let assign_me = me.filter(|_| editable && r.mr.assignees.is_empty()).map(|me| {
-            div()
-                .flex()
-                .gap_1()
-                .text_color(c(MUTED))
-                .child("None -")
-                .child(
-                    div()
-                        .id("gl-assign-me")
-                        .text_color(c(LINK))
-                        .cursor_pointer()
-                        .hover(|s| s.underline())
-                        .child("assign yourself")
-                        .on_click(cx.listener(move |v, _, window, cx| v.save_side(json!({ "assignee_ids": [me.id] }), window, cx))),
-                )
-        });
-        let labels = div().flex().flex_wrap().gap_1().children(r.mr.labels.iter().map(|l| {
-            let name = l.name.clone();
-            label_pill(l).when(editable, |p| {
-                // GitLab's × on a label removes it.
-                let fg = if l.text_color.is_empty() { c(TEXT) } else { hex(&l.text_color) };
-                p.flex().items_center().gap_1().child(
-                    div()
-                        .id(SharedString::from(format!("gl-unlabel-{name}")))
-                        .cursor_pointer()
-                        .rounded_full()
-                        .hover(|s| s.bg(ca(0x00000033)))
-                        .child(app_icon("close", 12., fg))
-                        .on_click(cx.listener(move |v, _, window, cx| {
-                            v.save_side(json!({ "remove_labels": name }), window, cx)
-                        })),
-                )
-            })
-        }));
+        let assign_me = me
+            .filter(|_| editable && r.mr.assignees.is_empty())
+            .map(|me| {
+                div()
+                    .flex()
+                    .gap_1()
+                    .text_color(c(MUTED))
+                    .child("None -")
+                    .child(
+                        div()
+                            .id("gl-assign-me")
+                            .text_color(c(LINK))
+                            .cursor_pointer()
+                            .hover(|s| s.underline())
+                            .child("assign yourself")
+                            .on_click(cx.listener(move |v, _, window, cx| {
+                                v.save_side(json!({ "assignee_ids": [me.id] }), window, cx)
+                            })),
+                    )
+            });
+        let labels = div()
+            .flex()
+            .flex_wrap()
+            .gap_1()
+            .children(r.mr.labels.iter().map(|l| {
+                let name = l.name.clone();
+                label_pill(l).when(editable, |p| {
+                    // GitLab's × on a label removes it.
+                    let fg = if l.text_color.is_empty() {
+                        c(TEXT)
+                    } else {
+                        hex(&l.text_color)
+                    };
+                    p.flex().items_center().gap_1().child(
+                        div()
+                            .id(SharedString::from(format!("gl-unlabel-{name}")))
+                            .cursor_pointer()
+                            .rounded_full()
+                            .hover(|s| s.bg(ca(0x00000033)))
+                            .child(app_icon("close", 12., fg))
+                            .on_click(cx.listener(move |v, _, window, cx| {
+                                v.save_side(json!({ "remove_labels": name }), window, cx)
+                            })),
+                    )
+                })
+            }));
         div()
             .w(px(290.))
             .flex_none()
             .flex()
             .flex_col()
             .child(
-                self.block(if r.mr.assignees.len() > 1 { "Assignees" } else { "Assignee" }, editable.then_some(SideMenu::Assignees), r, cx)
-                    .when(r.mr.assignees.is_empty(), |d| match assign_me {
-                        Some(a) => d.child(a),
-                        None => d.child(none()),
-                    })
-                    .children(r.mr.assignees.iter().map(|u| person(u, None))),
+                self.block(
+                    if r.mr.assignees.len() > 1 {
+                        "Assignees"
+                    } else {
+                        "Assignee"
+                    },
+                    editable.then_some(SideMenu::Assignees),
+                    r,
+                    cx,
+                )
+                .when(r.mr.assignees.is_empty(), |d| match assign_me {
+                    Some(a) => d.child(a),
+                    None => d.child(none()),
+                })
+                .children(r.mr.assignees.iter().map(|u| person(u, None))),
             )
             .child(
-                self.block(if r.mr.reviewers.len() > 1 { "Reviewers" } else { "Reviewer" }, editable.then_some(SideMenu::Reviewers), r, cx)
-                    .when(r.mr.reviewers.is_empty(), |d| d.child(none()))
-                    .children(r.mr.reviewers.iter().map(|u| {
-                        // GitLab's own word on it, else what the approvals say.
-                        let state = r
-                            .review_states
-                            .get(&u.id)
-                            .map(String::as_str)
-                            .unwrap_or(if approved.contains(&u.id) { "approved" } else { "unreviewed" });
-                        person(u, Some(state))
-                    })),
+                self.block(
+                    if r.mr.reviewers.len() > 1 {
+                        "Reviewers"
+                    } else {
+                        "Reviewer"
+                    },
+                    editable.then_some(SideMenu::Reviewers),
+                    r,
+                    cx,
+                )
+                .when(r.mr.reviewers.is_empty(), |d| d.child(none()))
+                .children(r.mr.reviewers.iter().map(|u| {
+                    // GitLab's own word on it, else what the approvals say.
+                    let state = r.review_states.get(&u.id).map(String::as_str).unwrap_or(
+                        if approved.contains(&u.id) {
+                            "approved"
+                        } else {
+                            "unreviewed"
+                        },
+                    );
+                    person(u, Some(state))
+                })),
             )
             .child(
                 self.block("Labels", editable.then_some(SideMenu::Labels), r, cx)
                     .when(r.mr.labels.is_empty(), |d| d.child(none()))
                     .child(labels),
             )
-            .child(self.block("Milestone", editable.then_some(SideMenu::Milestone), r, cx).child(match &r.mr.milestone {
-                Some(m) => div().text_color(c(TEXT)).child(m.title.clone()),
-                None => none(),
-            }))
+            .child(
+                self.block("Milestone", editable.then_some(SideMenu::Milestone), r, cx)
+                    .child(match &r.mr.milestone {
+                        Some(m) => div().text_color(c(TEXT)).child(m.title.clone()),
+                        None => none(),
+                    }),
+            )
             // GitLab's "Work items": what merging closes.
             .child(
                 self.block("Work items", None, r, cx)
@@ -308,27 +413,68 @@ impl GitLabView {
                             .min_w(px(0.))
                             .cursor_pointer()
                             .hover(|s| s.underline())
-                            .child(div().flex_none().text_color(c(MUTED)).child(format!("#{}", i.iid)))
-                            .child(div().truncate().text_color(c(if i.state == "closed" { MUTED } else { TEXT })).child(i.title.clone()))
-                            .on_click(move |_, window, cx| abromux_plugin::open_url(&url, window, cx))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(c(MUTED))
+                                    .child(format!("#{}", i.iid)),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_color(c(if i.state == "closed" { MUTED } else { TEXT }))
+                                    .child(i.title.clone()),
+                            )
+                            .on_click(move |_, window, cx| {
+                                abromux_plugin::open_url(&url, window, cx)
+                            })
                     })),
             )
-            .child(self.block("Time tracking", None, r, cx).child(time_tracking(&r.mr.time_stats)))
             .child(
-                self.block(&format!("{} Participant{}", participants.len(), if participants.len() == 1 { "" } else { "s" }), None, r, cx)
-                    .child(div().flex().flex_wrap().gap_1().children(participants.iter().map(|u| self.avatars.of(u, 24.)))),
+                self.block("Time tracking", None, r, cx)
+                    .child(time_tracking(&r.mr.time_stats)),
+            )
+            .child(
+                self.block(
+                    &format!(
+                        "{} Participant{}",
+                        participants.len(),
+                        if participants.len() == 1 { "" } else { "s" }
+                    ),
+                    None,
+                    r,
+                    cx,
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .children(participants.iter().map(|u| self.avatars.of(u, 24.))),
+                ),
             )
     }
 
     /// A sidebar block: its title, GitLab's "Edit" and, open, its dropdown.
-    fn block(&self, title: &str, menu: Option<SideMenu>, r: &Review, cx: &mut Context<Self>) -> Div {
+    fn block(
+        &self,
+        title: &str,
+        menu: Option<SideMenu>,
+        r: &Review,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let head = div()
             .relative()
             .flex()
             .items_center()
             .justify_between()
             .h(px(24.))
-            .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(TEXT)).child(title.to_string()))
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(c(TEXT))
+                    .child(title.to_string()),
+            )
             .children(menu.map(|m| {
                 let open = self.side_menu == Some(m);
                 div()
@@ -343,16 +489,34 @@ impl GitLabView {
                     .hover(|s| s.bg(ca(0x89888d40)))
                     .when(open, |d| d.bg(ca(0x89888d40)))
                     .child("Edit")
-                    .on_click(cx.listener(move |v, _, window, cx| v.toggle_side_menu(m, window, cx)))
+                    .on_click(
+                        cx.listener(move |v, _, window, cx| v.toggle_side_menu(m, window, cx)),
+                    )
             }))
-            .children(menu.filter(|m| self.side_menu == Some(*m)).map(|m| self.dropdown(m, r, cx)));
-        div().flex().flex_col().gap_1().pt_3().pb_4().border_b_1().border_color(c(RAISED)).child(head)
+            .children(
+                menu.filter(|m| self.side_menu == Some(*m))
+                    .map(|m| self.dropdown(m, r, cx)),
+            );
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .pt_3()
+            .pb_4()
+            .border_b_1()
+            .border_color(c(RAISED))
+            .child(head)
     }
 
     fn dropdown(&self, m: SideMenu, r: &Review, cx: &mut Context<Self>) -> impl IntoElement {
         let query = self.boxes.search.read(cx).value().trim().to_lowercase();
         let hits = |s: &str| query.is_empty() || s.to_lowercase().contains(&query);
-        let check = |on: bool| div().w(px(16.)).flex_none().when(on, |d| d.child(app_icon("check", 14., c(TEXT))));
+        let check = |on: bool| {
+            div()
+                .w(px(16.))
+                .flex_none()
+                .when(on, |d| d.child(app_icon("check", 14., c(TEXT))))
+        };
         let item = |id: SharedString| {
             div()
                 .id(id)
@@ -367,20 +531,44 @@ impl GitLabView {
                 .hover(|s| s.bg(c(RAISED)))
         };
         let section = |t: &'static str| {
-            div().px_3().pt_2().pb_1().text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(c(TEXT)).child(t)
+            div()
+                .px_3()
+                .pt_2()
+                .pb_1()
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(c(TEXT))
+                .child(t)
         };
         let mut rows: Vec<AnyElement> = vec![];
         match m {
             SideMenu::Assignees | SideMenu::Reviewers => {
                 // Who's on it first, as GitLab lists them, then everyone else.
-                let current = if m == SideMenu::Assignees { &r.mr.assignees } else { &r.mr.reviewers };
+                let current = if m == SideMenu::Assignees {
+                    &r.mr.assignees
+                } else {
+                    &r.mr.reviewers
+                };
                 let mut people: Vec<&User> = current.iter().collect();
                 // A big project's search is GitLab's (`search_people`); else the loaded members'.
-                let found = self.people_found.as_ref().filter(|(q, _)| *q == query).map(|(_, f)| f);
+                let found = self
+                    .people_found
+                    .as_ref()
+                    .filter(|(q, _)| *q == query)
+                    .map(|(_, f)| f);
                 let pool = found.unwrap_or(&r.members);
-                people.extend(pool.iter().filter(|u| !current.iter().any(|c| c.id == u.id)));
-                let people: Vec<&User> = people.into_iter().filter(|u| hits(&u.name) || hits(&u.username)).collect();
-                let first = people.iter().take_while(|u| current.iter().any(|c| c.id == u.id)).count();
+                people.extend(
+                    pool.iter()
+                        .filter(|u| !current.iter().any(|c| c.id == u.id)),
+                );
+                let people: Vec<&User> = people
+                    .into_iter()
+                    .filter(|u| hits(&u.name) || hits(&u.username))
+                    .collect();
+                let first = people
+                    .iter()
+                    .take_while(|u| current.iter().any(|c| c.id == u.id))
+                    .count();
                 let person = |u: &User, cx: &mut Context<Self>| {
                     let id = u.id;
                     item(SharedString::from(format!("gl-pick-{id}")))
@@ -391,14 +579,30 @@ impl GitLabView {
                                 .flex()
                                 .flex_col()
                                 .min_w(px(0.))
-                                .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(TEXT)).child(u.name.clone()))
-                                .child(div().text_color(c(MUTED)).child(format!("@{}", u.username))),
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(c(TEXT))
+                                        .child(u.name.clone()),
+                                )
+                                .child(
+                                    div().text_color(c(MUTED)).child(format!("@{}", u.username)),
+                                ),
                         )
-                        .on_click(cx.listener(move |v, _, window, cx| v.pick_person(id, window, cx)))
+                        .on_click(
+                            cx.listener(move |v, _, window, cx| v.pick_person(id, window, cx)),
+                        )
                         .into_any_element()
                 };
                 if first > 0 {
-                    rows.push(section(if m == SideMenu::Assignees { "Assignees" } else { "Reviewers" }).into_any_element());
+                    rows.push(
+                        section(if m == SideMenu::Assignees {
+                            "Assignees"
+                        } else {
+                            "Reviewers"
+                        })
+                        .into_any_element(),
+                    );
                 }
                 for (i, u) in people.iter().enumerate() {
                     if i == first && first > 0 {
@@ -435,14 +639,25 @@ impl GitLabView {
                         item(SharedString::from(format!("gl-pick-ms-{id}")))
                             .child(check(now == Some(ms.title.as_str())))
                             .child(div().text_color(c(TEXT)).child(ms.title.clone()))
-                            .on_click(cx.listener(move |v, _, window, cx| v.pick_milestone(id, window, cx)))
+                            .on_click(
+                                cx.listener(move |v, _, window, cx| {
+                                    v.pick_milestone(id, window, cx)
+                                }),
+                            )
                             .into_any_element(),
                     );
                 }
             }
         }
         if rows.is_empty() {
-            rows.push(div().px_3().py_2().text_color(c(MUTED)).child("No matching results").into_any_element());
+            rows.push(
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_color(c(MUTED))
+                    .child("No matching results")
+                    .into_any_element(),
+            );
         }
         let people = matches!(m, SideMenu::Assignees | SideMenu::Reviewers);
         deferred(
@@ -471,7 +686,13 @@ impl GitLabView {
                         .py_2()
                         .border_b_1()
                         .border_color(c(RAISED))
-                        .child(div().font_weight(FontWeight::SEMIBOLD).text_size(px(14.)).text_color(c(TEXT)).child(m.title(r.multiple)))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_size(px(14.))
+                                .text_color(c(TEXT))
+                                .child(m.title(r.multiple)),
+                        )
                         .when(people, |d| {
                             d.child(
                                 div()
@@ -503,10 +724,21 @@ impl GitLabView {
                             .border_color(c(0x1068bf))
                             .bg(c(BG))
                             .child(app_icon("search", 14., c(MUTED)))
-                            .child(div().flex_1().child(Input::new(&self.boxes.search).appearance(false))),
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(Input::new(&self.boxes.search).appearance(false)),
+                            ),
                     ),
                 )
-                .child(div().id("gl-side-menu-items").max_h(px(300.)).overflow_y_scroll().pb_1().children(rows)),
+                .child(
+                    div()
+                        .id("gl-side-menu-items")
+                        .max_h(px(300.))
+                        .overflow_y_scroll()
+                        .pb_1()
+                        .children(rows),
+                ),
         )
         .with_priority(1)
     }
@@ -514,17 +746,31 @@ impl GitLabView {
 
 /// A label's colour, in its dropdown row.
 fn swatch(l: &Label) -> Div {
-    let bg = if l.color.is_empty() { c(RAISED) } else { hex(&l.color) };
+    let bg = if l.color.is_empty() {
+        c(RAISED)
+    } else {
+        hex(&l.color)
+    };
     div().size(px(12.)).flex_none().rounded(px(3.)).bg(bg)
 }
 
 /// GitLab's time tracking line: what's spent of the estimate, or that
 /// there's neither.
 fn time_tracking(t: &crate::types::TimeStats) -> Div {
-    let spent = t.human_total_time_spent.clone().filter(|_| t.total_time_spent > 0);
-    let estimate = t.human_time_estimate.clone().filter(|_| t.time_estimate > 0);
+    let spent = t
+        .human_total_time_spent
+        .clone()
+        .filter(|_| t.total_time_spent > 0);
+    let estimate = t
+        .human_time_estimate
+        .clone()
+        .filter(|_| t.time_estimate > 0);
     let text = match (spent, estimate) {
-        (None, None) => return div().text_color(c(MUTED)).child("No estimate or time spent"),
+        (None, None) => {
+            return div()
+                .text_color(c(MUTED))
+                .child("No estimate or time spent");
+        }
         (Some(s), None) => format!("Spent: {s}"),
         (None, Some(e)) => format!("Estimate: {e}"),
         (Some(s), Some(e)) => format!("Spent: {s} · Estimate: {e}"),

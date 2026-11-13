@@ -6,7 +6,9 @@ use std::path::PathBuf;
 
 /// `$HOME`, if it's set to an absolute path.
 pub fn home_var() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from).filter(|p| p.is_absolute())
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
 }
 
 /// `$HOME`, else `/tmp`: absolute and writable, so a path made from it is

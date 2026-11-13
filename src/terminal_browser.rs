@@ -98,15 +98,17 @@ fn instance_dirs() -> Vec<PathBuf> {
     let base = std::env::var_os("XDG_RUNTIME_DIR")
         .or_else(|| std::env::var_os("XDG_STATE_HOME"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            crate::paths::home().join(".local/state")
-        });
+        .unwrap_or_else(|| crate::paths::home().join(".local/state"));
     let Ok(entries) = std::fs::read_dir(&base) else {
         return vec![];
     };
     entries
         .flatten()
-        .filter(|e| e.file_name().to_string_lossy().starts_with("terminal-browser-"))
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("terminal-browser-")
+        })
         .map(|e| e.path().join("instances"))
         .collect()
 }
@@ -128,7 +130,8 @@ fn ask(socket: &Path) -> Option<Page> {
     let timeout = Some(Duration::from_millis(500));
     s.set_read_timeout(timeout).ok()?;
     s.set_write_timeout(timeout).ok()?;
-    s.write_all(b"{\"id\":\"abromux\",\"cmd\":\"state\"}\n").ok()?;
+    s.write_all(b"{\"id\":\"abromux\",\"cmd\":\"state\"}\n")
+        .ok()?;
     let mut line = String::new();
     BufReader::new(s).read_line(&mut line).ok()?;
     let reply: Reply = serde_json::from_str(&line).ok()?;
@@ -256,7 +259,11 @@ const COMMANDS: &[(&str, &str, &[&str])] = &[
 /// terminal-browser's `shortcuts.json`: `$TERMINAL_BROWSER_CONFIG_DIR`, else
 /// `$XDG_CONFIG_HOME/terminal-browser`, else `~/.config/terminal-browser`.
 fn shortcuts_file() -> PathBuf {
-    let abs = |v: &str| std::env::var_os(v).map(PathBuf::from).filter(|p| p.is_absolute());
+    let abs = |v: &str| {
+        std::env::var_os(v)
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+    };
     abs("TERMINAL_BROWSER_CONFIG_DIR")
         .unwrap_or_else(|| crate::paths::xdg_config().join("terminal-browser"))
         .join("shortcuts.json")
@@ -267,9 +274,10 @@ fn shortcuts_file() -> PathBuf {
 fn chords(shortcuts: &serde_json::Value, command: &str, default: &[&str]) -> Vec<String> {
     match shortcuts.get(command) {
         Some(serde_json::Value::String(s)) => vec![s.clone()],
-        Some(serde_json::Value::Array(a)) => {
-            a.iter().filter_map(|v| v.as_str().map(String::from)).collect()
-        }
+        Some(serde_json::Value::Array(a)) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
         Some(serde_json::Value::Null) => vec![],
         _ => default.iter().map(|s| s.to_string()).collect(),
     }
@@ -319,7 +327,10 @@ fn translate(ks: &gpui::Keystroke, shortcuts: &serde_json::Value) -> Option<gpui
         .iter()
         .filter_map(|c| parse_chord(c))
         .collect();
-    if bound.iter().any(|b| b.modifiers == ks.modifiers && b.key == ks.key) {
+    if bound
+        .iter()
+        .any(|b| b.modifiers == ks.modifiers && b.key == ks.key)
+    {
         return None;
     }
     bound.into_iter().next()
@@ -399,7 +410,10 @@ impl crate::terminal::TerminalApp for Tab {
 
     fn translate_key(&self, ks: &gpui::Keystroke) -> Option<gpui::Keystroke> {
         // Only for the few keys in COMMANDS; read each time so edits apply.
-        if !COMMANDS.iter().any(|(k, _, _)| k.rsplit('-').next() == Some(&*ks.key)) {
+        if !COMMANDS
+            .iter()
+            .any(|(k, _, _)| k.rsplit('-').next() == Some(&*ks.key))
+        {
             return None;
         }
         let shortcuts = std::fs::read_to_string(shortcuts_file())
@@ -499,7 +513,10 @@ mod tests {
         assert_eq!(sent("alt-cmd-i", "null").as_deref(), Some("cmd-shift-i"));
         assert_eq!(sent("alt-cmd-c", "{}").as_deref(), Some("alt-cmd-j"));
         // Its shortcuts.json wins; a key it binds itself goes as is.
-        assert_eq!(sent("cmd-f", r#"{"find":"ctrl+f"}"#).as_deref(), Some("ctrl-f"));
+        assert_eq!(
+            sent("cmd-f", r#"{"find":"ctrl+f"}"#).as_deref(),
+            Some("ctrl-f")
+        );
         assert_eq!(sent("cmd-f", r#"{"find":["ctrl+f","cmd+f"]}"#), None);
         assert_eq!(sent("cmd-f", r#"{"find":null}"#), None);
         // Other keys are left alone.
@@ -524,10 +541,19 @@ mod tests {
             ..Default::default()
         };
         assert!(tab.update(page("https://a.b/", "A")));
-        assert!(!tab.update(page("https://a.b/", "A")), "no change, no redraw");
+        assert!(
+            !tab.update(page("https://a.b/", "A")),
+            "no change, no redraw"
+        );
         assert!(tab.update(page("https://c.d/", "C")));
-        assert_eq!((tab.title(), tab.page_url()), ("C".into(), Some("https://c.d/")));
-        assert!(!tab.update(page("", "C")), "an empty URL keeps the last one");
+        assert_eq!(
+            (tab.title(), tab.page_url()),
+            ("C".into(), Some("https://c.d/"))
+        );
+        assert!(
+            !tab.update(page("", "C")),
+            "an empty URL keeps the last one"
+        );
     }
 
     #[test]
@@ -543,10 +569,21 @@ mod tests {
         )
         .unwrap();
         let p = r.data.unwrap();
-        assert_eq!((p.url.as_str(), p.title.as_str()), ("https://lrt.lt/", "LRT"));
+        assert_eq!(
+            (p.url.as_str(), p.title.as_str()),
+            ("https://lrt.lt/", "LRT")
+        );
         assert_eq!(p.tty.as_deref(), Some("/dev/ttys004"));
-        let mut tab = Tab { url: String::new(), title: String::new(), browser: None, adopted: false };
-        tab.update(Page { key: Some("90107-1".into()), ..p });
+        let mut tab = Tab {
+            url: String::new(),
+            title: String::new(),
+            browser: None,
+            adopted: false,
+        };
+        tab.update(Page {
+            key: Some("90107-1".into()),
+            ..p
+        });
         assert_eq!(tab.browser.as_deref(), Some("90107-1"));
     }
 

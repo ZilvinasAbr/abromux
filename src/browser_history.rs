@@ -55,7 +55,9 @@ impl History {
     }
 
     fn find(&self, key: &str) -> Option<usize> {
-        self.entries.iter().position(|e| self::key(&e.url).as_deref() == Some(key))
+        self.entries
+            .iter()
+            .position(|e| self::key(&e.url).as_deref() == Some(key))
     }
 
     /// Count a visit to `url`. False if it isn't kept (not http(s), say).
@@ -140,7 +142,11 @@ impl History {
             all.sort_by(|a, b| {
                 b.typed_count
                     .cmp(&a.typed_count)
-                    .then(b.last_typed.unwrap_or(0.).total_cmp(&a.last_typed.unwrap_or(0.)))
+                    .then(
+                        b.last_typed
+                            .unwrap_or(0.)
+                            .total_cmp(&a.last_typed.unwrap_or(0.)),
+                    )
                     .then(b.last_visited.total_cmp(&a.last_visited))
             });
             return all.into_iter().take(limit).cloned().collect();
@@ -157,7 +163,11 @@ impl History {
                 .then(b.visit_count.cmp(&a.visit_count))
                 .then(a.url.cmp(&b.url))
         });
-        scored.into_iter().take(limit).map(|(_, e)| e.clone()).collect()
+        scored
+            .into_iter()
+            .take(limit)
+            .map(|(_, e)| e.clone())
+            .collect()
     }
 
     fn tidy(&mut self) {
@@ -261,10 +271,8 @@ fn score(e: &Entry, q: &str, tokens: &[String], now: f64) -> Option<f64> {
     {
         return None;
     }
-    let query_matches = url_value.contains(q)
-        || host.contains(q)
-        || path_query.contains(q)
-        || title.contains(q);
+    let query_matches =
+        url_value.contains(q) || host.contains(q) || path_query.contains(q) || title.contains(q);
     let token_matches = !tokens.is_empty()
         && tokens.iter().all(|t| {
             sans_scheme.contains(t.as_str())
@@ -423,7 +431,10 @@ mod tests {
         ] {
             assert_eq!(key(same).as_deref(), Some(k.as_str()), "{same}");
         }
-        assert_eq!(key("http://localhost:3000/a/").unwrap(), "http://localhost:3000/a");
+        assert_eq!(
+            key("http://localhost:3000/a/").unwrap(),
+            "http://localhost:3000/a"
+        );
         assert_eq!(key("https://a.com/x?Q=1").unwrap(), "https://a.com/x?q=1");
         assert_ne!(key("http://github.com"), key("https://github.com"));
     }
@@ -455,10 +466,17 @@ mod tests {
     fn host_prefix_beats_title_match() {
         let mut h = History::default();
         h.record_visit("https://docs.rs/gpui", Some("gpui - GitHub mirror"), NOW);
-        h.record_visit("https://github.com/zed-industries/zed", Some("Zed"), NOW - DAY);
+        h.record_visit(
+            "https://github.com/zed-industries/zed",
+            Some("Zed"),
+            NOW - DAY,
+        );
         assert_eq!(
             urls(h.suggestions("git", NOW, 10)),
-            ["https://github.com/zed-industries/zed", "https://docs.rs/gpui"]
+            [
+                "https://github.com/zed-industries/zed",
+                "https://docs.rs/gpui"
+            ]
         );
     }
 
@@ -473,7 +491,11 @@ mod tests {
     #[test]
     fn tokens_match_in_any_field() {
         let mut h = History::default();
-        h.record_visit("https://github.com/zed-industries/zed/pulls", Some("Pull requests"), NOW);
+        h.record_visit(
+            "https://github.com/zed-industries/zed/pulls",
+            Some("Pull requests"),
+            NOW,
+        );
         h.record_visit("https://github.com/rust-lang/rust", Some("Rust"), NOW);
         assert_eq!(
             urls(h.suggestions("zed pull", NOW, 10)),
@@ -499,7 +521,10 @@ mod tests {
         let mut h = History::default();
         h.record_visit("https://a.com/", None, NOW);
         h.record_typed("https://b.com/", NOW - DAY);
-        assert_eq!(urls(h.suggestions("", NOW, 10)), ["https://b.com/", "https://a.com/"]);
+        assert_eq!(
+            urls(h.suggestions("", NOW, 10)),
+            ["https://b.com/", "https://a.com/"]
+        );
     }
 
     #[test]
@@ -520,7 +545,10 @@ mod tests {
             h.record_visit(&format!("https://e{i}.com/"), None, NOW + i as f64);
         }
         assert_eq!(h.entries.len(), MAX_ENTRIES);
-        assert_eq!(h.entries[0].url, format!("https://e{}.com/", MAX_ENTRIES + 4));
+        assert_eq!(
+            h.entries[0].url,
+            format!("https://e{}.com/", MAX_ENTRIES + 4)
+        );
     }
 
     #[test]

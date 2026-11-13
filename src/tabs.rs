@@ -71,10 +71,7 @@ impl AbroMux {
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
         let src = self.workspace_of(id).context("no such surface")?;
-        if !self.workspaces[dest]
-            .panes()
-            .any(|p| p.id == pane)
-        {
+        if !self.workspaces[dest].panes().any(|p| p.id == pane) {
             bail!("pane:{pane} isn't in that workspace");
         }
         let mark = self.mark_focus();

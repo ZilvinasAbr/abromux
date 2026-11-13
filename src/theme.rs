@@ -39,7 +39,10 @@ pub const CLAUDE_FRAME_MS: u64 = 120;
 pub fn claude_spinner(size: Pixels) -> Div {
     static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
     let n = CLAUDE_FRAMES.len();
-    let step = START.get_or_init(std::time::Instant::now).elapsed().as_millis()
+    let step = START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis()
         / CLAUDE_FRAME_MS as u128;
     // 0 1 2 3 4 5 4 3 2 1 0 …
     let i = (step % (2 * n as u128 - 2)) as usize;

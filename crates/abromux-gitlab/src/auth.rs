@@ -34,12 +34,16 @@ pub fn saved_host() -> Option<String> {
         .stderr(Stdio::null())
         .output()
         .ok()?;
-    out.status.success().then(|| account(&String::from_utf8_lossy(&out.stdout)))?
+    out.status
+        .success()
+        .then(|| account(&String::from_utf8_lossy(&out.stdout)))?
 }
 
 /// The `acct` attribute in `security find-generic-password` output.
 fn account(attrs: &str) -> Option<String> {
-    let v = attrs.lines().find_map(|l| l.trim().strip_prefix("\"acct\"<blob>=\""))?;
+    let v = attrs
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("\"acct\"<blob>=\""))?;
     let v = v.strip_suffix('"')?;
     (!v.is_empty()).then(|| v.to_string())
 }
@@ -79,7 +83,10 @@ mod tests {
     #[test]
     fn account_from_attributes() {
         let out = "attributes:\n    0x00000007 <blob>=\"abromux-gitlab\"\n    \"acct\"<blob>=\"https://gl.example.com\"\n    \"svce\"<blob>=\"abromux-gitlab\"\n";
-        assert_eq!(super::account(out).as_deref(), Some("https://gl.example.com"));
+        assert_eq!(
+            super::account(out).as_deref(),
+            Some("https://gl.example.com")
+        );
         assert_eq!(super::account("    \"acct\"<blob>=<NULL>\n"), None);
     }
 }

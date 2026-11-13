@@ -90,7 +90,15 @@ pub struct File {
 
 impl File {
     pub fn new(meta: FileDiff, body: Body) -> File {
-        File { meta, body, late: Default::default(), stats: None, counted: Default::default(), threads: vec![], outdated: vec![] }
+        File {
+            meta,
+            body,
+            late: Default::default(),
+            stats: None,
+            counted: Default::default(),
+            threads: vec![],
+            outdated: vec![],
+        }
     }
 
     /// The diff to show: fetched late, or as GitLab sent it.
@@ -218,9 +226,10 @@ impl Review {
 
     /// Unresolved threads, of those that can be resolved.
     pub fn unresolved(&self) -> usize {
-        let on_lines = self.files.iter().flat_map(|f| {
-            f.threads.iter().map(|(_, _, d)| d).chain(&f.outdated)
-        });
+        let on_lines = self
+            .files
+            .iter()
+            .flat_map(|f| f.threads.iter().map(|(_, _, d)| d).chain(&f.outdated));
         on_lines
             .chain(&self.general)
             .chain(&self.outdated)
@@ -231,8 +240,14 @@ impl Review {
     /// Whether any thread can be resolved: GitLab shows its threads counter
     /// only then.
     pub fn has_resolvable(&self) -> bool {
-        let on_lines = self.files.iter().flat_map(|f| f.threads.iter().map(|(_, _, d)| d).chain(&f.outdated));
-        on_lines.chain(&self.general).chain(&self.outdated).any(|d| d.resolvable())
+        let on_lines = self
+            .files
+            .iter()
+            .flat_map(|f| f.threads.iter().map(|(_, _, d)| d).chain(&f.outdated));
+        on_lines
+            .chain(&self.general)
+            .chain(&self.outdated)
+            .any(|d| d.resolvable())
     }
 
     /// A summary for `abromux --json tree` and tests: what a reviewer would
@@ -240,7 +255,10 @@ impl Review {
     pub fn summary(&self) -> Value {
         let thread = |d: &Discussion| {
             let n = &d.notes[0];
-            let line = n.position.as_ref().map(|p| json!({ "old": p.old_line, "new": p.new_line }));
+            let line = n
+                .position
+                .as_ref()
+                .map(|p| json!({ "old": p.old_line, "new": p.new_line }));
             json!({
                 "author": n.author.username,
                 "notes": d.notes.len(),

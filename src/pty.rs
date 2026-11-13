@@ -200,7 +200,10 @@ fn stop_reader(stop: &mut Option<Stop>) {
 
 /// How `freeze` stops a held PTY's reader: a flag it checks after each read,
 /// and the thread, whose blocking read `WAKE` interrupts.
-type Stop = (Arc<std::sync::atomic::AtomicBool>, std::thread::JoinHandle<()>);
+type Stop = (
+    Arc<std::sync::atomic::AtomicBool>,
+    std::thread::JoinHandle<()>,
+);
 
 /// The signal that interrupts a held reader's read. Its handler does
 /// nothing and is installed without SA_RESTART, so read returns EINTR.
@@ -279,7 +282,13 @@ pub fn open(
     opened(local(cwd, argv, vars, size, feed))
 }
 
-fn local(cwd: &str, argv: &[String], vars: &[(String, String)], (cols, rows): (u16, u16), feed: &Feed) -> Pty {
+fn local(
+    cwd: &str,
+    argv: &[String],
+    vars: &[(String, String)],
+    (cols, rows): (u16, u16),
+    feed: &Feed,
+) -> Pty {
     let pty = native_pty_system()
         .openpty(PtySize {
             rows,
@@ -334,7 +343,11 @@ fn held_pty(held: crate::hold::Held, feed: &Feed) -> Option<Pty> {
     // owner left it as.
     unsafe {
         let flags = libc::fcntl(read_fd.as_raw_fd(), libc::F_GETFL);
-        libc::fcntl(read_fd.as_raw_fd(), libc::F_SETFL, flags & !libc::O_NONBLOCK);
+        libc::fcntl(
+            read_fd.as_raw_fd(),
+            libc::F_SETFL,
+            flags & !libc::O_NONBLOCK,
+        );
     }
     let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_flag = stopped.clone();
