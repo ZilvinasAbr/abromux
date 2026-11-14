@@ -549,7 +549,7 @@ impl Default for WorkspaceGroups {
     fn default() -> Self {
         Self {
             new_workspace_placement: Placement::default(),
-            group_by_agent_status: true,
+            group_by_agent_status: false,
         }
     }
 }
@@ -1328,9 +1328,11 @@ mod tests {
         assert_eq!(s.workspace_colors.parse("#ff0000"), Some(0xff0000));
         assert_eq!(s.workspace_groups.new_workspace_placement, Placement::Top);
         assert!(
-            s.workspace_groups.group_by_agent_status,
-            "on unless turned off"
+            !s.workspace_groups.group_by_agent_status,
+            "off unless turned on: it hides your groups"
         );
+        let on = parse(r#"{"workspaceGroups": {"groupByAgentStatus": true}}"#).unwrap();
+        assert!(on.workspace_groups.group_by_agent_status);
         assert!(s.automation.workspace_auto_naming);
         let d = Settings::default();
         assert_eq!(d.workspace_colors.parse("amber"), Some(0x7D6608));

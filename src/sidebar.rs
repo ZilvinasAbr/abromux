@@ -319,13 +319,29 @@ impl AbroMux {
     }
 
     /// [`Self::new_group`], then open its header's rename field with the
-    /// name selected, so typing replaces it.
+    /// name selected, so typing replaces it. Sections by agent status hide
+    /// your groups, so making one turns them off.
     pub(crate) fn new_group_and_rename(
         &mut self,
         index: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if cx
+            .global::<Settings>()
+            .workspace_groups
+            .group_by_agent_status
+        {
+            // Deferred: applying settings may update this window.
+            window.defer(cx, |window, cx| {
+                crate::settings_window::save(
+                    &["workspaceGroups", "groupByAgentStatus"],
+                    Some(false.into()),
+                    window,
+                    cx,
+                );
+            });
+        }
         if let Some(g) = self.new_group(index, cx)
             && self.sidebar
         {

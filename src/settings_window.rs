@@ -258,7 +258,7 @@ fn restore_keymap(cx: &mut App) {
 
 /// Save one key of the config file (`None` removes it) and apply the
 /// result, or say why it wasn't saved.
-fn save(key: &[&str], value: Option<Value>, window: &mut Window, cx: &mut App) {
+pub(crate) fn save(key: &[&str], value: Option<Value>, window: &mut Window, cx: &mut App) {
     match settings::edit(key, value) {
         Ok(s) => apply(s, cx),
         Err(e) => window.push_notification(
@@ -789,8 +789,8 @@ fn general_page() -> Page {
                     switch(
                         "Group by agent status",
                         "Show workspaces in sections by what their coding agent is doing: \
-                         Verify (waiting for you), Running, Idle and No agent. Turn it off \
-                         to see your own groups.",
+                         Verify (waiting for you), Running, Idle and No agent, instead of \
+                         your own groups. Making a group turns it off.",
                         &["workspaceGroups", "groupByAgentStatus"],
                         |s| s.workspace_groups.group_by_agent_status,
                     ),
