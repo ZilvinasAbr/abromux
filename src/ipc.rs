@@ -3,7 +3,7 @@
 
 pub use abromux_core::ipc::{err, ok};
 use serde_json::Value;
-use std::{os::unix::net::UnixStream, path::PathBuf, time::Duration};
+use std::{os::unix::net::UnixStream, path::PathBuf};
 
 /// `$ABROMUX_SOCKET_PATH`, else `~/Library/Application Support/abromux/abromux.sock`
 /// (`abromux-nightly/` for the nightly app).
@@ -16,25 +16,16 @@ pub fn socket_path() -> PathBuf {
 
 /// One request/response round trip.
 pub fn call(method: &str, params: Value) -> anyhow::Result<Value> {
-    round_trip(method, params, None).map(|(v, _)| v)
+    round_trip(method, params).map(|(v, _)| v)
 }
 
 /// `call`, keeping the connection open until the returned stream is
 /// dropped: the app can wait for that to know the caller is done (has
 /// printed what it got) before doing something that would end it.
 pub fn call_held(method: &str, params: Value) -> anyhow::Result<(Value, UnixStream)> {
-    round_trip(method, params, None)
+    round_trip(method, params)
 }
 
-/// `call`, giving up after `timeout` (for hooks that mustn't stall their caller).
-pub fn call_timeout(method: &str, params: Value, timeout: Duration) -> anyhow::Result<Value> {
-    round_trip(method, params, Some(timeout)).map(|(v, _)| v)
-}
-
-fn round_trip(
-    method: &str,
-    params: Value,
-    timeout: Option<Duration>,
-) -> anyhow::Result<(Value, UnixStream)> {
-    abromux_core::ipc::round_trip(&socket_path(), method, params, timeout)
+fn round_trip(method: &str, params: Value) -> anyhow::Result<(Value, UnixStream)> {
+    abromux_core::ipc::round_trip(&socket_path(), method, params, None)
 }

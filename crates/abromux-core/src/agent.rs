@@ -462,7 +462,9 @@ impl Agent {
 /// `abromux hooks <kind>-event`: the agent's hook payload arrives on stdin.
 /// Never fails and prints nothing (Claude's SessionStart output would land
 /// in the conversation), so a closed app can't get in the agent's way.
-pub fn hook_event(kind: Kind) -> i32 {
+/// `socket` says where the app's control socket is; it's asked only inside
+/// abromux.
+pub fn hook_event(kind: Kind, socket: impl FnOnce() -> PathBuf) -> i32 {
     let Ok(surface) = std::env::var("ABROMUX_SURFACE_ID") else {
         return 0;
     };
@@ -480,7 +482,12 @@ pub fn hook_event(kind: Kind) -> i32 {
     let Some(params) = report(kind, &payload, &surface, pid) else {
         return 0;
     };
-    let _ = ipc::call_timeout("agent.report", params, Duration::from_secs(2));
+    let _ = ipc::round_trip(
+        &socket(),
+        "agent.report",
+        params,
+        Some(Duration::from_secs(2)),
+    );
     0
 }
 
@@ -654,7 +661,7 @@ fn summary(jsonl: &str) -> Option<String> {
 
 /// How much of a prompt goes to the app, to name its workspace from, and
 /// how much of a workspace's latest prompts it names it from.
-pub(crate) const PROMPT_CHARS: usize = 2000;
+pub const PROMPT_CHARS: usize = 2000;
 
 /// A short title for a session of `prompts` (oldest first), from the
 /// agent's own CLI (`claude -p` on a small model, or `codex exec`), run

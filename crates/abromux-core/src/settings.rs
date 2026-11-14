@@ -1,7 +1,7 @@
 //! The settings model: what config.json can say, parsed. (Growing: the
 //! rest is still in the app's settings.rs.)
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 /// How terminals come back after abromux quits. Applies to terminals opened
 /// after it's set; ones already running in the holder are taken back
@@ -26,5 +26,42 @@ impl Persistence {
             Persistence::Abromux => "abromux",
             Persistence::CmuxLike => "cmux-like",
         }
+    }
+}
+
+/// One `notifications.hooks` entry: a shell command that gets the
+/// notification as JSON on stdin and may print it back changed.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct NotificationHook {
+    #[serde(deserialize_with = "non_blank")]
+    pub id: String,
+    #[serde(deserialize_with = "non_blank")]
+    pub command: String,
+    /// Default 20, as in cmux.
+    #[serde(default, deserialize_with = "positive")]
+    pub timeout_seconds: Option<f64>,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn non_blank<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let s = String::deserialize(d)?.trim().to_string();
+    if s.is_empty() {
+        return Err(serde::de::Error::custom("must not be blank"));
+    }
+    Ok(s)
+}
+
+fn positive<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
+    match Option::<f64>::deserialize(d)? {
+        Some(t) if !(t.is_finite() && t > 0.) => Err(serde::de::Error::custom(
+            "timeoutSeconds must be greater than 0",
+        )),
+        t => Ok(t),
     }
 }

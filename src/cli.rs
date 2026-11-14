@@ -253,7 +253,7 @@ pub fn run(argv: Vec<String>) -> i32 {
         && argv[0] == "hooks"
         && let Some(kind) = argv[1].strip_suffix("-event").and_then(agent::Kind::parse)
     {
-        return agent::hook_event(kind);
+        return agent::hook_event(kind, crate::ipc::socket_path);
     }
     let Args { mut pos, mut opts } = match parse(&argv) {
         Ok(a) => a,
