@@ -45,7 +45,7 @@ impl Feed {
 
     /// False once the view is gone.
     fn push(&mut self, bytes: &[u8]) -> bool {
-        crate::activity::output();
+        abromux_platform::power::output();
         self.queue.lock().unwrap().bytes.extend_from_slice(bytes);
         !matches!(self.wake.try_send(()), Err(e) if e.is_disconnected())
     }

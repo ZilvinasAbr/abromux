@@ -1417,7 +1417,7 @@ impl BrowserView {
                     })
                     .on_click(move |_, _, _| {
                         if done {
-                            let _ = std::process::Command::new("open").arg(&path).spawn();
+                            let _ = abromux_platform::opener::open(&path);
                         }
                     })
                     .child(icon("download").flex_none().text_color(rgb(pal().muted)))
@@ -1464,10 +1464,7 @@ impl BrowserView {
                             icon_button(("download-reveal", id as usize), "search").on_click(
                                 move |_, _, cx| {
                                     cx.stop_propagation();
-                                    let _ = std::process::Command::new("open")
-                                        .arg("-R")
-                                        .arg(&reveal)
-                                        .spawn();
+                                    let _ = abromux_platform::opener::reveal(&reveal);
                                 },
                             ),
                         )

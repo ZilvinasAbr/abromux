@@ -34,10 +34,11 @@ serde_json = { version = "1", features = ["preserve_order"] }
 smol_str = "0.2"
 # OSC 99 scan for ESC (already a dependency of several crates)
 memchr = "2"
-# debug window snapshots (ABROMUX_SNAPSHOT)
+# native sheets (alert.rs) and the WKWebView calls in browser.rs; the rest
+# of the app reaches the OS through abromux-platform
 objc = "0.2"
 libc = "0.2"
-# page click monitor (browser.rs)
+# alert sheets' completion handler, page click monitor (browser.rs)
 block = "0.1"
 raw-window-handle = "0.6"
 # Kitty graphics PNG decoding (already a gpui dependency)

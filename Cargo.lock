@@ -52,6 +52,7 @@ dependencies = [
  "cc",
  "futures",
  "objc",
+ "raw-window-handle",
 ]
 
 [[package]]

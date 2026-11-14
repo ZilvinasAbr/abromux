@@ -1,4 +1,3 @@
-#![allow(unexpected_cfgs)]
 //! Keeps macOS from App Napping abromux while a terminal is printing.
 //! Hidden or covered for a while, the app is napped and its main thread
 //! (where output is drawn) slows several times over. A shell printing is

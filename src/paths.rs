@@ -2,20 +2,8 @@
 //! `$HOME` is (and what to use without it), `~` paths, and the config
 //! folders abromux reads.
 
+pub use abromux_platform::dirs::{home, home_var};
 use std::path::PathBuf;
-
-/// `$HOME`, if it's set to an absolute path.
-pub fn home_var() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-}
-
-/// `$HOME`, else `/tmp`: absolute and writable, so a path made from it is
-/// never relative to wherever abromux was started.
-pub fn home() -> PathBuf {
-    home_var().unwrap_or_else(|| "/tmp".into())
-}
 
 /// `~` and `~/…` under [`home`]; anything else as it is.
 pub fn expand_tilde(path: &str) -> PathBuf {

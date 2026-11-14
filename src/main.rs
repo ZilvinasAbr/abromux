@@ -1,8 +1,6 @@
 mod about;
-mod activity;
 mod agent;
 mod alert;
-mod banner;
 mod bench;
 mod browser;
 mod browser_auto;
@@ -27,7 +25,6 @@ mod link;
 mod links;
 mod markdown;
 mod menu;
-mod menubar;
 mod naming;
 mod notification;
 mod notify_hook;
@@ -429,7 +426,7 @@ impl AbroMux {
         .detach();
         cx.observe(&update::entity(cx), |_, _, cx| cx.notify())
             .detach();
-        let mut menubar_picks = menubar::init();
+        let mut menubar_picks = abromux_platform::tray::init();
         cx.spawn_in(window, async move |this, cx| {
             while let Some(pick) = menubar_picks.next().await {
                 if this
@@ -444,7 +441,7 @@ impl AbroMux {
         // The merge requests panel follows the cache.
         cx.observe(&gitlab::store(cx), |_, _, cx| cx.notify())
             .detach();
-        let mut banner_clicks = banner::init();
+        let mut banner_clicks = abromux_platform::notify::init();
         cx.spawn_in(window, async move |this, cx| {
             while let Some(id) = banner_clicks.next().await {
                 if this

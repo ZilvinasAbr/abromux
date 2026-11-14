@@ -101,16 +101,17 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
 - [x] Create `abromux-platform`; move `browser_native.m`, `cursor.m`,
       `webauthn.m` and their `cc` builds and framework links into its
       `build.rs`, so the root `build.rs` only does the version and libghostty.
-- [ ] Move `banner`, `menubar`, `activity`, `icon`, `titlebar`, the
+- [x] Move `banner`, `menubar`, `activity`, `icon`, `titlebar`, the
       appearance half of `theme`, and the snapshot half of `debug` behind the
       platform API.
 - [ ] Replace NSUserDefaults (`alert.rs`, `quit.rs`) with `Prefs` (JSON). Copy
       existing "don't ask again" values over once.
 - [ ] Turn NSAlert sheets into a GPUI modal.
-- [ ] `Dirs` and `Channel`: `channel::support_dir()` and `app_name()` move
+- [x] `Dirs` and `Channel`: `channel::support_dir()` and `app_name()` move
       into the platform crate; drop the hardcoded `/Applications/...` path
-      (`agent.rs`) in favour of `current_exe()`.
-- [ ] `Opener` replaces `Command::new("open")` (`browser.rs`).
+      (`agent.rs`) in favour of `current_exe()`. (`agent.rs` already used
+      `current_exe()`; the path there is test data.)
+- [x] `Opener` replaces `Command::new("open")` (`browser.rs`).
 - [ ] Introduce `PageBackend`: every WKWebView call in `browser.rs` goes
       behind it (eval in frame, cookies, zoom, interaction state, snapshot,
       loading, stop, inspector, hover, downloads, focus check, user agent).
