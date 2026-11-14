@@ -167,7 +167,9 @@ impl AbroMux {
         let Some(cur) = self.workspaces.get(self.active) else {
             return (n, None);
         };
+        // Nothing new joins the cleanup group; outside it, it lands above.
         if let Some(g) = cur.group
+            && !self.groups.iter().any(|x| x.id == g && x.cleanup)
             && let Some((start, end)) = group_span(&self.workspaces, g)
         {
             let at = match s.workspace_groups.new_workspace_placement {
@@ -307,6 +309,7 @@ impl AbroMux {
             name,
             color: None,
             collapsed: false,
+            cleanup: false,
         });
         self.workspaces[index].group = Some(id);
         self.rearrange(cx, |_, _| ());
@@ -330,6 +333,36 @@ impl AbroMux {
         self.rearrange(cx, |ws, groups| {
             workspace::move_workspace(ws, groups, index, to, group)
         });
+    }
+
+    /// Move workspace `index` into the "Cleanup" group (made if need be),
+    /// which stays last in the sidebar. Returns its new index.
+    pub(crate) fn move_to_cleanup(&mut self, index: usize, cx: &mut Context<Self>) -> usize {
+        let Some(id) = self.workspaces.get(index).map(|w| w.id) else {
+            return index;
+        };
+        let group = match self.groups.iter().find(|g| g.cleanup) {
+            Some(g) => g.id,
+            None => {
+                self.next_group += 1;
+                self.groups.push(Group {
+                    id: self.next_group,
+                    name: workspace::CLEANUP_GROUP.into(),
+                    color: None,
+                    collapsed: false,
+                    cleanup: true,
+                });
+                self.next_group
+            }
+        };
+        if let Some(g) = self.groups.iter_mut().find(|g| g.id == group) {
+            g.collapsed = false;
+        }
+        let to = self.workspaces.len() - 1;
+        self.rearrange(cx, |ws, groups| {
+            workspace::move_workspace(ws, groups, index, to, Some(group))
+        });
+        self.ws_index(id).unwrap_or(index)
     }
 
     pub(crate) fn ungroup(&mut self, group: usize, cx: &mut Context<Self>) {
@@ -367,6 +400,7 @@ impl AbroMux {
                 name: folder_name(k),
                 color: None,
                 collapsed: false,
+                cleanup: false,
             });
             for (w, wk) in self.workspaces.iter_mut().zip(&keys) {
                 if wk.as_ref() == Some(k) {
