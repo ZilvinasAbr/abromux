@@ -122,6 +122,7 @@ pub const ACTIONS: &[Act] = {
         "persistenceCmuxLike", Some("Persistence: cmux-like (shells end on quit)"),
             PersistenceCmuxLike, [(None, [])];
         "openSettings", Some("Settings…"), OpenSettings, [(None, ["cmd-,"])];
+        "openConfig", Some("Open Config File"), OpenConfig, [(None, [])];
         "copy", Some("Copy"), terminal::Copy, [(T, ["cmd-c"])];
         "paste", Some("Paste"), terminal::Paste, [(T, ["cmd-v"])];
         "find", Some("Find…"), terminal::Find, [(T, ["cmd-f"]), (B, ["cmd-f"]), (BI, ["cmd-f"])];

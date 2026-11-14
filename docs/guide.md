@@ -374,7 +374,7 @@ A project can have its own commands. The palette looks from the focused terminal
 
 Reloading the config applies new shortcuts at once, in the menus too.
 
-⌘⇧, (or ⌘⇧P → Reload Config, or `abromux reload-config`) reads the file again without a restart. If it doesn't parse, the current settings stay and a toast shows the error with its line and column, and it does the same at launch. `abromux config check [<file>]` validates a file without the app, and `abromux config path` prints where it's read from. The Ghostty config below is separate and is still read only at launch.
+⌘⇧, (or ⌘⇧P → Reload Config, or `abromux reload-config`) reads the file again without a restart. If it doesn't parse, the current settings stay and a toast shows the error with its line and column, and it does the same at launch. `abromux config check [<file>]` validates a file without the app, `abromux config path` prints where it's read from, and `abromux config open` (or ⌘⇧P → Open Config File) opens it in its default app, making an empty one first if there's none. The Ghostty config below is separate and is still read only at launch.
 
 ### Notifications
 

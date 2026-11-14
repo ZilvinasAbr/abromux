@@ -81,6 +81,7 @@ actions!(
     [
         About,
         OpenSettings,
+        OpenConfig,
         Quit,
         NewWorkspace,
         NewFolderWorkspace,
@@ -2994,6 +2995,8 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, a: &keymap::RunCommand, window, cx| {
                 this.run_command(a.index, a.project.clone(), window, cx)
             }))
+            // Also on the root (not only app-wide) so the palette lists it.
+            .on_action(|_: &OpenConfig, _, cx| settings_window::open_config(cx))
             .on_action(cx.listener(|this, _: &ReloadConfig, window, cx| {
                 // A toast says how it went.
                 let _ = this.reload_settings(window, cx);
@@ -3318,6 +3321,7 @@ fn run_app(cwd: Option<String>) {
         });
         cx.on_action(|_: &About, cx| about::show(cx));
         cx.on_action(|_: &OpenSettings, cx| settings_window::show(cx));
+        cx.on_action(|_: &OpenConfig, cx| settings_window::open_config(cx));
         // The fixed bindings; the shortcuts users can change are in keymap.rs.
         cx.bind_keys([
             KeyBinding::new("cmd-w", about::CloseAbout, Some("About")),
