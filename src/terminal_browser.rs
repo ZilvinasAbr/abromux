@@ -36,6 +36,10 @@ pub const SCALE: f32 = 2.;
 /// `PIXEL_DISPLAY_SCALE` is [`SCALE`], which `attach` reports pixels at.
 pub fn command(url: &str) -> Option<String> {
     let bin = find()?;
+    // A `terminal-browser upgrade` since the last one undid the hooks.
+    if let Err(e) = crate::terminal_browser_panes::sync() {
+        eprintln!("abromux: {e}");
+    }
     let mut cmd = format!(
         "TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK=1 PIXEL_DISPLAY_SCALE={SCALE} exec {} open --no-merge",
         shell_quote(&bin.to_string_lossy())
@@ -49,7 +53,7 @@ pub fn command(url: &str) -> Option<String> {
 
 /// `terminal-browser` on PATH or where its installer puts it; an app
 /// opened from the Dock has only the system's PATH.
-fn find() -> Option<PathBuf> {
+pub(crate) fn find() -> Option<PathBuf> {
     let home = crate::paths::home();
     std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
