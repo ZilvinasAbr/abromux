@@ -127,7 +127,7 @@ impl Config {
         }
         let mut theme = vec![];
         if let Some((_, name)) = entries.iter().rev().find(|(k, _)| k == "theme")
-            && let Some(path) = find_theme(name, &xdg)
+            && let Some(path) = find_theme(name, &xdg, crate::theme::is_dark())
         {
             read_file(&path, &mut theme, 0);
         }
@@ -270,12 +270,14 @@ fn read_file(path: &Path, out: &mut Vec<(String, String)>, depth: usize) {
     }
 }
 
-/// `theme = Name`, an absolute path, or `light:A,dark:B` (abromux is dark-only).
-fn find_theme(value: &str, xdg: &Path) -> Option<PathBuf> {
+/// `theme = Name`, an absolute path, or `light:A,dark:B` (the one for the
+/// app's appearance, `dark`).
+fn find_theme(value: &str, xdg: &Path, dark: bool) -> Option<PathBuf> {
     let value = unquote(value);
+    let want = if dark { "dark:" } else { "light:" };
     let name = value
         .split(',')
-        .find_map(|p| p.trim().strip_prefix("dark:"))
+        .find_map(|p| p.trim().strip_prefix(want))
         .unwrap_or_else(|| {
             value
                 .split(',')
@@ -283,6 +285,7 @@ fn find_theme(value: &str, xdg: &Path) -> Option<PathBuf> {
                 .unwrap_or(value)
                 .trim()
                 .trim_start_matches("light:")
+                .trim_start_matches("dark:")
         });
     if Path::new(name).is_absolute() {
         return Some(name.into());
@@ -487,9 +490,19 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("abromux-theme-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("ghostty/themes")).unwrap();
         std::fs::write(dir.join("ghostty/themes/Night"), "background = #000000\n").unwrap();
+        std::fs::write(dir.join("ghostty/themes/Day"), "background = #ffffff\n").unwrap();
         assert_eq!(
-            find_theme("light:Day,dark:Night", &dir),
+            find_theme("light:Day,dark:Night", &dir, true),
             Some(dir.join("ghostty/themes/Night"))
+        );
+        assert_eq!(
+            find_theme("light:Day,dark:Night", &dir, false),
+            Some(dir.join("ghostty/themes/Day"))
+        );
+        assert_eq!(
+            find_theme("dark:Night", &dir, false),
+            Some(dir.join("ghostty/themes/Night")),
+            "one theme for both"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

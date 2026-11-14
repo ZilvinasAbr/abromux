@@ -787,6 +787,28 @@ impl Workspace {
         self.surfaces().any(|s| s.claude_running(cx))
     }
 
+    /// What its coding agents are up to, the most pressing first: one
+    /// asking for you wins over one working, over one sitting idle.
+    pub fn agent_state(&self, cx: &App) -> AgentState {
+        let pill = |value: &str| {
+            self.status
+                .iter()
+                .any(|s| s.owner.is_some() && s.value == value)
+        };
+        if pill(crate::status::AGENT_NEEDS_INPUT) {
+            AgentState::Verify
+        } else if pill(crate::status::AGENT_RUNNING) || self.claude_running(cx) {
+            AgentState::Running
+        } else if self.surfaces().any(|s| {
+            matches!(s, Surface::Terminal(t)
+                if t.read(cx).agent.as_ref().is_some_and(|a| a.alive()))
+        }) {
+            AgentState::Idle
+        } else {
+            AgentState::NoAgent
+        }
+    }
+
     pub fn name(&self, cx: &App) -> String {
         match self.custom_name.as_ref().or(self.auto_title.as_ref()) {
             Some(n) => n.clone(),
@@ -826,6 +848,37 @@ impl Workspace {
     }
 }
 
+/// The sections of the sidebar when it groups workspaces by what their
+/// agents are doing (`workspaceGroups.groupByAgentStatus`), in the order
+/// they show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AgentState {
+    /// An agent waits for you: a permission prompt or a question.
+    Verify,
+    Running,
+    /// An agent is open but done with its turn.
+    Idle,
+    NoAgent,
+}
+
+impl AgentState {
+    pub const ALL: [AgentState; 4] = [
+        AgentState::Verify,
+        AgentState::Running,
+        AgentState::Idle,
+        AgentState::NoAgent,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            AgentState::Verify => "Verify",
+            AgentState::Running => "Running",
+            AgentState::Idle => "Idle",
+            AgentState::NoAgent => "No agent",
+        }
+    }
+}
+
 /// Workspaces in a sidebar section: a header named `name` above the
 /// workspaces whose `group` is `id`, which can be folded away.
 #[derive(Clone, Debug, PartialEq)]
@@ -834,10 +887,17 @@ pub struct Group {
     pub name: String,
     pub color: Option<u32>,
     pub collapsed: bool,
+    /// The "Cleanup" group: workspaces whose folder is being cleaned up and
+    /// deleted. Always last in the sidebar.
+    pub cleanup: bool,
 }
 
+/// The name the cleanup group gets.
+pub const CLEANUP_GROUP: &str = "Cleanup";
+
 /// Put each group's workspaces right after its first one, keeping every
-/// other order as it was, and drop groups nobody is in.
+/// other order as it was, move the cleanup group to the end, and drop
+/// groups nobody is in.
 pub fn tidy_groups(ws: &mut Vec<Workspace>, groups: &mut Vec<Group>) {
     for w in ws.iter_mut() {
         if w.group.is_some_and(|g| !groups.iter().any(|x| x.id == g)) {
@@ -858,7 +918,13 @@ pub fn tidy_groups(ws: &mut Vec<Workspace>, groups: &mut Vec<Group>) {
             }
         }
     }
-    *ws = out;
+    // The cleanup group goes last, below everything else.
+    let cleanup: Vec<usize> = groups.iter().filter(|g| g.cleanup).map(|g| g.id).collect();
+    let (mut rest, last): (Vec<Workspace>, Vec<Workspace>) = out
+        .into_iter()
+        .partition(|w| !w.group.is_some_and(|g| cleanup.contains(&g)));
+    rest.extend(last);
+    *ws = rest;
     groups.retain(|g| ws.iter().any(|w| w.group == Some(g.id)));
 }
 
@@ -1104,7 +1170,35 @@ mod tests {
             name: format!("g{id}"),
             color: None,
             collapsed: false,
+            cleanup: false,
         }
+    }
+
+    #[test]
+    fn cleanup_group_stays_last() {
+        let mut groups = vec![
+            group(7),
+            Group {
+                cleanup: true,
+                ..group(8)
+            },
+        ];
+        let mut ws = wss(&[Some(8), None, Some(7), Some(8), None]);
+        tidy_groups(&mut ws, &mut groups);
+        assert_eq!(
+            order(&ws),
+            [
+                (1, None),
+                (2, Some(7)),
+                (4, None),
+                (0, Some(8)),
+                (3, Some(8))
+            ]
+        );
+        // Dropping a workspace below it puts it back above.
+        let at = move_workspace(&mut ws, &mut groups, 0, 4, None);
+        assert_eq!(at, 2);
+        assert_eq!(order(&ws)[3..], [(0, Some(8)), (3, Some(8))]);
     }
 
     #[test]

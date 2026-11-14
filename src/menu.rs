@@ -7,10 +7,10 @@ use crate::{
     About, CloseTab, CloseWorkspace, CommandPalette, EditDescription, FlashPane, FocusAddressBar,
     FocusDown, FocusLeft, FocusRight, FocusUp, GroupByFolder, ImportCmuxSession, JumpToUnread,
     LastPane, MarkOldestUnreadAndJumpNext, MoveWorkspaceDown, MoveWorkspaceUp, NewBrowser,
-    NewFolderWorkspace, NewGroup, NewTerminal, NewWorkspace, NextTab, NextWorkspace, OpenSettings,
-    PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab, RenameWorkspace, ReopenSession,
-    SplitDown, SplitRight, ToggleGroup, ToggleNotifications, ToggleSidebar, ToggleUnread,
-    ToggleZoom, Ungroup, WorkspaceSwitcher, browser, channel, terminal,
+    NewFolderWorkspace, NewGroup, NewTerminal, NewWorkspace, NextTab, NextWorkspace, OpenConfig,
+    OpenSettings, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab, RenameWorkspace,
+    ReopenSession, SplitDown, SplitRight, ToggleGroup, ToggleNotifications, ToggleSidebar,
+    ToggleUnread, ToggleZoom, Ungroup, WorkspaceSwitcher, browser, channel, terminal,
 };
 use gpui::*;
 
@@ -75,6 +75,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action("Check for Updates…", crate::update::CheckForUpdates),
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
+                MenuItem::action("Open Configuration File", OpenConfig),
                 MenuItem::action("Reload Configuration", ReloadConfig),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
@@ -109,6 +110,8 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action("Go to Workspace…", WorkspaceSwitcher),
                 MenuItem::action("Go to Merge Request…", crate::GoToMergeRequest),
                 MenuItem::action("Review Changes", crate::ReviewChanges),
+                MenuItem::action("Review Changes in Hunk", crate::ReviewInHunk),
+                MenuItem::action("Open Workspace in Neovim", crate::OpenInNeovim),
                 MenuItem::separator(),
                 MenuItem::action("Reopen Previous Session", ReopenSession),
                 MenuItem::action("Import cmux Session", ImportCmuxSession),

@@ -52,6 +52,7 @@ mod status;
 mod tabs;
 mod terminal;
 mod terminal_browser;
+mod terminal_browser_panes;
 mod theme;
 mod titlebar;
 mod update;
@@ -62,7 +63,7 @@ use browser::{BrowserEvent, BrowserView};
 use futures::StreamExt;
 use gpui::{prelude::*, *};
 use gpui_component::{
-    Root, Theme, ThemeMode, WindowExt,
+    Root, WindowExt,
     input::{Input, InputEvent, InputState, SelectAll},
     notification::Notification,
 };
@@ -82,6 +83,7 @@ actions!(
     [
         About,
         OpenSettings,
+        OpenConfig,
         Quit,
         NewWorkspace,
         NewFolderWorkspace,
@@ -166,7 +168,9 @@ actions!(
         ToggleMergeRequests,
         GoToMergeRequest,
         RefreshMergeRequests,
-        ReviewChanges
+        ReviewChanges,
+        ReviewInHunk,
+        OpenInNeovim
     ]
 );
 
@@ -308,6 +312,8 @@ struct AbroMux {
     groups: Vec<workspace::Group>,
     next_group: usize,
     renaming_group: Option<(usize, Entity<InputState>)>,
+    /// Agent-status sections folded away (`workspaceGroups.groupByAgentStatus`).
+    folded_states: std::collections::HashSet<workspace::AgentState>,
     /// Where a dragged workspace would land: beside workspace id, after it
     /// or before.
     ws_drop: Option<(usize, bool)>,
@@ -389,6 +395,7 @@ impl AbroMux {
             groups: vec![],
             next_group: 0,
             renaming_group: None,
+            folded_states: Default::default(),
             ws_drop: None,
             renaming_tab: None,
             sidebar: true,
@@ -746,6 +753,11 @@ impl AbroMux {
             // Compose stacks started here are the workspace's, for cleanup.
             env.push(("COMPOSE_PROJECT_NAME".into(), folder::tag(&home)));
         }
+        // This app's CLI, for programs that call back into it (the stable and
+        // nightly apps each have their own).
+        if let Ok(exe) = std::env::current_exe() {
+            env.push(("ABROMUX_BIN".into(), exe.to_string_lossy().into_owned()));
+        }
         env.extend([
             ("ABROMUX_WORKSPACE_ID".into(), format!("workspace:{ws}")),
             ("ABROMUX_SURFACE_ID".into(), format!("surface:{surface}")),
@@ -862,6 +874,87 @@ impl AbroMux {
         on
     }
 
+    /// The git repositories of workspace `wi`: its folder's checkouts and
+    /// those its tabs are in, each once, in path order.
+    fn workspace_repos(&self, wi: usize, cx: &App) -> Vec<std::path::PathBuf> {
+        let ws = &self.workspaces[wi];
+        let places = gitlab::remote::places(
+            ws.home.as_deref(),
+            &ws.surfaces().filter_map(|s| s.cwd(cx)).collect::<Vec<_>>(),
+        );
+        let mut repos = vec![];
+        for p in places {
+            if let Some(t) = git_top(&p.dir)
+                && !repos.contains(&t)
+            {
+                repos.push(t);
+            }
+        }
+        repos
+    }
+
+    /// File › Review Changes in Hunk: every git repository of the workspace
+    /// in `hunk diff --watch`, one pane each, stacked in a column to the
+    /// right of the focused pane. Each shows what Review Changes would: the
+    /// branch's work since it forked from the default branch, committed or
+    /// not (the uncommitted changes on the default branch itself).
+    fn review_in_hunk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let wi = self.active;
+        let repos = self.workspace_repos(wi, cx);
+        if repos.is_empty() {
+            let note = Notification::warning("No tab of this workspace is in a git repository.")
+                .title("Nothing to review");
+            return window.push_notification(note, cx);
+        }
+        let n = repos.len();
+        let mut pane = self.workspaces[wi].focused_pane;
+        for (i, repo) in repos.into_iter().enumerate() {
+            let run = format!("hunk diff --watch{}", hunk_target(&repo));
+            let cwd = Some(repo.to_string_lossy().into_owned());
+            let s = self.terminal_running(cwd, &run, window, cx);
+            // The first opens the column, each later one splits the last
+            // off the bottom; the ratios keep the panes the same height.
+            let (axis, ratio) = match i {
+                0 => (Axis::Horizontal, None),
+                _ => (Axis::Vertical, Some(1. / (n - i + 1) as f32)),
+            };
+            let Some(new) = self.split_pane(wi, pane, axis, false, s, i == 0, window, cx) else {
+                break;
+            };
+            let root = &mut self.workspaces[wi].root;
+            if let Some(r) = ratio
+                && let Some(id) = root.split_along(new, Axis::Vertical)
+                && let Some(slot) = root.split_mut(id)
+            {
+                *slot = r;
+            }
+            pane = new;
+        }
+        cx.notify();
+    }
+
+    /// A new terminal tab for the active workspace in `cwd`, with `run`
+    /// typed into its shell. Typed rather than run as the tab's command, so
+    /// the tab is kept across launches like any shell, and quitting the
+    /// program leaves a prompt.
+    fn terminal_running(
+        &mut self,
+        cwd: Option<String>,
+        run: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Surface {
+        let id = self.ws().id;
+        let s = self.make_terminal(id, TerminalOpts::cwd(cwd), window, cx);
+        if let Surface::Terminal(t) = &s {
+            t.update(cx, |t, cx| {
+                t.send(format!("{run}\r").as_bytes());
+                cx.notify();
+            });
+        }
+        s
+    }
+
     /// ⌥⌘D (File › Review Changes): the diff of the repository being worked
     /// in, in a review tab beside the focused pane (`abromux diff`, without
     /// typing it or asking an agent to). The focused tab's repository, else
@@ -870,33 +963,14 @@ impl AbroMux {
     pub(crate) fn review_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use abromux_gitlab::local;
         let wi = self.active;
-        let ws = &self.workspaces[wi];
-        let top = |dir: &std::path::Path| {
-            local::git(dir, &["rev-parse", "--show-toplevel"])
-                .ok()
-                .map(|o| std::path::PathBuf::from(String::from_utf8_lossy(&o).trim()))
-        };
-        let mut repos: Vec<std::path::PathBuf> = vec![];
-        if let Some(t) = ws
+        let focused = self.workspaces[wi]
             .focused_surface()
             .and_then(|s| s.cwd(cx))
-            .and_then(|c| top(std::path::Path::new(&c)))
-        {
-            repos.push(t);
-        }
-        if repos.is_empty() {
-            let places = gitlab::remote::places(
-                ws.home.as_deref(),
-                &ws.surfaces().filter_map(|s| s.cwd(cx)).collect::<Vec<_>>(),
-            );
-            for p in places {
-                if let Some(t) = top(&p.dir)
-                    && !repos.contains(&t)
-                {
-                    repos.push(t);
-                }
-            }
-        }
+            .and_then(|c| git_top(std::path::Path::new(&c)));
+        let repos = match focused {
+            Some(t) => vec![t],
+            None => self.workspace_repos(wi, cx),
+        };
         if repos.is_empty() {
             let note = Notification::warning("No tab of this workspace is in a git repository.")
                 .title("Nothing to review");
@@ -1356,8 +1430,10 @@ impl AbroMux {
     /// Right-click › Clean Up and Delete Folder…: a tab in workspace `wi`'s
     /// folder running the cleanup agent (`automation.workspaceCleanupAgent`,
     /// default `claude`) on `.abromux/cleanup.md`. The agent finds what the
-    /// workspace made, asks, removes it, and ends with `abromux folder
-    /// remove`. It runs in a shell, so the shell stays if it stops early.
+    /// workspace made, removes it (asking only if work would be lost), and
+    /// ends with `abromux folder remove`. It runs in a shell, so the shell
+    /// stays if it stops early. The workspace moves to the "Cleanup" group,
+    /// last in the sidebar.
     pub(crate) fn clean_up_folder(
         &mut self,
         wi: usize,
@@ -1385,6 +1461,7 @@ impl AbroMux {
             .clone()
             .filter(|a| !a.trim().is_empty())
             .unwrap_or_else(|| "claude".into());
+        let wi = self.move_to_cleanup(wi, cx);
         let id = self.workspaces[wi].id;
         let s = self.make_terminal(
             id,
@@ -1445,9 +1522,15 @@ impl AbroMux {
     }
 
     /// Put `ws` at `index`, keeping the selected workspace selected.
-    /// Returns where it went.
+    /// Returns where it went: never below the cleanup group unless it's in it.
     fn insert_workspace(&mut self, index: usize, ws: Workspace) -> usize {
-        let index = index.min(self.workspaces.len());
+        let mut index = index.min(self.workspaces.len());
+        if let Some(c) = self.groups.iter().find(|g| g.cleanup)
+            && ws.group != Some(c.id)
+            && let Some((start, _)) = workspace::group_span(&self.workspaces, c.id)
+        {
+            index = index.min(start);
+        }
         self.workspaces.insert(index, ws);
         if self.workspaces.len() > 1 && self.active >= index {
             self.active += 1;
@@ -1797,6 +1880,19 @@ impl AbroMux {
             self.focus_active(window, cx);
             cx.notify();
         }
+    }
+
+    /// File › Open Workspace in Neovim: a new terminal tab in the workspace
+    /// folder (the focused tab's directory if it has none) running `nvim .`.
+    fn open_in_neovim(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let cwd = self
+            .ws()
+            .home
+            .as_ref()
+            .map(|h| h.to_string_lossy().into_owned());
+        let cwd = cwd.or_else(|| self.focused_cwd(cx));
+        let s = self.terminal_running(cwd, "nvim .", window, cx);
+        self.add_tab(s, window, cx);
     }
 
     /// `"commands"[index]` of the config file, or of the project file
@@ -2222,7 +2318,7 @@ impl AbroMux {
                             .h(px(13.))
                             .px(px(3.))
                             .rounded_full()
-                            .bg(rgb(ACCENT_BRIGHT))
+                            .bg(rgb(pal().accent_bright))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -2270,7 +2366,7 @@ impl AbroMux {
                 let grab = DIVIDER_GRAB;
                 let divider = div()
                     .flex_none()
-                    .bg(cx.global::<settings::Settings>().panes.divider_color)
+                    .bg(cx.global::<settings::Settings>().panes.divider())
                     .when(horizontal, |s| s.w(px(1.)).h_full())
                     .when(!horizontal, |s| s.h(px(1.)).w_full())
                     .relative()
@@ -2397,12 +2493,15 @@ impl AbroMux {
                 .items_center()
                 .gap(px(6.))
                 .border_r_1()
-                .border_color(rgb(BORDER))
+                .border_color(rgb(pal().border))
                 .text_size(px(12.))
                 .cursor_pointer()
-                .when(active, |d| d.bg(rgb(PANE_BG)).text_color(rgb(TEXT)))
+                .when(active, |d| {
+                    d.bg(rgb(pal().pane_bg)).text_color(rgb(pal().text))
+                })
                 .when(!active, |d| {
-                    d.text_color(rgb(MUTED)).hover(|d| d.bg(rgba(HOVER)))
+                    d.text_color(rgb(pal().muted))
+                        .hover(|d| d.bg(rgba(pal().hover)))
                 })
                 // Overlaid, not a border, so the focused tab's content doesn't shift down.
                 .when(active && focused && multi, |d| {
@@ -2413,7 +2512,7 @@ impl AbroMux {
                             .left_0()
                             .w_full()
                             .h(px(2.))
-                            .bg(rgb(ACCENT)),
+                            .bg(rgb(pal().accent)),
                     )
                 })
                 .on_mouse_down(
@@ -2446,7 +2545,7 @@ impl AbroMux {
                     },
                     |d, _, _, cx| cx.new(|_| d.clone()),
                 )
-                .drag_over::<DraggedTab>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
+                .drag_over::<DraggedTab>(|d, _, _, _| d.bg(rgba(pal().drop_tint)))
                 .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
                     this.move_tab(
                         d.sid,
@@ -2459,12 +2558,12 @@ impl AbroMux {
                     )
                 }))
                 .when(unread, |d| {
-                    d.text_color(rgb(TEXT)).child(
+                    d.text_color(rgb(pal().text)).child(
                         div()
                             .size(px(6.))
                             .flex_none()
                             .rounded_full()
-                            .bg(rgb(ACCENT_BRIGHT)),
+                            .bg(rgb(pal().accent_bright)),
                     )
                 })
                 .child(if s.claude_running(cx) {
@@ -2484,9 +2583,9 @@ impl AbroMux {
                         .flex()
                         .items_center()
                         .rounded(px(4.))
-                        .bg(rgba(0x0000004d))
+                        .bg(rgba(pal().field_bg))
                         .border_1()
-                        .border_color(rgb(ACCENT))
+                        .border_color(rgb(pal().accent))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_mouse_up(MouseButton::Left, select_all_on_double_click)
                         .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
@@ -2523,12 +2622,12 @@ impl AbroMux {
                             .when(!active, |d| {
                                 d.invisible().group_hover(group.clone(), |d| d.visible())
                             })
-                            .hover(|d| d.bg(rgba(0xffffff18)))
+                            .hover(|d| d.bg(tint(0x18)))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.request_close_surface(sid, window, cx)
                             }))
-                            .child(icon("x").size(px(10.)).text_color(rgb(MUTED))),
+                            .child(icon("x").size(px(10.)).text_color(rgb(pal().muted))),
                     )
                 })
         });
@@ -2543,9 +2642,9 @@ impl AbroMux {
             .flex_none()
             .flex()
             .items_center()
-            .bg(rgb(TABBAR_BG))
+            .bg(rgb(pal().tabbar_bg))
             .border_b_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(pal().border))
             .child(
                 div()
                     .id(("tabs", pane_id))
@@ -2561,7 +2660,7 @@ impl AbroMux {
                     .on_mouse_down(MouseButton::Left, |ev, window, _| {
                         titlebar::drag_or_zoom(ev, window)
                     })
-                    .drag_over::<DraggedTab>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
+                    .drag_over::<DraggedTab>(|d, _, _, _| d.bg(rgba(pal().drop_tint)))
                     .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
                         this.move_tab(
                             d.sid,
@@ -2583,7 +2682,7 @@ impl AbroMux {
                     // Shown while this pane is zoomed (⌘⇧↩); a click unzooms.
                     .when(self.ws().zoom == Some(pane_id), |d| {
                         d.child(
-                            tinted_icon_button(("pane-zoom", pane_id), "maximize-2", ACCENT)
+                            tinted_icon_button(("pane-zoom", pane_id), "maximize-2", pal().accent)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.workspaces[this.active].toggle_zoom();
                                     cx.notify();
@@ -2612,7 +2711,7 @@ impl AbroMux {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(PANE_BG))
+            .bg(rgb(pal().pane_bg))
             .relative()
             .on_mouse_down(
                 MouseButton::Left,
@@ -2628,7 +2727,7 @@ impl AbroMux {
                     .child(content)
                     // Unfocused splits are dimmed, like cmux/ghostty.
                     .when(multi && !focused, |d| {
-                        d.child(div().absolute().inset_0().bg(rgba(0x0000004a)))
+                        d.child(div().absolute().inset_0().bg(rgba(pal().scrim)))
                     })
                     // Catches a dragged tab over the content (terminals and
                     // webviews would otherwise swallow it).
@@ -2655,7 +2754,7 @@ impl AbroMux {
                         d.child(
                             window_corners(div().absolute().inset_0(), corners)
                                 .border_2()
-                                .border_color(rgb(ACCENT))
+                                .border_color(rgb(pal().accent))
                                 .bg(rgba(0x1f6fe522))
                                 .with_animation(
                                     ("flash", n),
@@ -2669,7 +2768,7 @@ impl AbroMux {
                 d.child(
                     window_corners(div().absolute().inset_0(), corners)
                         .border_2()
-                        .border_color(rgb(ACCENT_BRIGHT)),
+                        .border_color(rgb(pal().accent_bright)),
                 )
             })
             // Which split has the keyboard, at a glance.
@@ -2746,7 +2845,7 @@ impl Render for AbroMux {
             .track_focus(&self.focus)
             .size_full()
             .flex()
-            .text_color(rgb(TEXT))
+            .text_color(rgb(pal().text))
             .font_family(".AppleSystemUIFont")
             .on_action(cx.listener(|_, _: &Quit, window, cx| quit::request(window, cx)))
             // Also on the app, but the palette lists only what the focused view handles.
@@ -2766,8 +2865,8 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &MoveWorkspaceDown, _, cx| {
                 this.nudge_workspace(this.active, true, cx)
             }))
-            .on_action(cx.listener(|this, _: &NewGroup, _, cx| {
-                this.new_group(this.active, cx);
+            .on_action(cx.listener(|this, _: &NewGroup, window, cx| {
+                this.new_group_and_rename(this.active, window, cx);
             }))
             .on_action(cx.listener(|this, _: &GroupByFolder, _, cx| {
                 this.group_by_folder(cx);
@@ -2801,13 +2900,13 @@ impl Render for AbroMux {
                 this.sidebar = true;
                 this.start_rename(this.active, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &NextWorkspace, window, cx| {
-                let n = this.workspaces.len();
-                this.select_workspace((this.active + 1) % n, window, cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &NextWorkspace, window, cx| {
+                    this.step_workspace(1, window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &PrevWorkspace, window, cx| {
-                let n = this.workspaces.len();
-                this.select_workspace((this.active + n - 1) % n, window, cx)
+                this.step_workspace(-1, window, cx)
             }))
             .on_action(cx.listener(|this, _: &NewTerminal, window, cx| {
                 let cwd = this.focused_cwd(cx);
@@ -2864,6 +2963,12 @@ impl Render for AbroMux {
             .on_action(
                 cx.listener(|this, _: &ReviewChanges, window, cx| this.review_changes(window, cx)),
             )
+            .on_action(
+                cx.listener(|this, _: &OpenInNeovim, window, cx| this.open_in_neovim(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ReviewInHunk, window, cx| this.review_in_hunk(window, cx)),
+            )
             // Reached when no browser took them: a plugin's tab has the focus.
             .on_action(cx.listener(|this, _: &browser::ZoomIn, window, cx| {
                 this.zoom_plugin("in", window, cx)
@@ -2879,17 +2984,17 @@ impl Render for AbroMux {
                     BrowserView::focus_address(b, window, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &Ws1, w, cx| this.select_workspace(0, w, cx)))
-            .on_action(cx.listener(|this, _: &Ws2, w, cx| this.select_workspace(1, w, cx)))
-            .on_action(cx.listener(|this, _: &Ws3, w, cx| this.select_workspace(2, w, cx)))
-            .on_action(cx.listener(|this, _: &Ws4, w, cx| this.select_workspace(3, w, cx)))
-            .on_action(cx.listener(|this, _: &Ws5, w, cx| this.select_workspace(4, w, cx)))
-            .on_action(cx.listener(|this, _: &Ws6, w, cx| this.select_workspace(5, w, cx)))
-            .on_action(cx.listener(|this, _: &Ws7, w, cx| this.select_workspace(6, w, cx)))
-            .on_action(cx.listener(|this, _: &Ws8, w, cx| this.select_workspace(7, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws1, w, cx| this.select_slot(0, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws2, w, cx| this.select_slot(1, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws3, w, cx| this.select_slot(2, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws4, w, cx| this.select_slot(3, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws5, w, cx| this.select_slot(4, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws6, w, cx| this.select_slot(5, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws7, w, cx| this.select_slot(6, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws8, w, cx| this.select_slot(7, w, cx)))
             .on_action(cx.listener(|this, _: &Ws9, w, cx| {
                 let last = this.workspaces.len() - 1;
-                this.select_workspace(last, w, cx)
+                this.select_slot(last, w, cx)
             }))
             .on_action(cx.listener(|this, _: &Tab1, w, cx| this.select_tab(Some(0), w, cx)))
             .on_action(cx.listener(|this, _: &Tab2, w, cx| this.select_tab(Some(1), w, cx)))
@@ -2995,6 +3100,8 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, a: &keymap::RunCommand, window, cx| {
                 this.run_command(a.index, a.project.clone(), window, cx)
             }))
+            // Also on the root (not only app-wide) so the palette lists it.
+            .on_action(|_: &OpenConfig, _, cx| settings_window::open_config(cx))
             .on_action(cx.listener(|this, _: &ReloadConfig, window, cx| {
                 // A toast says how it went.
                 let _ = this.reload_settings(window, cx);
@@ -3067,7 +3174,7 @@ impl Render for AbroMux {
                     .h_full()
                     .flex()
                     .flex_col()
-                    .bg(rgb(PANE_BG))
+                    .bg(rgb(pal().pane_bg))
                     .when(!self.sidebar, |d| {
                         // Same height as the sidebar's titlebar row so the
                         // traffic lights sit centered in it.
@@ -3080,9 +3187,9 @@ impl Render for AbroMux {
                                 .pl(px(80.))
                                 .pr(px(10.))
                                 .gap_1()
-                                .bg(rgb(TABBAR_BG))
+                                .bg(rgb(pal().tabbar_bg))
                                 .border_b_1()
-                                .border_color(rgb(BORDER))
+                                .border_color(rgb(pal().border))
                                 .on_mouse_down(MouseButton::Left, |ev, window, _| {
                                     titlebar::drag_or_zoom(ev, window)
                                 })
@@ -3094,7 +3201,7 @@ impl Render for AbroMux {
                                         .min_w_0()
                                         .truncate()
                                         .text_size(px(12.))
-                                        .text_color(rgb(MUTED))
+                                        .text_color(rgb(pal().muted))
                                         .child(title),
                                 ),
                         )
@@ -3122,8 +3229,8 @@ impl Render for AbroMux {
                                         .h(r.size.height)
                                         .rounded(px(4.))
                                         .border_2()
-                                        .border_color(rgb(ACCENT))
-                                        .bg(rgba(DROP_TINT)),
+                                        .border_color(rgb(pal().accent))
+                                        .bg(rgba(pal().drop_tint)),
                                 )
                             })
                     }),
@@ -3150,9 +3257,9 @@ fn window_corners(d: Div, corners: Corners<bool>) -> Div {
 /// unless the tab is active.
 fn icon_color(name: &str, bright: bool) -> Rgba {
     match name {
-        "claude" => rgb(ACCENT_BRIGHT),
-        _ if bright => rgb(TEXT),
-        _ => rgb(MUTED),
+        "claude" => rgb(pal().accent_bright),
+        _ if bright => rgb(pal().text),
+        _ => rgb(pal().muted),
     }
 }
 
@@ -3175,11 +3282,11 @@ impl Render for DraggedTab {
             .gap(px(6.))
             .rounded(px(5.))
             .border_1()
-            .border_color(rgb(ACCENT))
-            .bg(rgb(PANE_BG))
+            .border_color(rgb(pal().accent))
+            .bg(rgb(pal().pane_bg))
             .opacity(0.9)
             .text_size(px(12.))
-            .text_color(rgb(TEXT))
+            .text_color(rgb(pal().text))
             .font_family(".AppleSystemUIFont")
             .child(
                 icon(self.icon)
@@ -3247,13 +3354,13 @@ fn hint_pill(text: String) -> Div {
         .px(px(6.))
         .py(px(1.))
         .rounded_full()
-        .bg(rgba(0x3a3c42f2))
+        .bg(rgba(pal().pill_bg))
         .border_1()
-        .border_color(rgba(0xffffff4d))
+        .border_color(rgba(pal().pill_border))
         .shadow_sm()
         .text_size(px(10.))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(TEXT))
+        .text_color(rgb(pal().text))
         .child(text)
 }
 
@@ -3293,26 +3400,20 @@ fn run_app(cwd: Option<String>) {
     app.run(move |cx: &mut App| {
         icon::set_dock_icon();
         gpui_component::init(cx);
-        Theme::change(ThemeMode::Dark, None, cx);
-        let theme = Theme::global_mut(cx);
-        theme.background = rgba(0x00000000).into();
-        theme.font_family = ".AppleSystemUIFont".into();
-        theme.mono_font_family = terminal::FONT_FAMILY.into();
-        // gpui-component's dark theme is cold black and grey; use our warm neutrals.
-        theme.popover = rgb(MENU_BG).into();
-        theme.popover_foreground = rgb(TEXT).into();
-        theme.foreground = rgb(TEXT).into();
-        theme.muted_foreground = rgb(MUTED).into();
-        theme.border = rgb(MENU_BORDER).into();
-        theme.accent = rgb(MENU_HOVER).into();
-        theme.accent_foreground = rgb(TEXT).into();
-
-        cx.set_global(config::Config::load());
         // A broken config file starts with the defaults, and says so once the window is up.
         let (settings, settings_error) = match settings::load() {
             Ok(s) => (s, None),
             Err(e) => (settings::Settings::default(), Some(e)),
         };
+        // Light or dark before anything is drawn, and before the Ghostty
+        // config picks its theme for it.
+        theme::apply_appearance(settings.app.appearance);
+        theme::set_dark(theme::appearance_is_dark(cx.window_appearance()), cx);
+        cx.set_global(config::Config::load());
+        // Off by default: only takes out hooks an earlier run put in.
+        if let Err(e) = terminal_browser_panes::set(settings.browser.terminal_browser_panes) {
+            eprintln!("abromux: {e}");
+        }
         cx.set_global(settings);
         update::init(cx);
         gitlab::init(cx);
@@ -3326,6 +3427,7 @@ fn run_app(cwd: Option<String>) {
         });
         cx.on_action(|_: &About, cx| about::show(cx));
         cx.on_action(|_: &OpenSettings, cx| settings_window::show(cx));
+        cx.on_action(|_: &OpenConfig, cx| settings_window::open_config(cx));
         // The fixed bindings; the shortcuts users can change are in keymap.rs.
         cx.bind_keys([
             KeyBinding::new("cmd-w", about::CloseAbout, Some("About")),
@@ -3403,6 +3505,7 @@ fn run_app(cwd: Option<String>) {
                     ..Default::default()
                 },
                 |window, cx| {
+                    theme::follow(window);
                     if let Some(e) = settings_error {
                         window.defer(cx, move |window, cx| {
                             window.push_notification(settings::error_notification(e), cx)
@@ -3434,4 +3537,24 @@ fn run_app(cwd: Option<String>) {
         })
         .detach();
     });
+}
+
+/// The top of the git checkout `dir` is in.
+fn git_top(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    abromux_gitlab::local::git(dir, &["rev-parse", "--show-toplevel"])
+        .ok()
+        .map(|o| std::path::PathBuf::from(String::from_utf8_lossy(&o).trim()))
+}
+
+/// What `hunk diff` compares `repo`'s working tree with, as an argument
+/// with a leading space: the commit its branch forked from the default
+/// branch at, or nothing (the uncommitted changes), as in
+/// [`abromux_gitlab::local::work_spec`].
+fn hunk_target(repo: &std::path::Path) -> String {
+    use abromux_gitlab::local;
+    let spec = local::work_spec(repo);
+    spec.strip_prefix("--merge-base ")
+        .and_then(|base| local::git(repo, &["merge-base", base, "HEAD"]).ok())
+        .map(|o| format!(" {}", String::from_utf8_lossy(&o).trim()))
+        .unwrap_or_default()
 }

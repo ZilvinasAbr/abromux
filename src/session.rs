@@ -50,6 +50,8 @@ pub struct GroupState {
     pub color: Option<u32>,
     #[serde(default)]
     pub collapsed: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cleanup: bool,
 }
 
 fn yes() -> bool {
@@ -302,6 +304,7 @@ impl AbroMux {
                     name: g.name.clone(),
                     color: g.color,
                     collapsed: g.collapsed,
+                    cleanup: g.cleanup,
                 })
                 .collect(),
         }
@@ -474,6 +477,7 @@ impl AbroMux {
                         name: g.name.clone(),
                         color: g.color,
                         collapsed: g.collapsed,
+                        cleanup: g.cleanup,
                     });
                     self.next_group
                 })
@@ -919,6 +923,7 @@ mod tests {
                 name: "web".into(),
                 color: None,
                 collapsed: true,
+                cleanup: false,
             }],
         };
         let json = serde_json::to_string(&s).unwrap();

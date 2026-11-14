@@ -541,8 +541,8 @@ impl AbroMux {
                     .gap(px(8.))
                     .cursor_pointer()
                     .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .hover(|s| s.bg(rgba(HOVER)))
+                    .border_color(rgb(pal().border))
+                    .hover(|s| s.bg(rgba(pal().hover)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_notification(id, window, cx);
                     }))
@@ -552,7 +552,7 @@ impl AbroMux {
                             .size(px(7.))
                             .flex_none()
                             .rounded_full()
-                            .when(!n.read, |d| d.bg(rgb(ACCENT_BRIGHT))),
+                            .when(!n.read, |d| d.bg(rgb(pal().accent_bright))),
                     )
                     .child(
                         div()
@@ -574,7 +574,7 @@ impl AbroMux {
                                 d.child(
                                     div()
                                         .text_size(px(12.))
-                                        .text_color(rgb(TEXT))
+                                        .text_color(rgb(pal().text))
                                         .line_clamp(3)
                                         .child(n.body.clone()),
                                 )
@@ -582,7 +582,7 @@ impl AbroMux {
                             .child(
                                 div()
                                     .text_size(px(10.5))
-                                    .text_color(rgb(MUTED))
+                                    .text_color(rgb(pal().muted))
                                     .child(format!("{place} · {age}")),
                             ),
                     )
@@ -618,9 +618,9 @@ impl AbroMux {
                     .flex()
                     .flex_col()
                     .rounded(px(10.))
-                    .bg(rgb(TABBAR_BG))
+                    .bg(rgb(pal().tabbar_bg))
                     .border_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(pal().border))
                     .shadow_lg()
                     .overflow_hidden()
                     .occlude()
@@ -633,7 +633,7 @@ impl AbroMux {
                             .items_center()
                             .justify_between()
                             .border_b_1()
-                            .border_color(rgb(BORDER))
+                            .border_color(rgb(pal().border))
                             .child(
                                 div()
                                     .text_size(px(12.5))
@@ -648,9 +648,11 @@ impl AbroMux {
                                         .py(px(2.))
                                         .rounded(px(4.))
                                         .text_size(px(11.5))
-                                        .text_color(rgb(MUTED))
+                                        .text_color(rgb(pal().muted))
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(rgba(HOVER)).text_color(rgb(TEXT)))
+                                        .hover(|s| {
+                                            s.bg(rgba(pal().hover)).text_color(rgb(pal().text))
+                                        })
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.clear_notifications(cx)
                                         }))
@@ -669,7 +671,7 @@ impl AbroMux {
                                     div()
                                         .p(px(16.))
                                         .text_size(px(12.))
-                                        .text_color(rgb(MUTED))
+                                        .text_color(rgb(pal().muted))
                                         .child("No notifications"),
                                 )
                             })

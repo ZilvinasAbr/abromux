@@ -108,6 +108,9 @@ pub const ACTIONS: &[Act] = {
             [(None, [])];
         "reviewChanges", Some("Review Changes (Diff of This Workspace's Work)"), ReviewChanges,
             [(None, ["alt-cmd-d"])];
+        "reviewInHunk", Some("Review Changes in Hunk (Each Repository Beside)"), ReviewInHunk,
+            [(None, [])];
+        "openInNeovim", Some("Open Workspace in Neovim"), OpenInNeovim, [(None, [])];
         "showNotifications", Some("Show Notifications"), ToggleNotifications, [(None, ["cmd-i"])];
         "jumpToUnread", Some("Jump to Latest Unread"), JumpToUnread, [(None, ["cmd-shift-u"])];
         "toggleUnread", Some("Toggle Unread"), ToggleUnread, [(None, ["alt-cmd-u"])];
@@ -122,6 +125,7 @@ pub const ACTIONS: &[Act] = {
         "persistenceCmuxLike", Some("Persistence: cmux-like (shells end on quit)"),
             PersistenceCmuxLike, [(None, [])];
         "openSettings", Some("Settings…"), OpenSettings, [(None, ["cmd-,"])];
+        "openConfig", Some("Open Config File"), OpenConfig, [(None, [])];
         "copy", Some("Copy"), terminal::Copy, [(T, ["cmd-c"])];
         "paste", Some("Paste"), terminal::Paste, [(T, ["cmd-v"])];
         "find", Some("Find…"), terminal::Find, [(T, ["cmd-f"]), (B, ["cmd-f"]), (BI, ["cmd-f"])];

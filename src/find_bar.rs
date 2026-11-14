@@ -61,9 +61,9 @@ impl FindBar {
             .flex()
             .items_center()
             .gap_1()
-            .bg(rgb(TABBAR_BG))
+            .bg(rgb(pal().tabbar_bg))
             .text_size(px(12.))
-            .text_color(rgb(TEXT))
+            .text_color(rgb(pal().text))
             .on_action(
                 cx.listener(move |this, _: &input::Escape, window, cx| close(this, window, cx)),
             )
@@ -77,7 +77,7 @@ impl FindBar {
             .child(
                 div()
                     .flex_none()
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(pal().muted))
                     .child(self.counter()),
             )
             .child(

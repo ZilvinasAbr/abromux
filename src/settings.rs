@@ -21,7 +21,7 @@
 //!     "flashPane": ["cmd-shift-h", "ctrl-a f"],
 //!     "find": { "keys": "cmd-shift-f", "when": "Terminal" }
 //!   },
-//!   "browser": { "engine": "terminalBrowser" },
+//!   "browser": { "engine": "terminalBrowser", "terminalBrowserPanes": true },
 //!   "editor": { "program": "tode" },
 //!   "commands": [
 //!     { "title": "Run Tests", "run": "cargo test", "shortcut": "cmd-alt-t" },
@@ -45,7 +45,7 @@
 
 use crate::{
     layout::WorkspaceSpec,
-    theme::{ACCENT, BORDER},
+    theme::{Appearance, pal},
 };
 use gpui::Keystroke;
 use gpui::{Global, Rgba, rgb, rgba};
@@ -187,6 +187,9 @@ impl Persistence {
 pub struct BrowserSettings {
     /// What a browser tab is.
     pub engine: BrowserEngine,
+    /// terminal-browser opens new tabs as abromux splits beside it
+    /// (`crate::terminal_browser_panes`).
+    pub terminal_browser_panes: bool,
 }
 
 /// The built-in WebKit browser, or a terminal running `terminal-browser`.
@@ -229,6 +232,8 @@ impl EditorProgram {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct AppSettings {
+    /// Light, dark, or following macOS (`crate::theme`).
+    pub appearance: Appearance,
     /// ⌘N starts in the focused terminal's directory; off, in home.
     pub workspace_inherit_working_directory: bool,
     /// Where a new workspace goes in the sidebar, outside a group.
@@ -270,6 +275,7 @@ fn reorder<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            appearance: Appearance::System,
             workspace_inherit_working_directory: true,
             new_workspace_placement: Placement::End,
             automatically_check_for_updates: true,
@@ -526,13 +532,26 @@ pub enum IndicatorStyle {
     SolidFill,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct WorkspaceGroups {
     /// Where a new workspace goes inside a group (⌘N from one of its
     /// workspaces, or its header's +): after the selected one, second
     /// (after the group's first), or last.
     pub new_workspace_placement: Placement,
+    /// Show the sidebar in sections by what each workspace's coding agent
+    /// is doing (Verify, Running, Idle, No agent) instead of your groups,
+    /// which come back as they were when it's off.
+    pub group_by_agent_status: bool,
+}
+
+impl Default for WorkspaceGroups {
+    fn default() -> Self {
+        Self {
+            new_workspace_placement: Placement::default(),
+            group_by_agent_status: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -786,20 +805,28 @@ pub struct Panes {
     /// default (cmux's `paneResizeStepPixels`).
     #[serde(deserialize_with = "step")]
     pub resize_step: f32,
-    /// The line between split panes.
-    #[serde(deserialize_with = "color")]
-    pub divider_color: Rgba,
+    /// The line between split panes; None for the theme's border colour
+    /// ([`Panes::divider`]).
+    #[serde(deserialize_with = "opt_color")]
+    pub divider_color: Option<Rgba>,
     /// The border around the focused pane when a workspace has splits.
     #[serde(deserialize_with = "color")]
     pub focus_border_color: Rgba,
+}
+
+impl Panes {
+    /// The line between split panes, in the current theme unless set.
+    pub fn divider(&self) -> Rgba {
+        self.divider_color.unwrap_or_else(|| rgb(pal().border))
+    }
 }
 
 impl Default for Panes {
     fn default() -> Self {
         Self {
             resize_step: 20.,
-            divider_color: rgb(BORDER),
-            focus_border_color: rgba(ACCENT << 8 | 0xb0),
+            divider_color: None,
+            focus_border_color: rgba(pal().accent << 8 | 0xb0),
         }
     }
 }
@@ -886,6 +913,19 @@ pub fn error_notification(e: String) -> Notification {
 
 pub fn path() -> PathBuf {
     crate::paths::xdg_config().join("abromux/config.json")
+}
+
+/// The config file's path, after making an empty one if there's none, so
+/// it can be opened in an editor.
+pub fn ensure_file() -> PathBuf {
+    let path = path();
+    if !path.exists() {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, "{\n}\n");
+    }
+    path
 }
 
 /// The settings in the config file, or the defaults if there is none.
@@ -1134,7 +1174,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.panes.resize_step, 35.5);
-        assert_eq!(s.panes.divider_color, rgb(0xff0000));
+        assert_eq!(s.panes.divider_color, Some(rgb(0xff0000)));
         assert_eq!(s.panes.focus_border_color, rgba(0x00ff0080));
     }
 
@@ -1287,6 +1327,10 @@ mod tests {
         );
         assert_eq!(s.workspace_colors.parse("#ff0000"), Some(0xff0000));
         assert_eq!(s.workspace_groups.new_workspace_placement, Placement::Top);
+        assert!(
+            s.workspace_groups.group_by_agent_status,
+            "on unless turned off"
+        );
         assert!(s.automation.workspace_auto_naming);
         let d = Settings::default();
         assert_eq!(d.workspace_colors.parse("amber"), Some(0x7D6608));
@@ -1307,6 +1351,14 @@ mod tests {
         assert!(reorder(r#""notifications""#).unwrap());
         assert!(reorder(r#""agentActivity""#).unwrap());
         assert!(reorder(r#""sometimes""#).is_err());
+        let appearance = |v: &str| {
+            parse(&format!(r#"{{"app": {{"appearance": "{v}"}}}}"#)).map(|s| s.app.appearance)
+        };
+        assert_eq!(appearance("light").unwrap(), Appearance::Light);
+        assert_eq!(appearance("dark").unwrap(), Appearance::Dark);
+        assert_eq!(appearance("system").unwrap(), Appearance::System);
+        assert_eq!(AppSettings::default().appearance, Appearance::System);
+        assert!(appearance("sepia").is_err());
     }
 
     #[test]
@@ -1318,6 +1370,9 @@ mod tests {
         }
         let s = parse(r#"{"browser": {"engine": "builtIn"}}"#).unwrap();
         assert_eq!(s.browser.engine, BrowserEngine::BuiltIn);
+        assert!(!Settings::default().browser.terminal_browser_panes);
+        let s = parse(r#"{"browser": {"terminalBrowserPanes": true}}"#).unwrap();
+        assert!(s.browser.terminal_browser_panes);
         let e = parse(r#"{"browser": {"engine": "chrome"}}"#)
             .unwrap_err()
             .to_string();

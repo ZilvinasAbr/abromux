@@ -75,7 +75,7 @@ The check time and a skipped version are kept in `update.json` in the support fo
 
 ## GitLab reviews
 
-A GitLab tab (⌘⇧P → New GitLab Tab) shows merge requests the way GitLab's web UI does, in its dark theme. It's built in as a plugin (`crates/abromux-gitlab`, the `gitlab` Cargo feature, on by default) and writes what a reviewer and an author do: comments, replies, resolving, threads on lines, approvals, editing and deleting your comments, editing the title and description, draft, close and reopen, merging, and running, retrying or cancelling pipelines.
+A GitLab tab (⌘⇧P → New GitLab Tab) shows merge requests the way GitLab's web UI does, in its dark theme (whatever the app's appearance). It's built in as a plugin (`crates/abromux-gitlab`, the `gitlab` Cargo feature, on by default) and writes what a reviewer and an author do: comments, replies, resolving, threads on lines, approvals, editing and deleting your comments, editing the title and description, draft, close and reopen, merging, and running, retrying or cancelling pipelines.
 
 - **Sign in** with the GitLab URL and a personal access token with the `api` scope (a `read_api` token works too, but then writing says the token needs `api`). The token is checked, then kept in your login Keychain (service `abromux-gitlab`, account = the URL). New GitLab tabs then open on that GitLab, so you sign in once. `ABROMUX_GITLAB_TOKEN` overrides it.
 - **The list** has the merge requests you're asked to review, the ones you created, and all you can see, open, merged, closed or all of them, with checklist progress, coloured labels, the target branch when it isn't the default, pipeline status, assignees and reviewers, resolved threads ("1 of 4") and Approved, Merged and Closed badges, newest first, and a filter.
@@ -139,7 +139,7 @@ Each workspace's row shows its name, a description if it has one, the focused ta
 - **Description**: ⌥⌘E (or right-click → Add Description…) edits it under the name. Return saves, ⇧↩ adds a line, Esc cancels, and an empty one clears it.
 - **Color**: right-click → Color, from cmux's sixteen (Red, Crimson, Orange, Amber, Olive, Green, Teal, Aqua, Blue, Navy, Indigo, Purple, Magenta, Rose, Brown, Charcoal) or your own palette (`workspaceColors.colors`). It shows as a bar down the row's left edge, or fills the row with `"indicatorStyle": "solidFill"`. A layout's `"color"` sets it too.
 - **Order**: drag a row to move it. A line shows where it will land, between two rows; between two of a group's workspaces puts it in that group, and above a group's header keeps it out. Dropping it on a header makes it the group's first. Right-click → Move Up / Move Down / Move to Top, or ⌘⇧P → Move Workspace Up / Down. ⌘1…⌘9 follow the order.
-- **Groups**: a header above workspaces that belong together. Right-click a row → Group → New Group starts one (named after the repository), or ⌘⇧P → Group Workspaces by Folder groups every workspace that shares a repository or folder with another. Click a header to fold it (a folded group still shows the selected workspace, and a dot if one has an unread notification), double-click to rename it, drag it to move the whole group, and use its `+` for a new workspace in the group's folder. Right-click a header to rename, color, ungroup or close it. ⌘N from a workspace in a group puts the new one in the group.
+- **Groups**: a header above workspaces that belong together. Right-click a row → Group → New Group starts one (named after the repository, with the name selected so you can type a new one), or ⌘⇧P → Group Workspaces by Folder groups every workspace that shares a repository or folder with another. Click a header to fold it (a folded group still shows the selected workspace, and a dot if one has an unread notification), double-click to rename it, drag it to move the whole group, and use its `+` for a new workspace in the group's folder. Right-click a header to rename, color, ungroup or close it. ⌘N from a workspace in a group puts the new one in the group.
 - **Auto-naming** (off by default): with `"automation": { "workspaceAutoNaming": true }`, the first coding agent to run in a workspace names it; agents started later in other terminals leave the name alone. Claude Code titles its own terminal from the session, so a Claude workspace takes that title, and follows it as Claude Code retitles. Other agents' prompts are turned into a short name by that agent's own CLI (`codex exec`, or `claude -p` on Haiku), and renamed as later prompts move the work on (very short ones like "yes" don't count). That runs a request on your account per rename. A name you give the workspace always wins and stops the renaming; clearing it (an empty rename) starts it again. A try that fails (the CLI timing out, a rate limit) is made again on the next prompt, and after three in a row only every ten minutes. Agents other than Claude Code and Codex are named by whichever of those two is installed. Without either, the name follows the agent's terminal title. A ⇧⌘I workspace left on its made-up name is auto-named this way even with the setting off; typing a name in the ⇧⌘I dialog counts as naming it.
 
 ## Workspace folders
@@ -155,7 +155,7 @@ Closing the workspace keeps its folder.
 
 ### Cleaning up
 
-⇧⌘X (or right-click a workspace with a folder › Clean Up and Delete Folder…) opens a tab in the folder running a cleanup agent: `claude 'Read .abromux/cleanup.md and follow it.'`. It looks for everything the workspace made outside its folder, checks for work that would be lost, shows you what it will remove and keep, and waits for you to agree. Then it removes those things and ends with `abromux folder remove`, which closes the workspace. Claude asks before each command as usual. Set `automation.workspaceCleanupAgent` for another agent CLI; the instruction is passed as its one argument.
+⇧⌘X (or right-click a workspace with a folder › Clean Up and Delete Folder…) moves the workspace into the **Cleanup** group, which always stays last in the sidebar, and opens a tab in the folder running a cleanup agent: `claude 'Read .abromux/cleanup.md and follow it.'`. It looks for everything the workspace made outside its folder, removes those things without asking, and ends with `abromux folder remove`, which closes the workspace. Workspaces are treated as scratch folders for one task, so it only stops to ask when work would really be lost: uncommitted changes or unpushed, unmerged commits in a worktree, or a changed copy of a folder. Things that were there before or are shared with other projects are kept, and listed at the end. Claude asks before each command as usual. Set `automation.workspaceCleanupAgent` for another agent CLI; the instruction is passed as its one argument.
 
 To make that findable, each folder's `AGENTS.md` asks agents to keep track of what they make:
 
@@ -269,6 +269,8 @@ terminal-browser run in a shell (`terminal-browser open ./report.html`, as an ag
 
 abromux looks for `terminal-browser` on PATH, in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`; if it isn't there, the tab falls back to the built-in browser with a warning. The setting applies to tabs opened after it changes; open ones stay as they are. A terminal-browser tab is restored as a browser tab on the page it last showed (its own back/forward history isn't kept). The `abromux browser` automation commands only drive built-in tabs, so `abromux browser open` always opens one (use `terminal-browser action` to drive a terminal-browser).
 
+`"terminalBrowserPanes": true` in `browser` (Settings: General › Browser › terminal-browser new tabs as panes) has terminal-browser open new tabs as abromux panes instead of its own tabs. Links that ask for a new tab (`target=_blank`, ⌘-click, middle-click), the context menu's "Open link in new tab" and terminal-browser's new-tab box then open a terminal-browser split to the right of the browser they came from (`TB_ABROMUX_SPLIT=down`, `left` or `up` in that pane's environment picks another side). Pages opened with `window.open` and window features (OAuth and SSO sign-ins that talk to their opener) stay popups. terminal-browser has no setting for this, so abromux adds a few lines to its `app/browser/dist/main.js`, and takes them out when the setting is off. That file is outside terminal-browser's signed Electron app, so its signature, entitlements and passkeys are untouched. `terminal-browser upgrade` replaces the file; abromux puts the lines back before it next starts a terminal-browser, and if the code they hook into has moved, it changes nothing and says so. A running terminal-browser keeps the code it started with: all of them share one daemon, so a change applies once every terminal-browser has quit. That daemon's environment is the first pane's, so the new pane comes from each browser's own `ABROMUX_SURFACE_ID`; a browser that isn't in an abromux pane opens a normal tab. Shells get `ABROMUX_BIN`, the CLI of the app they run in, which is what the new pane is made with.
+
 ### Opening files
 
 ```json
@@ -297,6 +299,7 @@ These use cmux's key names. Shown with their defaults:
 ```json
 {
   "app": {
+    "appearance": "system",
     "workspaceInheritWorkingDirectory": true,
     "newWorkspacePlacement": "end",
     "automaticallyCheckForUpdates": true,
@@ -326,17 +329,19 @@ These use cmux's key names. Shown with their defaults:
     "unselectedFillOpacity": 0.7,
     "colors": { "Red": "#C0392B", "Blue": "#1565C0" }
   },
-  "workspaceGroups": { "newWorkspacePlacement": "afterCurrent" },
+  "workspaceGroups": { "newWorkspacePlacement": "afterCurrent", "groupByAgentStatus": true },
   "automation": { "workspaceAutoNaming": false, "workspaceCleanupAgent": null }
 }
 ```
 
+- `appearance`: `system` follows macOS's light or dark mode as it changes; `light` or `dark` keeps the app in one (also in Settings › General). It covers the windows, sidebar, menus, Markdown tabs, web pages that follow the system's color scheme, and terminals: a Ghostty `theme = light:A,dark:B` uses the one for the appearance, and without a theme the built-in colors switch too. Running terminals recolor when it changes. GitLab tabs stay in GitLab's dark theme.
 - `workspaceInheritWorkingDirectory`: ⌘N and the `+` start in the focused terminal's directory; `false` starts in your home folder.
 - `keepWorkspaceOpenWhenClosingLastSurface`: ⌘W on a workspace's last tab opens a fresh terminal in the same directory instead of closing the workspace. Only ⌘W: a shell that exits, or the tab's `×`, still closes it.
 - `reorderOnNotification`: a workspace that gets a notification you aren't looking at moves to the top of the sidebar, or to the top of its group if it's in one. `false` (or `"off"`) keeps the order as you left it. cmux's `"notifications"` is the same as `true`; its `"agentActivity"` is taken as `"notifications"` too, since agent turns already notify here.
 - `automaticallyCheckForUpdates`: look for a new release once a day ([Updates](#updates)).
 - `workspaceFoldersDirectory`: where ⇧⌘I makes [workspace folders](#workspace-folders); `null` is `~/.abromux/ws` (per channel for nightlies).
 - `newWorkspacePlacement`: where a new workspace goes, `top`, `afterCurrent` (after the selected one, or after its group) or `end`. `workspaceGroups.newWorkspacePlacement` is the same inside a group, where `top` means right after the group's first workspace.
+- `workspaceGroups.groupByAgentStatus` (Settings › General) shows the sidebar in sections by what each workspace's coding agent is doing, instead of your groups (on by default; `false` shows your groups): **Verify** (an agent waits for you), **Running**, **Idle** (an agent is open but done with its turn) and **No agent**. A workspace with several agents goes in the most pressing one. Sections fold on click; ⌘1…9 and next/previous workspace follow the order shown. Rows can't be dragged while it's on, and your groups come back unchanged when it's off.
 - `fontSize` sizes the workspace names (8–24); the smaller lines scale with it. `hideAllDetails` shows names only. `wrapWorkspaceTitles` lets long names wrap.
 - `showWorkspaceDescription`, `showNotificationMessage`, `showBranchDirectory`, `showProgress`, `showLog` and `showCustomMetadata` (status pills) hide those lines when `false`. `stackBranchDirectory` puts the branch and the directory on lines of their own, and `pathLastSegmentOnly` shows `…/api` instead of `~/code/api`.
 - `selectionColor` (in `sidebar` or `workspaceColors`) is the selected row's fill; it's the accent color by default. `sidebarAppearance.tintColor` lays a tint of that opacity over the sidebar.
@@ -396,7 +401,7 @@ A project can have its own commands. The palette looks from the focused terminal
 
 Reloading the config applies new shortcuts at once, in the menus too.
 
-⌘⇧, (or ⌘⇧P → Reload Config, or `abromux reload-config`) reads the file again without a restart. If it doesn't parse, the current settings stay and a toast shows the error with its line and column, and it does the same at launch. `abromux config check [<file>]` validates a file without the app, and `abromux config path` prints where it's read from. The Ghostty config below is separate and is still read only at launch.
+⌘⇧, (or ⌘⇧P → Reload Config, or `abromux reload-config`) reads the file again without a restart. If it doesn't parse, the current settings stay and a toast shows the error with its line and column, and it does the same at launch. `abromux config check [<file>]` validates a file without the app, `abromux config path` prints where it's read from, and `abromux config open` (or ⌘⇧P → Open Config File) opens it in its default app, making an empty one first if there's none. The Ghostty config below is separate and is still read only at launch.
 
 ### Notifications
 
@@ -430,7 +435,7 @@ Reloading the config applies new shortcuts at once, in the menus too.
 
 ## Ghostty config
 
-Terminals read your Ghostty config: `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`), then `~/Library/Application Support/com.mitchellh.ghostty/config`, plus their `config-file` includes. abromux uses `theme` (from `~/.config/ghostty/themes` or Ghostty.app), `font-family` (further `font-family` lines are fallbacks, as in Ghostty), `font-size`, `foreground`, `background`, `palette`, `cursor-color`, `cursor-text`, `cursor-style`, `selection-background`/`-foreground`, `keybind`s whose action is `text:`, `csi:` or `esc:`, and `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` (on by default, as in Ghostty: pasting text that could run commands, such as a newline when the program hasn't turned on bracketed paste, asks first; Enter pastes, Esc cancels). Programs can copy to the clipboard with OSC 52, as terminal-browser, Neovim and tmux do (`clipboard-write = deny` stops them; there's no prompt, so `ask` refuses too). `copy-on-select = clipboard` copies a selection to the clipboard when you let go of the mouse (Ghostty's default `true` uses a selection pasteboard macOS doesn't have, so it does nothing here). `mouse-scroll-multiplier` scales scrolling, as one number or `precision:<n>,discrete:<n>` for the trackpad and the mouse wheel. `scrollbar = never` hides the overlay scrollbar. `shell-integration = none` turns off abromux's shell integration (below). Other keys are ignored for now. Changes apply to new terminals.
+Terminals read your Ghostty config: `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`), then `~/Library/Application Support/com.mitchellh.ghostty/config`, plus their `config-file` includes. abromux uses `theme` (from `~/.config/ghostty/themes` or Ghostty.app; `light:A,dark:B` follows the app's appearance), `font-family` (further `font-family` lines are fallbacks, as in Ghostty), `font-size`, `foreground`, `background`, `palette`, `cursor-color`, `cursor-text`, `cursor-style`, `selection-background`/`-foreground`, `keybind`s whose action is `text:`, `csi:` or `esc:`, and `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` (on by default, as in Ghostty: pasting text that could run commands, such as a newline when the program hasn't turned on bracketed paste, asks first; Enter pastes, Esc cancels). Programs can copy to the clipboard with OSC 52, as terminal-browser, Neovim and tmux do (`clipboard-write = deny` stops them; there's no prompt, so `ask` refuses too). `copy-on-select = clipboard` copies a selection to the clipboard when you let go of the mouse (Ghostty's default `true` uses a selection pasteboard macOS doesn't have, so it does nothing here). `mouse-scroll-multiplier` scales scrolling, as one number or `precision:<n>,discrete:<n>` for the trackpad and the mouse wheel. `scrollbar = never` hides the overlay scrollbar. `shell-integration = none` turns off abromux's shell integration (below). Other keys are ignored for now. Changes apply to new terminals.
 
 Ghostty has Nerd Font symbols built in; abromux doesn't, so for the icons Neovim, eza or starship draw it falls back to the Nerd Fonts you have installed (symbols-only and "Mono" ones first), after your `font-family` fallbacks and before macOS's own fonts. Install one (`brew install --cask font-symbols-only-nerd-font`) if icons show as boxes.
 
@@ -533,6 +538,8 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 |---|---|---|
 | New workspace | `+` in sidebar header / footer | ⌘N |
 | New workspace folder | File › New Workspace Folder | ⇧⌘I |
+| Review every repository of the workspace in [hunk](https://hunk.dev/): a column right of the focused pane, one pane per repository (its folder's checkouts and those its tabs are in) running `hunk diff --watch` against where the branch forked from the default branch, as ⌥⌘D compares | File › Review Changes in Hunk | ⌘⇧P → Review Changes in Hunk (`reviewInHunk` in `"shortcuts"`) |
+| Open the workspace in Neovim: a new terminal tab in its folder (else the focused tab's directory) running `nvim .` | File › Open Workspace in Neovim | ⌘⇧P → Open Workspace in Neovim (`openInNeovim` in `"shortcuts"`) |
 | Clean up and delete workspace folder | right-click → Clean Up and Delete Folder… | ⇧⌘X |
 | Rename workspace | double-click its name (Enter saves, Esc cancels) | ⌘⇧R |
 | Workspace description | right-click → Add Description… (Return saves, ⇧↩ new line) | ⌥⌘E |

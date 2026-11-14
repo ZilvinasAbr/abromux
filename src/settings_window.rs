@@ -38,13 +38,26 @@ actions!(settings_window, [CloseSettings]);
 
 const NAV_W: f32 = 200.;
 const TITLEBAR_H: f32 = 38.;
-/// The row cards' background, a shade above the pane's.
-const CARD_BG: u32 = 0xffffff06;
 
 /// Make `s` the app's settings: the keymap, the menus' shortcuts and every
 /// window. The config reload uses it too.
 pub fn apply(s: Settings, cx: &mut App) {
+    let panes = crate::terminal_browser_panes::set(s.browser.terminal_browser_panes);
+    if let Err(e) = panes
+        && let Some(window) = cx.active_window().or_else(|| cx.windows().first().copied())
+    {
+        let _ = window.update(cx, |_, window, cx| {
+            window.push_notification(
+                Notification::error(e)
+                    .id::<crate::terminal_browser_panes::Failed>()
+                    .title("terminal-browser not changed")
+                    .autohide(false),
+                cx,
+            )
+        });
+    }
     keymap::apply(&s, cx);
+    crate::theme::apply(s.app.appearance, cx);
     cx.set_global(s);
     menu::set_menus(cx);
     cx.refresh_windows();
@@ -73,6 +86,7 @@ pub fn show(cx: &mut App) {
             ..Default::default()
         },
         |window, cx| {
+            crate::theme::follow(window);
             let view = cx.new(|cx| SettingsView::new(window, cx));
             cx.new(|cx| Root::new(view, window, cx))
         },
@@ -404,7 +418,7 @@ fn folder_row(title: &'static str, description: &'static str, key: Key) -> Row {
                         .min_w_0()
                         .truncate()
                         .text_size(px(12.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(pal().muted))
                         .child(crate::workspace::tilde(&shown.to_string_lossy())),
                 )
                 .child(
@@ -476,8 +490,8 @@ fn toggle(on: bool) -> Stateful<Div> {
         .p(px(2.))
         .rounded_full()
         .flex()
-        .when(on, |d| d.justify_end().bg(rgb(ACCENT)))
-        .when(!on, |d| d.bg(rgba(0xffffff26)))
+        .when(on, |d| d.justify_end().bg(rgb(pal().accent)))
+        .when(!on, |d| d.bg(tint(0x26)))
         .cursor_pointer()
         .hover(|s| s.opacity(0.9))
         .child(
@@ -539,11 +553,12 @@ fn stepper(
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(svg().path(icon).size(px(12.)).text_color(rgb(TEXT)))
+                .child(svg().path(icon).size(px(12.)).text_color(rgb(pal().text)))
                 .when(!enabled, |d| d.opacity(0.3))
                 .when(enabled, |d| {
-                    d.cursor_pointer().hover(|s| s.bg(rgba(HOVER))).on_click(
-                        move |_, window, cx| {
+                    d.cursor_pointer()
+                        .hover(|s| s.bg(rgba(pal().hover)))
+                        .on_click(move |_, window, cx| {
                             // Whole steps, so 0.1 + 0.05 stays 0.15 in the file.
                             let v = ((value + delta) / step).round() * step;
                             let v = (v.clamp(min, max) * 1000.).round() / 1000.;
@@ -554,8 +569,7 @@ fn stepper(
                                 serde_json::Number::from_f64(v as f64).map(Value::Number)
                             };
                             save(key, json.filter(|_| v != default), window, cx)
-                        },
-                    )
+                        })
                 })
         };
         div()
@@ -564,8 +578,8 @@ fn stepper(
             .h(px(24.))
             .rounded(px(6.))
             .border_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(INPUT_BG))
+            .border_color(rgb(pal().border))
+            .bg(rgb(pal().input_bg))
             .overflow_hidden()
             .child(button("less", "icons/minus.svg", -step))
             .child(
@@ -577,7 +591,7 @@ fn stepper(
                     .justify_center()
                     .border_l_1()
                     .border_r_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(pal().border))
                     .text_size(px(12.))
                     .child(format(value)),
             )
@@ -643,7 +657,11 @@ impl RenderOnce for ColorField {
         let picker = state.read(cx).picker.clone();
         div()
             .text_size(px(12.))
-            .text_color(if hex.is_some() { rgb(TEXT) } else { rgb(MUTED) })
+            .text_color(if hex.is_some() {
+                rgb(pal().text)
+            } else {
+                rgb(pal().muted)
+            })
             .child(
                 ColorPicker::new(&picker)
                     .small()
@@ -656,7 +674,7 @@ impl RenderOnce for ColorField {
 
 /// The app's accent and the workspace palette, first in every picker.
 fn featured_colors(cx: &App) -> Vec<Hsla> {
-    std::iter::once(rgb(ACCENT).into())
+    std::iter::once(rgb(pal().accent).into())
         .chain(
             cx.global::<Settings>()
                 .workspace_colors
@@ -678,12 +696,12 @@ fn button(id: &'static str, label: &'static str) -> Stateful<Div> {
         .flex()
         .items_center()
         .rounded(px(6.))
-        .bg(rgba(HOVER))
+        .bg(rgba(pal().hover))
         .border_1()
-        .border_color(rgb(BORDER))
+        .border_color(rgb(pal().border))
         .text_size(px(12.))
         .cursor_pointer()
-        .hover(|s| s.bg(rgba(0xffffff1c)))
+        .hover(|s| s.bg(tint(0x1c)))
         .active(|s| s.opacity(0.7))
         .child(label)
 }
@@ -734,6 +752,16 @@ fn general_page() -> Page {
         description: None,
         groups: vec![
             group(
+                "Appearance",
+                [choice(
+                    "Appearance",
+                    "Light or dark, or follow macOS's setting.",
+                    &["app", "appearance"],
+                    &[("system", "System"), ("light", "Light"), ("dark", "Dark")],
+                    |s| s.app.appearance.as_str(),
+                )],
+            ),
+            group(
                 "New Workspaces",
                 [
                     choice(
@@ -757,6 +785,14 @@ fn general_page() -> Page {
                             ("end", "Last"),
                         ],
                         |s| placement(s.workspace_groups.new_workspace_placement),
+                    ),
+                    switch(
+                        "Group by agent status",
+                        "Show workspaces in sections by what their coding agent is doing: \
+                         Verify (waiting for you), Running, Idle and No agent. Turn it off \
+                         to see your own groups.",
+                        &["workspaceGroups", "groupByAgentStatus"],
+                        |s| s.workspace_groups.group_by_agent_status,
                     ),
                     switch(
                         "Inherit working directory",
@@ -787,17 +823,28 @@ fn general_page() -> Page {
             ),
             group(
                 "Browser",
-                [choice(
-                    "Browser",
-                    "What new browser tabs open in. terminal-browser runs in a terminal \
-                     tab; `abromux browser open` stays built-in for automation.",
-                    &["browser", "engine"],
-                    &[
-                        ("builtIn", "Built-in"),
-                        ("terminalBrowser", "terminal-browser"),
-                    ],
-                    |s| engine(s.browser.engine),
-                )],
+                [
+                    choice(
+                        "Browser",
+                        "What new browser tabs open in. terminal-browser runs in a terminal \
+                         tab; `abromux browser open` stays built-in for automation.",
+                        &["browser", "engine"],
+                        &[
+                            ("builtIn", "Built-in"),
+                            ("terminalBrowser", "terminal-browser"),
+                        ],
+                        |s| engine(s.browser.engine),
+                    ),
+                    switch(
+                        "terminal-browser new tabs as panes",
+                        "Links that would open a terminal-browser tab open a split beside \
+                         it instead. abromux edits terminal-browser's main.js for this, and \
+                         again after it upgrades; it applies once all terminal-browsers have \
+                         quit.",
+                        &["browser", "terminalBrowserPanes"],
+                        |s| s.browser.terminal_browser_panes,
+                    ),
+                ],
             ),
             group(
                 "Editor",
@@ -858,10 +905,11 @@ fn general_page() -> Page {
                                 .flex()
                                 .gap(px(6.))
                                 .child(button("open", "Open").on_click(|_, _, cx| open_config(cx)))
-                                .child(button("reveal", "Show in Finder").on_click(|_, _, cx| {
-                                    ensure_config();
-                                    cx.reveal_path(&settings::path())
-                                }))
+                                .child(
+                                    button("reveal", "Show in Finder").on_click(|_, _, cx| {
+                                        cx.reveal_path(&settings::ensure_file())
+                                    }),
+                                )
                                 .into_any_element()
                         },
                     ),
@@ -1110,8 +1158,8 @@ fn text_row(
             .items_center()
             .rounded(px(6.))
             .border_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(INPUT_BG))
+            .border_color(rgb(pal().border))
+            .bg(rgb(pal().input_bg))
             .child(
                 Input::new(&input)
                     .appearance(false)
@@ -1295,7 +1343,7 @@ fn panes_page() -> Page {
                     "Divider",
                     "The line between split panes.",
                     &["panes", "dividerColor"],
-                    |s| Some(s.panes.divider_color),
+                    |s| s.panes.divider_color,
                 ),
                 color(
                     "Focused pane border",
@@ -1423,16 +1471,17 @@ fn shortcut_row(
                         .cursor_pointer()
                         .map(|d| {
                             if is_recording {
-                                d.border_color(rgb(ACCENT))
-                                    .bg(rgba(ACCENT << 8 | 0x26))
-                                    .text_color(rgb(ACCENT_BRIGHT))
+                                d.border_color(rgb(pal().accent))
+                                    .bg(rgba(pal().accent << 8 | 0x26))
+                                    .text_color(rgb(pal().accent_bright))
                             } else if keys.is_empty() {
-                                d.border_color(rgb(BORDER)).text_color(rgb(MUTED))
+                                d.border_color(rgb(pal().border))
+                                    .text_color(rgb(pal().muted))
                             } else {
-                                d.border_color(rgb(BORDER)).bg(rgb(INPUT_BG))
+                                d.border_color(rgb(pal().border)).bg(rgb(pal().input_bg))
                             }
                         })
-                        .hover(|s| s.border_color(rgb(MUTED)))
+                        .hover(|s| s.border_color(rgb(pal().muted)))
                         .child(label)
                         .on_click(move |_, window, cx| {
                             view.update(cx, |v, cx| {
@@ -1488,7 +1537,7 @@ fn commands_page(cx: &App) -> Page {
         rows.push(info_row(c.title.clone(), what, move |_, _| {
             div()
                 .text_size(px(12.))
-                .text_color(rgb(MUTED))
+                .text_color(rgb(pal().muted))
                 .child(keys.clone())
                 .into_any_element()
         }));
@@ -1516,11 +1565,11 @@ fn icon_button(id: &'static str, icon: &'static str, tip: &'static str) -> State
         .items_center()
         .justify_center()
         .rounded(px(5.))
-        .text_color(rgb(MUTED))
+        .text_color(rgb(pal().muted))
         .cursor_pointer()
-        .hover(|s| s.bg(rgba(HOVER)).text_color(rgb(TEXT)))
+        .hover(|s| s.bg(rgba(pal().hover)).text_color(rgb(pal().text)))
         .tooltip(move |_, cx| cx.new(|_| Tooltip::new(tip)).into())
-        .child(svg().path(icon).size(px(13.)).text_color(rgb(MUTED)))
+        .child(svg().path(icon).size(px(13.)).text_color(rgb(pal().muted)))
 }
 
 fn render_row(row: &Row, ix: usize, window: &mut Window, cx: &mut App) -> AnyElement {
@@ -1528,7 +1577,7 @@ fn render_row(row: &Row, ix: usize, window: &mut Window, cx: &mut App) -> AnyEle
         .id(("row", ix))
         .px(px(14.))
         .py(px(10.))
-        .when(ix > 0, |d| d.border_t_1().border_color(rgb(BORDER)));
+        .when(ix > 0, |d| d.border_t_1().border_color(rgb(pal().border)));
     match row {
         Row::Custom(control) => base.child(control(window, cx)).into_any_element(),
         Row::Setting {
@@ -1555,7 +1604,7 @@ fn render_row(row: &Row, ix: usize, window: &mut Window, cx: &mut App) -> AnyEle
                             d.child(
                                 div()
                                     .text_size(px(11.5))
-                                    .text_color(rgb(MUTED))
+                                    .text_color(rgb(pal().muted))
                                     .child(description.clone()),
                             )
                         }),
@@ -1590,15 +1639,15 @@ fn render_group(g: &Group, ix: usize, window: &mut Window, cx: &mut App) -> AnyE
                 .px(px(4.))
                 .text_size(px(11.5))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(MUTED))
+                .text_color(rgb(pal().muted))
                 .child(g.title.clone()),
         )
         .child(
             div()
                 .rounded(px(8.))
                 .border_1()
-                .border_color(rgb(BORDER))
-                .bg(rgba(CARD_BG))
+                .border_color(rgb(pal().border))
+                .bg(rgba(pal().card_bg))
                 .overflow_hidden()
                 .children(
                     g.rows
@@ -1612,7 +1661,7 @@ fn render_group(g: &Group, ix: usize, window: &mut Window, cx: &mut App) -> AnyE
                 div()
                     .px(px(4.))
                     .text_size(px(11.5))
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(pal().muted))
                     .child(desc),
             )
         })
@@ -1675,81 +1724,84 @@ impl Render for SettingsView {
             })
             .collect();
 
-        let nav = div()
-            .w(px(NAV_W))
-            .flex_none()
-            .h_full()
-            .flex()
-            .flex_col()
-            .bg(rgba(SIDEBAR_BG))
-            .border_r_1()
-            .border_color(rgb(BORDER))
-            .child(
-                div()
-                    .id("nav-titlebar")
-                    .h(px(TITLEBAR_H))
-                    .flex_none()
-                    .on_mouse_down(MouseButton::Left, |ev, window, _| {
-                        crate::titlebar::drag_or_zoom(ev, window)
-                    }),
-            )
-            .child(
-                div()
-                    .mx(px(10.))
-                    .mb(px(8.))
-                    .h(px(28.))
-                    .px(px(8.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .rounded(px(6.))
-                    .bg(rgb(INPUT_BG))
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .child(
-                        svg()
-                            .path("icons/search.svg")
-                            .size(px(13.))
-                            .flex_none()
-                            .text_color(rgb(MUTED)),
-                    )
-                    .child(
-                        Input::new(&self.search)
-                            .appearance(false)
-                            .cleanable(true)
-                            .text_size(px(13.))
-                            .h_full()
-                            .px_0()
-                            .py_0(),
-                    ),
-            )
-            .children(pages.iter().enumerate().map(|(ix, p)| {
-                let selected = !searching && ix == self.page;
-                div()
-                    .id(("nav", ix))
-                    .mx(px(6.))
-                    .px(px(10.))
-                    .h(px(28.))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .rounded(px(6.))
-                    .text_size(px(13.))
-                    .cursor_pointer()
-                    .when(selected, |d| d.bg(rgba(0xffffff1a)))
-                    .when(!selected, |d| d.hover(|s| s.bg(rgba(HOVER))))
-                    .child(
-                        svg()
-                            .path(p.icon)
-                            .size(px(14.))
-                            .flex_none()
-                            .text_color(if selected { rgb(TEXT) } else { rgb(MUTED) }),
-                    )
-                    .child(p.title)
-                    .on_click(
-                        cx.listener(move |this, _, window, cx| this.select_page(ix, window, cx)),
-                    )
-            }));
+        let nav =
+            div()
+                .w(px(NAV_W))
+                .flex_none()
+                .h_full()
+                .flex()
+                .flex_col()
+                .bg(rgba(pal().sidebar_bg))
+                .border_r_1()
+                .border_color(rgb(pal().border))
+                .child(
+                    div()
+                        .id("nav-titlebar")
+                        .h(px(TITLEBAR_H))
+                        .flex_none()
+                        .on_mouse_down(MouseButton::Left, |ev, window, _| {
+                            crate::titlebar::drag_or_zoom(ev, window)
+                        }),
+                )
+                .child(
+                    div()
+                        .mx(px(10.))
+                        .mb(px(8.))
+                        .h(px(28.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .rounded(px(6.))
+                        .bg(rgb(pal().input_bg))
+                        .border_1()
+                        .border_color(rgb(pal().border))
+                        .child(
+                            svg()
+                                .path("icons/search.svg")
+                                .size(px(13.))
+                                .flex_none()
+                                .text_color(rgb(pal().muted)),
+                        )
+                        .child(
+                            Input::new(&self.search)
+                                .appearance(false)
+                                .cleanable(true)
+                                .text_size(px(13.))
+                                .h_full()
+                                .px_0()
+                                .py_0(),
+                        ),
+                )
+                .children(pages.iter().enumerate().map(|(ix, p)| {
+                    let selected = !searching && ix == self.page;
+                    div()
+                        .id(("nav", ix))
+                        .mx(px(6.))
+                        .px(px(10.))
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .rounded(px(6.))
+                        .text_size(px(13.))
+                        .cursor_pointer()
+                        .when(selected, |d| d.bg(tint(0x1a)))
+                        .when(!selected, |d| d.hover(|s| s.bg(rgba(pal().hover))))
+                        .child(svg().path(p.icon).size(px(14.)).flex_none().text_color(
+                            if selected {
+                                rgb(pal().text)
+                            } else {
+                                rgb(pal().muted)
+                            },
+                        ))
+                        .child(p.title)
+                        .on_click(
+                            cx.listener(move |this, _, window, cx| {
+                                this.select_page(ix, window, cx)
+                            }),
+                        )
+                }));
 
         let header = div()
             .id("titlebar")
@@ -1760,7 +1812,7 @@ impl Render for SettingsView {
             .items_center()
             .justify_between()
             .border_b_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(pal().border))
             .on_mouse_down(MouseButton::Left, |ev, window, _| {
                 crate::titlebar::drag_or_zoom(ev, window)
             })
@@ -1781,16 +1833,16 @@ impl Render for SettingsView {
                         .gap(px(5.))
                         .rounded(px(5.))
                         .text_size(px(12.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(pal().muted))
                         .cursor_pointer()
-                        .hover(|s| s.bg(rgba(HOVER)).text_color(rgb(TEXT)))
+                        .hover(|s| s.bg(rgba(pal().hover)).text_color(rgb(pal().text)))
                         // Don't start a window drag from the header.
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             svg()
                                 .path("icons/undo-2.svg")
                                 .size(px(12.))
-                                .text_color(rgb(MUTED)),
+                                .text_color(rgb(pal().muted)),
                         )
                         .child("Reset Page")
                         .on_click(move |_, window, cx| {
@@ -1823,7 +1875,7 @@ impl Render for SettingsView {
                             div()
                                 .px(px(4.))
                                 .text_size(px(12.))
-                                .text_color(rgb(MUTED))
+                                .text_color(rgb(pal().muted))
                                 .child(desc),
                         )
                     })
@@ -1833,7 +1885,7 @@ impl Render for SettingsView {
                                 .pt(px(24.))
                                 .text_center()
                                 .text_size(px(12.5))
-                                .text_color(rgb(MUTED))
+                                .text_color(rgb(pal().muted))
                                 .child("No settings match your search."),
                         )
                     })
@@ -1856,7 +1908,7 @@ impl Render for SettingsView {
             .flex()
             .font_family(".AppleSystemUIFont")
             .text_size(px(13.))
-            .text_color(rgb(TEXT))
+            .text_color(rgb(pal().text))
             .child(nav)
             .child(
                 div()
@@ -1865,7 +1917,7 @@ impl Render for SettingsView {
                     .h_full()
                     .flex()
                     .flex_col()
-                    .bg(rgb(PANE_BG))
+                    .bg(rgb(pal().pane_bg))
                     .child(header)
                     .when_some(self.error.clone(), |d, e| d.child(error_banner(e)))
                     .child(body),
@@ -1898,27 +1950,15 @@ fn error_banner(e: String) -> impl IntoElement {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child("The config file has an error, so changes here can't be saved."),
                 )
-                .child(div().text_color(rgb(MUTED)).child(e)),
+                .child(div().text_color(rgb(pal().muted)).child(e)),
         )
         .child(button("open-config", "Open config.json").on_click(|_, _, cx| open_config(cx)))
 }
 
 // MARK: Files
 
-/// Make an empty config file if there's none, so it can be opened.
-fn ensure_config() {
-    let path = settings::path();
-    if !path.exists() {
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(&path, "{\n}\n");
-    }
-}
-
-fn open_config(cx: &mut App) {
-    ensure_config();
-    cx.open_with_system(&settings::path());
+pub fn open_config(cx: &mut App) {
+    cx.open_with_system(&settings::ensure_file());
 }
 
 /// The Ghostty config file whose settings win: the last one abromux reads.

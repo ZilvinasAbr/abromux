@@ -285,6 +285,13 @@ impl TerminalView {
         let focus = cx.focus_handle();
         let config = cx.try_global::<Config>().cloned().unwrap_or_default();
         cx.on_release(Self::free_images).detach();
+        // The config changes with the app's appearance (`main::sync_appearance`).
+        cx.observe_global::<Config>(|this, cx| {
+            if let Some(c) = cx.try_global::<Config>().cloned() {
+                this.recolor(c, cx);
+            }
+        })
+        .detach();
         // A held terminal comes back as it was left, plus what it printed since.
         let mut term = opened
             .snapshot
@@ -349,6 +356,21 @@ impl TerminalView {
 
     /// Free the closed terminal's image textures from its window's atlas
     /// (after this update, while the window isn't borrowed).
+    /// Take `config`'s colors (the appearance changed): the theme's
+    /// defaults, then the user's, and repaint.
+    fn recolor(&mut self, config: Config, cx: &mut Context<Self>) {
+        set_colors(&self.term, &config);
+        self.config.foreground = config.foreground;
+        self.config.background = config.background;
+        self.config.cursor_color = config.cursor_color;
+        self.config.cursor_text = config.cursor_text;
+        self.config.selection_background = config.selection_background;
+        self.config.selection_foreground = config.selection_foreground;
+        self.config.palette = config.palette;
+        self.dirty = true;
+        cx.notify();
+    }
+
     fn free_images(&mut self, cx: &mut App) {
         let textures: Vec<_> = self
             .images
@@ -976,7 +998,7 @@ impl TerminalView {
             .w(px(300.))
             .rounded(px(8.))
             .border_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(pal().border))
             .shadow_md()
             .cursor_default()
             // Keep clicks from reaching the terminal (selection, mouse reports).
@@ -1007,11 +1029,13 @@ impl TerminalView {
                 .py(px(4.))
                 .rounded(px(6.))
                 .cursor_pointer()
-                .when(primary, |d| d.bg(rgb(ACCENT)).text_color(rgb(0xffffff)))
+                .when(primary, |d| {
+                    d.bg(rgb(pal().accent)).text_color(rgb(0xffffff))
+                })
                 .when(!primary, |d| {
                     d.border_1()
-                        .border_color(rgb(BORDER))
-                        .hover(|d| d.bg(rgba(HOVER)))
+                        .border_color(rgb(pal().border))
+                        .hover(|d| d.bg(rgba(pal().hover)))
                 })
                 .child(label)
         };
@@ -1028,26 +1052,26 @@ impl TerminalView {
             .flex_col()
             .gap_2()
             .rounded(px(8.))
-            .bg(rgb(TABBAR_BG))
+            .bg(rgb(pal().tabbar_bg))
             .border_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(pal().border))
             .shadow_md()
             .cursor_default()
             .text_size(px(12.))
-            .text_color(rgb(TEXT))
+            .text_color(rgb(pal().text))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
             .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
             .child(
                 div()
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(pal().muted))
                     .child("It could run commands as soon as it lands in the shell."),
             )
             .child(
                 div()
                     .p_2()
                     .rounded(px(5.))
-                    .bg(rgba(0x0000004d))
+                    .bg(rgba(pal().field_bg))
                     .font_family(self.config.font_family.clone())
                     .text_size(px(11.))
                     .max_h(px(140.))
@@ -1615,7 +1639,13 @@ impl TerminalView {
                         .h(relative(sb.len as f32 / total))
                         .min_h(px(20.))
                         .rounded_full()
-                        .bg(rgba(0xffffff59)),
+                        .bg({
+                            // Light on a dark terminal, dark on a light one,
+                            // whatever its theme.
+                            let ghostty::Rgb(r, g, b) = self.frame.background;
+                            let light = r as u32 * 299 + g as u32 * 587 + b as u32 * 114 > 128_000;
+                            rgba(if light { 0x00000040 } else { 0xffffff59 })
+                        }),
                 ),
         )
     }
@@ -2504,15 +2534,21 @@ fn new_term(cols: u16, rows: u16, config: &Config) -> ghostty::Terminal {
     configure(term, config)
 }
 
-/// The config's colors and cursor on a new or restored terminal.
-fn configure(mut term: ghostty::Terminal, config: &Config) -> ghostty::Terminal {
-    term.set_clipboard_write(config.clipboard_write);
+/// The theme's and the config's colors on a terminal.
+fn set_colors(term: &ghostty::Terminal, config: &Config) {
+    term.apply_theme(crate::theme::is_dark());
     term.set_colors(
         config.foreground,
         config.background,
         config.cursor_color,
         &config.palette,
     );
+}
+
+/// The config's colors and cursor on a new or restored terminal.
+fn configure(mut term: ghostty::Terminal, config: &Config) -> ghostty::Terminal {
+    term.set_clipboard_write(config.clipboard_write);
+    set_colors(&term, config);
     // DECSCUSR as the starting cursor; programs can still change it.
     match config.cursor_style {
         Some(ConfigCursor::Block) => term.write(b"\x1b[2 q"),
