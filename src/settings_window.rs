@@ -1740,7 +1740,8 @@ impl Render for SettingsView {
                         .mx(px(10.))
                         .mb(px(8.))
                         .h(px(28.))
-                        .px(px(8.))
+                        .pl(px(8.))
+                        .pr(px(3.))
                         .flex()
                         .items_center()
                         .gap(px(6.))
@@ -1756,14 +1757,28 @@ impl Render for SettingsView {
                                 .text_color(rgb(pal().muted)),
                         )
                         .child(
+                            // Our own clear button below, not `cleanable`: its
+                            // suffix brings 12px of right padding we can't undo,
+                            // which leaves the ⓧ well short of the field's edge.
                             Input::new(&self.search)
                                 .appearance(false)
-                                .cleanable(true)
                                 .text_size(px(13.))
+                                .flex_1()
+                                .min_w_0()
                                 .h_full()
                                 .px_0()
                                 .py_0(),
-                        ),
+                        )
+                        .when(searching, |d| {
+                            d.child(
+                                icon_button("clear-search", "icons/circle-x.svg", "Clear search")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.search.update(cx, |s, cx| s.set_value("", window, cx));
+                                        window.focus(&this.search.focus_handle(cx));
+                                        cx.notify();
+                                    })),
+                            )
+                        }),
                 )
                 .children(pages.iter().enumerate().map(|(ix, p)| {
                     let selected = !searching && ix == self.page;
