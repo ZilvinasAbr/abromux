@@ -42,6 +42,20 @@ const TITLEBAR_H: f32 = 38.;
 /// Make `s` the app's settings: the keymap, the menus' shortcuts and every
 /// window. The config reload uses it too.
 pub fn apply(s: Settings, cx: &mut App) {
+    let panes = crate::terminal_browser_panes::set(s.browser.terminal_browser_panes);
+    if let Err(e) = panes
+        && let Some(window) = cx.active_window().or_else(|| cx.windows().first().copied())
+    {
+        let _ = window.update(cx, |_, window, cx| {
+            window.push_notification(
+                Notification::error(e)
+                    .id::<crate::terminal_browser_panes::Failed>()
+                    .title("terminal-browser not changed")
+                    .autohide(false),
+                cx,
+            )
+        });
+    }
     keymap::apply(&s, cx);
     crate::theme::apply(s.app.appearance, cx);
     cx.set_global(s);
@@ -801,17 +815,28 @@ fn general_page() -> Page {
             ),
             group(
                 "Browser",
-                [choice(
-                    "Browser",
-                    "What new browser tabs open in. terminal-browser runs in a terminal \
-                     tab; `abromux browser open` stays built-in for automation.",
-                    &["browser", "engine"],
-                    &[
-                        ("builtIn", "Built-in"),
-                        ("terminalBrowser", "terminal-browser"),
-                    ],
-                    |s| engine(s.browser.engine),
-                )],
+                [
+                    choice(
+                        "Browser",
+                        "What new browser tabs open in. terminal-browser runs in a terminal \
+                         tab; `abromux browser open` stays built-in for automation.",
+                        &["browser", "engine"],
+                        &[
+                            ("builtIn", "Built-in"),
+                            ("terminalBrowser", "terminal-browser"),
+                        ],
+                        |s| engine(s.browser.engine),
+                    ),
+                    switch(
+                        "terminal-browser new tabs as panes",
+                        "Links that would open a terminal-browser tab open a split beside \
+                         it instead. abromux edits terminal-browser's main.js for this, and \
+                         again after it upgrades; it applies once all terminal-browsers have \
+                         quit.",
+                        &["browser", "terminalBrowserPanes"],
+                        |s| s.browser.terminal_browser_panes,
+                    ),
+                ],
             ),
             group(
                 "Updates",

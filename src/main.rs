@@ -51,6 +51,7 @@ mod status;
 mod tabs;
 mod terminal;
 mod terminal_browser;
+mod terminal_browser_panes;
 mod theme;
 mod titlebar;
 mod update;
@@ -747,6 +748,11 @@ impl AbroMux {
             ));
             // Compose stacks started here are the workspace's, for cleanup.
             env.push(("COMPOSE_PROJECT_NAME".into(), folder::tag(&home)));
+        }
+        // This app's CLI, for programs that call back into it (the stable and
+        // nightly apps each have their own).
+        if let Ok(exe) = std::env::current_exe() {
+            env.push(("ABROMUX_BIN".into(), exe.to_string_lossy().into_owned()));
         }
         env.extend([
             ("ABROMUX_WORKSPACE_ID".into(), format!("workspace:{ws}")),
@@ -3392,6 +3398,10 @@ fn run_app(cwd: Option<String>) {
         theme::apply_appearance(settings.app.appearance);
         theme::set_dark(theme::appearance_is_dark(cx.window_appearance()), cx);
         cx.set_global(config::Config::load());
+        // Off by default: only takes out hooks an earlier run put in.
+        if let Err(e) = terminal_browser_panes::set(settings.browser.terminal_browser_panes) {
+            eprintln!("abromux: {e}");
+        }
         cx.set_global(settings);
         update::init(cx);
         gitlab::init(cx);

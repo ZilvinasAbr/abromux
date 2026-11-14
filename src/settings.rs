@@ -21,7 +21,7 @@
 //!     "flashPane": ["cmd-shift-h", "ctrl-a f"],
 //!     "find": { "keys": "cmd-shift-f", "when": "Terminal" }
 //!   },
-//!   "browser": { "engine": "terminalBrowser" },
+//!   "browser": { "engine": "terminalBrowser", "terminalBrowserPanes": true },
 //!   "commands": [
 //!     { "title": "Run Tests", "run": "cargo test", "shortcut": "cmd-alt-t" },
 //!     { "title": "Dev Server", "run": "npm run dev", "newTab": true },
@@ -185,6 +185,9 @@ impl Persistence {
 pub struct BrowserSettings {
     /// What a browser tab is.
     pub engine: BrowserEngine,
+    /// terminal-browser opens new tabs as abromux splits beside it
+    /// (`crate::terminal_browser_panes`).
+    pub terminal_browser_panes: bool,
 }
 
 /// The built-in WebKit browser, or a terminal running `terminal-browser`.
@@ -1322,6 +1325,9 @@ mod tests {
         }
         let s = parse(r#"{"browser": {"engine": "builtIn"}}"#).unwrap();
         assert_eq!(s.browser.engine, BrowserEngine::BuiltIn);
+        assert!(!Settings::default().browser.terminal_browser_panes);
+        let s = parse(r#"{"browser": {"terminalBrowserPanes": true}}"#).unwrap();
+        assert!(s.browser.terminal_browser_panes);
         let e = parse(r#"{"browser": {"engine": "chrome"}}"#)
             .unwrap_err()
             .to_string();
