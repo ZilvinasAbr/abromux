@@ -45,7 +45,9 @@ dependencies = [
 name = "abromux-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "memchr",
+ "serde_json",
 ]
 
 [[package]]

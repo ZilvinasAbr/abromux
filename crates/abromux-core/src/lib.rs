@@ -2,5 +2,6 @@
 //! models, unit-tested on every OS. Depends on nothing else of abromux's.
 //! See docs/linux-plan.md.
 
+pub mod ipc;
 pub mod osc99;
 pub mod paths;
