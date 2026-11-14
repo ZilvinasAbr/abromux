@@ -3281,13 +3281,7 @@ fn surface_has_claude(s: &Surface, cx: &App) -> bool {
     matches!(s, Surface::Terminal(t) if t.read(cx).has_claude())
 }
 
-pub(crate) fn one_line(s: &str) -> String {
-    s.split(['\n', '\r'])
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
+pub(crate) use abromux_core::text::one_line;
 
 /// Focus a new rename field with its text selected, so typing replaces the
 /// old name. The selection waits for the field's focus event: that comes

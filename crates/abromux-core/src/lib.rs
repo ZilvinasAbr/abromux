@@ -5,8 +5,10 @@
 pub mod agent;
 pub mod ipc;
 pub mod link;
+pub mod naming;
 pub mod notify_hook;
 pub mod osc99;
 pub mod paths;
 pub mod settings;
 pub mod status;
+pub mod text;
