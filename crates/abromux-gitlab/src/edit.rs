@@ -146,7 +146,7 @@ pub fn primary(id: impl Into<ElementId>, label: &'static str, enabled: bool) -> 
         .px_3()
         .rounded(px(8.))
         .bg(c(if enabled { 0x1068bf } else { 0x2b4a73 }))
-        .text_color(c(if enabled { HEADING } else { MUTED }))
+        .text_color(if enabled { on_fill() } else { c(MUTED) })
         .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(c(0x0b5cad))))
         .child(label)
 }
@@ -216,7 +216,7 @@ pub fn danger(id: impl Into<ElementId>, label: &'static str, enabled: bool) -> S
         .px_3()
         .rounded(px(8.))
         .bg(c(if enabled { 0xdd2b0e } else { 0x6e1f14 }))
-        .text_color(c(if enabled { HEADING } else { MUTED }))
+        .text_color(if enabled { on_fill() } else { c(MUTED) })
         .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(c(0xc91c00))))
         .child(label)
 }

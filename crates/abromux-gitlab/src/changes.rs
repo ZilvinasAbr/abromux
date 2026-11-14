@@ -2165,7 +2165,7 @@ impl GitLabView {
             .child(div().font_weight(FontWeight::SEMIBOLD).child(name))
             .when(f.meta.deleted_file, |d| d.child("deleted"))
             .when(f.meta.generated_file, |d| {
-                d.child(badge("Generated", c(0xa4a3a8), c(BG)))
+                d.child(neutral_badge("Generated"))
             })
             .child(
                 div()
@@ -2328,7 +2328,7 @@ impl GitLabView {
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .child(icon("comment", 12., c(HEADING)))
+                .child(icon("comment", 12., on_fill()))
                 .tooltip(hint("Add a comment to this line"))
                 .on_click(cx.listener(move |v, _, window, cx| {
                     // Not also the number's click under it (selecting the line).

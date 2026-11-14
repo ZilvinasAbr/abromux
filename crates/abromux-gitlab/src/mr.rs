@@ -393,6 +393,8 @@ impl GitLabView {
             "closed" => ("Closed", 0xfc7988, 0x5a0e17),
             _ => ("Open", GREEN, 0x002c26),
         };
+        // GitLab's light theme draws it filled, with white text.
+        let fg = if is_dark() { c(fg) } else { on_fill() };
         let unresolved = r.unresolved();
         let local = self.is_local();
         // Built before the tabs, which hold `cx` till the end.
@@ -460,8 +462,8 @@ impl GitLabView {
                         .text_color(c(MUTED))
                         .when(!local, |d| {
                             d.child(
-                                badge(state, c(bg), c(fg))
-                                    .child(icon("merge", 12., c(fg)))
+                                badge(state, c(bg), fg)
+                                    .child(icon("merge", 12., fg))
                                     .flex_row_reverse()
                                     .flex_none(),
                             )
@@ -533,8 +535,8 @@ impl GitLabView {
                     // A local diff: "<head> compared with <base>", no state or author.
                     .when(!local, |d| {
                         d.child(
-                            badge(state, c(bg), c(fg))
-                                .child(icon("merge", 12., c(fg)))
+                            badge(state, c(bg), fg)
+                                .child(icon("merge", 12., fg))
                                 .flex_row_reverse(),
                         )
                         .child(
