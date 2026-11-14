@@ -316,6 +316,21 @@ impl AbroMux {
         Some(id)
     }
 
+    /// [`Self::new_group`], then open its header's rename field with the
+    /// name selected, so typing replaces it.
+    pub(crate) fn new_group_and_rename(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(g) = self.new_group(index, cx)
+            && self.sidebar
+        {
+            self.start_group_rename(g, window, cx);
+        }
+    }
+
     /// Put workspace `index` last in group `group`, or out of any with None.
     pub(crate) fn set_group(&mut self, index: usize, group: Option<usize>, cx: &mut Context<Self>) {
         if index >= self.workspaces.len() || self.workspaces[index].group == group {
@@ -632,10 +647,10 @@ impl AbroMux {
                 };
                 let make = {
                     let this = this.clone();
-                    move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                         this.update(cx, |this, cx| {
                             if let Some(i) = this.ws_index(id) {
-                                this.new_group(i, cx);
+                                this.new_group_and_rename(i, window, cx);
                             }
                         })
                         .ok();
