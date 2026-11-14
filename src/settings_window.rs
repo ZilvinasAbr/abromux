@@ -787,14 +787,6 @@ fn general_page() -> Page {
                         |s| placement(s.workspace_groups.new_workspace_placement),
                     ),
                     switch(
-                        "Group by agent status",
-                        "Show workspaces in sections by what their coding agent is doing: \
-                         Verify (waiting for you), Running, Idle and No agent. Turn it off \
-                         to see your own groups.",
-                        &["workspaceGroups", "groupByAgentStatus"],
-                        |s| s.workspace_groups.group_by_agent_status,
-                    ),
-                    switch(
                         "Inherit working directory",
                         "Start in the focused terminal's directory instead of your home folder.",
                         &["app", "workspaceInheritWorkingDirectory"],
