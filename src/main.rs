@@ -164,7 +164,7 @@ const DEFAULT_URL: &str = "";
 /// How long a lone ⌘ or ⌃ must be held before shortcut hints show (cmux's value).
 const HINT_DELAY: Duration = Duration::from_millis(300);
 /// Sidebar width: default and the range its edge can be dragged within.
-const SIDEBAR_WIDTH: f32 = 232.;
+const SIDEBAR_WIDTH: f32 = abromux_core::session::SIDEBAR_WIDTH;
 const SIDEBAR_MIN: f32 = 180.;
 const SIDEBAR_MAX: f32 = 480.;
 /// Height of the titlebar row the traffic lights sit in.
@@ -3449,7 +3449,7 @@ fn run_app(cwd: Option<String>) {
         let bounds = session
             .as_ref()
             .and_then(|s| s.window)
-            .map(|w| w.bounds())
+            .map(|w| session::window_bounds(&w))
             .unwrap_or_else(|| Bounds::centered(None, size(px(1280.), px(820.)), cx));
         cx.open_window(
             WindowOptions {
