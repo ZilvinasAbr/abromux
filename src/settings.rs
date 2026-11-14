@@ -554,18 +554,27 @@ impl Default for WorkspaceGroups {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct Automation {
     /// Name a workspace from its agent's prompts, summarised by that agent's
     /// own CLI (`claude -p`, `codex exec`), renaming it as the work moves on.
-    /// A name you give it wins and stops that. (A ⇧⌘I workspace left on its
-    /// made-up name is named this way even when off.)
+    /// A name you give it wins and stops that. On by default. (A ⇧⌘I
+    /// workspace left on its made-up name is named this way even when off.)
     pub workspace_auto_naming: bool,
     /// The agent CLI that cleans up a workspace folder (right-click › Clean
     /// Up and Delete Folder…), run with the instruction as its one argument.
     /// None is `claude`.
     pub workspace_cleanup_agent: Option<String>,
+}
+
+impl Default for Automation {
+    fn default() -> Self {
+        Self {
+            workspace_auto_naming: true,
+            workspace_cleanup_agent: None,
+        }
+    }
 }
 
 /// cmux's `notifications` keys.
@@ -1299,7 +1308,7 @@ mod tests {
               "sidebarAppearance": { "tintColor": "#000", "tintOpacity": 0.3 },
               "workspaceColors": { "indicatorStyle": "solidFill", "colors": { "Ocean": "#0066aa" } },
               "workspaceGroups": { "newWorkspacePlacement": "top" },
-              "automation": { "workspaceAutoNaming": true }
+              "automation": { "workspaceAutoNaming": false }
             }"##,
         )
         .unwrap();
@@ -1331,8 +1340,9 @@ mod tests {
             s.workspace_groups.group_by_agent_status,
             "on unless turned off"
         );
-        assert!(s.automation.workspace_auto_naming);
+        assert!(!s.automation.workspace_auto_naming);
         let d = Settings::default();
+        assert!(d.automation.workspace_auto_naming, "on unless turned off");
         assert_eq!(d.workspace_colors.parse("amber"), Some(0x7D6608));
         assert_eq!(d.app.new_workspace_placement, Placement::End);
         let err = |text: &str| parse(text).unwrap_err().to_string();
