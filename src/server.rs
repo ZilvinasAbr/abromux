@@ -1075,6 +1075,24 @@ impl AbroMux {
                     cx,
                 )?
             }
+            "file.edit" => {
+                let path = PathBuf::from(str_param(p, "path").context("missing path")?);
+                anyhow::ensure!(
+                    path.is_absolute(),
+                    "the path must be absolute: {}",
+                    path.display()
+                );
+                let (wi, pane, _) = self.surface_target(p)?;
+                let focus = bool_param(p, "focus", true);
+                let (s, new) = self
+                    .edit_file(wi, pane, &path, focus, window, cx)
+                    .map_err(anyhow::Error::msg)?;
+                json!({
+                    "workspace": self.ws_ref(wi),
+                    "pane": format!("pane:{new}"),
+                    "surface": self.describe_surface(&s, true, cx),
+                })
+            }
             "browser.navigate" => {
                 let b = self.browser_target(p)?;
                 let url = normalize_url(str_param(p, "url").context("missing url")?);

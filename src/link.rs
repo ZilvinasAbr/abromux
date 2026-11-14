@@ -206,7 +206,7 @@ fn runs_code(path: &std::path::Path, meta: &std::fs::Metadata) -> bool {
 
 /// The local path a `file://` URL names, percent-decoded. None for other
 /// schemes and for files on another host.
-fn file_url_path(url: &str) -> Option<PathBuf> {
+pub(crate) fn file_url_path(url: &str) -> Option<PathBuf> {
     use std::os::unix::ffi::OsStringExt;
     let rest = url
         .get(..7)

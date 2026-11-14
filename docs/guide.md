@@ -9,6 +9,7 @@ Everything AbroMux does, in detail. For a quick start, see the [README](../READM
 - **Downloads** from browser panes go to `~/Downloads` (a file already there gets ` (1)` and so on), including links the server marks `Content-Disposition: attachment`. Once there's one, a download button joins the toolbar: a bar under it shows progress while one runs, and it hops when one starts. Click it for the session's list: click a finished one to open it, the magnifier shows it in Finder, `×` cancels a running one, and Clear empties the list (the files stay). `abromux browser downloads` and `wait-download` do the same from the CLI.
 - **Popovers over pages**: the command palette, ⌘I, the update popover, the sidebar's right-click menus, address-bar suggestions, the downloads list and dragging a tab all draw over a browser pane. Native webviews draw above everything the app draws, so while one of these is open the page is swapped for a bitmap of itself, taken just before; it comes back live when the popover closes.
 - **Markdown tabs** show a local Markdown file rendered, GitHub style (tables, task lists, footnotes, HTML in the file, `#heading` links), and follow the file: an edit shows within half a second, at the same scroll position. Open one with `abromux markdown <file>` (or `abromux open <file>.md`), or ⌘-click a `.md` path in a terminal. Relative links and images in the file work, so do back/forward, ⌘F, zoom and the `abromux browser` commands; web links open in a browser tab beside it. They're browser tabs underneath, served from an `abromux-md://` address that only Markdown tabs load, and they show local files only. Scripts in a file don't run.
+- **Files from Finder** open in a terminal editor, Neovim or tode (`editor.program`), in a new pane beside the focused one: pick AbroMux in a file's Open With menu, or make it the default app for a file type (see [Opening files](#opening-files)).
 - **Workspaces** sit in a left sidebar, cmux style. Each entry shows the name, the focused tab's title, the git branch and the cwd, plus whatever scripts report through the CLI: status pills (`set-status`), a progress bar (`set-progress`) and the newest `log` line.
 - **Coding agents** (Claude Code, Codex, Gemini CLI, Droid, Cursor CLI, OpenCode and Pi) show up in the sidebar once you've run `abromux hooks install`: a "Running" pill while the agent works and "Needs input" when it asks for permission (Cursor's hooks can't say when it asks). When it asks, or finishes a turn, its terminal gets a notification ("Codex: Asks to run …", "Claude Code: <the start of its reply>"). Their tabs show the agent's logo (Claude Code and Codex) or a robot.
 - **Notifications** come from terminal programs (OSC 9, OSC 99 and OSC 777, as Claude Code, Codex and others send them), from the bell, and from `abromux notify`. One you aren't looking at rings its pane, puts a dot on its tab and on its workspace, shows its text under the workspace in the sidebar, counts on the dock icon, and, while AbroMux is in the background, shows a macOS banner that takes you to it when clicked (banners need AbroMux.app; a `cargo run` build has the rest). It's read once you look at that terminal. ⌘I lists them all; ⌘⇧U jumps to the newest unread one. ⌥⌘U marks the terminal in front of you unread (or read), and ⌃⌘U sends its notification to the back of the queue and jumps to the next one, to work through a pile one at a time. A bell in the macOS menu bar shows the unread count and lists them. [Notification hooks](#notifications) can filter or change each one.
@@ -268,6 +269,27 @@ terminal-browser run in a shell (`terminal-browser open ./report.html`, as an ag
 
 abromux looks for `terminal-browser` on PATH, in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`; if it isn't there, the tab falls back to the built-in browser with a warning. The setting applies to tabs opened after it changes; open ones stay as they are. A terminal-browser tab is restored as a browser tab on the page it last showed (its own back/forward history isn't kept). The `abromux browser` automation commands only drive built-in tabs, so `abromux browser open` always opens one (use `terminal-browser action` to drive a terminal-browser).
 
+### Opening files
+
+```json
+{ "editor": { "program": "tode" } }
+```
+
+AbroMux can open files from Finder. It's listed in Open With for text and source files, and for the code extensions `abromux default-app list` prints (`.rs`, `.ts`, `.toml`… that macOS has no text type for). It never makes itself their default app on its own. Each file opens in a terminal running the editor `program` names, `nvim` (the default) or `tode`, in a new pane to the right of the focused one. That's in the workspace whose folder, or focused terminal's directory, holds the file most closely, else the selected one. The editor starts in the workspace's folder when the file is in it, else in the file's own folder. tode runs as `tode -n <file>`, so it opens in that pane rather than in a tode window already open. Quitting the editor closes the pane. Settings has it under General › Editor. Folders opened the same way (dropped on the Dock icon) open as workspaces.
+
+To have files open in AbroMux on a double-click:
+
+```bash
+abromux default-app code        # every extension `default-app list` prints
+abromux default-app rs ts py    # or just these
+```
+
+That's what Finder's Get Info › Open with › Change All… does, one extension at a time; Change All… there takes it back to another app. It must be the `abromux` inside AbroMux.app (or a nightly), since the app the command belongs to becomes the default.
+
+`abromux edit <file>…` opens files the same way from a shell, in a pane beside that terminal. A file that doesn't exist yet is fine if its folder does. The session saves an editor tab as the file it had open and opens it again on the next launch, in whichever editor is set then.
+
+The pane's tab shows a pencil and the file's name. abromux looks for the editor on PATH, in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`; if it isn't there, a warning says so and nothing opens.
+
 ### Sidebar and workspace settings
 
 These use cmux's key names. Shown with their defaults:
@@ -443,6 +465,7 @@ abromux join-pane --target-pane pane:2 --pane pane:4   # pane:4's active tab to 
 abromux zoom-pane                           # like ⌘⇧↩; on, off or toggle
 abromux trigger-flash --surface surface:3   # flash its pane, like ⌘⇧H
 abromux markdown README.md                  # a Markdown tab split off to the right; it follows edits to the file
+abromux edit src/main.rs                    # the file in editor.program (nvim or tode), in a pane split off to the right
 abromux browser open https://example.com
 abromux browser eval 'document.title'
 abromux browser zoom 125%                   # or in, out, reset, 1.5; no argument prints it
@@ -595,6 +618,7 @@ History lives in `<git common dir>/abromux-perf/history.jsonl`, outside the tree
 - `src/terminal.rs`: PTY plumbing plus a custom GPUI `Element` that paints the grid
 - `src/browser.rs`: the webview pane; `src/webauthn.{rs,js,m}`: the passkey bridge
 - `src/terminal_browser.rs`: browser tabs that run terminal-browser (`browser.engine`)
+- `src/editor.rs`: files opened from Finder or `abromux edit`, in a terminal editor (`editor.program`); `abromux default-app`
 - `src/workspace.rs`: the workspace, split-tree and surface model
 - `src/main.rs`: the app shell (pane tab bars, splits, actions); `src/sidebar.rs`: the sidebar's rows, groups, menus and drag to reorder
 - `src/bench.rs`: `abromux bench-vt` and `abromux bench-kitty`, the headless parse benchmarks used by `scripts/perf.py`

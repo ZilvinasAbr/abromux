@@ -800,6 +800,18 @@ fn general_page() -> Page {
                 )],
             ),
             group(
+                "Editor",
+                [choice(
+                    "Editor",
+                    "What a file opened in abromux (Finder's Open With, or a file type \
+                     whose default app is abromux) opens in, in a new pane beside the \
+                     focused one.",
+                    &["editor", "program"],
+                    &[("nvim", "Neovim"), ("tode", "tode")],
+                    |s| s.editor.program.key(),
+                )],
+            ),
+            group(
                 "Updates",
                 [
                     switch(

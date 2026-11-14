@@ -118,6 +118,10 @@ Commands:
   wait-for [-S|--signal] <name> [--timeout <seconds>]        (wait until another script signals <name>; default 30s)
   completion <zsh|bash|fish>                                 (a shell completion script: eval \"$(abromux completion zsh)\")
   open <path-or-url>...                                      (directories open workspaces, URLs open browser splits)
+  edit <file>... [--surface <ref>] [--focus <true|false>]    (in a pane beside this terminal, in editor.program: nvim or tode)
+  default-app <ext>... | code | list                         (make this AbroMux.app the default app for those file
+                                                             extensions, or for common source and text files; list
+                                                             prints what code covers)
   focus-window [--window <ref>]                              (bring abromux to the front; there is one window)
   sidebar <toggle|show|hide>
   link [list]                                                (this workspace's tracked links: Jira tickets, merge
@@ -1213,6 +1217,8 @@ fn dispatch(
             return Ok(());
         }
         "open" => return open(pos, opts),
+        "edit" => return edit(pos, opts),
+        "default-app" => return default_app(pos),
         "markdown" | "md" => return markdown(pos, opts),
         "browser" => return browser(pos, opts, as_json),
         "rpc" => {
@@ -2008,6 +2014,60 @@ fn open(pos: Vec<String>, opts: Map<String, Value>) -> Result<(), String> {
                 .unwrap_or(&Value::Null))
         );
     }
+    Ok(())
+}
+
+/// `abromux edit <file>…`: each in the editor, in a pane split off beside
+/// the caller. A file that doesn't exist yet is fine if its folder does.
+fn edit(pos: Vec<String>, opts: Map<String, Value>) -> Result<(), String> {
+    if pos.is_empty() {
+        return Err("edit: missing <file>".into());
+    }
+    for file in pos {
+        let path = std::path::absolute(&file).map_err(|e| format!("edit: {file}: {e}"))?;
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        if path.is_dir() || !path.parent().is_some_and(Path::is_dir) {
+            return Err(format!("edit: not a file: {file}"));
+        }
+        let mut o = opts.clone();
+        o.insert("path".into(), json!(path.to_string_lossy()));
+        let v = call("file.edit", o)?;
+        println!("OK {}", s(&v["surface"]["ref"]));
+    }
+    Ok(())
+}
+
+/// `abromux default-app <ext>… | code | list`: this app opens those files
+/// on a double-click in Finder.
+fn default_app(pos: Vec<String>) -> Result<(), String> {
+    // What `code` covers; scripts/bundle-app.sh declares them in Info.plist.
+    if pos.first().is_some_and(|p| p == "list") {
+        println!("{}", crate::editor::CODE_EXTENSIONS.join("\n"));
+        return Ok(());
+    }
+    let id = crate::channel::bundle_id().ok_or(
+        "default-app: run the abromux inside AbroMux.app (a dev build has no app to make the default)",
+    )?;
+    let exts: Vec<String> = if pos.iter().any(|p| p == "code") {
+        crate::editor::CODE_EXTENSIONS
+            .iter()
+            .map(|e| e.to_string())
+            .collect()
+    } else {
+        pos.iter()
+            .map(|e| e.trim_start_matches('.').to_lowercase())
+            .filter(|e| !e.is_empty())
+            .collect()
+    };
+    if exts.is_empty() {
+        return Err("default-app: missing <ext>... or code".into());
+    }
+    crate::editor::set_default_app(&id, &exts).map_err(|e| format!("default-app: {e}"))?;
+    println!(
+        "OK {} opens .{}",
+        crate::channel::app_name(),
+        exts.join(" .")
+    );
     Ok(())
 }
 

@@ -87,6 +87,12 @@ if $dist && ! $nightly && [[ "$version" == *+* ]]; then
   exit 1
 fi
 
+# Files abromux can open in its editor (src/editor.rs), offered in Finder's
+# Open With but never made their default on their own (rank Alternate):
+# text and source types, plus code extensions macOS knows no type for (.rs,
+# .toml) or another one (.ts is an MPEG stream to it).
+extensions="$(target/release/abromux default-app list | sed 's|.*|      <string>&</string>|')"
+
 tmp="$(mktemp -d)"
 app="$tmp/$name.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -113,6 +119,35 @@ cat > "$app/Contents/Info.plist" <<EOF
   <key>NSCameraUsageDescription</key><string>A program running in $name wants to use the camera.</string>
   <key>NSMicrophoneUsageDescription</key><string>A program running in $name wants to use the microphone.</string>
   <key>NSBluetoothAlwaysUsageDescription</key><string>$name uses Bluetooth to sign in to websites with a passkey on your phone.</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Text and source file</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.text</string>
+        <string>public.plain-text</string>
+        <string>public.source-code</string>
+        <string>public.script</string>
+        <string>public.shell-script</string>
+        <string>public.json</string>
+        <string>public.xml</string>
+        <string>public.yaml</string>
+        <string>net.daringfireball.markdown</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Code file</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+$extensions
+      </array>
+    </dict>
+  </array>
 </dict>
 </plist>
 EOF
