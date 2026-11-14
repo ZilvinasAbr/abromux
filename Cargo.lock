@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "abromux"
-version = "0.28.1"
+version = "0.29.0"
 dependencies = [
  "abromux-gitlab",
  "abromux-plugin",
