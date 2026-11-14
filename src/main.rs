@@ -4,7 +4,6 @@ mod bench;
 mod browser;
 mod channel;
 mod cli;
-mod cmux;
 mod config;
 mod debug;
 mod find_bar;
@@ -43,7 +42,7 @@ mod workspace;
 use abromux_browser::{
     auto as browser_auto, downloads, find as browser_find, history as browser_history,
 };
-use abromux_core::{agent, notify_hook, osc99, paths};
+use abromux_core::{agent, cmux, notify_hook, osc99, paths};
 use abromux_term::{ghostty, hold, pty};
 use browser::{BrowserEvent, BrowserView};
 use futures::StreamExt;

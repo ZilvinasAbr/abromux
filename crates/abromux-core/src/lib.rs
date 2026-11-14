@@ -3,6 +3,8 @@
 //! See docs/linux-plan.md.
 
 pub mod agent;
+pub mod cmux;
+pub mod color;
 pub mod ipc;
 pub mod link;
 pub mod links;

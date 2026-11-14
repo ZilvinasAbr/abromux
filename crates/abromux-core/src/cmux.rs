@@ -68,7 +68,7 @@ pub fn convert(v: &Value) -> Result<Session, String> {
             .unwrap_or(true),
         sidebar_width: sidebar
             .and_then(|s| s["width"].as_f64())
-            .map_or(crate::SIDEBAR_WIDTH, |w| w as f32),
+            .map_or(crate::session::SIDEBAR_WIDTH, |w| w as f32),
         mr_panel: false,
         workspaces,
         groups: vec![],
@@ -106,7 +106,7 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
         auto_name: title.filter(|_| !by_user),
         name_surface: None,
         description: str_of(ws, "customDescription").map(str::to_string),
-        color: str_of(ws, "customColor").and_then(crate::workspace::parse_color),
+        color: str_of(ws, "customColor").and_then(crate::color::parse_rgb),
         group: None,
         home: None,
         links: vec![],
