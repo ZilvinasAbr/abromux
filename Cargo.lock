@@ -55,6 +55,7 @@ dependencies = [
 name = "abromux-gitlab"
 version = "0.1.0"
 dependencies = [
+ "abromux-core",
  "abromux-plugin",
  "anyhow",
  "gpui",
@@ -84,6 +85,7 @@ dependencies = [
 name = "abromux-plugin"
 version = "0.1.0"
 dependencies = [
+ "abromux-core",
  "anyhow",
  "gpui",
  "serde_json",

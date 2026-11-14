@@ -61,19 +61,7 @@ pub fn jira_url(key: &str, cx: &App) -> Option<String> {
     Some(format!("{}/browse/{key}", base.trim_end_matches('/')))
 }
 
-/// `PAY-1423`: a Jira project key (a capital letter, then capitals, digits
-/// or `_`) and a number.
-pub fn is_jira_key(s: &str) -> bool {
-    let Some((project, n)) = s.split_once('-') else {
-        return false;
-    };
-    let mut c = project.chars();
-    c.next().is_some_and(|f| f.is_ascii_uppercase())
-        && project.len() >= 2
-        && c.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-        && !n.is_empty()
-        && n.chars().all(|c| c.is_ascii_digit())
-}
+pub use abromux_core::links::is_jira_key;
 
 /// Where the Jira keys in `text` are: each as a word of its own, so
 /// `UTF-8x`, `a/PAY-1` and the middle of a URL aren't.
