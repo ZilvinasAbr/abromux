@@ -165,7 +165,8 @@ actions!(
         ToggleMergeRequests,
         GoToMergeRequest,
         RefreshMergeRequests,
-        ReviewChanges
+        ReviewChanges,
+        OpenInNeovim
     ]
 );
 
@@ -1798,6 +1799,28 @@ impl AbroMux {
         }
     }
 
+    /// File › Open Workspace in Neovim: a new terminal tab in the workspace
+    /// folder (the focused tab's directory if it has none) running `nvim .`.
+    /// It's typed into a shell rather than run as the tab's command, so the
+    /// tab is kept across launches like any shell and `:q` leaves a prompt.
+    fn open_in_neovim(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ws = self.ws();
+        let cwd = ws
+            .home
+            .as_ref()
+            .map(|h| h.to_string_lossy().into_owned())
+            .or_else(|| self.focused_cwd(cx));
+        let id = ws.id;
+        let s = self.make_terminal(id, TerminalOpts::cwd(cwd), window, cx);
+        let Surface::Terminal(t) = &s else { return };
+        let t = t.clone();
+        self.add_tab(s, window, cx);
+        t.update(cx, |t, cx| {
+            t.send(b"nvim .\r");
+            cx.notify();
+        });
+    }
+
     /// `"commands"[index]` of the config file, or of the project file
     /// `project`, from the palette or its shortcut. A project command asks
     /// first until it's trusted as written; `confirm` asks every time.
@@ -2862,6 +2885,9 @@ impl Render for AbroMux {
             }))
             .on_action(
                 cx.listener(|this, _: &ReviewChanges, window, cx| this.review_changes(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &OpenInNeovim, window, cx| this.open_in_neovim(window, cx)),
             )
             // Reached when no browser took them: a plugin's tab has the focus.
             .on_action(cx.listener(|this, _: &browser::ZoomIn, window, cx| {
