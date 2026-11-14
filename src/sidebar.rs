@@ -60,12 +60,12 @@ fn drag_chip(name: SharedString) -> Div {
         .py(px(7.))
         .rounded(px(7.))
         .border_1()
-        .border_color(rgb(ACCENT))
-        .bg(rgb(PANE_BG))
+        .border_color(rgb(pal().accent))
+        .bg(rgb(pal().pane_bg))
         .opacity(0.9)
         .text_size(px(12.5))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(TEXT))
+        .text_color(rgb(pal().text))
         .font_family(".AppleSystemUIFont")
         .truncate()
         .child(name)
@@ -824,9 +824,9 @@ impl AbroMux {
             .flex()
             .flex_col()
             .relative()
-            .bg(rgba(SIDEBAR_BG))
+            .bg(rgba(pal().sidebar_bg))
             .border_r_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(pal().border))
             .when_some(tint, |d, t| d.child(div().absolute().inset_0().bg(t)))
             .child(
                 // Titlebar row: traffic lights live on the left.
@@ -864,7 +864,7 @@ impl AbroMux {
                     .px(px(8.))
                     .py(px(8.))
                     .border_t_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(pal().border))
                     .child(p)
             }))
             .child(
@@ -940,7 +940,7 @@ impl AbroMux {
                         .top(px(-4.))
                         .h(px(2.))
                         .rounded_full()
-                        .bg(rgb(ACCENT_BRIGHT)),
+                        .bg(rgb(pal().accent_bright)),
                 )
             })
             .px(px(6.))
@@ -952,8 +952,8 @@ impl AbroMux {
             .cursor_pointer()
             .text_size(px(11. * z))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(g.color.map_or(rgb(MUTED), rgb))
-            .hover(|s| s.bg(rgba(HOVER)))
+            .text_color(g.color.map_or(rgb(pal().muted), rgb))
+            .hover(|s| s.bg(rgba(pal().hover)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
@@ -974,13 +974,13 @@ impl AbroMux {
                 },
                 |d, _, _, cx| cx.new(|_| d.clone()),
             )
-            .drag_over::<DraggedWorkspace>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
+            .drag_over::<DraggedWorkspace>(|d, _, _, _| d.bg(rgba(pal().drop_tint)))
             .on_drop(cx.listener(move |this, d: &DraggedWorkspace, _, cx| {
                 if let Some(from) = this.ws_index(d.id) {
                     this.drop_on_group(from, gid, cx);
                 }
             }))
-            .drag_over::<DraggedGroup>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
+            .drag_over::<DraggedGroup>(|d, _, _, _| d.bg(rgba(pal().drop_tint)))
             .on_drop(cx.listener(move |this, d: &DraggedGroup, _, cx| {
                 if let Some((start, _)) = group_span(&this.workspaces, gid) {
                     this.drop_group(d.id, start, cx);
@@ -993,7 +993,7 @@ impl AbroMux {
                     "chevron-down"
                 })
                 .size(px(10. * z))
-                .text_color(rgb(MUTED)),
+                .text_color(rgb(pal().muted)),
             )
             .child(match renaming {
                 Some(input) => div()
@@ -1004,10 +1004,10 @@ impl AbroMux {
                     .flex()
                     .items_center()
                     .rounded(px(4.))
-                    .bg(rgba(0x0000004d))
+                    .bg(rgba(pal().field_bg))
                     .border_1()
-                    .border_color(rgba(0xffffff59))
-                    .text_color(rgb(TEXT))
+                    .border_color(rgba(pal().field_border))
+                    .text_color(rgb(pal().text))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_mouse_up(MouseButton::Left, select_all_on_double_click)
                     .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
@@ -1039,13 +1039,13 @@ impl AbroMux {
                         .size(px(6.))
                         .flex_none()
                         .rounded_full()
-                        .bg(rgb(ACCENT_BRIGHT)),
+                        .bg(rgb(pal().accent_bright)),
                 )
             })
             .child(
                 div()
                     .flex_none()
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(pal().muted))
                     .font_weight(FontWeight::NORMAL)
                     .child(count.to_string()),
             )
@@ -1057,12 +1057,12 @@ impl AbroMux {
                     .flex_none()
                     .rounded(px(4.))
                     .p(px(2.))
-                    .hover(|s| s.bg(rgba(0xffffff22)))
+                    .hover(|s| s.bg(tint(0x22)))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.new_workspace_in_group(gid, window, cx)
                     }))
-                    .child(icon("plus").size(px(11. * z)).text_color(rgb(MUTED))),
+                    .child(icon("plus").size(px(11. * z)).text_color(rgb(pal().muted))),
             )
             .context_menu(move |menu, window, cx| {
                 crate::browser::track_menu(window, cx);
@@ -1109,7 +1109,7 @@ impl AbroMux {
         let selection = sb
             .selection_color
             .or(colors.selection_color)
-            .unwrap_or(rgb(ACCENT));
+            .unwrap_or(rgb(pal().accent));
         let solid = colors.indicator_style == IndicatorStyle::SolidFill;
         let bg = match (ws.color, solid, active) {
             (Some(c), true, true) => Some(rgb(c)),
@@ -1121,8 +1121,16 @@ impl AbroMux {
             _ => None,
         };
         let filled = bg.is_some();
-        let fg = if filled { rgb(0xffffff) } else { rgb(TEXT) };
-        let sub = if filled { rgba(0xffffffc0) } else { rgb(MUTED) };
+        let fg = if filled {
+            rgb(0xffffff)
+        } else {
+            rgb(pal().text)
+        };
+        let sub = if filled {
+            rgba(0xffffffc0)
+        } else {
+            rgb(pal().muted)
+        };
         let rail = ws.color.filter(|_| !solid);
 
         let renaming = self
@@ -1179,7 +1187,7 @@ impl AbroMux {
             .rounded(px(7.))
             .cursor_pointer()
             .when_some(bg, |s, bg| s.bg(bg))
-            .when(!filled, |s| s.hover(|s| s.bg(rgba(HOVER))))
+            .when(!filled, |s| s.hover(|s| s.bg(rgba(pal().hover))))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
@@ -1229,7 +1237,7 @@ impl AbroMux {
                         .right(px(4.))
                         .h(px(2.))
                         .rounded_full()
-                        .bg(rgb(ACCENT_BRIGHT))
+                        .bg(rgb(pal().accent_bright))
                         .map(|d| {
                             if after {
                                 d.bottom(px(-2.))
@@ -1239,14 +1247,14 @@ impl AbroMux {
                         }),
                 )
             })
-            .drag_over::<DraggedGroup>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
+            .drag_over::<DraggedGroup>(|d, _, _, _| d.bg(rgba(pal().drop_tint)))
             .on_drop(cx.listener(move |this, d: &DraggedGroup, _, cx| {
                 if let Some(onto) = this.ws_index(id) {
                     this.drop_group(d.id, onto, cx);
                 }
             }))
             // A tab dropped on a workspace moves into it.
-            .drag_over::<crate::DraggedTab>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
+            .drag_over::<crate::DraggedTab>(|d, _, _, _| d.bg(rgba(pal().drop_tint)))
             .on_drop(cx.listener(move |this, d: &crate::DraggedTab, window, cx| {
                 this.drop_tab_on_workspace(d.sid, id, window, cx)
             }))
@@ -1273,7 +1281,7 @@ impl AbroMux {
                                 .size(px(7.))
                                 .flex_none()
                                 .rounded_full()
-                                .bg(rgb(ACCENT_BRIGHT)),
+                                .bg(rgb(pal().accent_bright)),
                         )
                     })
                     // White on a filled row, whose fill may be the same orange.
@@ -1292,10 +1300,10 @@ impl AbroMux {
                             .flex()
                             .items_center()
                             .rounded(px(5.))
-                            .bg(rgba(0x0000004d))
+                            .bg(rgba(pal().field_bg))
                             .border_1()
-                            .border_color(rgba(0xffffff59))
-                            .text_color(rgb(TEXT))
+                            .border_color(rgba(pal().field_border))
+                            .text_color(rgb(pal().text))
                             .font_weight(FontWeight::SEMIBOLD)
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_mouse_up(MouseButton::Left, select_all_on_double_click)
@@ -1341,7 +1349,7 @@ impl AbroMux {
                                 .flex_none()
                                 .rounded(px(4.))
                                 .p(px(2.))
-                                .hover(|s| s.bg(rgba(0xffffff22)))
+                                .hover(|s| s.bg(tint(0x22)))
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     if let Some(i) = this.ws_index(id) {
@@ -1359,10 +1367,10 @@ impl AbroMux {
                     .px(px(4.))
                     .py(px(2.))
                     .rounded(px(5.))
-                    .bg(rgba(0x0000004d))
+                    .bg(rgba(pal().field_bg))
                     .border_1()
-                    .border_color(rgba(0xffffff59))
-                    .text_color(rgb(TEXT))
+                    .border_color(rgba(pal().field_border))
+                    .text_color(rgb(pal().text))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                         let k = &ev.keystroke;
@@ -1422,7 +1430,7 @@ impl AbroMux {
                 let color = if filled {
                     rgb(0xffffff)
                 } else {
-                    rgb(ACCENT_BRIGHT)
+                    rgb(pal().accent_bright)
                 };
                 // Pin the line height so the bell can be centred on the first
                 // line, however many lines the text wraps to.

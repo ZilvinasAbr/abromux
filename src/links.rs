@@ -736,7 +736,11 @@ impl AbroMux {
             let open = l.clone();
             let tracked = self.workspaces[wi].links.iter().any(|t| t.key == l.key);
             let group: SharedString = format!("link-{i}").into();
-            let fg = if shown { rgb(TEXT) } else { rgb(MUTED) };
+            let fg = if shown {
+                rgb(pal().text)
+            } else {
+                rgb(pal().muted)
+            };
             div()
                 .id(("link", i))
                 .group(group.clone())
@@ -748,8 +752,8 @@ impl AbroMux {
                 .h(px(22. * z))
                 .rounded(px(5.))
                 .cursor_pointer()
-                .when(shown, |d| d.bg(rgba(HOVER)))
-                .hover(|d| d.bg(rgba(HOVER)))
+                .when(shown, |d| d.bg(rgba(pal().hover)))
+                .hover(|d| d.bg(rgba(pal().hover)))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     let wi = this.active;
@@ -769,7 +773,7 @@ impl AbroMux {
                     d.ml(px(14. * (depth - 1) as f32 * z)).child(
                         icon("corner-down-right")
                             .size(px(11. * z))
-                            .text_color(rgb(MUTED)),
+                            .text_color(rgb(pal().muted)),
                     )
                 })
                 .child(
@@ -806,7 +810,7 @@ impl AbroMux {
                                 .min_w_0()
                                 .truncate()
                                 .text_size(px(11. * z))
-                                .text_color(rgb(MUTED))
+                                .text_color(rgb(pal().muted))
                                 .children(l.label().map(str::to_string)),
                         ),
                 })
@@ -822,7 +826,7 @@ impl AbroMux {
                             .flex_none()
                             .rounded(px(4.))
                             .p(px(2.))
-                            .hover(|s| s.bg(rgba(0xffffff22)))
+                            .hover(|s| s.bg(tint(0x22)))
                             .tooltip(move |window, cx| {
                                 gpui_component::tooltip::Tooltip::new(if tracked {
                                     "Untrack"
@@ -837,7 +841,7 @@ impl AbroMux {
                                 this.untrack_link(wi, &key, cx);
                                 cx.stop_propagation();
                             }))
-                            .child(icon("x").size(px(10. * z)).text_color(rgb(MUTED))),
+                            .child(icon("x").size(px(10. * z)).text_color(rgb(pal().muted))),
                     )
                 })
         });

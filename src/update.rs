@@ -851,10 +851,10 @@ pub fn pill(cx: &App) -> Option<AnyElement> {
     let (icon_name, color) = match &state {
         State::Available(_) => ("download", 0xffffff),
         State::Error(_) => ("triangle-alert", 0xe5a050),
-        State::NotFound => ("info", MUTED),
-        State::Installing(_) => ("power", TEXT),
-        State::Downloading { .. } => ("download", TEXT),
-        _ => ("rotate-cw", TEXT),
+        State::NotFound => ("info", pal().muted),
+        State::Installing(_) => ("power", pal().text),
+        State::Downloading { .. } => ("download", pal().text),
+        _ => ("rotate-cw", pal().text),
     };
     let glyph = icon(icon_name).size(px(11.)).text_color(rgb(color));
     let glyph = if matches!(state, State::Checking { .. } | State::Preparing(_)) {
@@ -880,8 +880,10 @@ pub fn pill(cx: &App) -> Option<AnyElement> {
             .rounded_full()
             .text_size(px(11.))
             .font_weight(FontWeight::MEDIUM)
-            .when(available, |d| d.bg(rgb(ACCENT)).text_color(rgb(0xffffff)))
-            .when(!available, |d| d.bg(rgba(0xffffff14)).text_color(rgb(TEXT)))
+            .when(available, |d| {
+                d.bg(rgb(pal().accent)).text_color(rgb(0xffffff))
+            })
+            .when(!available, |d| d.bg(tint(0x14)).text_color(rgb(pal().text)))
             .cursor_pointer()
             .hover(|s| s.opacity(0.85))
             .active(|s| s.opacity(0.7))
@@ -916,12 +918,12 @@ pub fn popover(anchor: Anchor, top: Pixels, cx: &App) -> Option<AnyElement> {
         .flex_col()
         .gap(px(10.))
         .rounded(px(10.))
-        .bg(rgb(TABBAR_BG))
+        .bg(rgb(pal().tabbar_bg))
         .border_1()
-        .border_color(rgb(BORDER))
+        .border_color(rgb(pal().border))
         .shadow_lg()
         .text_size(px(12.))
-        .text_color(rgb(TEXT))
+        .text_color(rgb(pal().text))
         .occlude()
         .children(content(&u.state));
     let card = match anchor {
@@ -952,7 +954,7 @@ fn title(text: impl Into<SharedString>) -> Div {
 }
 
 fn muted(text: impl Into<SharedString>) -> Div {
-    div().text_color(rgb(MUTED)).child(text.into())
+    div().text_color(rgb(pal().muted)).child(text.into())
 }
 
 fn button(id: &'static str, label: &'static str, primary: bool) -> Stateful<Div> {
@@ -963,8 +965,10 @@ fn button(id: &'static str, label: &'static str, primary: bool) -> Stateful<Div>
         .py(px(4.))
         .rounded(px(6.))
         .text_size(px(12.))
-        .when(primary, |d| d.bg(rgb(ACCENT)).text_color(rgb(0xffffff)))
-        .when(!primary, |d| d.bg(rgba(HOVER)))
+        .when(primary, |d| {
+            d.bg(rgb(pal().accent)).text_color(rgb(0xffffff))
+        })
+        .when(!primary, |d| d.bg(rgba(pal().hover)))
         .cursor_pointer()
         .hover(|s| s.opacity(0.85))
         .active(|s| s.opacity(0.7))
@@ -981,7 +985,7 @@ fn buttons(children: impl IntoIterator<Item = AnyElement>) -> AnyElement {
 }
 
 fn progress(fraction: Option<f32>) -> AnyElement {
-    let bar = div().h_full().rounded_full().bg(rgb(ACCENT));
+    let bar = div().h_full().rounded_full().bg(rgb(pal().accent));
     let bar = match fraction {
         Some(f) => bar.w(relative(f.clamp(0., 1.))).into_any_element(),
         // No size to go by: a sliver that slides along.
@@ -998,7 +1002,7 @@ fn progress(fraction: Option<f32>) -> AnyElement {
         .w_full()
         .h(px(5.))
         .rounded_full()
-        .bg(rgba(HOVER))
+        .bg(rgba(pal().hover))
         .flex()
         .child(bar)
         .into_any_element()
@@ -1021,7 +1025,7 @@ fn content(state: &State) -> Vec<AnyElement> {
                 div()
                     .flex()
                     .gap(px(6.))
-                    .child(div().w(px(64.)).text_color(rgb(MUTED)).child(label))
+                    .child(div().w(px(64.)).text_color(rgb(pal().muted)).child(label))
                     .child(value)
             };
             vec![
@@ -1038,7 +1042,7 @@ fn content(state: &State) -> Vec<AnyElement> {
                     .into_any_element(),
                 div()
                     .id("update-notes")
-                    .text_color(rgb(ACCENT_BRIGHT))
+                    .text_color(rgb(pal().accent_bright))
                     .cursor_pointer()
                     .hover(|s| s.underline())
                     .child("View Release Notes")

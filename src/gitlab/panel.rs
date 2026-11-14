@@ -21,7 +21,7 @@ fn pipeline_color(status: &str) -> u32 {
         "failed" => RED,
         "running" => BLUE,
         "pending" | "created" | "preparing" | "waiting_for_resource" | "scheduled" => YELLOW,
-        _ => MUTED,
+        _ => pal().muted,
     }
 }
 
@@ -150,7 +150,7 @@ impl AbroMux {
                         .px(px(12.))
                         .pb(px(8.))
                         .text_size(px(11.5))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(pal().muted))
                         .child(empty.to_string())
                         .into_any_element(),
                 );
@@ -210,7 +210,7 @@ impl AbroMux {
         } else if st.slowdown() > 1.01 {
             Some((
                 format!("Checking {:.1}× less often (rate limit)", st.slowdown()),
-                MUTED,
+                pal().muted,
             ))
         } else {
             None
@@ -221,9 +221,9 @@ impl AbroMux {
             .flex_none()
             .flex()
             .flex_col()
-            .bg(rgba(SIDEBAR_BG))
+            .bg(rgba(pal().sidebar_bg))
             .border_l_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(pal().border))
             .child(
                 div()
                     .h(px(TITLEBAR_H))
@@ -272,7 +272,7 @@ impl AbroMux {
                         .flex_col()
                         .gap(px(8.))
                         .text_size(px(12.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(pal().muted))
                         .child(
                             "Sign in to GitLab in a GitLab tab: the panel uses the same \
                              host and token. (Settings → GitLab says which host.)",
@@ -280,7 +280,7 @@ impl AbroMux {
                         .child(
                             div()
                                 .id("mrs-sign-in")
-                                .text_color(rgb(ACCENT_BRIGHT))
+                                .text_color(rgb(pal().accent_bright))
                                 .cursor_pointer()
                                 .child("Open a GitLab Tab…")
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -314,7 +314,7 @@ fn section_title(title: &str, n: usize) -> Div {
         .gap(px(6.))
         .text_size(px(11.))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(MUTED))
+        .text_color(rgb(pal().muted))
         .child(title.to_uppercase())
         .when(n > 0, |d| d.child(n.to_string()))
 }
@@ -345,7 +345,7 @@ fn mr_row(m: &Mr, refreshing: bool, cx: &Context<AbroMux>) -> Stateful<Div> {
     };
     let color = l
         .and_then(|l| l.pipeline.as_deref())
-        .map_or(BORDER, pipeline_color);
+        .map_or(pal().border, pipeline_color);
     div()
         .id(SharedString::from(format!("mr-{}", m.key.reference())))
         .mx(px(6.))
@@ -355,7 +355,7 @@ fn mr_row(m: &Mr, refreshing: bool, cx: &Context<AbroMux>) -> Stateful<Div> {
         .flex()
         .gap(px(8.))
         .cursor_pointer()
-        .hover(|s| s.bg(rgba(HOVER)))
+        .hover(|s| s.bg(rgba(pal().hover)))
         .on_click(cx.listener(move |this, _, window, cx| this.open_mr(key.clone(), window, cx)))
         .child(div().pt(px(5.)).child(dot(color)))
         .child(
@@ -368,7 +368,7 @@ fn mr_row(m: &Mr, refreshing: bool, cx: &Context<AbroMux>) -> Stateful<Div> {
                     div()
                         .text_size(px(12.5))
                         .truncate()
-                        .when(draft, |d| d.text_color(rgb(MUTED)))
+                        .when(draft, |d| d.text_color(rgb(pal().muted)))
                         .child(if draft {
                             format!("Draft: {}", title.trim_start_matches("Draft: "))
                         } else {
@@ -378,7 +378,7 @@ fn mr_row(m: &Mr, refreshing: bool, cx: &Context<AbroMux>) -> Stateful<Div> {
                 .child(
                     div()
                         .text_size(px(11.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(pal().muted))
                         .truncate()
                         .child(sub),
                 ),

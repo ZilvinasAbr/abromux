@@ -44,7 +44,7 @@
 
 use crate::{
     layout::WorkspaceSpec,
-    theme::{ACCENT, BORDER},
+    theme::{Appearance, pal},
 };
 use gpui::Keystroke;
 use gpui::{Global, Rgba, rgb, rgba};
@@ -201,6 +201,8 @@ pub enum BrowserEngine {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct AppSettings {
+    /// Light, dark, or following macOS (`crate::theme`).
+    pub appearance: Appearance,
     /// ⌘N starts in the focused terminal's directory; off, in home.
     pub workspace_inherit_working_directory: bool,
     /// Where a new workspace goes in the sidebar, outside a group.
@@ -242,6 +244,7 @@ fn reorder<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            appearance: Appearance::System,
             workspace_inherit_working_directory: true,
             new_workspace_placement: Placement::End,
             automatically_check_for_updates: true,
@@ -758,20 +761,28 @@ pub struct Panes {
     /// default (cmux's `paneResizeStepPixels`).
     #[serde(deserialize_with = "step")]
     pub resize_step: f32,
-    /// The line between split panes.
-    #[serde(deserialize_with = "color")]
-    pub divider_color: Rgba,
+    /// The line between split panes; None for the theme's border colour
+    /// ([`Panes::divider`]).
+    #[serde(deserialize_with = "opt_color")]
+    pub divider_color: Option<Rgba>,
     /// The border around the focused pane when a workspace has splits.
     #[serde(deserialize_with = "color")]
     pub focus_border_color: Rgba,
+}
+
+impl Panes {
+    /// The line between split panes, in the current theme unless set.
+    pub fn divider(&self) -> Rgba {
+        self.divider_color.unwrap_or_else(|| rgb(pal().border))
+    }
 }
 
 impl Default for Panes {
     fn default() -> Self {
         Self {
             resize_step: 20.,
-            divider_color: rgb(BORDER),
-            focus_border_color: rgba(ACCENT << 8 | 0xb0),
+            divider_color: None,
+            focus_border_color: rgba(pal().accent << 8 | 0xb0),
         }
     }
 }
@@ -1106,7 +1117,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.panes.resize_step, 35.5);
-        assert_eq!(s.panes.divider_color, rgb(0xff0000));
+        assert_eq!(s.panes.divider_color, Some(rgb(0xff0000)));
         assert_eq!(s.panes.focus_border_color, rgba(0x00ff0080));
     }
 
@@ -1279,6 +1290,14 @@ mod tests {
         assert!(reorder(r#""notifications""#).unwrap());
         assert!(reorder(r#""agentActivity""#).unwrap());
         assert!(reorder(r#""sometimes""#).is_err());
+        let appearance = |v: &str| {
+            parse(&format!(r#"{{"app": {{"appearance": "{v}"}}}}"#)).map(|s| s.app.appearance)
+        };
+        assert_eq!(appearance("light").unwrap(), Appearance::Light);
+        assert_eq!(appearance("dark").unwrap(), Appearance::Dark);
+        assert_eq!(appearance("system").unwrap(), Appearance::System);
+        assert_eq!(AppSettings::default().appearance, Appearance::System);
+        assert!(appearance("sepia").is_err());
     }
 
     #[test]

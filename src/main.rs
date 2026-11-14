@@ -61,7 +61,7 @@ use browser::{BrowserEvent, BrowserView};
 use futures::StreamExt;
 use gpui::{prelude::*, *};
 use gpui_component::{
-    Root, Theme, ThemeMode, WindowExt,
+    Root, WindowExt,
     input::{Input, InputEvent, InputState, SelectAll},
     notification::Notification,
 };
@@ -2221,7 +2221,7 @@ impl AbroMux {
                             .h(px(13.))
                             .px(px(3.))
                             .rounded_full()
-                            .bg(rgb(ACCENT_BRIGHT))
+                            .bg(rgb(pal().accent_bright))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -2269,7 +2269,7 @@ impl AbroMux {
                 let grab = DIVIDER_GRAB;
                 let divider = div()
                     .flex_none()
-                    .bg(cx.global::<settings::Settings>().panes.divider_color)
+                    .bg(cx.global::<settings::Settings>().panes.divider())
                     .when(horizontal, |s| s.w(px(1.)).h_full())
                     .when(!horizontal, |s| s.h(px(1.)).w_full())
                     .relative()
@@ -2396,12 +2396,15 @@ impl AbroMux {
                 .items_center()
                 .gap(px(6.))
                 .border_r_1()
-                .border_color(rgb(BORDER))
+                .border_color(rgb(pal().border))
                 .text_size(px(12.))
                 .cursor_pointer()
-                .when(active, |d| d.bg(rgb(PANE_BG)).text_color(rgb(TEXT)))
+                .when(active, |d| {
+                    d.bg(rgb(pal().pane_bg)).text_color(rgb(pal().text))
+                })
                 .when(!active, |d| {
-                    d.text_color(rgb(MUTED)).hover(|d| d.bg(rgba(HOVER)))
+                    d.text_color(rgb(pal().muted))
+                        .hover(|d| d.bg(rgba(pal().hover)))
                 })
                 // Overlaid, not a border, so the focused tab's content doesn't shift down.
                 .when(active && focused && multi, |d| {
@@ -2412,7 +2415,7 @@ impl AbroMux {
                             .left_0()
                             .w_full()
                             .h(px(2.))
-                            .bg(rgb(ACCENT)),
+                            .bg(rgb(pal().accent)),
                     )
                 })
                 .on_mouse_down(
@@ -2445,7 +2448,7 @@ impl AbroMux {
                     },
                     |d, _, _, cx| cx.new(|_| d.clone()),
                 )
-                .drag_over::<DraggedTab>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
+                .drag_over::<DraggedTab>(|d, _, _, _| d.bg(rgba(pal().drop_tint)))
                 .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
                     this.move_tab(
                         d.sid,
@@ -2458,12 +2461,12 @@ impl AbroMux {
                     )
                 }))
                 .when(unread, |d| {
-                    d.text_color(rgb(TEXT)).child(
+                    d.text_color(rgb(pal().text)).child(
                         div()
                             .size(px(6.))
                             .flex_none()
                             .rounded_full()
-                            .bg(rgb(ACCENT_BRIGHT)),
+                            .bg(rgb(pal().accent_bright)),
                     )
                 })
                 .child(if s.claude_running(cx) {
@@ -2483,9 +2486,9 @@ impl AbroMux {
                         .flex()
                         .items_center()
                         .rounded(px(4.))
-                        .bg(rgba(0x0000004d))
+                        .bg(rgba(pal().field_bg))
                         .border_1()
-                        .border_color(rgb(ACCENT))
+                        .border_color(rgb(pal().accent))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_mouse_up(MouseButton::Left, select_all_on_double_click)
                         .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
@@ -2522,12 +2525,12 @@ impl AbroMux {
                             .when(!active, |d| {
                                 d.invisible().group_hover(group.clone(), |d| d.visible())
                             })
-                            .hover(|d| d.bg(rgba(0xffffff18)))
+                            .hover(|d| d.bg(tint(0x18)))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.request_close_surface(sid, window, cx)
                             }))
-                            .child(icon("x").size(px(10.)).text_color(rgb(MUTED))),
+                            .child(icon("x").size(px(10.)).text_color(rgb(pal().muted))),
                     )
                 })
         });
@@ -2542,9 +2545,9 @@ impl AbroMux {
             .flex_none()
             .flex()
             .items_center()
-            .bg(rgb(TABBAR_BG))
+            .bg(rgb(pal().tabbar_bg))
             .border_b_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(pal().border))
             .child(
                 div()
                     .id(("tabs", pane_id))
@@ -2560,7 +2563,7 @@ impl AbroMux {
                     .on_mouse_down(MouseButton::Left, |ev, window, _| {
                         titlebar::drag_or_zoom(ev, window)
                     })
-                    .drag_over::<DraggedTab>(|d, _, _, _| d.bg(rgba(DROP_TINT)))
+                    .drag_over::<DraggedTab>(|d, _, _, _| d.bg(rgba(pal().drop_tint)))
                     .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
                         this.move_tab(
                             d.sid,
@@ -2582,7 +2585,7 @@ impl AbroMux {
                     // Shown while this pane is zoomed (⌘⇧↩); a click unzooms.
                     .when(self.ws().zoom == Some(pane_id), |d| {
                         d.child(
-                            tinted_icon_button(("pane-zoom", pane_id), "maximize-2", ACCENT)
+                            tinted_icon_button(("pane-zoom", pane_id), "maximize-2", pal().accent)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.workspaces[this.active].toggle_zoom();
                                     cx.notify();
@@ -2611,7 +2614,7 @@ impl AbroMux {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(PANE_BG))
+            .bg(rgb(pal().pane_bg))
             .relative()
             .on_mouse_down(
                 MouseButton::Left,
@@ -2627,7 +2630,7 @@ impl AbroMux {
                     .child(content)
                     // Unfocused splits are dimmed, like cmux/ghostty.
                     .when(multi && !focused, |d| {
-                        d.child(div().absolute().inset_0().bg(rgba(0x0000004a)))
+                        d.child(div().absolute().inset_0().bg(rgba(pal().scrim)))
                     })
                     // Catches a dragged tab over the content (terminals and
                     // webviews would otherwise swallow it).
@@ -2654,7 +2657,7 @@ impl AbroMux {
                         d.child(
                             window_corners(div().absolute().inset_0(), corners)
                                 .border_2()
-                                .border_color(rgb(ACCENT))
+                                .border_color(rgb(pal().accent))
                                 .bg(rgba(0x1f6fe522))
                                 .with_animation(
                                     ("flash", n),
@@ -2668,7 +2671,7 @@ impl AbroMux {
                 d.child(
                     window_corners(div().absolute().inset_0(), corners)
                         .border_2()
-                        .border_color(rgb(ACCENT_BRIGHT)),
+                        .border_color(rgb(pal().accent_bright)),
                 )
             })
             // Which split has the keyboard, at a glance.
@@ -2745,7 +2748,7 @@ impl Render for AbroMux {
             .track_focus(&self.focus)
             .size_full()
             .flex()
-            .text_color(rgb(TEXT))
+            .text_color(rgb(pal().text))
             .font_family(".AppleSystemUIFont")
             .on_action(cx.listener(|_, _: &Quit, window, cx| quit::request(window, cx)))
             // Also on the app, but the palette lists only what the focused view handles.
@@ -3066,7 +3069,7 @@ impl Render for AbroMux {
                     .h_full()
                     .flex()
                     .flex_col()
-                    .bg(rgb(PANE_BG))
+                    .bg(rgb(pal().pane_bg))
                     .when(!self.sidebar, |d| {
                         // Same height as the sidebar's titlebar row so the
                         // traffic lights sit centered in it.
@@ -3079,9 +3082,9 @@ impl Render for AbroMux {
                                 .pl(px(80.))
                                 .pr(px(10.))
                                 .gap_1()
-                                .bg(rgb(TABBAR_BG))
+                                .bg(rgb(pal().tabbar_bg))
                                 .border_b_1()
-                                .border_color(rgb(BORDER))
+                                .border_color(rgb(pal().border))
                                 .on_mouse_down(MouseButton::Left, |ev, window, _| {
                                     titlebar::drag_or_zoom(ev, window)
                                 })
@@ -3093,7 +3096,7 @@ impl Render for AbroMux {
                                         .min_w_0()
                                         .truncate()
                                         .text_size(px(12.))
-                                        .text_color(rgb(MUTED))
+                                        .text_color(rgb(pal().muted))
                                         .child(title),
                                 ),
                         )
@@ -3121,8 +3124,8 @@ impl Render for AbroMux {
                                         .h(r.size.height)
                                         .rounded(px(4.))
                                         .border_2()
-                                        .border_color(rgb(ACCENT))
-                                        .bg(rgba(DROP_TINT)),
+                                        .border_color(rgb(pal().accent))
+                                        .bg(rgba(pal().drop_tint)),
                                 )
                             })
                     }),
@@ -3149,9 +3152,9 @@ fn window_corners(d: Div, corners: Corners<bool>) -> Div {
 /// unless the tab is active.
 fn icon_color(name: &str, bright: bool) -> Rgba {
     match name {
-        "claude" => rgb(ACCENT_BRIGHT),
-        _ if bright => rgb(TEXT),
-        _ => rgb(MUTED),
+        "claude" => rgb(pal().accent_bright),
+        _ if bright => rgb(pal().text),
+        _ => rgb(pal().muted),
     }
 }
 
@@ -3174,11 +3177,11 @@ impl Render for DraggedTab {
             .gap(px(6.))
             .rounded(px(5.))
             .border_1()
-            .border_color(rgb(ACCENT))
-            .bg(rgb(PANE_BG))
+            .border_color(rgb(pal().accent))
+            .bg(rgb(pal().pane_bg))
             .opacity(0.9)
             .text_size(px(12.))
-            .text_color(rgb(TEXT))
+            .text_color(rgb(pal().text))
             .font_family(".AppleSystemUIFont")
             .child(
                 icon(self.icon)
@@ -3246,13 +3249,13 @@ fn hint_pill(text: String) -> Div {
         .px(px(6.))
         .py(px(1.))
         .rounded_full()
-        .bg(rgba(0x3a3c42f2))
+        .bg(rgba(pal().pill_bg))
         .border_1()
-        .border_color(rgba(0xffffff4d))
+        .border_color(rgba(pal().pill_border))
         .shadow_sm()
         .text_size(px(10.))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(TEXT))
+        .text_color(rgb(pal().text))
         .child(text)
 }
 
@@ -3285,26 +3288,16 @@ fn run_app(cwd: Option<String>) {
     Application::new().with_assets(Assets).run(|cx: &mut App| {
         icon::set_dock_icon();
         gpui_component::init(cx);
-        Theme::change(ThemeMode::Dark, None, cx);
-        let theme = Theme::global_mut(cx);
-        theme.background = rgba(0x00000000).into();
-        theme.font_family = ".AppleSystemUIFont".into();
-        theme.mono_font_family = terminal::FONT_FAMILY.into();
-        // gpui-component's dark theme is cold black and grey; use our warm neutrals.
-        theme.popover = rgb(MENU_BG).into();
-        theme.popover_foreground = rgb(TEXT).into();
-        theme.foreground = rgb(TEXT).into();
-        theme.muted_foreground = rgb(MUTED).into();
-        theme.border = rgb(MENU_BORDER).into();
-        theme.accent = rgb(MENU_HOVER).into();
-        theme.accent_foreground = rgb(TEXT).into();
-
-        cx.set_global(config::Config::load());
         // A broken config file starts with the defaults, and says so once the window is up.
         let (settings, settings_error) = match settings::load() {
             Ok(s) => (s, None),
             Err(e) => (settings::Settings::default(), Some(e)),
         };
+        // Light or dark before anything is drawn, and before the Ghostty
+        // config picks its theme for it.
+        theme::apply_appearance(settings.app.appearance);
+        theme::set_dark(theme::appearance_is_dark(cx.window_appearance()), cx);
+        cx.set_global(config::Config::load());
         cx.set_global(settings);
         update::init(cx);
         gitlab::init(cx);
@@ -3392,6 +3385,7 @@ fn run_app(cwd: Option<String>) {
                 ..Default::default()
             },
             |window, cx| {
+                theme::follow(window);
                 if let Some(e) = settings_error {
                     window.defer(cx, move |window, cx| {
                         window.push_notification(settings::error_notification(e), cx)

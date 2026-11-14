@@ -553,24 +553,31 @@ impl Terminal {
                 ud,
                 epoch: Instant::now(),
             };
-            t.apply_theme();
+            t.apply_theme(crate::theme::is_dark());
             Ok(t)
         }
     }
 
-    /// A dark palette in the spirit of Ghostty's default theme.
-    fn apply_theme(&self) {
-        const ANSI: [u32; 16] = [
+    /// The built-in default colors, before the user's Ghostty config: a
+    /// dark palette in the spirit of Ghostty's default theme (Tomorrow
+    /// Night), or Tomorrow for light.
+    pub fn apply_theme(&self, dark: bool) {
+        const DARK: [u32; 16] = [
             0x1d1f21, 0xcc6666, 0xb5bd68, 0xf0c674, 0x81a2be, 0xb294bb, 0x8abeb7, 0xc5c8c6,
             0x666666, 0xd54e53, 0xb9ca4a, 0xe7c547, 0x7aa6da, 0xc397d8, 0x70c0b1, 0xeaeaea,
         ];
+        const LIGHT: [u32; 16] = [
+            0x1d1f21, 0xc82829, 0x718c00, 0xb08800, 0x4271ae, 0x8959a8, 0x3e999f, 0xb4b4b4,
+            0x707070, 0xe04545, 0x8aa600, 0xeab700, 0x5a8bd0, 0xa174c0, 0x52b0b6, 0xd6d6d6,
+        ];
+        let ansi = if dark { DARK } else { LIGHT };
         let rgb = |v: u32| GhosttyColorRgb {
             r: (v >> 16) as u8,
             g: (v >> 8) as u8,
             b: v as u8,
         };
         let mut palette = [GhosttyColorRgb::default(); 256];
-        for (i, c) in ANSI.iter().enumerate() {
+        for (i, c) in ansi.iter().enumerate() {
             palette[i] = rgb(*c);
         }
         // xterm 6x6x6 cube + grayscale ramp.
@@ -584,9 +591,12 @@ impl Terminal {
             palette[232 + i as usize] = rgb((v << 16) | (v << 8) | v);
         }
         unsafe {
-            let fg = rgb(0xdcdfe4);
-            let bg = rgb(0x16171a);
-            let cursor = rgb(0xdcdfe4);
+            let (fg, bg) = if dark {
+                (0xdcdfe4, 0x16171a)
+            } else {
+                (0x3b3a37, 0xfdfcf9)
+            };
+            let (fg, bg, cursor) = (rgb(fg), rgb(bg), rgb(fg));
             ghostty_terminal_set(
                 self.raw,
                 GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND,
