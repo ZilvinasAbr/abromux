@@ -53,6 +53,7 @@ dependencies = [
  "futures",
  "objc",
  "raw-window-handle",
+ "serde_json",
 ]
 
 [[package]]

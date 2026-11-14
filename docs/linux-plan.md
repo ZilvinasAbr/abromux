@@ -104,9 +104,9 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
 - [x] Move `banner`, `menubar`, `activity`, `icon`, `titlebar`, the
       appearance half of `theme`, and the snapshot half of `debug` behind the
       platform API.
-- [ ] Replace NSUserDefaults (`alert.rs`, `quit.rs`) with `Prefs` (JSON). Copy
+- [x] Replace NSUserDefaults (`alert.rs`, `quit.rs`) with `Prefs` (JSON). Copy
       existing "don't ask again" values over once.
-- [ ] Turn NSAlert sheets into a GPUI modal.
+- [x] Turn NSAlert sheets into a GPUI modal.
 - [x] `Dirs` and `Channel`: `channel::support_dir()` and `app_name()` move
       into the platform crate; drop the hardcoded `/Applications/...` path
       (`agent.rs`) in favour of `current_exe()`. (`agent.rs` already used

@@ -177,6 +177,9 @@ const SIDEBAR_MIN: f32 = 180.;
 const SIDEBAR_MAX: f32 = 480.;
 /// Height of the titlebar row the traffic lights sit in.
 const TITLEBAR_H: f32 = 38.;
+/// The prefs key of "Don't ask again" when closing a tab or workspace
+/// running Claude Code.
+const SKIP_CLOSE_CLAUDE_KEY: &str = "AbroMuxSkipCloseClaudeWarning";
 const TABBAR_H: f32 = 30.;
 /// How wide the area is that grabs a pane divider (drawn 1px wide).
 const DIVIDER_GRAB: f32 = 9.;
@@ -1265,12 +1268,13 @@ impl AbroMux {
         }
         let rx = alert::confirm(
             window,
+            cx,
             alert::Confirm {
                 message: "Close tab?",
                 info: "Claude Code is running in this tab. Closing it will end the session.",
                 button: "Close",
                 suppress: "Don't ask again",
-                skip_key: "AbroMuxSkipCloseClaudeWarning",
+                skip_key: SKIP_CLOSE_CLAUDE_KEY,
             },
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -1302,12 +1306,13 @@ impl AbroMux {
         let ws_id = ws.id;
         let rx = alert::confirm(
             window,
+            cx,
             alert::Confirm {
                 message: "Close workspace?",
                 info: "Claude Code is running in this workspace. Closing it will close all of its panels and end the session.",
                 button: "Close",
                 suppress: "Don't ask again",
-                skip_key: "AbroMuxSkipCloseClaudeWarning",
+                skip_key: SKIP_CLOSE_CLAUDE_KEY,
             },
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -2226,6 +2231,7 @@ impl AbroMux {
             || self.palette.is_some()
             || update::popover_open(cx)
             || browser::menus_open()
+            || alert::is_open(cx)
             // Also while dragging a tab, so drop targets show over pages and
             // get the mouse.
             || cx.has_active_drag();
@@ -3372,6 +3378,7 @@ fn main() {
 fn run_app(cwd: Option<String>) {
     Application::new().with_assets(Assets).run(|cx: &mut App| {
         icon::set_dock_icon();
+        abromux_platform::prefs::import_once(&alert::SKIP_KEYS);
         gpui_component::init(cx);
         // A broken config file starts with the defaults, and says so once the window is up.
         let (settings, settings_error) = match settings::load() {
@@ -3478,7 +3485,8 @@ fn run_app(cwd: Option<String>) {
                 }
                 let view = cx.new(|cx| AbroMux::new(cwd, session, window, cx));
                 plugins::set_host(view.downgrade(), cx);
-                cx.new(|cx| Root::new(view, window, cx))
+                let layer = cx.new(|cx| alert::Layer::new(view, window, cx));
+                cx.new(|cx| Root::new(layer, window, cx))
             },
         )
         .expect("open window");

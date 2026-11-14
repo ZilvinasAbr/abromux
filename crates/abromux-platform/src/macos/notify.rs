@@ -56,15 +56,9 @@ fn error_text(err: *mut Object) -> Option<String> {
     })
 }
 
-fn bundled() -> bool {
-    let bundle: *mut Object = unsafe { msg_send![class!(NSBundle), mainBundle] };
-    let id: *mut Object = unsafe { msg_send![bundle, bundleIdentifier] };
-    !id.is_null()
-}
-
 fn center() -> Option<*mut Object> {
     // currentNotificationCenter throws outside a bundle.
-    bundled()
+    super::defaults::bundled()
         .then(|| unsafe { msg_send![class!(UNUserNotificationCenter), currentNotificationCenter] })
 }
 

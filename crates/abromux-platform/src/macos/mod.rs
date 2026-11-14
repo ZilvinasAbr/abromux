@@ -6,6 +6,7 @@
 pub mod appearance;
 pub mod browser_native;
 pub mod cursor;
+pub(crate) mod defaults;
 pub mod dock;
 pub mod notify;
 pub mod opener;
