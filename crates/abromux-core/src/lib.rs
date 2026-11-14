@@ -9,3 +9,4 @@ pub mod notify_hook;
 pub mod osc99;
 pub mod paths;
 pub mod settings;
+pub mod status;
