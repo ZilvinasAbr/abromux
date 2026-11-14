@@ -166,6 +166,7 @@ actions!(
         GoToMergeRequest,
         RefreshMergeRequests,
         ReviewChanges,
+        ReviewInHunk,
         OpenInNeovim
     ]
 );
@@ -862,6 +863,87 @@ impl AbroMux {
         on
     }
 
+    /// The git repositories of workspace `wi`: its folder's checkouts and
+    /// those its tabs are in, each once, in path order.
+    fn workspace_repos(&self, wi: usize, cx: &App) -> Vec<std::path::PathBuf> {
+        let ws = &self.workspaces[wi];
+        let places = gitlab::remote::places(
+            ws.home.as_deref(),
+            &ws.surfaces().filter_map(|s| s.cwd(cx)).collect::<Vec<_>>(),
+        );
+        let mut repos = vec![];
+        for p in places {
+            if let Some(t) = git_top(&p.dir)
+                && !repos.contains(&t)
+            {
+                repos.push(t);
+            }
+        }
+        repos
+    }
+
+    /// File › Review Changes in Hunk: every git repository of the workspace
+    /// in `hunk diff --watch`, one pane each, stacked in a column to the
+    /// right of the focused pane. Each shows what Review Changes would: the
+    /// branch's work since it forked from the default branch, committed or
+    /// not (the uncommitted changes on the default branch itself).
+    fn review_in_hunk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let wi = self.active;
+        let repos = self.workspace_repos(wi, cx);
+        if repos.is_empty() {
+            let note = Notification::warning("No tab of this workspace is in a git repository.")
+                .title("Nothing to review");
+            return window.push_notification(note, cx);
+        }
+        let n = repos.len();
+        let mut pane = self.workspaces[wi].focused_pane;
+        for (i, repo) in repos.into_iter().enumerate() {
+            let run = format!("hunk diff --watch{}", hunk_target(&repo));
+            let cwd = Some(repo.to_string_lossy().into_owned());
+            let s = self.terminal_running(cwd, &run, window, cx);
+            // The first opens the column, each later one splits the last
+            // off the bottom; the ratios keep the panes the same height.
+            let (axis, ratio) = match i {
+                0 => (Axis::Horizontal, None),
+                _ => (Axis::Vertical, Some(1. / (n - i + 1) as f32)),
+            };
+            let Some(new) = self.split_pane(wi, pane, axis, false, s, i == 0, window, cx) else {
+                break;
+            };
+            let root = &mut self.workspaces[wi].root;
+            if let Some(r) = ratio
+                && let Some(id) = root.split_along(new, Axis::Vertical)
+                && let Some(slot) = root.split_mut(id)
+            {
+                *slot = r;
+            }
+            pane = new;
+        }
+        cx.notify();
+    }
+
+    /// A new terminal tab for the active workspace in `cwd`, with `run`
+    /// typed into its shell. Typed rather than run as the tab's command, so
+    /// the tab is kept across launches like any shell, and quitting the
+    /// program leaves a prompt.
+    fn terminal_running(
+        &mut self,
+        cwd: Option<String>,
+        run: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Surface {
+        let id = self.ws().id;
+        let s = self.make_terminal(id, TerminalOpts::cwd(cwd), window, cx);
+        if let Surface::Terminal(t) = &s {
+            t.update(cx, |t, cx| {
+                t.send(format!("{run}\r").as_bytes());
+                cx.notify();
+            });
+        }
+        s
+    }
+
     /// ⌥⌘D (File › Review Changes): the diff of the repository being worked
     /// in, in a review tab beside the focused pane (`abromux diff`, without
     /// typing it or asking an agent to). The focused tab's repository, else
@@ -870,33 +952,14 @@ impl AbroMux {
     pub(crate) fn review_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use abromux_gitlab::local;
         let wi = self.active;
-        let ws = &self.workspaces[wi];
-        let top = |dir: &std::path::Path| {
-            local::git(dir, &["rev-parse", "--show-toplevel"])
-                .ok()
-                .map(|o| std::path::PathBuf::from(String::from_utf8_lossy(&o).trim()))
-        };
-        let mut repos: Vec<std::path::PathBuf> = vec![];
-        if let Some(t) = ws
+        let focused = self.workspaces[wi]
             .focused_surface()
             .and_then(|s| s.cwd(cx))
-            .and_then(|c| top(std::path::Path::new(&c)))
-        {
-            repos.push(t);
-        }
-        if repos.is_empty() {
-            let places = gitlab::remote::places(
-                ws.home.as_deref(),
-                &ws.surfaces().filter_map(|s| s.cwd(cx)).collect::<Vec<_>>(),
-            );
-            for p in places {
-                if let Some(t) = top(&p.dir)
-                    && !repos.contains(&t)
-                {
-                    repos.push(t);
-                }
-            }
-        }
+            .and_then(|c| git_top(std::path::Path::new(&c)));
+        let repos = match focused {
+            Some(t) => vec![t],
+            None => self.workspace_repos(wi, cx),
+        };
         if repos.is_empty() {
             let note = Notification::warning("No tab of this workspace is in a git repository.")
                 .title("Nothing to review");
@@ -1801,24 +1864,15 @@ impl AbroMux {
 
     /// File › Open Workspace in Neovim: a new terminal tab in the workspace
     /// folder (the focused tab's directory if it has none) running `nvim .`.
-    /// It's typed into a shell rather than run as the tab's command, so the
-    /// tab is kept across launches like any shell and `:q` leaves a prompt.
     fn open_in_neovim(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let ws = self.ws();
-        let cwd = ws
+        let cwd = self
+            .ws()
             .home
             .as_ref()
-            .map(|h| h.to_string_lossy().into_owned())
-            .or_else(|| self.focused_cwd(cx));
-        let id = ws.id;
-        let s = self.make_terminal(id, TerminalOpts::cwd(cwd), window, cx);
-        let Surface::Terminal(t) = &s else { return };
-        let t = t.clone();
+            .map(|h| h.to_string_lossy().into_owned());
+        let cwd = cwd.or_else(|| self.focused_cwd(cx));
+        let s = self.terminal_running(cwd, "nvim .", window, cx);
         self.add_tab(s, window, cx);
-        t.update(cx, |t, cx| {
-            t.send(b"nvim .\r");
-            cx.notify();
-        });
     }
 
     /// `"commands"[index]` of the config file, or of the project file
@@ -2892,6 +2946,9 @@ impl Render for AbroMux {
             .on_action(
                 cx.listener(|this, _: &OpenInNeovim, window, cx| this.open_in_neovim(window, cx)),
             )
+            .on_action(
+                cx.listener(|this, _: &ReviewInHunk, window, cx| this.review_in_hunk(window, cx)),
+            )
             // Reached when no browser took them: a plugin's tab has the focus.
             .on_action(cx.listener(|this, _: &browser::ZoomIn, window, cx| {
                 this.zoom_plugin("in", window, cx)
@@ -3425,4 +3482,24 @@ fn run_app(cwd: Option<String>) {
         .expect("open window");
         cx.activate(true);
     });
+}
+
+/// The top of the git checkout `dir` is in.
+fn git_top(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    abromux_gitlab::local::git(dir, &["rev-parse", "--show-toplevel"])
+        .ok()
+        .map(|o| std::path::PathBuf::from(String::from_utf8_lossy(&o).trim()))
+}
+
+/// What `hunk diff` compares `repo`'s working tree with, as an argument
+/// with a leading space: the commit its branch forked from the default
+/// branch at, or nothing (the uncommitted changes), as in
+/// [`abromux_gitlab::local::work_spec`].
+fn hunk_target(repo: &std::path::Path) -> String {
+    use abromux_gitlab::local;
+    let spec = local::work_spec(repo);
+    spec.strip_prefix("--merge-base ")
+        .and_then(|base| local::git(repo, &["merge-base", base, "HEAD"]).ok())
+        .map(|o| format!(" {}", String::from_utf8_lossy(&o).trim()))
+        .unwrap_or_default()
 }

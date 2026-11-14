@@ -109,6 +109,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action("Go to Workspace…", WorkspaceSwitcher),
                 MenuItem::action("Go to Merge Request…", crate::GoToMergeRequest),
                 MenuItem::action("Review Changes", crate::ReviewChanges),
+                MenuItem::action("Review Changes in Hunk", crate::ReviewInHunk),
                 MenuItem::action("Open Workspace in Neovim", crate::OpenInNeovim),
                 MenuItem::separator(),
                 MenuItem::action("Reopen Previous Session", ReopenSession),
