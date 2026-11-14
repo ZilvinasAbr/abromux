@@ -1048,7 +1048,7 @@ impl AbroMux {
             AgentState::Verify => rgb(WARNING),
             AgentState::Running => rgb(RUNNING),
             AgentState::Idle => rgb(SUCCESS),
-            AgentState::NoAgent => rgb(MUTED),
+            AgentState::NoAgent => rgb(pal().muted),
         };
         let id: SharedString = format!("agent-state-{}", state.name()).into();
         div()
@@ -1065,7 +1065,7 @@ impl AbroMux {
             .text_size(px(11. * z))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(color)
-            .hover(|s| s.bg(rgba(HOVER)))
+            .hover(|s| s.bg(rgba(pal().hover)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| this.toggle_state(state, cx)),
@@ -1077,7 +1077,7 @@ impl AbroMux {
                     "chevron-down"
                 })
                 .size(px(10. * z))
-                .text_color(rgb(MUTED)),
+                .text_color(rgb(pal().muted)),
             )
             .child(
                 div()
@@ -1092,13 +1092,13 @@ impl AbroMux {
                         .size(px(6.))
                         .flex_none()
                         .rounded_full()
-                        .bg(rgb(ACCENT_BRIGHT)),
+                        .bg(rgb(pal().accent_bright)),
                 )
             })
             .child(
                 div()
                     .flex_none()
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(pal().muted))
                     .font_weight(FontWeight::NORMAL)
                     .child(of.len().to_string()),
             )
