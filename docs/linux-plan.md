@@ -112,11 +112,17 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
       (`agent.rs`) in favour of `current_exe()`. (`agent.rs` already used
       `current_exe()`; the path there is test data.)
 - [x] `Opener` replaces `Command::new("open")` (`browser.rs`).
-- [ ] Introduce `PageBackend`: every WKWebView call in `browser.rs` goes
+- [x] Introduce `PageBackend`: every WKWebView call in `browser.rs` goes
       behind it (eval in frame, cookies, zoom, interaction state, snapshot,
       loading, stop, inspector, hover, downloads, focus check, user agent).
       Move the pane into `abromux-browser`, with `wkwebview.rs` as its first
       backend; fold `terminal_browser.rs` in as the `terminal` backend.
+      Done differently: `abromux-browser` has the trait, `backend/wkwebview.rs`,
+      automation, find, history and downloads; the pane's view stays in
+      `src/browser.rs` until what it draws with (theme, find bar) leaves the
+      app. `terminal_browser.rs` stays as it is: it's a terminal app in a
+      terminal tab, not a page under the pane, so it's left for Phase 3's
+      engines.
 - [ ] Pull out `abromux-core` and `abromux-term`, one module group per PR.
 - [ ] CI guard: fail if `cfg(target_os` / `objc::` / `msg_send!` appears outside
       `crates/abromux-platform` and `crates/abromux-browser/src/backend`.

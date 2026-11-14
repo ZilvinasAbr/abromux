@@ -1,34 +1,30 @@
-#![allow(unexpected_cfgs)]
-//! A browser pane: address bar + native WKWebView (via wry / gpui-component).
+//! A browser pane: address bar, toolbar and find bar over a page
+//! (`abromux_browser::backend`: WKWebView on macOS).
 
 use crate::{
     browser_find,
     browser_history::{self, Entry},
-    browser_native::{self, Pixels},
     downloads::{self, Downloads},
     find_bar::{FindBar, Step},
     markdown,
     terminal::{Find, FindNext, FindPrevious, UseSelectionForFind},
     theme::*,
-    webauthn,
 };
+pub use abromux_browser::backend::watch_clicks;
+use abromux_browser::backend::{self, Answer, PageBackend, PageEvent, PageOptions, Pixels};
 use futures::{
     StreamExt,
     channel::{mpsc, oneshot},
 };
 use gpui::{prelude::*, *};
-use gpui_component::{
-    input::{self, Input, InputEvent, InputState},
-    webview::WebView,
-    wry::{self, WebViewExtMacOS},
-};
-use objc::{msg_send, runtime::Object, sel, sel_impl};
+use gpui_component::input::{self, Input, InputEvent, InputState};
 use serde_json::Value;
 use std::{
     collections::{HashMap, VecDeque},
     f32::consts::PI,
     path::PathBuf,
-    sync::{Arc, Mutex, OnceLock},
+    rc::Rc,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -123,6 +119,24 @@ enum WebMsg {
     External(String),
 }
 
+/// A `{openTab, focus}` message from the links script: ⌘-click or
+/// middle-click on a web link.
+fn open_tab_request(body: &str) -> Option<WebMsg> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Msg {
+        open_tab: String,
+        #[serde(default)]
+        focus: bool,
+    }
+    let Msg {
+        open_tab: url,
+        focus,
+    } = serde_json::from_str(body).ok()?;
+    (url.starts_with("http://") || url.starts_with("https://"))
+        .then_some(WebMsg::OpenTab { url, focus })
+}
+
 /// What the page has logged, for `browser console`, `errors` and `network`.
 /// Each entry is the page script's JSON plus the frame it came from.
 #[derive(Default)]
@@ -165,11 +179,13 @@ enum Cover {
 
 /// Page script for ⌘-click / middle-click on links.
 const LINKS_SCRIPT: &str = include_str!("browser_links.js");
-/// The page script in every frame (`browser_native::install`).
+/// The page script in every frame (`PageOptions::frame_script`).
 const PAGE_SCRIPT: &str = include_str!("browser_page.js");
+/// The page side of the passkey bridge (`PageOptions::webauthn_script`).
+const WEBAUTHN_SCRIPT: &str = include_str!("webauthn.js");
 
 pub struct BrowserView {
-    webview: Entity<WebView>,
+    page: Rc<dyn PageBackend>,
     address: Entity<InputState>,
     pub title: String,
     pub url: String,
@@ -233,104 +249,80 @@ impl Focusable for BrowserView {
 impl BrowserView {
     pub fn new(url: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (tx, mut rx) = mpsc::unbounded::<WebMsg>();
-        let (tx_title, tx_url, tx_ipc) = (tx.clone(), tx.clone(), tx.clone());
-        let (tx_dl_start, tx_dl_done, tx_nav) = (tx.clone(), tx.clone(), tx.clone());
         let is_markdown = markdown::is_markdown_url(url);
-        let builder = wry::WebViewBuilder::new();
-        // A blank page gets the pane's background rather than white. A URL
-        // loads once the WebAuthn bridge is in, so its first page has it.
-        let builder = if url.is_empty() {
-            builder.with_html(format!(
-                "<html style=\"background:#{:06x}\"></html>",
-                pal().pane_bg
-            ))
-        } else {
-            builder
-        };
-        let raw = builder
-            .with_user_agent(user_agent())
-            .with_devtools(true)
-            .with_document_title_changed_handler(move |t| {
-                let _ = tx_title.unbounded_send(WebMsg::Title(t));
-            })
-            .with_on_page_load_handler(move |ev, url| {
-                let finished = matches!(ev, wry::PageLoadEvent::Finished);
-                let _ = tx_url.unbounded_send(WebMsg::Url { url, finished });
-            })
-            .with_initialization_script(LINKS_SCRIPT)
-            // WebKit saves it where wry says (a free name in ~/Downloads).
-            .with_download_started_handler(move |url, path| {
-                let _ = tx_dl_start.unbounded_send(WebMsg::DownloadStarted {
-                    url,
-                    path: path.clone(),
-                });
-                true
-            })
-            .with_download_completed_handler(move |url, _, ok| {
-                let _ = tx_dl_done.unbounded_send(WebMsg::DownloadDone { url, ok });
-            })
-            .with_ipc_handler(move |req| {
-                #[derive(serde::Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Msg {
-                    open_tab: String,
-                    #[serde(default)]
-                    focus: bool,
-                }
-                let Ok(Msg {
-                    open_tab: url,
-                    focus,
-                }) = serde_json::from_str(req.body())
-                else {
-                    return;
-                };
-                if url.starts_with("http://") || url.starts_with("https://") {
-                    let _ = tx_ipc.unbounded_send(WebMsg::OpenTab { url, focus });
-                }
-            });
+        let tx_nav = tx.clone();
         // Only Markdown tabs can load the scheme, and they load nothing else:
         // web links open as browser tabs beside them.
-        let raw = if is_markdown {
-            raw.with_custom_protocol(markdown::SCHEME.into(), |_, req| markdown::respond(&req))
-                .with_navigation_handler(move |url| {
-                    if markdown::is_markdown_url(&url) || url.starts_with("about:") {
-                        return true;
-                    }
-                    let msg = if url.starts_with("http://") || url.starts_with("https://") {
-                        WebMsg::OpenTab { url, focus: true }
-                    } else if url.starts_with("mailto:") {
-                        WebMsg::External(url)
-                    } else {
-                        return false;
-                    };
-                    let _ = tx_nav.unbounded_send(msg);
-                    false
-                })
+        let (protocol, navigation) = if is_markdown {
+            let serve: backend::Protocol = Box::new(markdown::respond);
+            let decide: backend::Navigation = Box::new(move |url: String| {
+                if markdown::is_markdown_url(&url) || url.starts_with("about:") {
+                    return true;
+                }
+                let msg = if url.starts_with("http://") || url.starts_with("https://") {
+                    WebMsg::OpenTab { url, focus: true }
+                } else if url.starts_with("mailto:") {
+                    WebMsg::External(url)
+                } else {
+                    return false;
+                };
+                let _ = tx_nav.unbounded_send(msg);
+                false
+            });
+            (Some((markdown::SCHEME, serve)), Some(decide))
         } else {
-            raw
+            (None, None)
         };
-        let raw = raw.build_as_child(window).expect("create webview");
-        webauthn::install(&raw);
-        let (page_tx, mut page_rx) = mpsc::unbounded::<String>();
-        {
-            let wk = raw.webview();
-            browser_native::install(&*wk as *const _ as *mut Object, PAGE_SCRIPT, page_tx);
-        }
-        // wry's delegate class exists now that a webview does.
-        browser_native::downloads_install();
-        browser_native::page_shortcuts_install();
-        // NSViews don't clip by default since macOS 14; keep the page from
-        // drawing past its frame over the focused pane's border just outside.
-        {
-            let wk = raw.webview();
-            let wk = &*wk as *const _ as *mut Object;
-            let _: () = unsafe { msg_send![wk, setClipsToBounds: true] };
-        }
-        crate::cursor::install();
-        if !url.is_empty() {
-            let _ = raw.load_url(url);
-        }
-        let webview = cx.new(|cx| WebView::new(raw, window, cx));
+        let (page_tx, mut page_rx) = mpsc::unbounded::<PageEvent>();
+        let page: Rc<dyn PageBackend> = backend::new_page(
+            PageOptions {
+                url: url.to_string(),
+                blank_bg: pal().pane_bg,
+                init_scripts: vec![LINKS_SCRIPT],
+                frame_script: PAGE_SCRIPT,
+                webauthn_script: WEBAUTHN_SCRIPT,
+                protocol,
+                navigation,
+            },
+            page_tx,
+            window,
+            cx,
+        )
+        .into();
+        let tx_page = tx.clone();
+        cx.spawn(async move |this, cx| {
+            while let Some(ev) = page_rx.next().await {
+                let msg = match ev {
+                    PageEvent::Title(t) => WebMsg::Title(t),
+                    PageEvent::Url { url, finished } => WebMsg::Url { url, finished },
+                    PageEvent::DownloadStarted { url, path } => {
+                        WebMsg::DownloadStarted { url, path }
+                    }
+                    PageEvent::DownloadDone { url, ok } => WebMsg::DownloadDone { url, ok },
+                    PageEvent::Ipc(body) => match open_tab_request(&body) {
+                        Some(msg) => msg,
+                        None => continue,
+                    },
+                    // The page script's messages, from any frame.
+                    PageEvent::FrameMessage(json) => {
+                        let Ok(msg) = serde_json::from_str::<Value>(&json) else {
+                            continue;
+                        };
+                        if this
+                            .update(cx, |this, cx| this.page_message(msg, cx))
+                            .is_err()
+                        {
+                            break;
+                        }
+                        continue;
+                    }
+                };
+                if tx_page.unbounded_send(msg).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
 
         let address = cx.new(|cx| {
             InputState::new(window, cx)
@@ -451,21 +443,6 @@ impl BrowserView {
         })
         .detach();
 
-        cx.spawn(async move |this, cx| {
-            while let Some(json) = page_rx.next().await {
-                let Ok(msg) = serde_json::from_str::<Value>(&json) else {
-                    continue;
-                };
-                if this
-                    .update(cx, |this, cx| this.page_message(msg, cx))
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
-
         let downloads = downloads::entity(cx);
         cx.observe(&downloads, |_, _, cx| cx.notify()).detach();
         if is_markdown {
@@ -473,7 +450,7 @@ impl BrowserView {
         }
 
         Self {
-            webview,
+            page,
             address,
             title: String::new(),
             url: url.into(),
@@ -546,7 +523,7 @@ impl BrowserView {
     }
 
     /// A message from the page script (browser_page.js) in any frame.
-    fn page_message(&mut self, msg: Value, cx: &mut Context<Self>) {
+    fn page_message(&mut self, msg: Value, _cx: &mut Context<Self>) {
         let main = msg["main"].as_bool().unwrap_or(true);
         let frame = if main { None } else { msg["frameUrl"].as_str() };
         match msg["kind"].as_str() {
@@ -555,7 +532,7 @@ impl BrowserView {
                 if main {
                     self.frame = None;
                     self.frame_asks.clear();
-                    browser_native::hover(self.wk_webview(cx), "");
+                    self.page.hover("");
                 }
             }
             Some("answer") => {
@@ -574,7 +551,7 @@ impl BrowserView {
             }
             Some("hover") => {
                 let url = msg["url"].as_str().unwrap_or("");
-                browser_native::hover(self.wk_webview(cx), url);
+                self.page.hover(url);
             }
             _ => {}
         }
@@ -582,27 +559,27 @@ impl BrowserView {
 
     pub fn navigate(&mut self, url: &str, cx: &mut Context<Self>) {
         self.url = url.into();
-        self.webview.update(cx, |w, _| w.load_url(url));
+        self.page.load_url(url, cx);
         self.watch_loading(cx);
     }
 
     pub fn focus_address(this: &Entity<Self>, window: &mut Window, cx: &mut App) {
         // A Markdown tab has no address bar.
         if this.read(cx).markdown {
-            let _ = this.read(cx).webview.read(cx).raw().focus();
+            this.read(cx).page.focus(cx);
             this.update(cx, |this, cx| this.page_focused(window, cx));
             return;
         }
         let this = this.read(cx);
         // Take native focus back from the page so typing reaches the address bar.
-        let _ = this.webview.read(cx).raw().focus_parent();
+        this.page.unfocus(cx);
         let address = this.address.clone();
         address.update(cx, |a, cx| a.focus(window, cx));
     }
 
     /// Give the page keyboard focus, natively and in gpui.
     fn focus_page(&self, window: &mut Window, cx: &mut App) {
-        let _ = self.webview.read(cx).raw().focus();
+        self.page.focus(cx);
         self.page_focused(window, cx);
     }
 
@@ -616,19 +593,8 @@ impl BrowserView {
 
     /// Whether the page holds native keyboard focus (the window's first
     /// responder is the WKWebView or a view inside it).
-    pub fn page_has_focus(&self, cx: &App) -> bool {
-        let webview = self.webview.read(cx).raw().webview();
-        let webview = &*webview as *const _ as *mut Object;
-        unsafe {
-            let window: *mut Object = msg_send![webview, window];
-            if window.is_null() {
-                return false;
-            }
-            let responder: *mut Object = msg_send![window, firstResponder];
-            let is_view: bool =
-                !responder.is_null() && msg_send![responder, isKindOfClass: objc::class!(NSView)];
-            is_view && msg_send![responder, isDescendantOf: webview]
-        }
+    pub fn page_has_focus(&self, _cx: &App) -> bool {
+        self.page.has_focus()
     }
 
     /// Native views float above gpui content, so hidden panes must be hidden
@@ -670,10 +636,9 @@ impl BrowserView {
         if self.native_shown != native {
             self.native_shown = native;
             if !native {
-                browser_native::hover(self.wk_webview(cx), "");
+                self.page.hover("");
             }
-            self.webview
-                .update(cx, |w, _| if native { w.show() } else { w.hide() });
+            self.page.set_shown(native, cx);
         }
         cx.notify();
     }
@@ -687,7 +652,7 @@ impl BrowserView {
             generation,
             hidden: false,
         };
-        let rx = browser_native::snapshot(self.wk_webview(cx));
+        let rx = self.page.bitmap();
         let tx = self.tx.clone();
         cx.foreground_executor()
             .spawn(async move {
@@ -715,8 +680,7 @@ impl BrowserView {
     fn sync_native_shown(&mut self, native: bool, cx: &mut Context<Self>) {
         if self.native_shown != native {
             self.native_shown = native;
-            self.webview
-                .update(cx, |w, _| if native { w.show() } else { w.hide() });
+            self.page.set_shown(native, cx);
             cx.notify();
         }
     }
@@ -908,60 +872,23 @@ impl BrowserView {
     }
 
     pub fn script(&self, js: &str, cx: &App) {
-        let _ = self.webview.read(cx).raw().evaluate_script(js);
+        self.page.run(js, cx);
     }
 
     pub fn reload(&self, cx: &App) {
-        let _ = self.webview.read(cx).raw().reload();
+        self.page.reload(cx);
     }
 
-    /// WKWebView's `interactionState` (its back/forward list), base64, for
-    /// the session file.
-    pub fn history_state(&self, cx: &App) -> Option<String> {
-        unsafe {
-            let wk = self.wk_webview(cx);
-            let state: *mut Object = msg_send![wk, interactionState];
-            if state.is_null() {
-                return None;
-            }
-            let is_data: bool = msg_send![state, isKindOfClass: objc::class!(NSData)];
-            if !is_data {
-                return None;
-            }
-            let b64: *mut Object = msg_send![state, base64EncodedStringWithOptions: 0usize];
-            let utf8: *const std::ffi::c_char = msg_send![b64, UTF8String];
-            (!utf8.is_null()).then(|| {
-                std::ffi::CStr::from_ptr(utf8)
-                    .to_string_lossy()
-                    .into_owned()
-            })
-        }
+    /// The page's back/forward list, as text for the session file.
+    pub fn history_state(&self, _cx: &App) -> Option<String> {
+        self.page.history_state()
     }
 
     /// Bring back a back/forward list from [`history_state`](Self::history_state),
     /// which also loads its current page. False if `state` isn't one, or
-    /// WebKit didn't take it.
+    /// the page didn't take it.
     pub fn restore_history(&mut self, state: &str, cx: &mut Context<Self>) -> bool {
-        let Ok(c) = std::ffi::CString::new(state) else {
-            return false;
-        };
-        let ok = unsafe {
-            let s: *mut Object =
-                msg_send![objc::class!(NSString), stringWithUTF8String: c.as_ptr()];
-            let data: *mut Object = msg_send![objc::class!(NSData), alloc];
-            let data: *mut Object = msg_send![data, initWithBase64EncodedString: s options: 0usize];
-            if data.is_null() {
-                false
-            } else {
-                let wk = self.wk_webview(cx);
-                let _: () = msg_send![wk, setInteractionState: data];
-                let _: () = msg_send![data, release];
-                // WebKit ignores data it can't read; then there's no page.
-                let list: *mut Object = msg_send![wk, backForwardList];
-                let item: *mut Object = msg_send![list, currentItem];
-                !item.is_null()
-            }
-        };
+        let ok = self.page.restore_history(state);
         if ok {
             self.watch_loading(cx);
         }
@@ -976,17 +903,17 @@ impl BrowserView {
     pub fn set_zoom(&mut self, zoom: f64, cx: &mut Context<Self>) {
         let zoom = zoom.clamp(ZOOM_LEVELS[0], ZOOM_LEVELS[ZOOM_LEVELS.len() - 1]);
         self.zoom = zoom;
-        let _: () = unsafe { msg_send![self.wk_webview(cx), setPageZoom: zoom] };
+        self.page.set_zoom(zoom);
         cx.notify();
     }
 
-    fn stop(&self, cx: &App) {
-        let _: () = unsafe { msg_send![self.wk_webview(cx), stopLoading] };
+    fn stop(&self, _cx: &App) {
+        self.page.stop();
     }
 
-    pub(crate) fn wk_webview(&self, cx: &App) -> *mut Object {
-        let webview = self.webview.read(cx).raw().webview();
-        &*webview as *const _ as *mut Object
+    /// The page, for what the pane doesn't wrap (cookies over the socket).
+    pub(crate) fn page(&self) -> Rc<dyn PageBackend> {
+        self.page.clone()
     }
 
     /// Follow WKWebView's `isLoading` for the reload button's stop icon.
@@ -1002,7 +929,7 @@ impl BrowserView {
             let mut idle = 0;
             loop {
                 let polling = this.update(cx, |this, cx| {
-                    let loading: bool = unsafe { msg_send![this.wk_webview(cx), isLoading] };
+                    let loading = this.page.is_loading();
                     if loading != this.loading {
                         this.loading = loading;
                         this.nav_presses[Nav::Reload as usize] += 1;
@@ -1038,32 +965,21 @@ impl BrowserView {
     }
 
     /// ⌥⌘I opens WebKit's inspector, ⌥⌘C its console.
-    fn show_inspector(&self, console: bool, cx: &App) {
-        let webview = self.webview.read(cx).raw().webview();
-        let webview = &*webview as *const _ as *mut Object;
-        unsafe {
-            let inspector: *mut Object = msg_send![webview, _inspector];
-            if inspector.is_null() {
-                return;
-            }
-            let action = if console {
-                sel!(showConsole)
-            } else {
-                sel!(show)
-            };
-            let ok: bool = msg_send![inspector, respondsToSelector: action];
-            if ok {
-                let _: () = msg_send![inspector, performSelector: action];
-            }
-        }
+    fn show_inspector(&self, console: bool, _cx: &App) {
+        self.page.show_inspector(console);
     }
 
     /// Run a find script and send its count back to the main thread.
     fn find_script(&self, js: &str, cx: &App) {
         let tx = self.tx.clone();
-        let _ = self.eval(js, cx, move |json| {
-            let _ = tx.unbounded_send(WebMsg::Find(json));
-        });
+        let rx = self.page.eval(js, cx);
+        cx.foreground_executor()
+            .spawn(async move {
+                if let Ok(Ok(json)) = rx.await {
+                    let _ = tx.unbounded_send(WebMsg::Find(json));
+                }
+            })
+            .detach();
     }
 
     /// ⌘F: show the find bar (or focus it) with its last search.
@@ -1089,7 +1005,7 @@ impl BrowserView {
             self.run_find(cx);
         }
         // Take native focus back from the page so typing reaches the field.
-        let _ = self.webview.read(cx).raw().focus_parent();
+        self.page.unfocus(cx);
         input.update(cx, |i, cx| i.focus(window, cx));
         // Runs once the input has focus, so retyping replaces the old search.
         window.dispatch_action(Box::new(input::SelectAll), cx);
@@ -1126,9 +1042,14 @@ impl BrowserView {
     /// ⌘E: search for the page's selected text.
     fn find_selection(&mut self, cx: &mut Context<Self>) {
         let tx = self.tx.clone();
-        let _ = self.eval(browser_find::SELECTION, cx, move |json| {
-            let _ = tx.unbounded_send(WebMsg::Selection(json));
-        });
+        let rx = self.page.eval(browser_find::SELECTION, cx);
+        cx.foreground_executor()
+            .spawn(async move {
+                if let Ok(Ok(json)) = rx.await {
+                    let _ = tx.unbounded_send(WebMsg::Selection(json));
+                }
+            })
+            .detach();
     }
 
     fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1152,36 +1073,18 @@ impl BrowserView {
             .border_color(rgb(pal().border))
     }
 
-    /// Run `js` and hand its JSON-encoded result to `done` (on a wry thread).
-    pub fn eval(
-        &self,
-        js: &str,
-        cx: &App,
-        done: impl Fn(String) + Send + 'static,
-    ) -> anyhow::Result<()> {
-        Ok(self
-            .webview
-            .read(cx)
-            .raw()
-            .evaluate_script_with_callback(js, done)?)
+    /// Run `js` in the page; answers with its JSON-encoded result.
+    pub fn eval(&self, js: &str, cx: &App) -> oneshot::Receiver<Answer> {
+        self.page.eval(js, cx)
     }
 
     /// Run `js` where automation commands act: in the frame `browser frame`
     /// picked, else in the page. Err if that frame is gone; canceled if the
     /// page dropped the script.
-    pub fn eval_target(&self, js: &str, cx: &App) -> oneshot::Receiver<browser_native::Answer> {
+    pub fn eval_target(&self, js: &str, cx: &App) -> oneshot::Receiver<Answer> {
         match &self.frame {
-            Some((token, _)) => browser_native::eval_in_frame(self.wk_webview(cx), token, js),
-            None => {
-                let (tx, rx) = oneshot::channel();
-                let tx = Mutex::new(Some(tx));
-                let _ = self.eval(js, cx, move |out| {
-                    if let Some(tx) = tx.lock().unwrap().take() {
-                        let _ = tx.send(Ok(out));
-                    }
-                });
-                rx
-            }
+            Some((token, _)) => self.page.eval_in_frame(token, js),
+            None => self.page.eval(js, cx),
         }
     }
 
@@ -1194,9 +1097,9 @@ impl BrowserView {
 
     /// Point automation commands at a frame (its token and URL), or back at
     /// the page.
-    pub fn set_frame(&mut self, frame: Option<(String, String)>, cx: &App) -> bool {
+    pub fn set_frame(&mut self, frame: Option<(String, String)>, _cx: &App) -> bool {
         if let Some((token, _)) = &frame
-            && !browser_native::frame_known(self.wk_webview(cx), token)
+            && !self.page.frame_known(token)
         {
             return false;
         }
@@ -1204,35 +1107,29 @@ impl BrowserView {
         true
     }
 
-    /// Save a PNG of the page as shown (WKWebView's own snapshot) to `path`.
+    /// Save a PNG of the page as shown to `path`.
     pub fn screenshot(
         &self,
         path: std::path::PathBuf,
         cx: &App,
     ) -> oneshot::Receiver<anyhow::Result<serde_json::Value>> {
         let (tx, rx) = oneshot::channel();
-        let tx = Mutex::new(Some(tx));
-        let handler = block::ConcreteBlock::new(move |image: *mut Object, _error: *mut Object| {
-            let out = unsafe { png_data(image) }
-                .ok_or_else(|| {
-                    anyhow::anyhow!("WebKit couldn't snapshot the page (is it on screen?)")
-                })
-                .and_then(|png| {
-                    std::fs::write(&path, &png)
-                        .map_err(|e| anyhow::anyhow!("can't write {}: {e}", path.display()))?;
-                    Ok(serde_json::json!({ "path": path, "bytes": png.len() }))
-                });
-            if let Some(tx) = tx.lock().unwrap().take() {
+        let png = self.page.png();
+        cx.foreground_executor()
+            .spawn(async move {
+                let Ok(png) = png.await else { return };
+                let out = png
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("WebKit couldn't snapshot the page (is it on screen?)")
+                    })
+                    .and_then(|png| {
+                        std::fs::write(&path, &png)
+                            .map_err(|e| anyhow::anyhow!("can't write {}: {e}", path.display()))?;
+                        Ok(serde_json::json!({ "path": path, "bytes": png.len() }))
+                    });
                 let _ = tx.send(out);
-            }
-        })
-        .copy();
-        let webview = self.webview.read(cx).raw().webview();
-        let webview = &*webview as *const _ as *mut Object;
-        let nil: *mut Object = std::ptr::null_mut();
-        let _: () = unsafe {
-            msg_send![webview, takeSnapshotWithConfiguration: nil completionHandler: &*handler]
-        };
+            })
+            .detach();
         rx
     }
 
@@ -1294,7 +1191,7 @@ impl BrowserView {
         if self.downloads.read(cx).list.is_empty() {
             return;
         }
-        let _ = self.webview.read(cx).raw().focus_parent();
+        self.page.unfocus(cx);
         window.focus(&self.focus);
         self.set_downloads_open(true, cx);
     }
@@ -1668,7 +1565,7 @@ impl Render for BrowserView {
                     .flex_1()
                     .min_h_0()
                     .relative()
-                    .child(self.webview.clone())
+                    .child(self.page.element())
                     .children(cover)
                     .children(self.render_suggestions(cx))
                     .children(downloads),
@@ -1712,97 +1609,6 @@ pub fn track_menu(window: &mut Window, cx: &mut Context<gpui_component::menu::Po
     window.refresh();
 }
 
-/// Yields after each left click in the app. Pages are native views, so gpui
-/// never sees clicks into them.
-pub fn watch_clicks() -> mpsc::UnboundedReceiver<()> {
-    let (tx, rx) = mpsc::unbounded();
-    let handler = block::ConcreteBlock::new(move |event: *mut Object| -> *mut Object {
-        let _ = tx.unbounded_send(());
-        event
-    })
-    .copy();
-    // NSEventMaskLeftMouseDown. AppKit copies the block and keeps the monitor.
-    let _: *mut Object = unsafe {
-        msg_send![objc::class!(NSEvent), addLocalMonitorForEventsMatchingMask: 1u64 << 1 handler: &*handler]
-    };
-    rx
-}
-
-/// An NSImage as PNG bytes.
-unsafe fn png_data(image: *mut Object) -> Option<Vec<u8>> {
-    if image.is_null() {
-        return None;
-    }
-    unsafe {
-        let tiff: *mut Object = msg_send![image, TIFFRepresentation];
-        if tiff.is_null() {
-            return None;
-        }
-        let rep: *mut Object = msg_send![objc::class!(NSBitmapImageRep), imageRepWithData: tiff];
-        if rep.is_null() {
-            return None;
-        }
-        let props: *mut Object = msg_send![objc::class!(NSDictionary), dictionary];
-        // NSBitmapImageFileTypePNG
-        let png: *mut Object = msg_send![rep, representationUsingType: 4u64 properties: props];
-        if png.is_null() {
-            return None;
-        }
-        let len: usize = msg_send![png, length];
-        let bytes: *const u8 = msg_send![png, bytes];
-        (!bytes.is_null()).then(|| std::slice::from_raw_parts(bytes, len).to_vec())
-    }
-}
-
-/// A bare WKWebView's user agent lacks Safari's `Version/… Safari/…` part,
-/// and sites like Google then serve their legacy pages. So the pane claims
-/// to be the installed Safari.
-fn user_agent() -> &'static str {
-    static UA: OnceLock<String> = OnceLock::new();
-    UA.get_or_init(|| {
-        format!(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 \
-             (KHTML, like Gecko) Version/{} Safari/605.1.15",
-            safari_version(installed_safari_version().as_deref())
-        )
-    })
-}
-
-/// The Safari version to claim: the installed one, but never older than
-/// 26.6, as Google Workspace supports only the two latest versions.
-fn safari_version(installed: Option<&str>) -> String {
-    const FLOOR: [u32; 2] = [26, 6];
-    let parsed: Option<Vec<u32>> =
-        installed.and_then(|v| v.split('.').map(|n| n.parse().ok()).collect());
-    match parsed {
-        Some(v) if v.as_slice() >= FLOOR.as_slice() => installed.unwrap().into(),
-        _ => format!("{}.{}", FLOOR[0], FLOOR[1]),
-    }
-}
-
-fn installed_safari_version() -> Option<String> {
-    let path = std::ffi::CString::new("/Applications/Safari.app").ok()?;
-    let key = std::ffi::CString::new("CFBundleShortVersionString").ok()?;
-    unsafe {
-        let path: *mut Object =
-            msg_send![objc::class!(NSString), stringWithUTF8String: path.as_ptr()];
-        let bundle: *mut Object = msg_send![objc::class!(NSBundle), bundleWithPath: path];
-        if bundle.is_null() {
-            return None;
-        }
-        let key: *mut Object =
-            msg_send![objc::class!(NSString), stringWithUTF8String: key.as_ptr()];
-        let version: *mut Object = msg_send![bundle, objectForInfoDictionaryKey: key];
-        let is_string: bool =
-            !version.is_null() && msg_send![version, isKindOfClass: objc::class!(NSString)];
-        if !is_string {
-            return None;
-        }
-        let p: *const std::ffi::c_char = msg_send![version, UTF8String];
-        (!p.is_null()).then(|| std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned())
-    }
-}
-
 const SEARCH: &str = "https://www.google.com/search?q=";
 
 /// Whether `url` is a search `normalize_url` made.
@@ -1832,18 +1638,7 @@ pub fn normalize_url(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{safari_version, user_agent, zoom_step};
-
-    #[test]
-    fn safari_version_keeps_installed_but_not_below_floor() {
-        assert_eq!(safari_version(Some("26.6")), "26.6");
-        assert_eq!(safari_version(Some("26.6.1")), "26.6.1");
-        assert_eq!(safari_version(Some("27.0")), "27.0");
-        assert_eq!(safari_version(Some("26")), "26.6");
-        assert_eq!(safari_version(Some("18.5")), "26.6");
-        assert_eq!(safari_version(Some("bogus")), "26.6");
-        assert_eq!(safari_version(None), "26.6");
-    }
+    use super::zoom_step;
 
     #[test]
     fn zoom_steps_through_levels_and_stops_at_the_ends() {
@@ -1854,14 +1649,5 @@ mod tests {
         // A zoom between steps (restored from elsewhere) goes to the next one.
         assert_eq!(zoom_step(1.1, true), 1.15);
         assert_eq!(zoom_step(1.1, false), 1.0);
-    }
-
-    #[test]
-    fn user_agent_looks_like_safari() {
-        let ua = user_agent();
-        assert!(
-            ua.contains(" Version/") && ua.ends_with(" Safari/605.1.15"),
-            "{ua}"
-        );
     }
 }

@@ -3,7 +3,7 @@
 //! picks a free name in ~/Downloads); this keeps the list for the session,
 //! and follows each running one's progress.
 
-use crate::browser_native;
+use abromux_platform::browser_native;
 use gpui::{App, AppContext as _, Context, Entity, Timer};
 use serde_json::{Value, json};
 use std::{

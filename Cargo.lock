@@ -6,26 +6,39 @@ version = 4
 name = "abromux"
 version = "0.27.0"
 dependencies = [
+ "abromux-browser",
  "abromux-gitlab",
  "abromux-platform",
  "abromux-plugin",
  "anyhow",
  "bindgen",
- "block",
  "futures",
  "gpui",
  "gpui-component",
  "image",
- "lb-wry",
  "libc",
  "markdown",
  "memchr",
- "objc",
  "portable-pty",
- "raw-window-handle",
  "serde",
  "serde_json",
  "smol_str",
+]
+
+[[package]]
+name = "abromux-browser"
+version = "0.1.0"
+dependencies = [
+ "abromux-platform",
+ "anyhow",
+ "block",
+ "futures",
+ "gpui",
+ "gpui-component",
+ "lb-wry",
+ "objc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

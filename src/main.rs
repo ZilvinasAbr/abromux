@@ -3,15 +3,11 @@ mod agent;
 mod alert;
 mod bench;
 mod browser;
-mod browser_auto;
-mod browser_find;
-mod browser_history;
 mod channel;
 mod cli;
 mod cmux;
 mod config;
 mod debug;
-mod downloads;
 mod find_bar;
 mod folder;
 mod ghostty;
@@ -49,10 +45,11 @@ mod terminal_browser;
 mod theme;
 mod titlebar;
 mod update;
-mod webauthn;
 mod workspace;
 
-use abromux_platform::{browser_native, cursor};
+use abromux_browser::{
+    auto as browser_auto, downloads, find as browser_find, history as browser_history,
+};
 use browser::{BrowserEvent, BrowserView};
 use futures::StreamExt;
 use gpui::{prelude::*, *};

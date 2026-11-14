@@ -345,7 +345,7 @@ static STORE: Mutex<Option<History>> = Mutex::new(None);
 static CHANGES: AtomicU64 = AtomicU64::new(0);
 
 fn path() -> PathBuf {
-    crate::channel::support_dir().join("browser-history.json")
+    abromux_platform::dirs::support_dir().join("browser-history.json")
 }
 
 fn now() -> f64 {
