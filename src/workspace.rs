@@ -787,6 +787,28 @@ impl Workspace {
         self.surfaces().any(|s| s.claude_running(cx))
     }
 
+    /// What its coding agents are up to, the most pressing first: one
+    /// asking for you wins over one working, over one sitting idle.
+    pub fn agent_state(&self, cx: &App) -> AgentState {
+        let pill = |value: &str| {
+            self.status
+                .iter()
+                .any(|s| s.owner.is_some() && s.value == value)
+        };
+        if pill(crate::status::AGENT_NEEDS_INPUT) {
+            AgentState::Verify
+        } else if pill(crate::status::AGENT_RUNNING) || self.claude_running(cx) {
+            AgentState::Running
+        } else if self.surfaces().any(|s| {
+            matches!(s, Surface::Terminal(t)
+                if t.read(cx).agent.as_ref().is_some_and(|a| a.alive()))
+        }) {
+            AgentState::Idle
+        } else {
+            AgentState::NoAgent
+        }
+    }
+
     pub fn name(&self, cx: &App) -> String {
         match self.custom_name.as_ref().or(self.auto_title.as_ref()) {
             Some(n) => n.clone(),
@@ -823,6 +845,37 @@ impl Workspace {
                 }
             })
             .unwrap_or_else(|| format!("Workspace {}", self.id))
+    }
+}
+
+/// The sections of the sidebar when it groups workspaces by what their
+/// agents are doing (`workspaceGroups.groupByAgentStatus`), in the order
+/// they show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AgentState {
+    /// An agent waits for you: a permission prompt or a question.
+    Verify,
+    Running,
+    /// An agent is open but done with its turn.
+    Idle,
+    NoAgent,
+}
+
+impl AgentState {
+    pub const ALL: [AgentState; 4] = [
+        AgentState::Verify,
+        AgentState::Running,
+        AgentState::Idle,
+        AgentState::NoAgent,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            AgentState::Verify => "Verify",
+            AgentState::Running => "Running",
+            AgentState::Idle => "Idle",
+            AgentState::NoAgent => "No agent",
+        }
     }
 }
 

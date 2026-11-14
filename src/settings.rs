@@ -505,6 +505,10 @@ pub struct WorkspaceGroups {
     /// workspaces, or its header's +): after the selected one, second
     /// (after the group's first), or last.
     pub new_workspace_placement: Placement,
+    /// Show the sidebar in sections by what each workspace's coding agent
+    /// is doing (Verify, Running, Idle, No agent) instead of your groups,
+    /// which come back as they were when it's off.
+    pub group_by_agent_status: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
