@@ -18,6 +18,7 @@ gitlab = ["dep:abromux-gitlab"]
 
 [dependencies]
 abromux-plugin = { path = "crates/abromux-plugin" }
+abromux-platform = { path = "crates/abromux-platform" }
 abromux-gitlab = { path = "crates/abromux-gitlab", optional = true }
 gpui = { version = "=0.2.2", default-features = false, features = ["runtime_shaders"] }
 gpui-component = { version = "=0.5.1", features = ["webview"] }
@@ -46,8 +47,6 @@ markdown = "=1.0.0"
 
 [build-dependencies]
 bindgen = "0.71"
-# the native WebAuthn bridge (src/webauthn.m)
-cc = "1"
 
 [profile.dev]
 debug = 0

@@ -4,9 +4,10 @@
 
 use futures::channel::{mpsc, oneshot};
 use objc::runtime::Object;
-use std::ffi::{CStr, CString, c_char, c_void};
-
-const PAGE_SCRIPT: &str = include_str!("browser_page.js");
+use std::{
+    ffi::{CStr, CString, c_char, c_void},
+    sync::OnceLock,
+};
 
 type MessageFn = extern "C" fn(*mut c_void, *const c_char);
 type FreeFn = extern "C" fn(*mut c_void);
@@ -69,10 +70,10 @@ extern "C" fn free_sender(ctx: *mut c_void) {
     drop(unsafe { Box::from_raw(ctx as *mut mpsc::UnboundedSender<String>) });
 }
 
-/// Add the page script (browser_page.js) to every frame of `wk`, before its
-/// first navigation. Each message's JSON goes to `tx`.
-pub fn install(wk: *mut Object, tx: mpsc::UnboundedSender<String>) {
-    let script = cstr(PAGE_SCRIPT);
+/// Add the page `script` to every frame of `wk`, before its first
+/// navigation. Each message's JSON goes to `tx`.
+pub fn install(wk: *mut Object, script: &str, tx: mpsc::UnboundedSender<String>) {
+    let script = cstr(script);
     let ctx = Box::into_raw(Box::new(tx)) as *mut c_void;
     unsafe { abx_page_install(wk as _, script.as_ptr(), ctx, on_message, free_sender) };
 }
@@ -183,15 +184,19 @@ pub fn download_forget(url: &str) {
     unsafe { abx_download_forget(url.as_ptr()) };
 }
 
+/// Asked about each URL gpui is about to open in the system browser.
+static OPEN_URL_HOOK: OnceLock<fn(&str) -> bool> = OnceLock::new();
+
 extern "C" fn on_open_url(url: *const c_char) -> bool {
-    let Some(url) = (unsafe { owned(url) }) else {
+    let (Some(url), Some(hook)) = (unsafe { owned(url) }, OPEN_URL_HOOK.get()) else {
         return false;
     };
-    std::panic::catch_unwind(|| abromux_plugin::caught_url(&url)).unwrap_or(false)
+    std::panic::catch_unwind(|| hook(&url)).unwrap_or(false)
 }
 
-/// Let plugins keep links that gpui would open in the system browser
-/// (`abromux_plugin::catch_opened_urls`). Once is enough.
-pub fn open_url_hook_install() {
+/// Ask `hook` before gpui opens a URL in the system browser; true keeps it
+/// from opening there. Once is enough; later hooks are ignored.
+pub fn open_url_hook_install(hook: fn(&str) -> bool) {
+    let _ = OPEN_URL_HOOK.set(hook);
     unsafe { abx_open_url_hook_install(on_open_url) };
 }

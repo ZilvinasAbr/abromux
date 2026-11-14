@@ -7,11 +7,11 @@ name = "abromux"
 version = "0.27.0"
 dependencies = [
  "abromux-gitlab",
+ "abromux-platform",
  "abromux-plugin",
  "anyhow",
  "bindgen",
  "block",
- "cc",
  "futures",
  "gpui",
  "gpui-component",
@@ -42,6 +42,16 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
+]
+
+[[package]]
+name = "abromux-platform"
+version = "0.1.0"
+dependencies = [
+ "block",
+ "cc",
+ "futures",
+ "objc",
 ]
 
 [[package]]

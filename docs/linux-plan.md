@@ -96,8 +96,9 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
 
 ### Phase 0: refactor on macOS, no behaviour change
 
-- [ ] Add CI (GitHub Actions, macOS): `cargo fmt --check`, `clippy -D warnings`, `cargo test`.
-- [ ] Create `abromux-platform`; move `browser_native.m`, `cursor.m`,
+- [ ] ~~Add CI (GitHub Actions, macOS): `cargo fmt --check`, `clippy -D warnings`, `cargo test`.~~
+      Skipped for now: no CI; the checks run locally.
+- [x] Create `abromux-platform`; move `browser_native.m`, `cursor.m`,
       `webauthn.m` and their `cc` builds and framework links into its
       `build.rs`, so the root `build.rs` only does the version and libghostty.
 - [ ] Move `banner`, `menubar`, `activity`, `icon`, `titlebar`, the

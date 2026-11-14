@@ -111,7 +111,7 @@ Comments go to a coding agent instead of GitLab. A new thread (or a submitted re
 
 ## Passkeys
 
-Browser panes sign in with passkeys (iCloud Keychain, a phone over Bluetooth) and security keys, the way cmux does. WKWebView only allows WebAuthn for an app's own associated domains, so `src/webauthn.js` replaces `navigator.credentials.create/get` for public-key requests in the top frame and hands them to `src/webauthn.m`, which runs them through AuthenticationServices' web-browser APIs with the page's origin and challenge, and passes the credential back. Conditional (autofill) requests stay pending, since there's no autofill UI; sites show their "Sign in with a passkey" button instead. Frames and U2F `appid` requests are left to WebKit.
+Browser panes sign in with passkeys (iCloud Keychain, a phone over Bluetooth) and security keys, the way cmux does. WKWebView only allows WebAuthn for an app's own associated domains, so `src/webauthn.js` replaces `navigator.credentials.create/get` for public-key requests in the top frame and hands them to `crates/abromux-platform/src/macos/webauthn.m`, which runs them through AuthenticationServices' web-browser APIs with the page's origin and challenge, and passes the credential back. Conditional (autofill) requests stay pending, since there's no autofill UI; sites show their "Sign in with a passkey" button instead. Frames and U2F `appid` requests are left to WebKit.
 
 The web-browser APIs need the restricted `com.apple.developer.web-browser.public-key-credential` entitlement, which Apple grants per App ID and only a provisioning profile can carry. Without it the bridge stays out of the way and WebKit handles WebAuthn as before (for most sites, not at all). To turn it on:
 
@@ -609,4 +609,4 @@ History lives in `<git common dir>/abromux-perf/history.jsonl`, outside the tree
 ## Known POC limits
 
 - Native webviews always draw above GPUI content. Hidden tabs and workspaces are hidden explicitly, and the app's popovers swap a page they cover for a still bitmap of it (see "Popovers over pages"); a popover the app doesn't know about (a new one) would still draw under the page.
-- While a page has keyboard focus, keys with ⌘ or ⌃ go to the app first (`abx_page_shortcuts_install` in `src/browser_native.m`): a shortcut the app handles doesn't reach the page, so a site can't use ⌘T, ⌘W, ⌘L and the like for itself. Other ⌘ keys (⌘C, ⌘A, ⌘B in an editor) reach the page as usual.
+- While a page has keyboard focus, keys with ⌘ or ⌃ go to the app first (`abx_page_shortcuts_install` in `crates/abromux-platform/src/macos/browser_native.m`): a shortcut the app handles doesn't reach the page, so a site can't use ⌘T, ⌘W, ⌘L and the like for itself. Other ⌘ keys (⌘C, ⌘A, ⌘B in an editor) reach the page as usual.

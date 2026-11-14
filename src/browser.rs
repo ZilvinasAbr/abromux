@@ -165,6 +165,8 @@ enum Cover {
 
 /// Page script for ⌘-click / middle-click on links.
 const LINKS_SCRIPT: &str = include_str!("browser_links.js");
+/// The page script in every frame (`browser_native::install`).
+const PAGE_SCRIPT: &str = include_str!("browser_page.js");
 
 pub struct BrowserView {
     webview: Entity<WebView>,
@@ -312,7 +314,7 @@ impl BrowserView {
         let (page_tx, mut page_rx) = mpsc::unbounded::<String>();
         {
             let wk = raw.webview();
-            browser_native::install(&*wk as *const _ as *mut Object, page_tx);
+            browser_native::install(&*wk as *const _ as *mut Object, PAGE_SCRIPT, page_tx);
         }
         // wry's delegate class exists now that a webview does.
         browser_native::downloads_install();

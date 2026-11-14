@@ -18,7 +18,7 @@ pub fn set_host(view: WeakEntity<crate::AbroMux>, cx: &mut App) {
         jira,
     });
     // Links gpui-component's markdown opens go to a tab, see catch_opened_urls.
-    crate::browser_native::open_url_hook_install();
+    crate::browser_native::open_url_hook_install(abromux_plugin::caught_url);
 }
 
 /// A plugin's command in a terminal (a local diff's agents): deferred, as
