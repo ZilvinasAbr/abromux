@@ -1,14 +1,12 @@
-#![allow(unexpected_cfgs)]
 //! Dev helpers: `ABROMUX_DEMO=1` builds a sample layout and `ABROMUX_SNAPSHOT=out.png`
 //! asks the driving shell to
 //! save a PNG of our window (see scripts/drive.sh). Also the frame timing and
 //! synthetic input behind the `debug.*` RPCs that scripts/perf.py uses.
 
+use abromux_platform as platform;
 use anyhow::{Context as _, anyhow, bail};
 use futures::channel::oneshot;
 use gpui::{App, Context, Entity, Keystroke, PlatformInput, Timer, Window};
-use objc::{msg_send, runtime::Object, sel, sel_impl};
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use serde_json::{Value, json};
 use std::{
     cell::RefCell,
@@ -17,14 +15,7 @@ use std::{
 };
 
 pub fn snapshot(window: &Window, path: &str) -> anyhow::Result<()> {
-    let RawWindowHandle::AppKit(h) = HasWindowHandle::window_handle(window)?.as_raw() else {
-        anyhow::bail!("not an AppKit window")
-    };
-    let number: isize = unsafe {
-        let view = h.ns_view.as_ptr() as *mut Object;
-        let win: *mut Object = msg_send![view, window];
-        msg_send![win, windowNumber]
-    };
+    let number = platform::window::number(window).map_err(|e| anyhow!(e))?;
     // Capture is done by scripts/drive.sh with screencapture (under the
     // terminal's Screen Recording permission): it watches stdout for this line.
     use std::io::Write;
@@ -35,7 +26,11 @@ pub fn snapshot(window: &Window, path: &str) -> anyhow::Result<()> {
 
 /// `ui:down|up|move|drag,X,Y[,left|right][,clicks=N]`: queue a native mouse
 /// event to our window, which AppKit then delivers like a real one.
+/// `ui:scroll,X,Y,DY`: a native scroll wheel event of DY pixels (positive
+/// scrolls up) at window point X,Y, through gpui's hit testing to whatever
+/// scrolls there.
 fn post_mouse(window: &Window, arg: &str) -> anyhow::Result<()> {
+    use platform::window::Mouse;
     let parts: Vec<&str> = arg.split(',').map(str::trim).collect();
     let num = |i: usize| -> anyhow::Result<f64> {
         parts
@@ -45,7 +40,7 @@ fn post_mouse(window: &Window, arg: &str) -> anyhow::Result<()> {
     };
     let (x, y) = (num(1)?, num(2)?);
     if parts[0] == "scroll" {
-        return post_scroll(window, x, y, num(3)?);
+        return platform::window::post_scroll(window, x, y, num(3)?).map_err(|e| anyhow!(e));
     }
     let right = parts.contains(&"right");
     let clicks: isize = parts
@@ -53,141 +48,14 @@ fn post_mouse(window: &Window, arg: &str) -> anyhow::Result<()> {
         .find_map(|p| p.strip_prefix("clicks="))
         .and_then(|n| n.parse().ok())
         .unwrap_or(1);
-    // NSEventType: left down/up 1/2, right down/up 3/4, moved 5, left dragged 6.
-    let kind: usize = match (parts[0], right) {
-        ("down", false) => 1,
-        ("up", false) => 2,
-        ("down", true) => 3,
-        ("up", true) => 4,
-        ("move", _) => 5,
-        ("drag", _) => 6,
-        (k, _) => bail!("unknown mouse action {k}"),
+    let mouse = match parts[0] {
+        "down" => Mouse::Down,
+        "up" => Mouse::Up,
+        "move" => Mouse::Move,
+        "drag" => Mouse::Drag,
+        k => bail!("unknown mouse action {k}"),
     };
-    let RawWindowHandle::AppKit(h) = HasWindowHandle::window_handle(window)?.as_raw() else {
-        bail!("not an AppKit window")
-    };
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct Point {
-        x: f64,
-        y: f64,
-    }
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct Rect {
-        origin: Point,
-        size: Point,
-    }
-    unsafe {
-        let view = h.ns_view.as_ptr() as *mut Object;
-        let win: *mut Object = msg_send![view, window];
-        let number: isize = msg_send![win, windowNumber];
-        let content: *mut Object = msg_send![win, contentView];
-        let frame: Rect = msg_send![content, frame];
-        // AppKit's window coordinates start at the bottom left.
-        let at = Point {
-            x,
-            y: frame.size.y - y,
-        };
-        let nil: *mut Object = std::ptr::null_mut();
-        let ev: *mut Object = msg_send![objc::class!(NSEvent),
-            mouseEventWithType: kind
-            location: at
-            modifierFlags: 0usize
-            timestamp: 0f64
-            windowNumber: number
-            context: nil
-            eventNumber: 0isize
-            clickCount: clicks
-            pressure: 1f32];
-        if ev.is_null() {
-            bail!("NSEvent refused it");
-        }
-        // Such an event is always button 0, which gpui reads as left; set
-        // the button on its CGEvent and make a new NSEvent from that.
-        let ev = if right {
-            #[link(name = "CoreGraphics", kind = "framework")]
-            unsafe extern "C" {
-                fn CGEventSetIntegerValueField(event: *mut Object, field: u32, value: i64);
-            }
-            const BUTTON_NUMBER: u32 = 3;
-            let cg: *mut Object = msg_send![ev, CGEvent];
-            CGEventSetIntegerValueField(cg, BUTTON_NUMBER, 1);
-            msg_send![objc::class!(NSEvent), eventWithCGEvent: cg]
-        } else {
-            ev
-        };
-        let app: *mut Object = msg_send![objc::class!(NSApplication), sharedApplication];
-        let _: () = msg_send![app, postEvent: ev atStart: false];
-    }
-    Ok(())
-}
-
-/// `ui:scroll,X,Y,DY`: a native scroll wheel event of DY pixels (positive
-/// scrolls up) at window point X,Y, through gpui's hit testing to whatever
-/// scrolls there.
-fn post_scroll(window: &Window, x: f64, y: f64, dy: f64) -> anyhow::Result<()> {
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct Point {
-        x: f64,
-        y: f64,
-    }
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct Rect {
-        origin: Point,
-        size: Point,
-    }
-    #[link(name = "CoreGraphics", kind = "framework")]
-    unsafe extern "C" {
-        fn CGEventCreateScrollWheelEvent(
-            source: *mut Object,
-            units: u32,
-            wheel_count: u32,
-            wheel1: i32,
-            ...
-        ) -> *mut Object;
-        fn CGEventSetLocation(event: *mut Object, at: Point);
-        fn CFRelease(cf: *mut Object);
-    }
-    let RawWindowHandle::AppKit(h) = HasWindowHandle::window_handle(window)?.as_raw() else {
-        bail!("not an AppKit window")
-    };
-    unsafe {
-        let view = h.ns_view.as_ptr() as *mut Object;
-        let win: *mut Object = msg_send![view, window];
-        let content: *mut Object = msg_send![win, contentView];
-        let frame: Rect = msg_send![content, frame];
-        // An event made from a CGEvent has no window, so AppKit won't route
-        // it; it goes straight to gpui's view instead. Without a window its
-        // locationInWindow is its screen point (bottom left), so place it
-        // where that equals the window point: CoreGraphics counts from the
-        // main screen's top left.
-        let screens: *mut Object = msg_send![objc::class!(NSScreen), screens];
-        let main: *mut Object = msg_send![screens, objectAtIndex: 0usize];
-        let main_frame: Rect = msg_send![main, frame];
-        let at = Point {
-            x,
-            y: main_frame.size.y - (frame.size.y - y),
-        };
-        const PIXEL: u32 = 0;
-        let cg = CGEventCreateScrollWheelEvent(std::ptr::null_mut(), PIXEL, 1, dy as i32);
-        if cg.is_null() {
-            bail!("CoreGraphics refused the scroll event");
-        }
-        CGEventSetLocation(cg, at);
-        let ev: *mut Object = msg_send![objc::class!(NSEvent), eventWithCGEvent: cg];
-        CFRelease(cg);
-        if ev.is_null() {
-            bail!("NSEvent refused the scroll event");
-        }
-        // On the next run loop pass: gpui is mid-update now and the view's
-        // handler would re-enter it.
-        let _: () =
-            msg_send![view, performSelector: sel!(scrollWheel:) withObject: ev afterDelay: 0f64];
-    }
-    Ok(())
+    platform::window::post_mouse(window, mouse, x, y, right, clicks).map_err(|e| anyhow!(e))
 }
 
 /// Mouse steps go to this (gpui's own dispatch_event isn't callable from

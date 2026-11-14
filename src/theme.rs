@@ -1,5 +1,3 @@
-#![allow(unexpected_cfgs)] // objc's msg_send!
-
 //! Colours and small shared widgets: cmux's layout in Claude's warm neutrals
 //! with the terracotta orange accent, light or dark.
 //!
@@ -145,25 +143,12 @@ impl Appearance {
 /// follow macOS's. The palette follows in [`sync`], when the windows
 /// report their new appearance.
 pub fn apply_appearance(a: Appearance) {
-    use objc::{class, msg_send, runtime::Object, sel, sel_impl};
-    #[link(name = "AppKit", kind = "framework")]
-    unsafe extern "C" {
-        static NSAppearanceNameAqua: *mut Object;
-        static NSAppearanceNameDarkAqua: *mut Object;
-    }
-    unsafe {
-        let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
-        let appearance: *mut Object = match a {
-            Appearance::System => std::ptr::null_mut(),
-            Appearance::Light => {
-                msg_send![class!(NSAppearance), appearanceNamed: NSAppearanceNameAqua]
-            }
-            Appearance::Dark => {
-                msg_send![class!(NSAppearance), appearanceNamed: NSAppearanceNameDarkAqua]
-            }
-        };
-        let _: () = msg_send![app, setAppearance: appearance];
-    }
+    use abromux_platform::appearance::{Look, set};
+    set(match a {
+        Appearance::System => Look::System,
+        Appearance::Light => Look::Light,
+        Appearance::Dark => Look::Dark,
+    });
 }
 
 /// Is this appearance a dark one?

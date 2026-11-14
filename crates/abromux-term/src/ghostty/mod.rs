@@ -378,10 +378,11 @@ unsafe extern "C" fn on_render_hold(t: GhosttyTerminal, ud: *mut c_void, held: b
 }
 
 impl Terminal {
-    pub fn new(cols: u16, rows: u16) -> anyhow::Result<Self> {
+    /// A new terminal, in the dark or light theme.
+    pub fn new(cols: u16, rows: u16, dark: bool) -> anyhow::Result<Self> {
         let mut raw = ptr::null_mut();
         check(unsafe { ghostty_terminal_new(ptr::null(), &mut raw, cols, rows) })?;
-        Self::wrap(raw, cols, rows)
+        Self::wrap(raw, cols, rows, dark)
     }
 
     /// Its complete state (screen, scrollback, modes, colors) in libghostty-vt's
@@ -405,8 +406,8 @@ impl Terminal {
         })
     }
 
-    /// A terminal as `snapshot` left it.
-    pub fn from_snapshot(bytes: &[u8]) -> anyhow::Result<Self> {
+    /// A terminal as `snapshot` left it, in the dark or light theme.
+    pub fn from_snapshot(bytes: &[u8], dark: bool) -> anyhow::Result<Self> {
         unsafe {
             let mut dec = ptr::null_mut();
             check(ghostty_snapshot_decoder_new_buf(
@@ -430,13 +431,13 @@ impl Terminal {
                 GHOSTTY_TERMINAL_DATA_ROWS,
                 &mut rows as *mut _ as *mut c_void,
             );
-            Self::wrap(raw, cols.max(1), rows.max(1))
+            Self::wrap(raw, cols.max(1), rows.max(1), dark)
         }
     }
 
     /// Set up a new or decoded terminal of that size: callbacks, render
     /// state, encoders.
-    fn wrap(raw: GhosttyTerminal, cols: u16, rows: u16) -> anyhow::Result<Self> {
+    fn wrap(raw: GhosttyTerminal, cols: u16, rows: u16, dark: bool) -> anyhow::Result<Self> {
         unsafe {
             let mut render = ptr::null_mut();
             check(ghostty_render_state_new(ptr::null(), &mut render))?;
@@ -553,7 +554,7 @@ impl Terminal {
                 ud,
                 epoch: Instant::now(),
             };
-            t.apply_theme(crate::theme::is_dark());
+            t.apply_theme(dark);
             Ok(t)
         }
     }
@@ -1738,9 +1739,24 @@ fn to_bgra(data: &[u8], w: u32, h: u32, bpp: usize, src: [u32; 4]) -> Option<Ima
         let start = (y * w as usize + x0) * bpp;
         let row = &data[start..start + (x1 - x0) * bpp];
         match bpp {
-            4 => bgra.extend(row.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]])),
-            3 => bgra.extend(row.chunks_exact(3).flat_map(|p| [p[2], p[1], p[0], 255])),
-            2 => bgra.extend(row.chunks_exact(2).flat_map(|p| [p[0], p[0], p[0], p[1]])),
+            4 => bgra.extend(
+                row.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .flat_map(|p| [p[2], p[1], p[0], p[3]]),
+            ),
+            3 => bgra.extend(
+                row.as_chunks::<3>()
+                    .0
+                    .iter()
+                    .flat_map(|p| [p[2], p[1], p[0], 255]),
+            ),
+            2 => bgra.extend(
+                row.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .flat_map(|p| [p[0], p[0], p[0], p[1]]),
+            ),
             _ => bgra.extend(row.iter().flat_map(|&g| [g, g, g, 255])),
         }
     }
@@ -1785,13 +1801,13 @@ mod tests {
     /// lands as it would have.
     #[test]
     fn snapshot_round_trip() {
-        let mut t = Terminal::new(20, 5).unwrap();
+        let mut t = Terminal::new(20, 5, true).unwrap();
         for i in 0..30 {
             t.write(format!("\x1b[1;3{}mline {i}\x1b[0m\r\n", i % 8).as_bytes());
         }
         t.write(b"\x1b[?1049h\x1b[Hfull screen");
         let snap = t.snapshot().unwrap();
-        let mut back = Terminal::from_snapshot(&snap).unwrap();
+        let mut back = Terminal::from_snapshot(&snap, true).unwrap();
         assert!(back.alt_screen());
         assert_eq!(back.screen_text(), t.screen_text());
         back.write(b"\x1b[?1049l");
@@ -1801,14 +1817,14 @@ mod tests {
 
         // Quit mid-sequence: the snapshot still works, minus that sequence.
         t.write(b"\x1b[3");
-        let mut back = Terminal::from_snapshot(&t.snapshot().unwrap()).unwrap();
+        let mut back = Terminal::from_snapshot(&t.snapshot().unwrap(), true).unwrap();
         back.write(b"after");
         assert!(back.screen_text().contains("after"));
     }
 
     #[test]
     fn scrollbar_and_scroll_to_row() {
-        let mut t = Terminal::new(10, 5).unwrap();
+        let mut t = Terminal::new(10, 5, true).unwrap();
         for i in 0..50 {
             t.write(format!("{i}\r\n").as_bytes());
         }
@@ -1826,7 +1842,7 @@ mod tests {
 
     #[test]
     fn programs_write_the_clipboard() {
-        let mut t = Terminal::new(20, 3).unwrap();
+        let mut t = Terminal::new(20, 3, true).unwrap();
         // OSC 52, "hello" in base64, as terminal-browser and Neovim send it.
         t.write(b"\x1b]52;c;aGVsbG8=\x07");
         assert_eq!(t.take_effects().clipboard.as_deref(), Some("hello"));
@@ -1846,7 +1862,7 @@ mod tests {
 
     #[test]
     fn parses_output_and_answers_queries() {
-        let mut t = Terminal::new(20, 3).unwrap();
+        let mut t = Terminal::new(20, 3, true).unwrap();
         t.write(b"hi \x1b[1;32mworld\x1b[0m\r\n\x1b]0;title\x07\x1b[c");
         let fx = t.take_effects();
         assert!(fx.title_changed);
@@ -1871,7 +1887,7 @@ mod tests {
 
     #[test]
     fn kitty_images_are_listed_with_their_pixels() {
-        let mut t = Terminal::new(20, 5).unwrap();
+        let mut t = Terminal::new(20, 5, true).unwrap();
         t.resize(20, 5, 10, 20);
         // A 2x1 RGBA image (red, then half-transparent blue) placed at the
         // cursor; base64 of ff0000ff 0000ff80.
@@ -1903,7 +1919,7 @@ mod tests {
 
     #[test]
     fn pointer_shape_and_lone_command_key() {
-        let mut t = Terminal::new(20, 3).unwrap();
+        let mut t = Terminal::new(20, 3, true).unwrap();
         assert_eq!(t.mouse_shape(), GHOSTTY_MOUSE_SHAPE_TEXT);
         t.write(b"\x1b]22;pointer\x1b\\");
         assert_eq!(t.mouse_shape(), GHOSTTY_MOUSE_SHAPE_POINTER);
@@ -1911,7 +1927,7 @@ mod tests {
         assert_eq!(t.mouse_shape(), GHOSTTY_MOUSE_SHAPE_DEFAULT);
 
         let sup = GHOSTTY_MODS_SUPER as u16;
-        let mut cmd = |t: &mut Terminal, action, mods| {
+        let cmd = |t: &mut Terminal, action, mods| {
             String::from_utf8(t.encode_key_action(action, GHOSTTY_KEY_META_LEFT, mods, None, 0))
                 .unwrap()
         };
@@ -1929,7 +1945,7 @@ mod tests {
         );
 
         // ⌘L, a held key's repeat and its release, as terminal-browser gets them.
-        let mut key = |t: &mut Terminal, action, k, mods, cp: char| {
+        let key = |t: &mut Terminal, action, k, mods, cp: char| {
             String::from_utf8(t.encode_key_action(action, k, mods, None, cp as u32)).unwrap()
         };
         assert_eq!(
@@ -1948,8 +1964,8 @@ mod tests {
 
     #[test]
     fn answers_size_queries() {
-        let mut t = Terminal::new(20, 3).unwrap();
-        let mut ask = |t: &mut Terminal, q: &[u8]| {
+        let mut t = Terminal::new(20, 3, true).unwrap();
+        let ask = |t: &mut Terminal, q: &[u8]| {
             t.write(q);
             String::from_utf8_lossy(&t.take_effects().pty_response).into_owned()
         };
@@ -1967,7 +1983,7 @@ mod tests {
 
     #[test]
     fn kitty_placeholder_cells_show_the_image_not_the_character() {
-        let mut t = Terminal::new(20, 3).unwrap();
+        let mut t = Terminal::new(20, 3, true).unwrap();
         t.resize(20, 3, 10, 20);
         // A virtual placement of image 5, shown by two placeholder cells
         // whose foreground colour carries the image id.
@@ -1984,7 +2000,7 @@ mod tests {
 
     #[test]
     fn kitty_animations_advance_on_tick() {
-        let mut t = Terminal::new(20, 3).unwrap();
+        let mut t = Terminal::new(20, 3, true).unwrap();
         t.resize(20, 3, 10, 20);
         assert_eq!(t.tick_animations(), None, "nothing playing");
         // Red, then a blue frame, 1 ms apart, looping.
@@ -2010,7 +2026,7 @@ mod tests {
 
     #[test]
     fn kitty_images_load_from_temp_files_only_in_the_temp_dir() {
-        let mut t = Terminal::new(20, 3).unwrap();
+        let mut t = Terminal::new(20, 3, true).unwrap();
         t.resize(20, 3, 10, 20);
         let send = |t: &mut Terminal, path: &std::path::Path| {
             std::fs::write(path, [9u8, 8, 7]).unwrap();
@@ -2027,13 +2043,13 @@ mod tests {
             [7, 8, 9, 255]
         );
 
-        let outside = std::env::current_dir().unwrap().join("target").join(&name);
+        let outside = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(&name);
         assert!(send(&mut t, &outside).contains("EINVAL"), "refused outside");
     }
 
     #[test]
     fn kitty_png_images_are_decoded() {
-        let mut t = Terminal::new(20, 5).unwrap();
+        let mut t = Terminal::new(20, 5, true).unwrap();
         t.resize(20, 5, 10, 20);
         let mut png = Vec::new();
         image::RgbaImage::from_raw(1, 1, vec![1, 2, 3, 255])
@@ -2068,7 +2084,7 @@ mod tests {
 
     #[test]
     fn synchronized_output_draws_only_finished_frames() {
-        let mut t = Terminal::new(10, 2).unwrap();
+        let mut t = Terminal::new(10, 2, true).unwrap();
         let first = |t: &mut Terminal| t.frame().rows[0][0].text.to_string();
         t.write(b"old");
         assert_eq!(first(&mut t), "o");
@@ -2087,7 +2103,7 @@ mod tests {
 
     #[test]
     fn mouse_reports_follow_the_programs_mode() {
-        let mut t = Terminal::new(20, 5).unwrap();
+        let mut t = Terminal::new(20, 5, true).unwrap();
         let g = MouseGeometry {
             width: 200,
             height: 100,
@@ -2117,7 +2133,7 @@ mod tests {
 
     #[test]
     fn config_colors_and_alt_screen() {
-        let mut t = Terminal::new(10, 2).unwrap();
+        let mut t = Terminal::new(10, 2, true).unwrap();
         t.set_colors(
             Some(Rgb(1, 2, 3)),
             Some(Rgb(4, 5, 6)),
@@ -2139,7 +2155,7 @@ mod tests {
 
     #[test]
     fn search_finds_and_selects_matches() {
-        let mut t = Terminal::new(20, 3).unwrap();
+        let mut t = Terminal::new(20, 3, true).unwrap();
         // Five lines in three rows: two matches scroll off into history.
         t.write(b"error one\r\nok\r\nERROR two\r\nfine\r\nan error");
         t.set_search("error");
@@ -2191,7 +2207,7 @@ mod tests {
 
     #[test]
     fn reports_notifications_and_hyperlinks() {
-        let mut t = Terminal::new(40, 3).unwrap();
+        let mut t = Terminal::new(40, 3, true).unwrap();
         t.write(b"\x1b]9;Build done\x07\x1b]777;notify;Claude;Needs input\x1b\\");
         let fx = t.take_effects();
         assert_eq!(
@@ -2208,7 +2224,7 @@ mod tests {
 
     #[test]
     fn incremental_frame_matches_a_fresh_one() {
-        let mut t = Terminal::new(20, 4).unwrap();
+        let mut t = Terminal::new(20, 4, true).unwrap();
         let mut inc = Frame::default();
         let steps: &[&dyn Fn(&mut Terminal)] = &[
             &|t| t.write(b"one\r\ntwo\r\nthree"),
@@ -2239,7 +2255,7 @@ mod tests {
 
     #[test]
     fn selection_and_keys() {
-        let mut t = Terminal::new(20, 3).unwrap();
+        let mut t = Terminal::new(20, 3, true).unwrap();
         t.write(b"hello world");
         t.select((6, 0), (10, 0));
         assert_eq!(t.selection_text().as_deref(), Some("world"));
@@ -2281,7 +2297,7 @@ mod tests {
     #[test]
     fn unmarked_prompt_leaves_a_copy_on_resize() {
         let line = "~/repos ❯ echo zilvinas";
-        let mut t = Terminal::new(30, 6).unwrap();
+        let mut t = Terminal::new(30, 6, true).unwrap();
         t.write(line.as_bytes());
         zsh_resize(&mut t, 18, line);
         assert_eq!(t.screen_text().matches("~/repos").count(), 2);
@@ -2289,7 +2305,7 @@ mod tests {
 
     #[test]
     fn marked_prompt_is_redrawn_on_wider_resize() {
-        let mut t = Terminal::new(18, 6).unwrap();
+        let mut t = Terminal::new(18, 6, true).unwrap();
         t.write(b"some output\r\n");
         t.write(marked("echo zilvinas").as_bytes());
         zsh_resize(&mut t, 30, &marked("echo zilvinas"));
@@ -2301,7 +2317,7 @@ mod tests {
 
     #[test]
     fn command_output_still_reflows() {
-        let mut t = Terminal::new(30, 6).unwrap();
+        let mut t = Terminal::new(30, 6, true).unwrap();
         t.write(marked("ls").as_bytes());
         t.write(b"\r\n\x1b]133;C\x07a-file-name-that-is-long");
         t.resize(18, 6, 10, 20);

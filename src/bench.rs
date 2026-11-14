@@ -25,7 +25,7 @@ pub fn vt(args: &[String]) -> i32 {
         };
         for _ in 0..passes {
             // Same grid as bench.sh's 1000x700 window at 13 pt.
-            let mut term = match Terminal::new(96, 41) {
+            let mut term = match Terminal::new(96, 41, crate::theme::is_dark()) {
                 Ok(t) => t,
                 Err(e) => {
                     eprintln!("abromux: {e}");
@@ -67,7 +67,7 @@ pub fn kitty(args: &[String]) -> i32 {
     let (w, h) = (1920, 1200);
     let images: Vec<Vec<u8>> = (0..2u8).map(|i| kitty_image(w, h, i)).collect();
     for _ in 0..passes {
-        let mut term = match Terminal::new(96, 41) {
+        let mut term = match Terminal::new(96, 41, crate::theme::is_dark()) {
             Ok(t) => t,
             Err(e) => {
                 eprintln!("abromux: {e}");

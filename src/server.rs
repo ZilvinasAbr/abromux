@@ -89,7 +89,7 @@ async fn eval_json(
 
 /// An answer from the native side (cookies), or an error after `limit`.
 async fn native(
-    rx: oneshot::Receiver<crate::browser_native::Answer>,
+    rx: oneshot::Receiver<abromux_browser::backend::Answer>,
     limit: Duration,
 ) -> anyhow::Result<Value> {
     match select(rx, Timer::after(limit)).await {
@@ -102,19 +102,9 @@ async fn native(
 
 /// Run `js` in the page itself (never a picked frame). None if it didn't.
 async fn eval_page(b: &Entity<BrowserView>, js: &str, cx: &AsyncApp) -> Option<String> {
-    let (tx, rx) = oneshot::channel();
-    let tx = std::sync::Mutex::new(Some(tx));
-    b.read_with(cx, |b, cx| {
-        b.eval(js, cx, move |out| {
-            if let Some(tx) = tx.lock().unwrap().take() {
-                let _ = tx.send(out);
-            }
-        })
-    })
-    .ok()?
-    .ok()?;
+    let rx = b.read_with(cx, |b, cx| b.eval(js, cx)).ok()?;
     match select(rx, Timer::after(SCRIPT_TIMEOUT)).await {
-        Either::Left((Ok(out), _)) => Some(out),
+        Either::Left((Ok(Ok(out)), _)) => Some(out),
         _ => None,
     }
 }
@@ -1782,7 +1772,7 @@ impl AbroMux {
     /// HttpOnly cookies count too. Without `--all`, only the page's.
     fn browser_cookies(&self, p: &Value, cx: &mut Context<Self>) -> anyhow::Result<Reply> {
         let b = self.browser_target(p)?;
-        let wk = b.read(cx).wk_webview(cx);
+        let web = b.read(cx).page();
         let page_url = str_param(p, "url")
             .map(normalize_url)
             .unwrap_or_else(|| b.read(cx).url.clone());
@@ -1799,7 +1789,7 @@ impl AbroMux {
         match str_param(p, "op").unwrap_or("get") {
             "get" => Ok(Reply::Later(
                 async move {
-                    let list = native(crate::browser_native::cookies(wk), SCRIPT_TIMEOUT).await?;
+                    let list = native(web.cookies(), SCRIPT_TIMEOUT).await?;
                     let list: Vec<Value> = list.as_array().into_iter().flatten().filter(|c| wanted(c)).cloned().collect();
                     Ok(json!(list))
                 }
@@ -1826,7 +1816,7 @@ impl AbroMux {
                     "httpOnly": bool_param(p, "http_only", false),
                     "sameSite": str_param(p, "same_site").unwrap_or("Lax"),
                 }]);
-                let rx = crate::browser_native::set_cookies(wk, &cookie.to_string());
+                let rx = web.set_cookies(&cookie.to_string());
                 Ok(Reply::Later(
                     async move {
                         native(rx, SCRIPT_TIMEOUT).await?;
@@ -1837,7 +1827,7 @@ impl AbroMux {
             }
             "clear" | "delete" => Ok(Reply::Later(
                 async move {
-                    let list = native(crate::browser_native::cookies(wk), SCRIPT_TIMEOUT).await?;
+                    let list = native(web.cookies(), SCRIPT_TIMEOUT).await?;
                     let gone: Vec<Value> = list
                         .as_array()
                         .into_iter()
@@ -1845,7 +1835,7 @@ impl AbroMux {
                         .filter(|c| wanted(c))
                         .map(|c| json!({ "name": c["name"], "domain": c["domain"], "path": c["path"] }))
                         .collect();
-                    let n = native(crate::browser_native::delete_cookies(wk, &json!(gone).to_string()), SCRIPT_TIMEOUT).await?;
+                    let n = native(web.delete_cookies(&json!(gone).to_string()), SCRIPT_TIMEOUT).await?;
                     Ok(json!({ "deleted": n }))
                 }
                 .boxed_local(),
@@ -1858,7 +1848,7 @@ impl AbroMux {
     /// localStorage, in Playwright's storageState format.
     fn browser_state(&self, p: &Value, cx: &mut Context<Self>) -> anyhow::Result<Reply> {
         let b = self.browser_target(p)?;
-        let wk = b.read(cx).wk_webview(cx);
+        let web = b.read(cx).page();
         let path = PathBuf::from(str_param(p, "path").context("state needs a file")?);
         let op = str_param(p, "op").unwrap_or("save").to_string();
         let acx = cx.to_async();
@@ -1871,7 +1861,7 @@ impl AbroMux {
                     .and_then(|s| serde_json::from_str(&s).ok());
                 match op.as_str() {
                     "save" => {
-                        let cookies = native(crate::browser_native::cookies(wk), SCRIPT_TIMEOUT).await?;
+                        let cookies = native(web.cookies(), SCRIPT_TIMEOUT).await?;
                         let origins: Vec<Value> = page
                             .into_iter()
                             .filter(|o| o["origin"].as_str().is_some_and(|o| o != "null"))
@@ -1894,7 +1884,7 @@ impl AbroMux {
                         let set = if cookies.is_empty() {
                             json!(0)
                         } else {
-                            native(crate::browser_native::set_cookies(wk, &json!(cookies).to_string()), SCRIPT_TIMEOUT).await?
+                            native(web.set_cookies(&json!(cookies).to_string()), SCRIPT_TIMEOUT).await?
                         };
                         let here = page.as_ref().and_then(|p| p["origin"].as_str()).unwrap_or("").to_string();
                         let (mut applied, mut skipped) = (vec![], vec![]);
@@ -2075,8 +2065,8 @@ impl AbroMux {
                             }
                             s => bail!("download {} {}", x.id, s.name()),
                         }
-                    } else if want.is_some() {
-                        bail!("no download {}", want.unwrap());
+                    } else if let Some(want) = want {
+                        bail!("no download {want}");
                     }
                     if Instant::now() >= deadline {
                         bail!("timed out after {ms} ms");

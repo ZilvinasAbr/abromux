@@ -1,27 +1,15 @@
 mod about;
-mod activity;
-mod agent;
 mod alert;
-mod banner;
 mod bench;
 mod browser;
-mod browser_auto;
-mod browser_find;
-mod browser_history;
-mod browser_native;
 mod channel;
 mod cli;
-mod cmux;
 mod config;
-mod cursor;
 mod debug;
-mod downloads;
 mod editor;
 mod find_bar;
 mod folder;
-mod ghostty;
 mod gitlab;
-mod hold;
 mod icon;
 mod ipc;
 mod keymap;
@@ -30,15 +18,10 @@ mod link;
 mod links;
 mod markdown;
 mod menu;
-mod menubar;
 mod naming;
 mod notification;
-mod notify_hook;
-mod osc99;
 mod palette;
-mod paths;
 mod plugins;
-mod pty;
 mod quit;
 mod server;
 mod session;
@@ -56,9 +39,13 @@ mod terminal_browser_panes;
 mod theme;
 mod titlebar;
 mod update;
-mod webauthn;
 mod workspace;
 
+use abromux_browser::{
+    auto as browser_auto, downloads, find as browser_find, history as browser_history,
+};
+use abromux_core::{agent, cmux, notify_hook, osc99, paths};
+use abromux_term::{ghostty, hold, pty};
 use browser::{BrowserEvent, BrowserView};
 use futures::StreamExt;
 use gpui::{prelude::*, *};
@@ -179,11 +166,14 @@ const DEFAULT_URL: &str = "";
 /// How long a lone ⌘ or ⌃ must be held before shortcut hints show (cmux's value).
 const HINT_DELAY: Duration = Duration::from_millis(300);
 /// Sidebar width: default and the range its edge can be dragged within.
-const SIDEBAR_WIDTH: f32 = 232.;
+const SIDEBAR_WIDTH: f32 = abromux_core::session::SIDEBAR_WIDTH;
 const SIDEBAR_MIN: f32 = 180.;
 const SIDEBAR_MAX: f32 = 480.;
 /// Height of the titlebar row the traffic lights sit in.
 const TITLEBAR_H: f32 = 38.;
+/// The prefs key of "Don't ask again" when closing a tab or workspace
+/// running Claude Code.
+const SKIP_CLOSE_CLAUDE_KEY: &str = "AbroMuxSkipCloseClaudeWarning";
 const TABBAR_H: f32 = 30.;
 /// How wide the area is that grabs a pane divider (drawn 1px wide).
 const DIVIDER_GRAB: f32 = 9.;
@@ -433,7 +423,7 @@ impl AbroMux {
         .detach();
         cx.observe(&update::entity(cx), |_, _, cx| cx.notify())
             .detach();
-        let mut menubar_picks = menubar::init();
+        let mut menubar_picks = abromux_platform::tray::init();
         cx.spawn_in(window, async move |this, cx| {
             while let Some(pick) = menubar_picks.next().await {
                 if this
@@ -448,7 +438,7 @@ impl AbroMux {
         // The merge requests panel follows the cache.
         cx.observe(&gitlab::store(cx), |_, _, cx| cx.notify())
             .detach();
-        let mut banner_clicks = banner::init();
+        let mut banner_clicks = abromux_platform::notify::init();
         cx.spawn_in(window, async move |this, cx| {
             while let Some(id) = banner_clicks.next().await {
                 if this
@@ -1213,12 +1203,10 @@ impl AbroMux {
         } else if idx < pane.active {
             pane.active -= 1;
         }
-        if pane.tabs.is_empty() {
-            if !ws.remove_pane(pane_id) {
-                // Last pane in the workspace: closing it closes the workspace.
-                self.close_workspace(wi, window, cx);
-                return;
-            }
+        // Last pane in the workspace: closing it closes the workspace.
+        if pane.tabs.is_empty() && !ws.remove_pane(pane_id) {
+            self.close_workspace(wi, window, cx);
+            return;
         }
         self.focus_active(window, cx);
         cx.notify();
@@ -1279,12 +1267,13 @@ impl AbroMux {
         }
         let rx = alert::confirm(
             window,
+            cx,
             alert::Confirm {
                 message: "Close tab?",
                 info: "Claude Code is running in this tab. Closing it will end the session.",
                 button: "Close",
                 suppress: "Don't ask again",
-                skip_key: "AbroMuxSkipCloseClaudeWarning",
+                skip_key: SKIP_CLOSE_CLAUDE_KEY,
             },
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -1316,12 +1305,13 @@ impl AbroMux {
         let ws_id = ws.id;
         let rx = alert::confirm(
             window,
+            cx,
             alert::Confirm {
                 message: "Close workspace?",
                 info: "Claude Code is running in this workspace. Closing it will close all of its panels and end the session.",
                 button: "Close",
                 suppress: "Don't ask again",
-                skip_key: "AbroMuxSkipCloseClaudeWarning",
+                skip_key: SKIP_CLOSE_CLAUDE_KEY,
             },
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -2241,6 +2231,7 @@ impl AbroMux {
             || self.palette.is_some()
             || update::popover_open(cx)
             || browser::menus_open()
+            || alert::is_open(cx)
             // Also while dragging a tab, so drop targets show over pages and
             // get the mouse.
             || cx.has_active_drag();
@@ -3300,13 +3291,7 @@ fn surface_has_claude(s: &Surface, cx: &App) -> bool {
     matches!(s, Surface::Terminal(t) if t.read(cx).has_claude())
 }
 
-pub(crate) fn one_line(s: &str) -> String {
-    s.split(['\n', '\r'])
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
+pub(crate) use abromux_core::text::one_line;
 
 /// Focus a new rename field with its text selected, so typing replaces the
 /// old name. The selection waits for the field's focus event: that comes
@@ -3362,6 +3347,9 @@ fn hint_pill(text: String) -> Div {
 }
 
 fn main() {
+    // Before anything can reach the holder or read a terminal.
+    hold::set_dir(channel::support_dir());
+    pty::on_output(abromux_platform::power::output);
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "bench-vt") {
         std::process::exit(bench::vt(&args[1..]));
@@ -3369,7 +3357,7 @@ fn main() {
     if args.first().is_some_and(|a| a == "bench-kitty") {
         std::process::exit(bench::kitty(&args[1..]));
     }
-    // The background process that keeps shells running (`"persistence": "abromux"`, hold.rs).
+    // The background process that keeps shells running (`"persistence": "abromux"`, abromux_term::hold).
     if args.first().is_some_and(|a| a == "hold") {
         if let Err(e) = hold::serve(&hold::socket_path()) {
             eprintln!("abromux hold: {e}");
@@ -3396,6 +3384,7 @@ fn run_app(cwd: Option<String>) {
     });
     app.run(move |cx: &mut App| {
         icon::set_dock_icon();
+        abromux_platform::prefs::import_once(&alert::SKIP_KEYS);
         gpui_component::init(cx);
         // A broken config file starts with the defaults, and says so once the window is up.
         let (settings, settings_error) = match settings::load() {
@@ -3482,7 +3471,7 @@ fn run_app(cwd: Option<String>) {
         let bounds = session
             .as_ref()
             .and_then(|s| s.window)
-            .map(|w| w.bounds())
+            .map(|w| session::window_bounds(&w))
             .unwrap_or_else(|| Bounds::centered(None, size(px(1280.), px(820.)), cx));
         let host = Rc::new(RefCell::new(None::<WeakEntity<AbroMux>>));
         let set_host = host.clone();
@@ -3511,7 +3500,8 @@ fn run_app(cwd: Option<String>) {
                     let view = cx.new(|cx| AbroMux::new(cwd, session, window, cx));
                     plugins::set_host(view.downgrade(), cx);
                     *set_host.borrow_mut() = Some(view.downgrade());
-                    cx.new(|cx| Root::new(view, window, cx))
+                    let layer = cx.new(|cx| alert::Layer::new(view, window, cx));
+                    cx.new(|cx| Root::new(layer, window, cx))
                 },
             )
             .expect("open window");

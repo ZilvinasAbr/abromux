@@ -59,7 +59,7 @@ A named nightly (bundle id `dev.abromux.nightly.<name>`, support folder `abromux
 
 A nightly others can download: commit, then `scripts/bundle-app.sh --nightly --dist` builds a notarized `dist/AbroMux-Nightly-<version>.dmg`, published as a GitHub pre-release tagged `nightly-<commit>`. Pre-releases are never GitHub's "latest" release, so the release app's update check doesn't offer them.
 
-AbroMux Nightly runs next to AbroMux. It has a neon icon (`assets/app/abromux-nightly.svg`), its own name, the bundle id `dev.abromux.nightly` (so separate notification permissions and settings), and its own socket and session in `~/Library/Application Support/abromux-nightly/`. It's signed like the release but never notarized: `scripts/bundle-app.sh --nightly` is what `nightly.sh` calls, and it refuses `--dist`. The binary decides which one it is at runtime from the bundle it sits in (`src/channel.rs`); `cargo run` counts as the release. Install agent hooks from the release `abromux`, not `abromux-nightly`: hooks point at the binary you install them from, and do nothing once that app is gone.
+AbroMux Nightly runs next to AbroMux. It has a neon icon (`assets/app/abromux-nightly.svg`), its own name, the bundle id `dev.abromux.nightly` (so separate notification permissions and settings), and its own socket and session in `~/Library/Application Support/abromux-nightly/`. It's signed like the release but never notarized: `scripts/bundle-app.sh --nightly` is what `nightly.sh` calls, and it refuses `--dist`. The binary decides which one it is at runtime from the bundle it sits in (`crates/abromux-platform/src/channel.rs`); `cargo run` counts as the release. Install agent hooks from the release `abromux`, not `abromux-nightly`: hooks point at the binary you install them from, and do nothing once that app is gone.
 
 ## Updates
 
@@ -112,7 +112,7 @@ Comments go to a coding agent instead of GitLab. A new thread (or a submitted re
 
 ## Passkeys
 
-Browser panes sign in with passkeys (iCloud Keychain, a phone over Bluetooth) and security keys, the way cmux does. WKWebView only allows WebAuthn for an app's own associated domains, so `src/webauthn.js` replaces `navigator.credentials.create/get` for public-key requests in the top frame and hands them to `src/webauthn.m`, which runs them through AuthenticationServices' web-browser APIs with the page's origin and challenge, and passes the credential back. Conditional (autofill) requests stay pending, since there's no autofill UI; sites show their "Sign in with a passkey" button instead. Frames and U2F `appid` requests are left to WebKit.
+Browser panes sign in with passkeys (iCloud Keychain, a phone over Bluetooth) and security keys, the way cmux does. WKWebView only allows WebAuthn for an app's own associated domains, so `src/webauthn.js` replaces `navigator.credentials.create/get` for public-key requests in the top frame and hands them to `crates/abromux-platform/src/macos/webauthn.m`, which runs them through AuthenticationServices' web-browser APIs with the page's origin and challenge, and passes the credential back. Conditional (autofill) requests stay pending, since there's no autofill UI; sites show their "Sign in with a passkey" button instead. Frames and U2F `appid` requests are left to WebKit.
 
 The web-browser APIs need the restricted `com.apple.developer.web-browser.public-key-credential` entitlement, which Apple grants per App ID and only a provisioning profile can carry. Without it the bridge stays out of the way and WebKit handles WebAuthn as before (for most sites, not at all). To turn it on:
 
@@ -620,19 +620,22 @@ History lives in `<git common dir>/abromux-perf/history.jsonl`, outside the tree
 
 ## Layout
 
-- `src/ghostty/`: FFI bindings and a safe wrapper (`Terminal`, `Frame` snapshots, key encoding, selection)
+- `crates/abromux-core`: logic with no UI and no OS calls (paths, the OSC 99 scanner, the control-socket protocol, the settings model as it moves there)
+- `crates/abromux-term`: `ghostty/`, the libghostty-vt bindings and a safe wrapper (`Terminal`, `Frame` snapshots, key encoding, selection); `pty.rs` and `hold.rs`, the PTYs and the holder that keeps shells running
+- `crates/abromux-platform`: every OS service the app uses (notifications, the menu-bar bell, App Nap, appearance, the dock, window drags, prefs, the channel and its folders), with the Objective-C parts in `src/macos/`
+- `crates/abromux-browser`: the browser page behind `PageBackend` (`backend/wkwebview.rs` on macOS), plus automation, find, history and downloads
 - `src/terminal.rs`: PTY plumbing plus a custom GPUI `Element` that paints the grid
-- `src/browser.rs`: the webview pane; `src/webauthn.{rs,js,m}`: the passkey bridge
+- `src/browser.rs`: the browser pane (address bar, toolbar, find bar); `src/webauthn.js` and `crates/abromux-platform/src/macos/webauthn.m`: the passkey bridge
 - `src/terminal_browser.rs`: browser tabs that run terminal-browser (`browser.engine`)
 - `src/editor.rs`: files opened from Finder or `abromux edit`, in a terminal editor (`editor.program`); `abromux default-app`
 - `src/workspace.rs`: the workspace, split-tree and surface model
 - `src/main.rs`: the app shell (pane tab bars, splits, actions); `src/sidebar.rs`: the sidebar's rows, groups, menus and drag to reorder
 - `src/bench.rs`: `abromux bench-vt` and `abromux bench-kitty`, the headless parse benchmarks used by `scripts/perf.py`
-- `src/server.rs`: the control socket's method handlers; `src/cli.rs`: the `abromux` commands; `src/ipc.rs`: the shared wire format
+- `src/server.rs`: the control socket's method handlers; `src/cli.rs`: the `abromux` commands; `src/ipc.rs` and `crates/abromux-core/src/ipc.rs`: the shared wire format
 - `src/plugins.rs`: the plugins built in; `crates/abromux-plugin`: the interface a plugin's tab implements; `crates/abromux-gitlab`: the GitLab review tab
 - `dev/gitlab/`: a GitLab in Docker with review fixtures, and scripts to drive and screenshot the plugin (see its README)
 
 ## Known POC limits
 
 - Native webviews always draw above GPUI content. Hidden tabs and workspaces are hidden explicitly, and the app's popovers swap a page they cover for a still bitmap of it (see "Popovers over pages"); a popover the app doesn't know about (a new one) would still draw under the page.
-- While a page has keyboard focus, keys with ⌘ or ⌃ go to the app first (`abx_page_shortcuts_install` in `src/browser_native.m`): a shortcut the app handles doesn't reach the page, so a site can't use ⌘T, ⌘W, ⌘L and the like for itself. Other ⌘ keys (⌘C, ⌘A, ⌘B in an editor) reach the page as usual.
+- While a page has keyboard focus, keys with ⌘ or ⌃ go to the app first (`abx_page_shortcuts_install` in `crates/abromux-platform/src/macos/browser_native.m`): a shortcut the app handles doesn't reach the page, so a site can't use ⌘T, ⌘W, ⌘L and the like for itself. Other ⌘ keys (⌘C, ⌘A, ⌘B in an editor) reach the page as usual.

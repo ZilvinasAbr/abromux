@@ -88,7 +88,8 @@ pub fn show(cx: &mut App) {
         |window, cx| {
             crate::theme::follow(window);
             let view = cx.new(|cx| SettingsView::new(window, cx));
-            cx.new(|cx| Root::new(view, window, cx))
+            let layer = cx.new(|cx| crate::alert::Layer::new(view, window, cx));
+            cx.new(|cx| Root::new(layer, window, cx))
         },
     );
     if let Ok(handle) = handle {

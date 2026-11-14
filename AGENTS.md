@@ -15,6 +15,10 @@ To check a change in the real app, build it with `scripts/nightly.sh` (AbroMux N
 
 In code, use `channel::app_name()` for the user-visible app name and `channel::support_dir()` for files under Application Support, never a hardcoded "AbroMux" or `abromux/` path, so the two apps stay apart.
 
+## OS calls
+
+Only `crates/abromux-platform` and the browser backends (`crates/abromux-browser/src/backend`) call the OS directly (`objc`, `msg_send!`, `cfg(target_os)`); the rest of the app goes through `abromux_platform`, so it can run on Linux later (`docs/linux-plan.md`). `scripts/check-os-calls.sh` checks it.
+
 ## Performance
 
 Run `scripts/perf.py run` after changes that could affect speed or memory. It records each run with its commit and compares it with earlier runs. `scripts/perf.py run --headless` is the quick check that needs no window.

@@ -9,12 +9,21 @@
 //! Output from either goes into a `Feed`, which the view drains on the main
 //! thread.
 
-use crate::settings::Persistence;
+pub use abromux_core::settings::Persistence;
 use futures::channel::mpsc;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// Called on each read of a terminal's output (see [`on_output`]).
+static ON_OUTPUT: OnceLock<fn()> = OnceLock::new();
+
+/// Call `f` whenever a terminal produces output, from any thread: the app
+/// keeps the OS from napping it meanwhile. Once is enough.
+pub fn on_output(f: fn()) {
+    let _ = ON_OUTPUT.set(f);
+}
 
 /// Output waiting for the main thread, and whether the program is gone.
 #[derive(Default)]
@@ -45,7 +54,9 @@ impl Feed {
 
     /// False once the view is gone.
     fn push(&mut self, bytes: &[u8]) -> bool {
-        crate::activity::output();
+        if let Some(on_output) = ON_OUTPUT.get() {
+            on_output();
+        }
         self.queue.lock().unwrap().bytes.extend_from_slice(bytes);
         !matches!(self.wake.try_send(()), Err(e) if e.is_disconnected())
     }

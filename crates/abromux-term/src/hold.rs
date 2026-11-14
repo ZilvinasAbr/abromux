@@ -46,11 +46,25 @@ const BACKLOG_MAX: usize = 16 << 20;
 /// With no terminals and no connections for this long, the holder exits.
 const IDLE_EXIT: Duration = Duration::from_secs(10);
 
+/// The folder `hold.sock` is in unless `$ABROMUX_HOLD_SOCKET` says
+/// otherwise: the app's support folder, set by [`set_dir`].
+static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Keep the holder's socket in `dir` (the app's support folder). Call it
+/// once, before anything here; later calls are ignored.
+pub fn set_dir(dir: PathBuf) {
+    let _ = DIR.set(dir);
+}
+
 pub fn socket_path() -> PathBuf {
     std::env::var_os("ABROMUX_HOLD_SOCKET")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| crate::channel::support_dir().join("hold.sock"))
+        .unwrap_or_else(|| {
+            DIR.get()
+                .expect("hold::set_dir before using the holder")
+                .join("hold.sock")
+        })
 }
 
 /// Where a terminal's state waits for the next launch.

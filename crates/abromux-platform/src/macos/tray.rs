@@ -1,13 +1,13 @@
-#![allow(unexpected_cfgs)]
 //! The menu-bar extra, as in cmux: a bell in the macOS menu bar with the
 //! unread count, and a menu of the newest unread notifications plus Show
 //! Notifications, Jump to Latest Unread, Mark All Read and Clear All.
 //! `notifications.showInMenuBar: false` in config.json hides it.
 //!
 //! AppKit calls back on the main thread; picks go through a channel to the
-//! app (notification.rs), like banner clicks.
+//! app (notification.rs), like banner clicks. The app shortens the
+//! entries' text; the item titles here use [`crate::channel::app_name`].
 
-use crate::banner::nsstring;
+use super::notify::nsstring;
 use futures::channel::mpsc;
 use objc::{
     class,
@@ -73,6 +73,7 @@ thread_local! {
 /// One unread notification in the menu.
 pub struct Entry {
     pub id: usize,
+    /// Its menu item's title: one short line.
     pub text: String,
 }
 
@@ -164,7 +165,7 @@ unsafe fn menu(unread: usize, recent: &[Entry]) -> *mut Object {
         };
         add(menu, &hint, None);
         for e in recent {
-            add(menu, &short(&e.text), Some(Pick::Open(e.id)));
+            add(menu, &e.text, Some(Pick::Open(e.id)));
         }
         separator(menu);
         add(
@@ -225,15 +226,6 @@ unsafe fn separator(menu: *mut Object) {
     }
 }
 
-/// One line of at most 60 characters.
-fn short(text: &str) -> String {
-    let line = crate::one_line(text);
-    match line.char_indices().nth(59) {
-        Some((i, _)) => format!("{}…", &line[..i]),
-        None => line,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,13 +242,5 @@ mod tests {
             assert_eq!(pick_of(tag_of(p)), Some(p));
         }
         assert_eq!(pick_of(0), None);
-    }
-
-    #[test]
-    fn long_lines_are_cut() {
-        assert_eq!(short("a\nb"), "a b");
-        let long = "x".repeat(80);
-        assert_eq!(short(&long).chars().count(), 60);
-        assert!(short(&long).ends_with('…'));
     }
 }

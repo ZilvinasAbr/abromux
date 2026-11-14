@@ -51,12 +51,12 @@ pub fn paint(
         0x2504..=0x250b => {
             let i = code - 0x2504;
             let n = if i < 4 { 3 } else { 4 };
-            cv.dashes(i % 4 < 2, n, if i % 2 == 0 { t } else { 2. * t });
+            cv.dashes(i % 4 < 2, n, if i.is_multiple_of(2) { t } else { 2. * t });
         }
         // ╌ ╍ ╎ ╏
         0x254c..=0x254f => {
             let i = code - 0x254c;
-            cv.dashes(i < 2, 2, if i % 2 == 0 { t } else { 2. * t });
+            cv.dashes(i < 2, 2, if i.is_multiple_of(2) { t } else { 2. * t });
         }
         // ╭ ╮ ╯ ╰
         0x256d => cv.rounded(cv.x1, cv.y1),

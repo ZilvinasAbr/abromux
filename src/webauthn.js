@@ -1,4 +1,4 @@
-// Passkeys and security keys for browser panes (see webauthn.m).
+// Passkeys and security keys for browser panes (see crates/abromux-platform/src/macos/webauthn.m).
 //
 // WKWebView refuses WebAuthn for sites outside the app's associated domains,
 // so this replaces navigator.credentials.create/get for public-key requests:

@@ -1,4 +1,3 @@
-#![allow(unexpected_cfgs)]
 //! macOS notification banners (UserNotifications) and the dock badge.
 //! Banners need a bundle identifier, so they only show from AbroMux.app; a
 //! bare `cargo run` binary just gets the in-app notifications and badge.
@@ -26,7 +25,7 @@ static CLICKS: Mutex<Option<mpsc::UnboundedSender<usize>>> = Mutex::new(None);
 
 const ID_PREFIX: &str = "abromux-";
 
-pub(crate) fn nsstring(s: &str) -> *mut Object {
+pub(super) fn nsstring(s: &str) -> *mut Object {
     let c = CString::new(s.replace('\0', "")).unwrap_or_default();
     unsafe { msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()] }
 }
@@ -57,15 +56,9 @@ fn error_text(err: *mut Object) -> Option<String> {
     })
 }
 
-fn bundled() -> bool {
-    let bundle: *mut Object = unsafe { msg_send![class!(NSBundle), mainBundle] };
-    let id: *mut Object = unsafe { msg_send![bundle, bundleIdentifier] };
-    !id.is_null()
-}
-
 fn center() -> Option<*mut Object> {
     // currentNotificationCenter throws outside a bundle.
-    bundled()
+    super::defaults::bundled()
         .then(|| unsafe { msg_send![class!(UNUserNotificationCenter), currentNotificationCenter] })
 }
 

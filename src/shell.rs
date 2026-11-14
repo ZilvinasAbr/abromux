@@ -112,7 +112,7 @@ mod tests {
                 }
             }
         });
-        let mut term = Terminal::new(80, 12).unwrap();
+        let mut term = Terminal::new(80, 12, crate::theme::is_dark()).unwrap();
         let pump = |term: &mut Terminal, ms| {
             let end = Instant::now() + Duration::from_millis(ms);
             while let Ok(b) = rx.recv_timeout(end.saturating_duration_since(Instant::now())) {

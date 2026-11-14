@@ -258,7 +258,7 @@ pub fn run(argv: Vec<String>) -> i32 {
         && argv[0] == "hooks"
         && let Some(kind) = argv[1].strip_suffix("-event").and_then(agent::Kind::parse)
     {
-        return agent::hook_event(kind);
+        return agent::hook_event(kind, crate::ipc::socket_path);
     }
     let Args { mut pos, mut opts } = match parse(&argv) {
         Ok(a) => a,
@@ -1448,10 +1448,8 @@ fn config(pos: &[String]) -> Result<(), String> {
         Some("path") => println!("{}", settings::path().display()),
         Some("open") => {
             let path = settings::ensure_file();
-            let status = std::process::Command::new("open")
-                .arg(&path)
-                .status()
-                .map_err(|e| format!("open: {e}"))?;
+            let status =
+                abromux_platform::opener::open_and_wait(&path).map_err(|e| format!("open: {e}"))?;
             if !status.success() {
                 return Err(format!("open {} failed ({status})", path.display()));
             }

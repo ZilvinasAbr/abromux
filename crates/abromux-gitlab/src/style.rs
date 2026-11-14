@@ -621,7 +621,9 @@ pub fn checkbox(on: bool) -> Div {
 
 #[cfg(test)]
 mod tests {
-    use super::{ADD_BG, BG, CARD, CODE_BG, DEL_BG, HUNK_BG, LINE_NUM, RAISED, TEXT, light, light_alpha};
+    use super::{
+        ADD_BG, BG, CARD, CODE_BG, DEL_BG, HUNK_BG, LINE_NUM, RAISED, TEXT, light, light_alpha,
+    };
 
     #[test]
     fn light_theme_maps_dark_colors_and_keeps_the_rest() {

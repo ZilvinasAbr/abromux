@@ -9,38 +9,10 @@ use crate::{
     theme::*,
     workspace::{LogEntry, LogLevel, Progress, Status, Workspace},
 };
+use abromux_core::status::KEEP_LOG;
+pub use abromux_core::status::{ERROR, ICONS, RUNNING, SUCCESS, WARNING};
 use gpui::{prelude::*, *};
 use std::time::SystemTime;
-
-/// Oldest log entries are dropped past this.
-const KEEP_LOG: usize = 200;
-
-/// Icons a status may name: the ones bundled with the app.
-pub const ICONS: &[&str] = &[
-    "terminal",
-    "globe",
-    "plus",
-    "x",
-    "split-right",
-    "split-down",
-    "chevron-left",
-    "chevron-right",
-    "chevron-down",
-    "chevron-up",
-    "rotate-cw",
-    "panel-left",
-    "bell",
-    "git-branch",
-    "folder",
-    "search",
-    "circle-x",
-    "pencil",
-];
-
-pub const RUNNING: u32 = 0x6a9fd8;
-pub const SUCCESS: u32 = 0x7fb069;
-pub const WARNING: u32 = 0xe0a84f;
-pub const ERROR: u32 = 0xe5534b;
 
 pub fn level_color(level: LogLevel) -> u32 {
     match level {
@@ -309,21 +281,4 @@ impl AbroMux {
     }
 }
 
-/// JSON for `list-status` and the workspace description.
-pub fn status_json(s: &Status) -> serde_json::Value {
-    serde_json::json!({
-        "key": s.key,
-        "value": s.value,
-        "icon": s.icon,
-        "color": s.color.map(|c| format!("#{c:06x}")),
-    })
-}
-
-pub fn log_json(l: &LogEntry, now: SystemTime) -> serde_json::Value {
-    serde_json::json!({
-        "level": l.level.as_str(),
-        "source": l.source,
-        "message": l.message,
-        "age_seconds": now.duration_since(l.at).unwrap_or_default().as_secs(),
-    })
-}
+pub use abromux_core::status::{log_json, status_json};
