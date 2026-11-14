@@ -2057,8 +2057,8 @@ impl AbroMux {
                             }
                             s => bail!("download {} {}", x.id, s.name()),
                         }
-                    } else if want.is_some() {
-                        bail!("no download {}", want.unwrap());
+                    } else if let Some(want) = want {
+                        bail!("no download {want}");
                     }
                     if Instant::now() >= deadline {
                         bail!("timed out after {ms} ms");

@@ -1914,8 +1914,10 @@ impl Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, ()) {
-        let mut style = Style::default();
-        style.size = Size::full();
+        let style = Style {
+            size: Size::full(),
+            ..Default::default()
+        };
         (window.request_layout(style, [], cx), ())
     }
 
@@ -2601,10 +2603,10 @@ fn process_cwd(pid: u32) -> Option<String> {
 }
 
 fn mods(m: Modifiers) -> ffi::GhosttyMods {
-    (m.shift as u16) * ffi::GHOSTTY_MODS_SHIFT as u16
-        | (m.control as u16) * ffi::GHOSTTY_MODS_CTRL as u16
-        | (m.alt as u16) * ffi::GHOSTTY_MODS_ALT as u16
-        | (m.platform as u16) * ffi::GHOSTTY_MODS_SUPER as u16
+    ((m.shift as u16) * ffi::GHOSTTY_MODS_SHIFT as u16)
+        | ((m.control as u16) * ffi::GHOSTTY_MODS_CTRL as u16)
+        | ((m.alt as u16) * ffi::GHOSTTY_MODS_ALT as u16)
+        | ((m.platform as u16) * ffi::GHOSTTY_MODS_SUPER as u16)
 }
 
 fn button_code(b: MouseButton) -> Option<u8> {

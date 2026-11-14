@@ -1205,12 +1205,10 @@ impl AbroMux {
         } else if idx < pane.active {
             pane.active -= 1;
         }
-        if pane.tabs.is_empty() {
-            if !ws.remove_pane(pane_id) {
-                // Last pane in the workspace: closing it closes the workspace.
-                self.close_workspace(wi, window, cx);
-                return;
-            }
+        // Last pane in the workspace: closing it closes the workspace.
+        if pane.tabs.is_empty() && !ws.remove_pane(pane_id) {
+            self.close_workspace(wi, window, cx);
+            return;
         }
         self.focus_active(window, cx);
         cx.notify();

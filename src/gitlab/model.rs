@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn stale_flags() {
-        let mut m = mr("g/p", 1);
+        let m = mr("g/p", 1);
         assert!(m.review_stale());
         assert!(m.wants_review());
         let mut m = with_diff(m, 1);

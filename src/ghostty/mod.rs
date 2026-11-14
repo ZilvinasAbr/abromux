@@ -1738,9 +1738,24 @@ fn to_bgra(data: &[u8], w: u32, h: u32, bpp: usize, src: [u32; 4]) -> Option<Ima
         let start = (y * w as usize + x0) * bpp;
         let row = &data[start..start + (x1 - x0) * bpp];
         match bpp {
-            4 => bgra.extend(row.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]])),
-            3 => bgra.extend(row.chunks_exact(3).flat_map(|p| [p[2], p[1], p[0], 255])),
-            2 => bgra.extend(row.chunks_exact(2).flat_map(|p| [p[0], p[0], p[0], p[1]])),
+            4 => bgra.extend(
+                row.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .flat_map(|p| [p[2], p[1], p[0], p[3]]),
+            ),
+            3 => bgra.extend(
+                row.as_chunks::<3>()
+                    .0
+                    .iter()
+                    .flat_map(|p| [p[2], p[1], p[0], 255]),
+            ),
+            2 => bgra.extend(
+                row.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .flat_map(|p| [p[0], p[0], p[0], p[1]]),
+            ),
             _ => bgra.extend(row.iter().flat_map(|&g| [g, g, g, 255])),
         }
     }
@@ -1911,7 +1926,7 @@ mod tests {
         assert_eq!(t.mouse_shape(), GHOSTTY_MOUSE_SHAPE_DEFAULT);
 
         let sup = GHOSTTY_MODS_SUPER as u16;
-        let mut cmd = |t: &mut Terminal, action, mods| {
+        let cmd = |t: &mut Terminal, action, mods| {
             String::from_utf8(t.encode_key_action(action, GHOSTTY_KEY_META_LEFT, mods, None, 0))
                 .unwrap()
         };
@@ -1929,7 +1944,7 @@ mod tests {
         );
 
         // ⌘L, a held key's repeat and its release, as terminal-browser gets them.
-        let mut key = |t: &mut Terminal, action, k, mods, cp: char| {
+        let key = |t: &mut Terminal, action, k, mods, cp: char| {
             String::from_utf8(t.encode_key_action(action, k, mods, None, cp as u32)).unwrap()
         };
         assert_eq!(
@@ -1949,7 +1964,7 @@ mod tests {
     #[test]
     fn answers_size_queries() {
         let mut t = Terminal::new(20, 3).unwrap();
-        let mut ask = |t: &mut Terminal, q: &[u8]| {
+        let ask = |t: &mut Terminal, q: &[u8]| {
             t.write(q);
             String::from_utf8_lossy(&t.take_effects().pty_response).into_owned()
         };
