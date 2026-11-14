@@ -1420,9 +1420,10 @@ impl AbroMux {
     /// Right-click › Clean Up and Delete Folder…: a tab in workspace `wi`'s
     /// folder running the cleanup agent (`automation.workspaceCleanupAgent`,
     /// default `claude`) on `.abromux/cleanup.md`. The agent finds what the
-    /// workspace made, asks, removes it, and ends with `abromux folder
-    /// remove`. It runs in a shell, so the shell stays if it stops early.
-    /// The workspace moves to the "Cleanup" group, last in the sidebar.
+    /// workspace made, removes it (asking only if work would be lost), and
+    /// ends with `abromux folder remove`. It runs in a shell, so the shell
+    /// stays if it stops early. The workspace moves to the "Cleanup" group,
+    /// last in the sidebar.
     pub(crate) fn clean_up_folder(
         &mut self,
         wi: usize,
