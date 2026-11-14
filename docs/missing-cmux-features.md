@@ -132,7 +132,7 @@ What's missing beyond the browser commands above:
 - [x] **Customizable keyboard shortcuts**, including two-step chords and `when` conditions. *(`"shortcuts"` in config.json, listed by `abromux config shortcuts`; `when` takes a key context)*
 - [x] **Custom commands and actions**: project-specific commands and workspace layouts that you launch from the palette or the plus-button menu. Also packs and setting presets. *(partial: `"commands"` run text in a terminal, open a URL or build a workspace layout in cmux's format, from the palette or their own shortcut, globally or per project with a trust prompt; no packs or presets. Tab-bar buttons are descoped, below)*
 - [x] **Command palette**: ⌘⇧P for commands, ⌘P to switch workspaces. *(partial: the switcher lists workspaces, not surfaces; no custom commands or rename/description modes)*
-- [ ] **App preferences**: light/dark/system appearance, accent color, app icon, window-title template, menu-bar-only mode, minimal mode.
+- [ ] **App preferences**: light/dark/system appearance, accent color, app icon, window-title template, menu-bar-only mode, minimal mode. *(partial: light/dark/system appearance, `app.appearance`; not the rest)*
 - [ ] **Themes**: `themes list/set/clear`.
 
 ## 8. Remote, persistence and process lifetime

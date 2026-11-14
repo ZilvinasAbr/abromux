@@ -64,7 +64,7 @@ impl Render for About {
         let dirty = env!("ABROMUX_VERSION").ends_with("-dirty");
         let commit_value = div()
             .id("commit")
-            .text_color(rgb(ACCENT_BRIGHT))
+            .text_color(rgb(pal().accent_bright))
             .cursor_pointer()
             .hover(|s| s.underline())
             .child(if dirty {
@@ -82,9 +82,9 @@ impl Render for About {
             .flex_col()
             .items_center()
             .pt(px(48.))
-            .bg(rgba(SIDEBAR_BG))
+            .bg(rgba(pal().sidebar_bg))
             .font_family(".AppleSystemUIFont")
-            .text_color(rgb(TEXT))
+            .text_color(rgb(pal().text))
             .child(
                 img(Arc::new(Image::from_bytes(
                     ImageFormat::Png,
@@ -105,7 +105,7 @@ impl Render for About {
                     .px(px(24.))
                     .text_size(px(13.))
                     .text_center()
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(pal().muted))
                     .child(DESCRIPTION),
             )
             .child(
@@ -130,7 +130,7 @@ impl Render for About {
                             .flex_col()
                             .gap(px(4.))
                             .font_family(crate::terminal::FONT_FAMILY)
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(pal().muted))
                             .child(version.to_string())
                             .when(!build.is_empty(), |d| d.child(build))
                             .when(!commit.is_empty(), |d| d.child(commit_value)),
@@ -154,10 +154,10 @@ fn button(label: &'static str, url: String) -> Stateful<Div> {
         .px(px(14.))
         .py(px(5.))
         .rounded(px(6.))
-        .bg(rgba(HOVER))
+        .bg(rgba(pal().hover))
         .text_size(px(13.))
         .cursor_pointer()
-        .hover(|s| s.bg(rgba(0xffffff1c)))
+        .hover(|s| s.bg(tint(0x1c)))
         .active(|s| s.opacity(0.7))
         .child(label)
         .on_click(move |_, _, cx| cx.open_url(&url))

@@ -467,8 +467,8 @@ impl AbroMux {
                     .items_center()
                     .gap(px(10.))
                     .cursor_pointer()
-                    .when(selected, |d| d.bg(rgba(0xffffff1a)))
-                    .when(!selected, |d| d.hover(|s| s.bg(rgba(HOVER))))
+                    .when(selected, |d| d.bg(tint(0x1a)))
+                    .when(!selected, |d| d.hover(|s| s.bg(rgba(pal().hover))))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if let Some(p) = &mut this.palette {
                             p.selected = row;
@@ -493,7 +493,7 @@ impl AbroMux {
                                     .min_w_0()
                                     .truncate()
                                     .text_size(px(11.5))
-                                    .text_color(rgb(MUTED))
+                                    .text_color(rgb(pal().muted))
                                     .child(s)
                             })),
                     )
@@ -501,7 +501,7 @@ impl AbroMux {
                         div()
                             .flex_none()
                             .text_size(px(11.5))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(pal().muted))
                             .child(k)
                     }))
                     .into_any_element()
@@ -581,9 +581,9 @@ impl AbroMux {
                                 .flex()
                                 .flex_col()
                                 .rounded(px(10.))
-                                .bg(rgb(TABBAR_BG))
+                                .bg(rgb(pal().tabbar_bg))
                                 .border_1()
-                                .border_color(rgb(BORDER))
+                                .border_color(rgb(pal().border))
                                 .shadow_lg()
                                 .overflow_hidden()
                                 .occlude()
@@ -598,7 +598,7 @@ impl AbroMux {
                                         .flex()
                                         .items_center()
                                         .border_b_1()
-                                        .border_color(rgb(BORDER))
+                                        .border_color(rgb(pal().border))
                                         .child(
                                             Input::new(&p.input)
                                                 .appearance(false)
@@ -621,7 +621,7 @@ impl AbroMux {
                                                     .px(px(16.))
                                                     .py(px(8.))
                                                     .text_size(px(12.5))
-                                                    .text_color(rgb(MUTED))
+                                                    .text_color(rgb(pal().muted))
                                                     .child(empty),
                                             )
                                         })
@@ -662,7 +662,7 @@ impl Palette {
 /// The title with matched characters in the accent colour.
 fn highlighted(title: &SharedString, positions: &[usize]) -> StyledText {
     let style = HighlightStyle {
-        color: Some(rgb(ACCENT_BRIGHT).into()),
+        color: Some(rgb(pal().accent_bright).into()),
         font_weight: Some(FontWeight::SEMIBOLD),
         ..Default::default()
     };

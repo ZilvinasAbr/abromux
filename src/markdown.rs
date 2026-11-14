@@ -393,17 +393,22 @@ fn page(title: &str, body: &str) -> String {
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
          <meta http-equiv=\"Content-Security-Policy\" content=\"{CSP}\">\
-         <meta name=\"color-scheme\" content=\"dark\">\
+         <meta name=\"color-scheme\" content=\"light dark\">\
          <title>{}</title><style>{STYLE}</style></head>\
          <body><article class=\"markdown-body\">{body}</article></body></html>",
         esc(title)
     )
 }
 
-/// GitHub's Markdown look, in the app's dark colours.
+/// GitHub's Markdown look, in the app's colours. The web view follows the
+/// app's appearance (`crate::theme`), so `prefers-color-scheme` picks.
 const STYLE: &str = r#"
 :root { color-scheme: dark; --bg: #1a1918; --text: #faf9f5; --muted: #9c9a92;
-  --border: #3a3935; --code-bg: #262624; --accent: #d97757; --link: #6cb6ff; }
+  --border: #3a3935; --code-bg: #262624; --accent: #d97757; --link: #6cb6ff; --stripe: #ffffff08; }
+@media (prefers-color-scheme: light) {
+  :root { color-scheme: light; --bg: #faf9f5; --text: #1f1e1d; --muted: #6f6d66;
+    --border: #dedcd1; --code-bg: #f0eee6; --accent: #c96442; --link: #0969da; --stripe: #00000006; }
+}
 html { background: var(--bg); }
 body { margin: 0; color: var(--text); font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
 .markdown-body { max-width: 860px; margin: 0 auto; padding: 32px 40px 64px; word-wrap: break-word; }
@@ -428,7 +433,7 @@ pre code { padding: 0; background: none; font-size: 100%; }
 kbd { padding: 3px 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 6px; background: var(--code-bg); }
 table { border-collapse: collapse; display: block; width: max-content; max-width: 100%; overflow: auto; }
 th, td { padding: 6px 13px; border: 1px solid var(--border); }
-th { font-weight: 600; } tr:nth-child(2n) { background: #ffffff08; }
+th { font-weight: 600; } tr:nth-child(2n) { background: var(--stripe); }
 img { max-width: 100%; background: transparent; }
 details > summary { cursor: pointer; }
 .footnotes { font-size: .85em; color: var(--muted); border-top: 1px solid var(--border); padding-top: 8px; }

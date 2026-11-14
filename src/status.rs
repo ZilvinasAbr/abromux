@@ -44,7 +44,7 @@ pub const ERROR: u32 = 0xe5534b;
 
 pub fn level_color(level: LogLevel) -> u32 {
     match level {
-        LogLevel::Info => MUTED,
+        LogLevel::Info => pal().muted,
         LogLevel::Progress => RUNNING,
         LogLevel::Success => SUCCESS,
         LogLevel::Warning => WARNING,
@@ -164,8 +164,16 @@ impl AbroMux {
         if status.is_empty() && progress.is_none() && log.is_none() {
             return None;
         }
-        let sub = if active { rgba(0xffffffc0) } else { rgb(MUTED) };
-        let fg = if active { rgb(0xffffff) } else { rgb(TEXT) };
+        let sub = if active {
+            rgba(0xffffffc0)
+        } else {
+            rgb(pal().muted)
+        };
+        let fg = if active {
+            rgb(0xffffff)
+        } else {
+            rgb(pal().text)
+        };
         let agents = status.iter().filter(|s| s.owner.is_some()).count();
         let pills = status.iter().map(|s| {
             // An agent's key carries its surface number to keep it apart from
@@ -182,11 +190,7 @@ impl AbroMux {
                 .px(px(6.))
                 .py(px(1.))
                 .rounded(px(4.))
-                .bg(if active {
-                    rgba(0x0000002e)
-                } else {
-                    rgba(0xffffff0d)
-                })
+                .bg(if active { rgba(0x0000002e) } else { tint(0x0d) })
                 .text_size(px(10.5 * z))
                 .map(|d| match s.icon.as_deref().filter(|i| ICONS.contains(i)) {
                     Some(i) => d.child(
@@ -244,11 +248,7 @@ impl AbroMux {
                         .h(px(3.))
                         .w_full()
                         .rounded_full()
-                        .bg(if active {
-                            rgba(0x00000040)
-                        } else {
-                            rgba(0xffffff1a)
-                        })
+                        .bg(if active { rgba(0x00000040) } else { tint(0x1a) })
                         .child(
                             div()
                                 .h_full()

@@ -74,7 +74,7 @@ The check time and a skipped version are kept in `update.json` in the support fo
 
 ## GitLab reviews
 
-A GitLab tab (⌘⇧P → New GitLab Tab) shows merge requests the way GitLab's web UI does, in its dark theme. It's built in as a plugin (`crates/abromux-gitlab`, the `gitlab` Cargo feature, on by default) and writes what a reviewer and an author do: comments, replies, resolving, threads on lines, approvals, editing and deleting your comments, editing the title and description, draft, close and reopen, merging, and running, retrying or cancelling pipelines.
+A GitLab tab (⌘⇧P → New GitLab Tab) shows merge requests the way GitLab's web UI does, in its dark theme (whatever the app's appearance). It's built in as a plugin (`crates/abromux-gitlab`, the `gitlab` Cargo feature, on by default) and writes what a reviewer and an author do: comments, replies, resolving, threads on lines, approvals, editing and deleting your comments, editing the title and description, draft, close and reopen, merging, and running, retrying or cancelling pipelines.
 
 - **Sign in** with the GitLab URL and a personal access token with the `api` scope (a `read_api` token works too, but then writing says the token needs `api`). The token is checked, then kept in your login Keychain (service `abromux-gitlab`, account = the URL). New GitLab tabs then open on that GitLab, so you sign in once. `ABROMUX_GITLAB_TOKEN` overrides it.
 - **The list** has the merge requests you're asked to review, the ones you created, and all you can see, open, merged, closed or all of them, with checklist progress, coloured labels, the target branch when it isn't the default, pipeline status, assignees and reviewers, resolved threads ("1 of 4") and Approved, Merged and Closed badges, newest first, and a filter.
@@ -275,6 +275,7 @@ These use cmux's key names. Shown with their defaults:
 ```json
 {
   "app": {
+    "appearance": "system",
     "workspaceInheritWorkingDirectory": true,
     "newWorkspacePlacement": "end",
     "automaticallyCheckForUpdates": true,
@@ -309,6 +310,7 @@ These use cmux's key names. Shown with their defaults:
 }
 ```
 
+- `appearance`: `system` follows macOS's light or dark mode as it changes; `light` or `dark` keeps the app in one (also in Settings › General). It covers the windows, sidebar, menus, Markdown tabs, web pages that follow the system's color scheme, and terminals: a Ghostty `theme = light:A,dark:B` uses the one for the appearance, and without a theme the built-in colors switch too. Running terminals recolor when it changes. GitLab tabs stay in GitLab's dark theme.
 - `workspaceInheritWorkingDirectory`: ⌘N and the `+` start in the focused terminal's directory; `false` starts in your home folder.
 - `keepWorkspaceOpenWhenClosingLastSurface`: ⌘W on a workspace's last tab opens a fresh terminal in the same directory instead of closing the workspace. Only ⌘W: a shell that exits, or the tab's `×`, still closes it.
 - `reorderOnNotification`: a workspace that gets a notification you aren't looking at moves to the top of the sidebar, or to the top of its group if it's in one. `false` (or `"off"`) keeps the order as you left it. cmux's `"notifications"` is the same as `true`; its `"agentActivity"` is taken as `"notifications"` too, since agent turns already notify here.
@@ -408,7 +410,7 @@ Reloading the config applies new shortcuts at once, in the menus too.
 
 ## Ghostty config
 
-Terminals read your Ghostty config: `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`), then `~/Library/Application Support/com.mitchellh.ghostty/config`, plus their `config-file` includes. abromux uses `theme` (from `~/.config/ghostty/themes` or Ghostty.app), `font-family` (further `font-family` lines are fallbacks, as in Ghostty), `font-size`, `foreground`, `background`, `palette`, `cursor-color`, `cursor-text`, `cursor-style`, `selection-background`/`-foreground`, `keybind`s whose action is `text:`, `csi:` or `esc:`, and `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` (on by default, as in Ghostty: pasting text that could run commands, such as a newline when the program hasn't turned on bracketed paste, asks first; Enter pastes, Esc cancels). Programs can copy to the clipboard with OSC 52, as terminal-browser, Neovim and tmux do (`clipboard-write = deny` stops them; there's no prompt, so `ask` refuses too). `copy-on-select = clipboard` copies a selection to the clipboard when you let go of the mouse (Ghostty's default `true` uses a selection pasteboard macOS doesn't have, so it does nothing here). `mouse-scroll-multiplier` scales scrolling, as one number or `precision:<n>,discrete:<n>` for the trackpad and the mouse wheel. `scrollbar = never` hides the overlay scrollbar. `shell-integration = none` turns off abromux's shell integration (below). Other keys are ignored for now. Changes apply to new terminals.
+Terminals read your Ghostty config: `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`), then `~/Library/Application Support/com.mitchellh.ghostty/config`, plus their `config-file` includes. abromux uses `theme` (from `~/.config/ghostty/themes` or Ghostty.app; `light:A,dark:B` follows the app's appearance), `font-family` (further `font-family` lines are fallbacks, as in Ghostty), `font-size`, `foreground`, `background`, `palette`, `cursor-color`, `cursor-text`, `cursor-style`, `selection-background`/`-foreground`, `keybind`s whose action is `text:`, `csi:` or `esc:`, and `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` (on by default, as in Ghostty: pasting text that could run commands, such as a newline when the program hasn't turned on bracketed paste, asks first; Enter pastes, Esc cancels). Programs can copy to the clipboard with OSC 52, as terminal-browser, Neovim and tmux do (`clipboard-write = deny` stops them; there's no prompt, so `ask` refuses too). `copy-on-select = clipboard` copies a selection to the clipboard when you let go of the mouse (Ghostty's default `true` uses a selection pasteboard macOS doesn't have, so it does nothing here). `mouse-scroll-multiplier` scales scrolling, as one number or `precision:<n>,discrete:<n>` for the trackpad and the mouse wheel. `scrollbar = never` hides the overlay scrollbar. `shell-integration = none` turns off abromux's shell integration (below). Other keys are ignored for now. Changes apply to new terminals.
 
 Ghostty has Nerd Font symbols built in; abromux doesn't, so for the icons Neovim, eza or starship draw it falls back to the Nerd Fonts you have installed (symbols-only and "Mono" ones first), after your `font-family` fallbacks and before macOS's own fonts. Install one (`brew install --cask font-symbols-only-nerd-font`) if icons show as boxes.
 

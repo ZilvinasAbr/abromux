@@ -238,7 +238,10 @@ impl BrowserView {
         // A blank page gets the pane's background rather than white. A URL
         // loads once the WebAuthn bridge is in, so its first page has it.
         let builder = if url.is_empty() {
-            builder.with_html(format!("<html style=\"background:#{PANE_BG:06x}\"></html>"))
+            builder.with_html(format!(
+                "<html style=\"background:#{:06x}\"></html>",
+                pal().pane_bg
+            ))
         } else {
             builder
         };
@@ -845,8 +848,8 @@ impl BrowserView {
                     .items_center()
                     .gap(px(8.))
                     .cursor_pointer()
-                    .when(selected, |d| d.bg(rgba(0xffffff1a)))
-                    .when(!selected, |d| d.hover(|s| s.bg(rgba(HOVER))))
+                    .when(selected, |d| d.bg(tint(0x1a)))
+                    .when(!selected, |d| d.hover(|s| s.bg(rgba(pal().hover))))
                     // On mouse down, before the address bar loses focus and
                     // closes the list.
                     .on_mouse_down(
@@ -856,7 +859,7 @@ impl BrowserView {
                             this.open_suggestion(i, window, cx);
                         }),
                     )
-                    .child(icon("globe").flex_none().text_color(rgb(MUTED)))
+                    .child(icon("globe").flex_none().text_color(rgb(pal().muted)))
                     .child(
                         div()
                             .flex_1()
@@ -870,7 +873,7 @@ impl BrowserView {
                                     .min_w(px(80.))
                                     .truncate()
                                     .text_size(px(12.5))
-                                    .text_color(rgb(TEXT))
+                                    .text_color(rgb(pal().text))
                                     .child(t)
                             }))
                             .child(
@@ -879,7 +882,7 @@ impl BrowserView {
                                     .min_w_0()
                                     .truncate()
                                     .text_size(px(11.5))
-                                    .text_color(rgb(MUTED))
+                                    .text_color(rgb(pal().muted))
                                     .child(shown_url),
                             ),
                     )
@@ -895,9 +898,9 @@ impl BrowserView {
                 .flex()
                 .flex_col()
                 .gap(px(1.))
-                .bg(rgb(TABBAR_BG))
+                .bg(rgb(pal().tabbar_bg))
                 .border_b_1()
-                .border_color(rgb(BORDER))
+                .border_color(rgb(pal().border))
                 .children(rows),
         )
     }
@@ -1144,7 +1147,7 @@ impl BrowserView {
             )
             .flex_none()
             .border_b_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(pal().border))
     }
 
     /// Run `js` and hand its JSON-encoded result to `done` (on a wry thread).
@@ -1241,7 +1244,7 @@ impl BrowserView {
             Nav::Reload if self.loading => ("reload", "x"),
             Nav::Reload => ("reload", "rotate-cw"),
         };
-        let icon = icon(name).text_color(rgb(MUTED));
+        let icon = icon(name).text_color(rgb(pal().muted));
         let presses = self.nav_presses[nav as usize];
         // Nothing plays before the first press.
         let icon = if presses == 0 {
@@ -1328,9 +1331,9 @@ impl BrowserView {
         });
         let starts = d.starts;
         let tint = if fraction.is_some() || self.downloads_open {
-            ACCENT_BRIGHT
+            pal().accent_bright
         } else {
-            MUTED
+            pal().muted
         };
         let arrow = icon("download").text_color(rgb(tint)).with_animation(
             ("download-bounce", starts),
@@ -1344,7 +1347,7 @@ impl BrowserView {
             button_frame("downloads")
                 .size(px(24.))
                 .relative()
-                .when(self.downloads_open, |b| b.bg(rgba(HOVER)))
+                .when(self.downloads_open, |b| b.bg(rgba(pal().hover)))
                 .child(arrow)
                 .children(fraction.map(|f| {
                     div()
@@ -1354,13 +1357,13 @@ impl BrowserView {
                         .w(px(14.))
                         .h(px(2.))
                         .rounded(px(1.))
-                        .bg(rgba(0xffffff26))
+                        .bg(crate::theme::tint(0x26))
                         .child(
                             div()
                                 .h_full()
                                 .w(relative(f))
                                 .rounded(px(1.))
-                                .bg(rgb(ACCENT_BRIGHT)),
+                                .bg(rgb(pal().accent_bright)),
                         )
                 }))
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -1407,13 +1410,15 @@ impl BrowserView {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .when(done, |r| r.cursor_pointer().hover(|s| s.bg(rgba(HOVER))))
+                    .when(done, |r| {
+                        r.cursor_pointer().hover(|s| s.bg(rgba(pal().hover)))
+                    })
                     .on_click(move |_, _, _| {
                         if done {
                             let _ = std::process::Command::new("open").arg(&path).spawn();
                         }
                     })
-                    .child(icon("download").flex_none().text_color(rgb(MUTED)))
+                    .child(icon("download").flex_none().text_color(rgb(pal().muted)))
                     .child(
                         div()
                             .flex_1()
@@ -1425,22 +1430,22 @@ impl BrowserView {
                                 div()
                                     .truncate()
                                     .text_size(px(12.5))
-                                    .text_color(rgb(TEXT))
+                                    .text_color(rgb(pal().text))
                                     .child(d.name()),
                             )
                             .children(d.fraction().filter(|_| running).map(|f| {
-                                div().h(px(3.)).rounded(px(2.)).bg(rgba(0xffffff1a)).child(
+                                div().h(px(3.)).rounded(px(2.)).bg(tint(0x1a)).child(
                                     div()
                                         .h_full()
                                         .w(relative(f))
                                         .rounded(px(2.))
-                                        .bg(rgb(ACCENT_BRIGHT)),
+                                        .bg(rgb(pal().accent_bright)),
                                 )
                             }))
                             .child(
                                 div()
                                     .text_size(px(11.))
-                                    .text_color(rgb(MUTED))
+                                    .text_color(rgb(pal().muted))
                                     .child(status),
                             ),
                     )
@@ -1481,9 +1486,9 @@ impl BrowserView {
             .flex_col()
             .gap(px(1.))
             .rounded(px(8.))
-            .bg(rgb(MENU_BG))
+            .bg(rgb(pal().menu_bg))
             .border_1()
-            .border_color(rgb(MENU_BORDER))
+            .border_color(rgb(pal().menu_border))
             .shadow_lg()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.set_downloads_open(false, cx)))
             .child(
@@ -1493,14 +1498,14 @@ impl BrowserView {
                     .flex()
                     .items_center()
                     .text_size(px(11.))
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(pal().muted))
                     .child(div().flex_1().child("Downloads"))
                     .when(finished, |h| {
                         h.child(
                             div()
                                 .id("downloads-clear")
                                 .cursor_pointer()
-                                .hover(|s| s.text_color(rgb(TEXT)))
+                                .hover(|s| s.text_color(rgb(pal().text)))
                                 .child("Clear")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.downloads.update(cx, |d, cx| d.clear(cx));
@@ -1529,7 +1534,7 @@ impl Render for BrowserView {
             div()
                 .absolute()
                 .inset_0()
-                .bg(rgb(PANE_BG))
+                .bg(rgb(pal().pane_bg))
                 .children(img.map(|img| gpui::img(img).size_full()))
         });
         let downloads_button = self.render_downloads_button(cx);
@@ -1550,8 +1555,8 @@ impl Render for BrowserView {
                 .items_center()
                 .gap_1p5()
                 .text_size(px(12.))
-                .text_color(rgb(MUTED))
-                .child(icon("markdown").size(px(13.)).text_color(rgb(MUTED)))
+                .text_color(rgb(pal().muted))
+                .child(icon("markdown").size(px(13.)).text_color(rgb(pal().muted)))
                 .child(
                     div()
                         .min_w_0()
@@ -1570,7 +1575,7 @@ impl Render for BrowserView {
                 .flex()
                 .items_center()
                 .rounded(px(6.))
-                .bg(rgb(INPUT_BG))
+                .bg(rgb(pal().input_bg))
                 .text_size(px(12.))
                 .key_context(OMNIBAR)
                 .on_action(
@@ -1641,7 +1646,7 @@ impl Render for BrowserView {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(PANE_BG))
+            .bg(rgb(pal().pane_bg))
             .child(
                 div()
                     .h(px(34.))
@@ -1651,7 +1656,7 @@ impl Render for BrowserView {
                     .gap_1()
                     .px_2()
                     .border_b_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(pal().border))
                     .child(self.render_nav(Nav::Back, cx))
                     .child(self.render_nav(Nav::Forward, cx))
                     .child(self.render_nav(Nav::Reload, cx))
