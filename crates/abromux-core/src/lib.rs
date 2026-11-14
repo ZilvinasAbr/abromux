@@ -6,6 +6,7 @@ pub mod agent;
 pub mod cmux;
 pub mod color;
 pub mod ipc;
+pub mod layout;
 pub mod link;
 pub mod links;
 pub mod naming;
