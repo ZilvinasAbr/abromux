@@ -123,7 +123,11 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
       app. `terminal_browser.rs` stays as it is: it's a terminal app in a
       terminal tab, not a page under the pane, so it's left for Phase 3's
       engines.
-- [ ] Pull out `abromux-core` and `abromux-term`, one module group per PR.
+- [x] Pull out `abromux-core` and `abromux-term`, one module group per PR.
+      Settings and the keymap tables stay in the app for now: settings
+      parsing checks shortcuts with gpui's keystroke parser against gpui
+      actions, and holds gpui colours. They move with Phase 2's per-OS
+      keymap tables.
 - [x] CI guard: fail if `cfg(target_os` / `objc::` / `msg_send!` appears outside
       `crates/abromux-platform` and `crates/abromux-browser/src/backend`.
       A local script, `scripts/check-os-calls.sh`, since there's no CI.
