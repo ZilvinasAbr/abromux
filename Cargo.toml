@@ -18,6 +18,7 @@ gitlab = ["dep:abromux-gitlab"]
 
 [dependencies]
 abromux-plugin = { path = "crates/abromux-plugin" }
+abromux-core = { path = "crates/abromux-core" }
 abromux-platform = { path = "crates/abromux-platform" }
 abromux-browser = { path = "crates/abromux-browser" }
 abromux-gitlab = { path = "crates/abromux-gitlab", optional = true }
@@ -31,8 +32,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 # inline terminal cell text (already a gpui dependency)
 smol_str = "0.2"
-# OSC 99 scan for ESC (already a dependency of several crates)
-memchr = "2"
 libc = "0.2"
 # Kitty graphics PNG decoding (already a gpui dependency)
 image = "0.25"

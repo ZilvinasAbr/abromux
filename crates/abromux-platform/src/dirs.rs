@@ -2,20 +2,8 @@
 //! support folder and workspace folders (see [`crate::channel`]).
 
 use crate::channel::flavor;
+pub use abromux_core::paths::{home, home_var};
 use std::path::PathBuf;
-
-/// `$HOME`, if it's set to an absolute path.
-pub fn home_var() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-}
-
-/// `$HOME`, else `/tmp`: absolute and writable, so a path made from it is
-/// never relative to wherever abromux was started.
-pub fn home() -> PathBuf {
-    home_var().unwrap_or_else(|| "/tmp".into())
-}
 
 /// `~/Library/Application Support/abromux` (or `abromux-nightly`, or
 /// `abromux-nightly-<name>`).

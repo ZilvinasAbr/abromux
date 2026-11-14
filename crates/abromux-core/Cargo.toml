@@ -1,0 +1,11 @@
+[package]
+name = "abromux-core"
+version = "0.1.0"
+edition = "2024"
+description = "abromux's logic that needs no UI and no OS calls"
+license = "MIT"
+publish = false
+
+[dependencies]
+# OSC 99 scan for ESC (already a dependency of several crates)
+memchr = "2"

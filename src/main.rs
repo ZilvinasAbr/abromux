@@ -24,9 +24,7 @@ mod menu;
 mod naming;
 mod notification;
 mod notify_hook;
-mod osc99;
 mod palette;
-mod paths;
 mod plugins;
 mod pty;
 mod quit;
@@ -50,6 +48,7 @@ mod workspace;
 use abromux_browser::{
     auto as browser_auto, downloads, find as browser_find, history as browser_history,
 };
+use abromux_core::{osc99, paths};
 use browser::{BrowserEvent, BrowserView};
 use futures::StreamExt;
 use gpui::{prelude::*, *};

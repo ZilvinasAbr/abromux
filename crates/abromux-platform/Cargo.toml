@@ -7,6 +7,7 @@ license = "MIT"
 publish = false
 
 [dependencies]
+abromux-core = { path = "../abromux-core" }
 futures = "0.3"
 objc = "0.2"
 block = "0.1"

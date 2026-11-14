@@ -7,6 +7,7 @@ name = "abromux"
 version = "0.27.0"
 dependencies = [
  "abromux-browser",
+ "abromux-core",
  "abromux-gitlab",
  "abromux-platform",
  "abromux-plugin",
@@ -18,7 +19,6 @@ dependencies = [
  "image",
  "libc",
  "markdown",
- "memchr",
  "portable-pty",
  "serde",
  "serde_json",
@@ -42,6 +42,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "abromux-core"
+version = "0.1.0"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "abromux-gitlab"
 version = "0.1.0"
 dependencies = [
@@ -61,6 +68,7 @@ dependencies = [
 name = "abromux-platform"
 version = "0.1.0"
 dependencies = [
+ "abromux-core",
  "block",
  "cc",
  "futures",
