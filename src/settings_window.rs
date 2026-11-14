@@ -761,8 +761,8 @@ fn general_page() -> Page {
                     switch(
                         "Group by agent status",
                         "Show workspaces in sections by what their coding agent is doing: \
-                         Verify (waiting for you), Running, Idle and No agent. Your own \
-                         groups come back when it's off.",
+                         Verify (waiting for you), Running, Idle and No agent. Turn it off \
+                         to see your own groups.",
                         &["workspaceGroups", "groupByAgentStatus"],
                         |s| s.workspace_groups.group_by_agent_status,
                     ),

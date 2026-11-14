@@ -304,7 +304,7 @@ These use cmux's key names. Shown with their defaults:
     "unselectedFillOpacity": 0.7,
     "colors": { "Red": "#C0392B", "Blue": "#1565C0" }
   },
-  "workspaceGroups": { "newWorkspacePlacement": "afterCurrent", "groupByAgentStatus": false },
+  "workspaceGroups": { "newWorkspacePlacement": "afterCurrent", "groupByAgentStatus": true },
   "automation": { "workspaceAutoNaming": false, "workspaceCleanupAgent": null }
 }
 ```
@@ -315,7 +315,7 @@ These use cmux's key names. Shown with their defaults:
 - `automaticallyCheckForUpdates`: look for a new release once a day ([Updates](#updates)).
 - `workspaceFoldersDirectory`: where ⇧⌘I makes [workspace folders](#workspace-folders); `null` is `~/.abromux/ws` (per channel for nightlies).
 - `newWorkspacePlacement`: where a new workspace goes, `top`, `afterCurrent` (after the selected one, or after its group) or `end`. `workspaceGroups.newWorkspacePlacement` is the same inside a group, where `top` means right after the group's first workspace.
-- `workspaceGroups.groupByAgentStatus` (Settings › General) shows the sidebar in sections by what each workspace's coding agent is doing, instead of your groups: **Verify** (an agent waits for you), **Running**, **Idle** (an agent is open but done with its turn) and **No agent**. A workspace with several agents goes in the most pressing one. Sections fold on click; ⌘1…9 and next/previous workspace follow the order shown. Rows can't be dragged while it's on, and your groups come back unchanged when it's off.
+- `workspaceGroups.groupByAgentStatus` (Settings › General) shows the sidebar in sections by what each workspace's coding agent is doing, instead of your groups (on by default; `false` shows your groups): **Verify** (an agent waits for you), **Running**, **Idle** (an agent is open but done with its turn) and **No agent**. A workspace with several agents goes in the most pressing one. Sections fold on click; ⌘1…9 and next/previous workspace follow the order shown. Rows can't be dragged while it's on, and your groups come back unchanged when it's off.
 - `fontSize` sizes the workspace names (8–24); the smaller lines scale with it. `hideAllDetails` shows names only. `wrapWorkspaceTitles` lets long names wrap.
 - `showWorkspaceDescription`, `showNotificationMessage`, `showBranchDirectory`, `showProgress`, `showLog` and `showCustomMetadata` (status pills) hide those lines when `false`. `stackBranchDirectory` puts the branch and the directory on lines of their own, and `pathLastSegmentOnly` shows `…/api` instead of `~/code/api`.
 - `selectionColor` (in `sidebar` or `workspaceColors`) is the selected row's fill; it's the accent color by default. `sidebarAppearance.tintColor` lays a tint of that opacity over the sidebar.
