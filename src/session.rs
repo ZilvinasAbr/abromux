@@ -138,6 +138,10 @@ pub enum TabState {
         /// `ABROMUX_SURFACE_ID`; only kept with `held`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         surface: Option<usize>,
+        /// The file its editor had open (`crate::editor`), opened again in
+        /// the editor set then.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        edit: Option<String>,
     },
     Browser {
         url: String,
@@ -579,8 +583,24 @@ impl AbroMux {
                 name,
                 held,
                 surface,
+                edit,
             } => {
                 let cwd = std::path::Path::new(&cwd).is_dir().then_some(cwd);
+                // An editor whose file is still there; else a shell, as the
+                // editor exiting would have left nothing to come back to.
+                let editor = edit
+                    .map(std::path::PathBuf::from)
+                    .filter(|f| f.is_file())
+                    .and_then(|f| self.make_editor(ws, &f, cwd.clone(), window, cx).ok());
+                if let Some(s) = editor {
+                    if let (Some(size), Surface::Terminal(t)) = (font_size, &s) {
+                        t.update(cx, |t, cx| t.restore(None, Some(size), None, cx));
+                    }
+                    if name.is_some() {
+                        s.set_custom_title(name, cx);
+                    }
+                    return s;
+                }
                 let attach = surface.zip(held);
                 let opts = crate::TerminalOpts {
                     cwd,
@@ -777,14 +797,22 @@ fn tab_state(s: &Surface, scrollback: bool, refs: &Refs, cx: &App) -> TabState {
                 };
             }
             let held = t.held_id().map(str::to_string);
+            let edit = t
+                .app
+                .as_ref()
+                .and_then(|a| a.edits())
+                .map(|f| f.to_string_lossy().into_owned());
             TabState::Terminal {
                 surface: surface.filter(|_| held.is_some()),
                 held,
                 cwd: t.live_cwd(),
                 font_size: Some(t.font_size()),
-                scrollback: scrollback
+                // An editor draws its screen again; its old one would only
+                // show under it.
+                scrollback: (scrollback && edit.is_none())
                     .then(|| t.scrollback_vt(SCROLLBACK_LINES))
                     .flatten(),
+                edit,
                 agent: t.agent.clone().filter(Agent::alive),
                 name: t.custom_title.clone(),
             }
@@ -876,6 +904,7 @@ mod tests {
                                 name: Some("server".into()),
                                 held: Some("4242-3".into()),
                                 surface: Some(7),
+                                edit: Some("/tmp/main.rs".into()),
                             }],
                         },
                         NodeState::Pane {

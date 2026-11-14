@@ -16,6 +16,7 @@ mod config;
 mod cursor;
 mod debug;
 mod downloads;
+mod editor;
 mod find_bar;
 mod folder;
 mod ghostty;
@@ -3389,7 +3390,14 @@ fn main() {
 }
 
 fn run_app(cwd: Option<String>) {
-    Application::new().with_assets(Assets).run(|cx: &mut App| {
+    let app = Application::new().with_assets(Assets);
+    // Files opened from Finder (editor.rs). They can come before the window
+    // is up, at launch, so they wait in the channel until it is.
+    let (opened_tx, mut opened) = futures::channel::mpsc::unbounded::<Vec<String>>();
+    app.on_open_urls(move |urls| {
+        let _ = opened_tx.unbounded_send(urls);
+    });
+    app.run(move |cx: &mut App| {
         icon::set_dock_icon();
         gpui_component::init(cx);
         // A broken config file starts with the defaults, and says so once the window is up.
@@ -3479,34 +3487,55 @@ fn run_app(cwd: Option<String>) {
             .and_then(|s| s.window)
             .map(|w| w.bounds())
             .unwrap_or_else(|| Bounds::centered(None, size(px(1280.), px(820.)), cx));
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(640.), px(400.))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some(channel::app_name().into()),
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(px(14.), px(13.))),
-                }),
-                window_background: WindowBackgroundAppearance::Blurred,
-                // Only empty titlebar areas move it (titlebar.rs), not tab drags.
-                is_movable: false,
-                ..Default::default()
-            },
-            |window, cx| {
-                theme::follow(window);
-                if let Some(e) = settings_error {
-                    window.defer(cx, move |window, cx| {
-                        window.push_notification(settings::error_notification(e), cx)
-                    });
-                }
-                let view = cx.new(|cx| AbroMux::new(cwd, session, window, cx));
-                plugins::set_host(view.downgrade(), cx);
-                cx.new(|cx| Root::new(view, window, cx))
-            },
-        )
-        .expect("open window");
+        let host = Rc::new(RefCell::new(None::<WeakEntity<AbroMux>>));
+        let set_host = host.clone();
+        let window = cx
+            .open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_min_size: Some(size(px(640.), px(400.))),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some(channel::app_name().into()),
+                        appears_transparent: true,
+                        traffic_light_position: Some(point(px(14.), px(13.))),
+                    }),
+                    window_background: WindowBackgroundAppearance::Blurred,
+                    // Only empty titlebar areas move it (titlebar.rs), not tab drags.
+                    is_movable: false,
+                    ..Default::default()
+                },
+                |window, cx| {
+                    theme::follow(window);
+                    if let Some(e) = settings_error {
+                        window.defer(cx, move |window, cx| {
+                            window.push_notification(settings::error_notification(e), cx)
+                        });
+                    }
+                    let view = cx.new(|cx| AbroMux::new(cwd, session, window, cx));
+                    plugins::set_host(view.downgrade(), cx);
+                    *set_host.borrow_mut() = Some(view.downgrade());
+                    cx.new(|cx| Root::new(view, window, cx))
+                },
+            )
+            .expect("open window");
         cx.activate(true);
+        let view = host.borrow_mut().take();
+        cx.spawn(async move |cx| {
+            let Some(view) = view else { return };
+            while let Some(urls) = opened.next().await {
+                let paths = editor::paths(&urls);
+                if paths.is_empty() {
+                    continue;
+                }
+                let open = window.update(cx, |_, window, cx| {
+                    view.update(cx, |v, cx| v.open_paths(paths, window, cx))
+                });
+                if !matches!(open, Ok(Ok(()))) {
+                    break;
+                }
+            }
+        })
+        .detach();
     });
 }
 

@@ -26,14 +26,30 @@ fn flavor() -> Option<&'static str> {
         .as_deref()
 }
 
-/// The flavor an Info.plist's bundle id names (bundle-app.sh writes it on one line).
-fn flavor_of(plist: &str) -> Option<&str> {
-    let id = plist
+/// The bundle id of the app this binary is in; None outside an app bundle.
+pub fn bundle_id() -> Option<String> {
+    let exe = std::env::current_exe()
+        .and_then(|e| e.canonicalize())
+        .ok()?;
+    let app = exe
+        .ancestors()
+        .find(|p| p.extension().is_some_and(|e| e == "app"))?;
+    let plist = std::fs::read_to_string(app.join("Contents/Info.plist")).ok()?;
+    id_of(&plist).map(str::to_string)
+}
+
+/// The bundle id in an Info.plist (bundle-app.sh writes it on one line).
+fn id_of(plist: &str) -> Option<&str> {
+    plist
         .split("<key>CFBundleIdentifier</key><string>")
         .nth(1)?
         .split('<')
-        .next()?;
-    match id.strip_prefix(NIGHTLY_ID)? {
+        .next()
+}
+
+/// The flavor an Info.plist's bundle id names (bundle-app.sh writes it on one line).
+fn flavor_of(plist: &str) -> Option<&str> {
+    match id_of(plist)?.strip_prefix(NIGHTLY_ID)? {
         "" => Some(""),
         rest => rest.strip_prefix('.'),
     }

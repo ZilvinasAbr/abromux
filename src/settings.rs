@@ -22,6 +22,7 @@
 //!     "find": { "keys": "cmd-shift-f", "when": "Terminal" }
 //!   },
 //!   "browser": { "engine": "terminalBrowser", "terminalBrowserPanes": true },
+//!   "editor": { "program": "tode" },
 //!   "commands": [
 //!     { "title": "Run Tests", "run": "cargo test", "shortcut": "cmd-alt-t" },
 //!     { "title": "Dev Server", "run": "npm run dev", "newTab": true },
@@ -74,6 +75,7 @@ pub struct Settings {
     pub workspace_groups: WorkspaceGroups,
     pub automation: Automation,
     pub browser: BrowserSettings,
+    pub editor: EditorSettings,
     pub notifications: NotificationSettings,
     pub gitlab: GitlabSettings,
     pub jira: JiraSettings,
@@ -198,6 +200,32 @@ pub enum BrowserEngine {
     BuiltIn,
     #[serde(alias = "terminal-browser")]
     TerminalBrowser,
+}
+
+/// Files abromux is asked to open (`crate::editor`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct EditorSettings {
+    /// The terminal editor a file opens in, in a pane of its own.
+    pub program: EditorProgram,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum EditorProgram {
+    #[default]
+    Nvim,
+    Tode,
+}
+
+impl EditorProgram {
+    /// Its value in the config file, which is also the command's name.
+    pub fn key(self) -> &'static str {
+        match self {
+            EditorProgram::Nvim => "nvim",
+            EditorProgram::Tode => "tode",
+        }
+    }
 }
 
 /// cmux's `app` keys that abromux has.
@@ -1349,6 +1377,14 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(e.contains("unknown variant"), "{e}");
+    }
+
+    #[test]
+    fn editor_program() {
+        assert_eq!(Settings::default().editor.program, EditorProgram::Nvim);
+        let s = parse(r#"{"editor": {"program": "tode"}}"#).unwrap();
+        assert_eq!(s.editor.program, EditorProgram::Tode);
+        assert!(parse(r#"{"editor": {"program": "emacs"}}"#).is_err());
     }
 
     #[test]
