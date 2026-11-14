@@ -124,8 +124,9 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
       terminal tab, not a page under the pane, so it's left for Phase 3's
       engines.
 - [ ] Pull out `abromux-core` and `abromux-term`, one module group per PR.
-- [ ] CI guard: fail if `cfg(target_os` / `objc::` / `msg_send!` appears outside
+- [x] CI guard: fail if `cfg(target_os` / `objc::` / `msg_send!` appears outside
       `crates/abromux-platform` and `crates/abromux-browser/src/backend`.
+      A local script, `scripts/check-os-calls.sh`, since there's no CI.
 
 **Done when:** the macOS app is unchanged, CI is green, and the guard passes.
 
