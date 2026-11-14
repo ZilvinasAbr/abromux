@@ -512,6 +512,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 |---|---|---|
 | New workspace | `+` in sidebar header / footer | ⌘N |
 | New workspace folder | File › New Workspace Folder | ⇧⌘I |
+| Review every repository of the workspace in [hunk](https://hunk.dev/): a column right of the focused pane, one pane per repository (its folder's checkouts and those its tabs are in) running `hunk diff --watch` against where the branch forked from the default branch, as ⌥⌘D compares | File › Review Changes in Hunk | ⌘⇧P → Review Changes in Hunk (`reviewInHunk` in `"shortcuts"`) |
 | Open the workspace in Neovim: a new terminal tab in its folder (else the focused tab's directory) running `nvim .` | File › Open Workspace in Neovim | ⌘⇧P → Open Workspace in Neovim (`openInNeovim` in `"shortcuts"`) |
 | Clean up and delete workspace folder | right-click → Clean Up and Delete Folder… | ⇧⌘X |
 | Rename workspace | double-click its name (Enter saves, Esc cancels) | ⌘⇧R |

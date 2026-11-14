@@ -108,6 +108,8 @@ pub const ACTIONS: &[Act] = {
             [(None, [])];
         "reviewChanges", Some("Review Changes (Diff of This Workspace's Work)"), ReviewChanges,
             [(None, ["alt-cmd-d"])];
+        "reviewInHunk", Some("Review Changes in Hunk (Each Repository Beside)"), ReviewInHunk,
+            [(None, [])];
         "openInNeovim", Some("Open Workspace in Neovim"), OpenInNeovim, [(None, [])];
         "showNotifications", Some("Show Notifications"), ToggleNotifications, [(None, ["cmd-i"])];
         "jumpToUnread", Some("Jump to Latest Unread"), JumpToUnread, [(None, ["cmd-shift-u"])];
