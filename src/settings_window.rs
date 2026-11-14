@@ -860,10 +860,11 @@ fn general_page() -> Page {
                                 .flex()
                                 .gap(px(6.))
                                 .child(button("open", "Open").on_click(|_, _, cx| open_config(cx)))
-                                .child(button("reveal", "Show in Finder").on_click(|_, _, cx| {
-                                    ensure_config();
-                                    cx.reveal_path(&settings::path())
-                                }))
+                                .child(
+                                    button("reveal", "Show in Finder").on_click(|_, _, cx| {
+                                        cx.reveal_path(&settings::ensure_file())
+                                    }),
+                                )
                                 .into_any_element()
                         },
                     ),
@@ -1911,20 +1912,8 @@ fn error_banner(e: String) -> impl IntoElement {
 
 // MARK: Files
 
-/// Make an empty config file if there's none, so it can be opened.
-fn ensure_config() {
-    let path = settings::path();
-    if !path.exists() {
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(&path, "{\n}\n");
-    }
-}
-
-fn open_config(cx: &mut App) {
-    ensure_config();
-    cx.open_with_system(&settings::path());
+pub fn open_config(cx: &mut App) {
+    cx.open_with_system(&settings::ensure_file());
 }
 
 /// The Ghostty config file whose settings win: the last one abromux reads.

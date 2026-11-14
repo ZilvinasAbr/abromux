@@ -131,6 +131,7 @@ Commands:
   mr panel [toggle|show|hide]                                (the merge requests panel on the right, ⌥⌘B)
   reload-config                                              (read the config file again, like ⌘⇧,)
   config path                                                (where abromux's config.json lives)
+  config open                                                (open config.json in its default app; made empty if missing)
   config check [<file>]                                      (validate the config file; needs no running app)
   config shortcuts                                           (each shortcut's name for config.json, and its keys now)
   config project                                             (the project commands file found from here, and its commands)
@@ -1434,11 +1435,22 @@ complete -o default -F _abromux abromux
     })
 }
 
-/// `config path`, `config check [<file>]`, `config project` and `config shortcuts`, which
+/// `config path`, `config open`, `config check [<file>]`, `config project` and `config shortcuts`, which
 /// need no running app.
 fn config(pos: &[String]) -> Result<(), String> {
     match pos.first().map(String::as_str) {
         Some("path") => println!("{}", settings::path().display()),
+        Some("open") => {
+            let path = settings::ensure_file();
+            let status = std::process::Command::new("open")
+                .arg(&path)
+                .status()
+                .map_err(|e| format!("open: {e}"))?;
+            if !status.success() {
+                return Err(format!("open {} failed ({status})", path.display()));
+            }
+            println!("OK {}", path.display());
+        }
         Some("check") => {
             let path = pos.get(1).map_or_else(settings::path, Into::into);
             settings::read(&path)?;
@@ -1473,7 +1485,7 @@ fn config(pos: &[String]) -> Result<(), String> {
             let settings = settings::load()?;
             print!("{}", crate::keymap::describe(&settings));
         }
-        _ => return Err("config: expected path, check, project or shortcuts".into()),
+        _ => return Err("config: expected path, open, check, project or shortcuts".into()),
     }
     Ok(())
 }

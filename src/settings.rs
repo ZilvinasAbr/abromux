@@ -871,6 +871,19 @@ pub fn path() -> PathBuf {
     crate::paths::xdg_config().join("abromux/config.json")
 }
 
+/// The config file's path, after making an empty one if there's none, so
+/// it can be opened in an editor.
+pub fn ensure_file() -> PathBuf {
+    let path = path();
+    if !path.exists() {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, "{\n}\n");
+    }
+    path
+}
+
 /// The settings in the config file, or the defaults if there is none.
 pub fn load() -> Result<Settings, String> {
     read(&path())
