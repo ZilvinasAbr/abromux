@@ -2765,8 +2765,8 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &MoveWorkspaceDown, _, cx| {
                 this.nudge_workspace(this.active, true, cx)
             }))
-            .on_action(cx.listener(|this, _: &NewGroup, _, cx| {
-                this.new_group(this.active, cx);
+            .on_action(cx.listener(|this, _: &NewGroup, window, cx| {
+                this.new_group_and_rename(this.active, window, cx);
             }))
             .on_action(cx.listener(|this, _: &GroupByFolder, _, cx| {
                 this.group_by_folder(cx);
