@@ -504,13 +504,26 @@ pub enum IndicatorStyle {
     SolidFill,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct WorkspaceGroups {
     /// Where a new workspace goes inside a group (⌘N from one of its
     /// workspaces, or its header's +): after the selected one, second
     /// (after the group's first), or last.
     pub new_workspace_placement: Placement,
+    /// Show the sidebar in sections by what each workspace's coding agent
+    /// is doing (Verify, Running, Idle, No agent) instead of your groups,
+    /// which come back as they were when it's off.
+    pub group_by_agent_status: bool,
+}
+
+impl Default for WorkspaceGroups {
+    fn default() -> Self {
+        Self {
+            new_workspace_placement: Placement::default(),
+            group_by_agent_status: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -1286,6 +1299,10 @@ mod tests {
         );
         assert_eq!(s.workspace_colors.parse("#ff0000"), Some(0xff0000));
         assert_eq!(s.workspace_groups.new_workspace_placement, Placement::Top);
+        assert!(
+            s.workspace_groups.group_by_agent_status,
+            "on unless turned off"
+        );
         assert!(s.automation.workspace_auto_naming);
         let d = Settings::default();
         assert_eq!(d.workspace_colors.parse("amber"), Some(0x7D6608));

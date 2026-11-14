@@ -2090,12 +2090,20 @@ impl AbroMux {
         };
         let (label, title) = (kind.label(), kind.title());
         match event {
-            AgentEvent::Working => {
-                self.set_agent_status(surface, label, Some(("Running", RUNNING)), cx)
-            }
+            AgentEvent::Working => self.set_agent_status(
+                surface,
+                label,
+                Some((crate::status::AGENT_RUNNING, RUNNING)),
+                cx,
+            ),
             AgentEvent::NeedsInput(message) => {
                 let message = message.unwrap_or_else(|| format!("{label} needs your attention"));
-                self.set_agent_status(surface, label, Some(("Needs input", WARNING)), cx);
+                self.set_agent_status(
+                    surface,
+                    label,
+                    Some((crate::status::AGENT_NEEDS_INPUT, WARNING)),
+                    cx,
+                );
                 self.add_notification(surface, title.into(), message, false, window, cx);
             }
             AgentEvent::Stopped(summary) => {

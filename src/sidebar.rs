@@ -8,10 +8,12 @@ use crate::{
     AbroMux, Hints, SIDEBAR_WIDTH, TITLEBAR_H, focus_selected, hint_pill, one_line,
     select_all_on_double_click,
     settings::{IndicatorStyle, Placement, Settings},
-    shortcut_digit, terminal,
+    shortcut_digit,
+    status::{RUNNING, SUCCESS, WARNING},
+    terminal,
     theme::*,
     titlebar,
-    workspace::{self, Group, Workspace, group_span, tilde},
+    workspace::{self, AgentState, Group, Workspace, group_span, tilde},
 };
 use gpui::{prelude::*, *};
 use gpui_component::{
@@ -824,6 +826,73 @@ impl AbroMux {
         }
     }
 
+    // ---- grouping by agent status ---------------------------------------
+
+    /// With `workspaceGroups.groupByAgentStatus` on, the workspace indexes
+    /// in each agent-status section, keeping their order within it; None
+    /// when it's off. Empty sections are left out.
+    pub(crate) fn agent_sections(&self, cx: &App) -> Option<Vec<(AgentState, Vec<usize>)>> {
+        if !cx
+            .global::<Settings>()
+            .workspace_groups
+            .group_by_agent_status
+        {
+            return None;
+        }
+        let states: Vec<AgentState> = self.workspaces.iter().map(|w| w.agent_state(cx)).collect();
+        Some(
+            AgentState::ALL
+                .into_iter()
+                .map(|st| {
+                    let of: Vec<usize> = (0..states.len()).filter(|&i| states[i] == st).collect();
+                    (st, of)
+                })
+                .filter(|(_, of)| !of.is_empty())
+                .collect(),
+        )
+    }
+
+    /// The workspace indexes in the order the sidebar shows them, which
+    /// ⌘1…9 and next/previous workspace follow.
+    pub(crate) fn sidebar_order(&self, cx: &App) -> Vec<usize> {
+        match self.agent_sections(cx) {
+            Some(sections) => sections.into_iter().flat_map(|(_, of)| of).collect(),
+            None => (0..self.workspaces.len()).collect(),
+        }
+    }
+
+    /// Select the workspace in sidebar place `slot` (⌘1…9).
+    pub(crate) fn select_slot(&mut self, slot: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(&i) = self.sidebar_order(cx).get(slot) {
+            self.select_workspace(i, window, cx);
+        }
+    }
+
+    /// Select the workspace `by` places down the sidebar (up when
+    /// negative), wrapping around.
+    pub(crate) fn step_workspace(
+        &mut self,
+        by: isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let order = self.sidebar_order(cx);
+        let n = order.len() as isize;
+        if n == 0 {
+            return;
+        }
+        let at = order.iter().position(|&i| i == self.active).unwrap_or(0) as isize;
+        let i = order[(at + by).rem_euclid(n) as usize];
+        self.select_workspace(i, window, cx);
+    }
+
+    fn toggle_state(&mut self, state: AgentState, cx: &mut Context<Self>) {
+        if !self.folded_states.remove(&state) {
+            self.folded_states.insert(state);
+        }
+        cx.notify();
+    }
+
     // ---- rendering ------------------------------------------------------
 
     pub(crate) fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -831,7 +900,29 @@ impl AbroMux {
         // The selected workspace's row, to scroll into view when asked.
         let mut active_row = None;
         let mut prev_group = None;
-        for (i, ws) in self.workspaces.iter().enumerate() {
+        let sections = self.agent_sections(cx);
+        for (state, of) in sections.iter().flatten() {
+            let folded = self.folded_states.contains(state);
+            rows.push(self.render_state_header(*state, of, folded, cx));
+            for &i in of {
+                // A folded section still shows its selected workspace.
+                if !folded || i == self.active {
+                    rows.push(self.render_workspace_row(i, &self.workspaces[i], cx));
+                }
+                if i == self.active {
+                    active_row = Some(rows.len() - 1);
+                    if let Some(links) = self.render_links(i, cx) {
+                        rows.push(links);
+                    }
+                }
+            }
+        }
+        let by_group = if sections.is_none() {
+            &self.workspaces[..]
+        } else {
+            &[]
+        };
+        for (i, ws) in by_group.iter().enumerate() {
             if ws.group != prev_group
                 && let Some(g) = ws
                     .group
@@ -938,6 +1029,78 @@ impl AbroMux {
                             cx.stop_propagation();
                         }),
                     ),
+            )
+            .into_any_element()
+    }
+
+    /// An agent-status section's header: its name and how many workspaces
+    /// are in it; click to fold it.
+    fn render_state_header(
+        &self,
+        state: AgentState,
+        of: &[usize],
+        folded: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let z = cx.global::<Settings>().sidebar.font_size / 12.5;
+        let unread = of.iter().any(|&i| self.ws_unread(&self.workspaces[i]));
+        let color = match state {
+            AgentState::Verify => rgb(WARNING),
+            AgentState::Running => rgb(RUNNING),
+            AgentState::Idle => rgb(SUCCESS),
+            AgentState::NoAgent => rgb(MUTED),
+        };
+        let id: SharedString = format!("agent-state-{}", state.name()).into();
+        div()
+            .id(id)
+            .mx(px(8.))
+            .mt(px(6.))
+            .px(px(6.))
+            .py(px(4.))
+            .rounded(px(6.))
+            .flex()
+            .items_center()
+            .gap(px(5.))
+            .cursor_pointer()
+            .text_size(px(11. * z))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(color)
+            .hover(|s| s.bg(rgba(HOVER)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| this.toggle_state(state, cx)),
+            )
+            .child(
+                icon(if folded {
+                    "chevron-right"
+                } else {
+                    "chevron-down"
+                })
+                .size(px(10. * z))
+                .text_color(rgb(MUTED)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(state.name().to_uppercase()),
+            )
+            .when(folded && unread, |d| {
+                d.child(
+                    div()
+                        .size(px(6.))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(rgb(ACCENT_BRIGHT)),
+                )
+            })
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(rgb(MUTED))
+                    .font_weight(FontWeight::NORMAL)
+                    .child(of.len().to_string()),
             )
             .into_any_element()
     }
@@ -1194,8 +1357,14 @@ impl AbroMux {
             .map(|(_, input)| input.clone());
         let is_renaming = renaming.is_some();
         let group: SharedString = format!("ws-{}", ws.id).into();
-        let hint =
-            shortcut_digit(i, self.workspaces.len()).filter(|_| self.hints == Some(Hints::Command));
+        let by_status = settings.workspace_groups.group_by_agent_status;
+        let hint = (self.hints == Some(Hints::Command))
+            .then(|| match by_status {
+                true => self.sidebar_order(cx).iter().position(|&x| x == i),
+                false => Some(i),
+            })
+            .flatten()
+            .and_then(|slot| shortcut_digit(slot, self.workspaces.len()));
         let unread = self.latest_unread(ws).map(|n| n.text());
         let latest = unread
             .clone()
@@ -1230,7 +1399,7 @@ impl AbroMux {
             .relative()
             .mx(px(8.))
             // A group's workspaces sit in from its header.
-            .when(ws.group.is_some(), |s| s.ml(px(GROUP_INDENT)))
+            .when(ws.group.is_some() || by_status, |s| s.ml(px(GROUP_INDENT)))
             .px(px(10.))
             .py(px(7.))
             .rounded(px(7.))
@@ -1248,36 +1417,40 @@ impl AbroMux {
                     }
                 }),
             )
-            .on_drag(
-                DraggedWorkspace {
-                    id,
-                    name: name.clone().into(),
-                },
-                |d, _, _, cx| cx.new(|_| d.clone()),
-            )
-            // Where it would land shows as a line between rows: above this
-            // one over its top half, below it over the bottom half.
-            .on_drag_move(
-                cx.listener(move |this, ev: &DragMoveEvent<DraggedWorkspace>, _, cx| {
-                    if !ev.bounds.contains(&ev.event.position) {
-                        return;
+            // Sections by agent status follow what the agents do, not
+            // where you put a workspace, so there's nothing to drag.
+            .when(!by_status, |s| {
+                s.on_drag(
+                    DraggedWorkspace {
+                        id,
+                        name: name.clone().into(),
+                    },
+                    |d, _, _, cx| cx.new(|_| d.clone()),
+                )
+                // Where it would land shows as a line between rows: above this
+                // one over its top half, below it over the bottom half.
+                .on_drag_move(cx.listener(
+                    move |this, ev: &DragMoveEvent<DraggedWorkspace>, _, cx| {
+                        if !ev.bounds.contains(&ev.event.position) {
+                            return;
+                        }
+                        let at = Some((id, ev.event.position.y > ev.bounds.center().y));
+                        if this.ws_drop != at {
+                            this.ws_drop = at;
+                            cx.notify();
+                        }
+                    },
+                ))
+                .on_drop(cx.listener(move |this, d: &DraggedWorkspace, _, cx| {
+                    let after = this
+                        .ws_drop
+                        .take()
+                        .is_some_and(|(t, after)| t == id && after);
+                    if let (Some(from), Some(onto)) = (this.ws_index(d.id), this.ws_index(id)) {
+                        this.drop_workspace(from, onto, after, cx);
                     }
-                    let at = Some((id, ev.event.position.y > ev.bounds.center().y));
-                    if this.ws_drop != at {
-                        this.ws_drop = at;
-                        cx.notify();
-                    }
-                }),
-            )
-            .on_drop(cx.listener(move |this, d: &DraggedWorkspace, _, cx| {
-                let after = this
-                    .ws_drop
-                    .take()
-                    .is_some_and(|(t, after)| t == id && after);
-                if let (Some(from), Some(onto)) = (this.ws_index(d.id), this.ws_index(id)) {
-                    this.drop_workspace(from, onto, after, cx);
-                }
-            }))
+                }))
+            })
             .when_some(drop_line, |s, after| {
                 s.child(
                     div()
