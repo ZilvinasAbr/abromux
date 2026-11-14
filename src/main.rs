@@ -10,9 +10,7 @@ mod config;
 mod debug;
 mod find_bar;
 mod folder;
-mod ghostty;
 mod gitlab;
-mod hold;
 mod icon;
 mod ipc;
 mod keymap;
@@ -26,7 +24,6 @@ mod notification;
 mod notify_hook;
 mod palette;
 mod plugins;
-mod pty;
 mod quit;
 mod server;
 mod session;
@@ -49,6 +46,7 @@ use abromux_browser::{
     auto as browser_auto, downloads, find as browser_find, history as browser_history,
 };
 use abromux_core::{osc99, paths};
+use abromux_term::{ghostty, hold, pty};
 use browser::{BrowserEvent, BrowserView};
 use futures::StreamExt;
 use gpui::{prelude::*, *};
@@ -3347,6 +3345,9 @@ fn hint_pill(text: String) -> Div {
 }
 
 fn main() {
+    // Before anything can reach the holder or read a terminal.
+    hold::set_dir(channel::support_dir());
+    pty::on_output(abromux_platform::power::output);
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "bench-vt") {
         std::process::exit(bench::vt(&args[1..]));
@@ -3354,7 +3355,7 @@ fn main() {
     if args.first().is_some_and(|a| a == "bench-kitty") {
         std::process::exit(bench::kitty(&args[1..]));
     }
-    // The background process that keeps shells running (`"persistence": "abromux"`, hold.rs).
+    // The background process that keeps shells running (`"persistence": "abromux"`, abromux_term::hold).
     if args.first().is_some_and(|a| a == "hold") {
         if let Err(e) = hold::serve(&hold::socket_path()) {
             eprintln!("abromux hold: {e}");

@@ -290,7 +290,7 @@ impl TerminalView {
         // A held terminal comes back as it was left, plus what it printed since.
         let mut term = opened
             .snapshot
-            .and_then(|s| ghostty::Terminal::from_snapshot(&s).ok())
+            .and_then(|s| ghostty::Terminal::from_snapshot(&s, crate::theme::is_dark()).ok())
             .map(|t| configure(t, &config))
             .unwrap_or_else(|| new_term(cols, rows, &config));
         term.write(&opened.backlog);
@@ -2527,7 +2527,8 @@ fn drain(
 
 /// A libghostty-vt terminal with the config's colors and cursor.
 fn new_term(cols: u16, rows: u16, config: &Config) -> ghostty::Terminal {
-    let term = ghostty::Terminal::new(cols, rows).expect("libghostty-vt terminal");
+    let term = ghostty::Terminal::new(cols, rows, crate::theme::is_dark())
+        .expect("libghostty-vt terminal");
     configure(term, config)
 }
 
@@ -2772,7 +2773,7 @@ mod tests {
         // Cells are 7.9 px wide on screen; truncated to 7 px the encoder
         // used to report column ~170 for a click on column 150.
         let cell = size(px(7.9), px(17.6));
-        let mut t = Terminal::new(200, 40).unwrap();
+        let mut t = Terminal::new(200, 40, crate::theme::is_dark()).unwrap();
         t.write(b"\x1b[?1000h\x1b[?1006h");
         for (col, row) in [(0u16, 0u16), (150, 30), (199, 39)] {
             let at = point(
@@ -2795,7 +2796,7 @@ mod tests {
         // On a 2x screen 7.9x17.6 pt cells are 16x35 px to the program
         // (terminal-browser draws its page in those pixels).
         let cell = size(px(7.9), px(17.6));
-        let mut t = Terminal::new(200, 40).unwrap();
+        let mut t = Terminal::new(200, 40, crate::theme::is_dark()).unwrap();
         t.write(b"\x1b[?1003h\x1b[?1016h");
         let at = point(
             px(super::PADDING + 7.9 * 100.),

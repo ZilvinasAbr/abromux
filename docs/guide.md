@@ -595,14 +595,17 @@ History lives in `<git common dir>/abromux-perf/history.jsonl`, outside the tree
 
 ## Layout
 
-- `src/ghostty/`: FFI bindings and a safe wrapper (`Terminal`, `Frame` snapshots, key encoding, selection)
+- `crates/abromux-core`: logic with no UI and no OS calls (paths, the OSC 99 scanner, the control-socket protocol, the settings model as it moves there)
+- `crates/abromux-term`: `ghostty/`, the libghostty-vt bindings and a safe wrapper (`Terminal`, `Frame` snapshots, key encoding, selection); `pty.rs` and `hold.rs`, the PTYs and the holder that keeps shells running
+- `crates/abromux-platform`: every OS service the app uses (notifications, the menu-bar bell, App Nap, appearance, the dock, window drags, prefs, the channel and its folders), with the Objective-C parts in `src/macos/`
+- `crates/abromux-browser`: the browser page behind `PageBackend` (`backend/wkwebview.rs` on macOS), plus automation, find, history and downloads
 - `src/terminal.rs`: PTY plumbing plus a custom GPUI `Element` that paints the grid
-- `src/browser.rs`: the webview pane; `src/webauthn.{rs,js,m}`: the passkey bridge
+- `src/browser.rs`: the browser pane (address bar, toolbar, find bar); `src/webauthn.js` and `crates/abromux-platform/src/macos/webauthn.m`: the passkey bridge
 - `src/terminal_browser.rs`: browser tabs that run terminal-browser (`browser.engine`)
 - `src/workspace.rs`: the workspace, split-tree and surface model
 - `src/main.rs`: the app shell (pane tab bars, splits, actions); `src/sidebar.rs`: the sidebar's rows, groups, menus and drag to reorder
 - `src/bench.rs`: `abromux bench-vt` and `abromux bench-kitty`, the headless parse benchmarks used by `scripts/perf.py`
-- `src/server.rs`: the control socket's method handlers; `src/cli.rs`: the `abromux` commands; `src/ipc.rs`: the shared wire format
+- `src/server.rs`: the control socket's method handlers; `src/cli.rs`: the `abromux` commands; `src/ipc.rs` and `crates/abromux-core/src/ipc.rs`: the shared wire format
 - `src/plugins.rs`: the plugins built in; `crates/abromux-plugin`: the interface a plugin's tab implements; `crates/abromux-gitlab`: the GitLab review tab
 - `dev/gitlab/`: a GitLab in Docker with review fixtures, and scripts to drive and screenshot the plugin (see its README)
 

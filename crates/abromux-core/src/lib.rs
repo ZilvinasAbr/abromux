@@ -5,3 +5,4 @@
 pub mod ipc;
 pub mod osc99;
 pub mod paths;
+pub mod settings;
