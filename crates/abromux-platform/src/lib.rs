@@ -19,6 +19,6 @@ mod macos;
 pub mod prefs;
 
 pub use macos::{
-    appearance, browser_native, cursor, dock, notify, opener, power, process, tray, webauthn,
-    window,
+    appearance, browser_native, cursor, dock, file_types, notify, opener, power, process, tray,
+    webauthn, window,
 };

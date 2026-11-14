@@ -2,7 +2,7 @@
 //! libghostty-vt cells.
 
 use crate::ghostty::Cell;
-pub use abromux_core::link::{Local, Target, local};
+pub use abromux_core::link::{Local, Target, file_url_path, local};
 use std::ops::Range;
 
 /// The link covering column `col` of `row`, and the columns it spans.

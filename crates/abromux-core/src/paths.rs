@@ -43,6 +43,23 @@ pub fn ghostty_configs() -> [PathBuf; 2] {
     ]
 }
 
+/// The program `name` on PATH, in `~/.local/bin`, `/opt/homebrew/bin` or
+/// `/usr/local/bin`: an app opened from the Dock has only the system's PATH.
+pub fn find_program(name: &str) -> Option<PathBuf> {
+    let home = home();
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .chain([
+            home.join(".local/bin"),
+            "/opt/homebrew/bin".into(),
+            "/usr/local/bin".into(),
+        ])
+        .map(|d| d.join(name))
+        .find(|p| p.is_file())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

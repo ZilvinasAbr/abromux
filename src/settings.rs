@@ -21,7 +21,8 @@
 //!     "flashPane": ["cmd-shift-h", "ctrl-a f"],
 //!     "find": { "keys": "cmd-shift-f", "when": "Terminal" }
 //!   },
-//!   "browser": { "engine": "terminalBrowser" },
+//!   "browser": { "engine": "terminalBrowser", "terminalBrowserPanes": true },
+//!   "editor": { "program": "tode" },
 //!   "commands": [
 //!     { "title": "Run Tests", "run": "cargo test", "shortcut": "cmd-alt-t" },
 //!     { "title": "Dev Server", "run": "npm run dev", "newTab": true },
@@ -74,6 +75,7 @@ pub struct Settings {
     pub workspace_groups: WorkspaceGroups,
     pub automation: Automation,
     pub browser: BrowserSettings,
+    pub editor: EditorSettings,
     pub notifications: NotificationSettings,
     pub gitlab: GitlabSettings,
     pub jira: JiraSettings,
@@ -161,6 +163,9 @@ pub use abromux_core::settings::{NotificationHook, Persistence};
 pub struct BrowserSettings {
     /// What a browser tab is.
     pub engine: BrowserEngine,
+    /// terminal-browser opens new tabs as abromux splits beside it
+    /// (`crate::terminal_browser_panes`).
+    pub terminal_browser_panes: bool,
 }
 
 /// The built-in WebKit browser, or a terminal running `terminal-browser`.
@@ -171,6 +176,32 @@ pub enum BrowserEngine {
     BuiltIn,
     #[serde(alias = "terminal-browser")]
     TerminalBrowser,
+}
+
+/// Files abromux is asked to open (`crate::editor`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct EditorSettings {
+    /// The terminal editor a file opens in, in a pane of its own.
+    pub program: EditorProgram,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum EditorProgram {
+    #[default]
+    Nvim,
+    Tode,
+}
+
+impl EditorProgram {
+    /// Its value in the config file, which is also the command's name.
+    pub fn key(self) -> &'static str {
+        match self {
+            EditorProgram::Nvim => "nvim",
+            EditorProgram::Tode => "tode",
+        }
+    }
 }
 
 /// cmux's `app` keys that abromux has.
@@ -484,20 +515,33 @@ pub struct WorkspaceGroups {
     /// workspaces, or its header's +): after the selected one, second
     /// (after the group's first), or last.
     pub new_workspace_placement: Placement,
+    /// Sections by agent status, from 0.28: removed, but still accepted so
+    /// a config that set it isn't refused.
+    #[serde(rename = "groupByAgentStatus")]
+    _group_by_agent_status: serde::de::IgnoredAny,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct Automation {
     /// Name a workspace from its agent's prompts, summarised by that agent's
     /// own CLI (`claude -p`, `codex exec`), renaming it as the work moves on.
-    /// A name you give it wins and stops that. (A ⇧⌘I workspace left on its
-    /// made-up name is named this way even when off.)
+    /// A name you give it wins and stops that. On by default. (A ⇧⌘I
+    /// workspace left on its made-up name is named this way even when off.)
     pub workspace_auto_naming: bool,
     /// The agent CLI that cleans up a workspace folder (right-click › Clean
     /// Up and Delete Folder…), run with the instruction as its one argument.
     /// None is `claude`.
     pub workspace_cleanup_agent: Option<String>,
+}
+
+impl Default for Automation {
+    fn default() -> Self {
+        Self {
+            workspace_auto_naming: true,
+            workspace_cleanup_agent: None,
+        }
+    }
 }
 
 /// cmux's `notifications` keys.
@@ -808,6 +852,19 @@ pub fn error_notification(e: String) -> Notification {
 
 pub fn path() -> PathBuf {
     crate::paths::xdg_config().join("abromux/config.json")
+}
+
+/// The config file's path, after making an empty one if there's none, so
+/// it can be opened in an editor.
+pub fn ensure_file() -> PathBuf {
+    let path = path();
+    if !path.exists() {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, "{\n}\n");
+    }
+    path
 }
 
 /// The settings in the config file, or the defaults if there is none.
@@ -1180,8 +1237,8 @@ mod tests {
               "sidebar": { "fontSize": 14, "hideAllDetails": true, "selectionColor": "#336699" },
               "sidebarAppearance": { "tintColor": "#000", "tintOpacity": 0.3 },
               "workspaceColors": { "indicatorStyle": "solidFill", "colors": { "Ocean": "#0066aa" } },
-              "workspaceGroups": { "newWorkspacePlacement": "top" },
-              "automation": { "workspaceAutoNaming": true }
+              "workspaceGroups": { "newWorkspacePlacement": "top", "groupByAgentStatus": true },
+              "automation": { "workspaceAutoNaming": false }
             }"##,
         )
         .unwrap();
@@ -1209,8 +1266,9 @@ mod tests {
         );
         assert_eq!(s.workspace_colors.parse("#ff0000"), Some(0xff0000));
         assert_eq!(s.workspace_groups.new_workspace_placement, Placement::Top);
-        assert!(s.automation.workspace_auto_naming);
+        assert!(!s.automation.workspace_auto_naming);
         let d = Settings::default();
+        assert!(d.automation.workspace_auto_naming, "on unless turned off");
         assert_eq!(d.workspace_colors.parse("amber"), Some(0x7D6608));
         assert_eq!(d.app.new_workspace_placement, Placement::End);
         let err = |text: &str| parse(text).unwrap_err().to_string();
@@ -1248,10 +1306,21 @@ mod tests {
         }
         let s = parse(r#"{"browser": {"engine": "builtIn"}}"#).unwrap();
         assert_eq!(s.browser.engine, BrowserEngine::BuiltIn);
+        assert!(!Settings::default().browser.terminal_browser_panes);
+        let s = parse(r#"{"browser": {"terminalBrowserPanes": true}}"#).unwrap();
+        assert!(s.browser.terminal_browser_panes);
         let e = parse(r#"{"browser": {"engine": "chrome"}}"#)
             .unwrap_err()
             .to_string();
         assert!(e.contains("unknown variant"), "{e}");
+    }
+
+    #[test]
+    fn editor_program() {
+        assert_eq!(Settings::default().editor.program, EditorProgram::Nvim);
+        let s = parse(r#"{"editor": {"program": "tode"}}"#).unwrap();
+        assert_eq!(s.editor.program, EditorProgram::Tode);
+        assert!(parse(r#"{"editor": {"program": "emacs"}}"#).is_err());
     }
 
     #[test]

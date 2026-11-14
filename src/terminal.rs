@@ -131,6 +131,11 @@ pub trait TerminalApp: Any {
     fn saves_as_page(&self) -> bool {
         self.page_url().is_some()
     }
+    /// The file the tab's editor has open (`crate::editor`): the session
+    /// saves the tab as a terminal that opens it again.
+    fn edits(&self) -> Option<&std::path::Path> {
+        None
+    }
 }
 
 pub enum TerminalEvent {

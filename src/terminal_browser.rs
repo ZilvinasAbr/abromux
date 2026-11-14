@@ -36,6 +36,10 @@ pub const SCALE: f32 = 2.;
 /// `PIXEL_DISPLAY_SCALE` is [`SCALE`], which `attach` reports pixels at.
 pub fn command(url: &str) -> Option<String> {
     let bin = find()?;
+    // A `terminal-browser upgrade` since the last one undid the hooks.
+    if let Err(e) = crate::terminal_browser_panes::sync() {
+        eprintln!("abromux: {e}");
+    }
     let mut cmd = format!(
         "TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK=1 PIXEL_DISPLAY_SCALE={SCALE} exec {} open --no-merge",
         shell_quote(&bin.to_string_lossy())
@@ -47,25 +51,13 @@ pub fn command(url: &str) -> Option<String> {
     Some(cmd)
 }
 
-/// `terminal-browser` on PATH or where its installer puts it; an app
-/// opened from the Dock has only the system's PATH.
-fn find() -> Option<PathBuf> {
-    let home = crate::paths::home();
-    std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
-        .unwrap_or_default()
-        .into_iter()
-        .chain([
-            home.join(".local/bin"),
-            "/opt/homebrew/bin".into(),
-            "/usr/local/bin".into(),
-        ])
-        .map(|d| d.join("terminal-browser"))
-        .find(|p| p.is_file())
+/// `terminal-browser` on PATH or where its installer puts it.
+pub(crate) fn find() -> Option<PathBuf> {
+    crate::paths::find_program("terminal-browser")
 }
 
 /// One word for sh, zsh, bash or fish.
-fn shell_quote(s: &str) -> String {
+pub(crate) fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 

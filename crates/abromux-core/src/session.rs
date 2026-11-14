@@ -124,6 +124,10 @@ pub enum TabState {
         /// `ABROMUX_SURFACE_ID`; only kept with `held`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         surface: Option<usize>,
+        /// The file its editor had open (the app's `editor`), opened again
+        /// in the editor set then.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        edit: Option<String>,
     },
     Browser {
         url: String,
@@ -284,6 +288,7 @@ mod tests {
                                 name: Some("server".into()),
                                 held: Some("4242-3".into()),
                                 surface: Some(7),
+                                edit: Some("/tmp/main.rs".into()),
                             }],
                         },
                         NodeState::Pane {

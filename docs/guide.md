@@ -9,6 +9,7 @@ Everything AbroMux does, in detail. For a quick start, see the [README](../READM
 - **Downloads** from browser panes go to `~/Downloads` (a file already there gets ` (1)` and so on), including links the server marks `Content-Disposition: attachment`. Once there's one, a download button joins the toolbar: a bar under it shows progress while one runs, and it hops when one starts. Click it for the session's list: click a finished one to open it, the magnifier shows it in Finder, `×` cancels a running one, and Clear empties the list (the files stay). `abromux browser downloads` and `wait-download` do the same from the CLI.
 - **Popovers over pages**: the command palette, ⌘I, the update popover, the sidebar's right-click menus, address-bar suggestions, the downloads list and dragging a tab all draw over a browser pane. Native webviews draw above everything the app draws, so while one of these is open the page is swapped for a bitmap of itself, taken just before; it comes back live when the popover closes.
 - **Markdown tabs** show a local Markdown file rendered, GitHub style (tables, task lists, footnotes, HTML in the file, `#heading` links), and follow the file: an edit shows within half a second, at the same scroll position. Open one with `abromux markdown <file>` (or `abromux open <file>.md`), or ⌘-click a `.md` path in a terminal. Relative links and images in the file work, so do back/forward, ⌘F, zoom and the `abromux browser` commands; web links open in a browser tab beside it. They're browser tabs underneath, served from an `abromux-md://` address that only Markdown tabs load, and they show local files only. Scripts in a file don't run.
+- **Files from Finder** open in a terminal editor, Neovim or tode (`editor.program`), in a new pane beside the focused one: pick AbroMux in a file's Open With menu, or make it the default app for a file type (see [Opening files](#opening-files)).
 - **Workspaces** sit in a left sidebar, cmux style. Each entry shows the name, the focused tab's title, the git branch and the cwd, plus whatever scripts report through the CLI: status pills (`set-status`), a progress bar (`set-progress`) and the newest `log` line.
 - **Coding agents** (Claude Code, Codex, Gemini CLI, Droid, Cursor CLI, OpenCode and Pi) show up in the sidebar once you've run `abromux hooks install`: a "Running" pill while the agent works and "Needs input" when it asks for permission (Cursor's hooks can't say when it asks). When it asks, or finishes a turn, its terminal gets a notification ("Codex: Asks to run …", "Claude Code: <the start of its reply>"). Their tabs show the agent's logo (Claude Code and Codex) or a robot.
 - **Notifications** come from terminal programs (OSC 9, OSC 99 and OSC 777, as Claude Code, Codex and others send them), from the bell, and from `abromux notify`. One you aren't looking at rings its pane, puts a dot on its tab and on its workspace, shows its text under the workspace in the sidebar, counts on the dock icon, and, while AbroMux is in the background, shows a macOS banner that takes you to it when clicked (banners need AbroMux.app; a `cargo run` build has the rest). It's read once you look at that terminal. ⌘I lists them all; ⌘⇧U jumps to the newest unread one. ⌥⌘U marks the terminal in front of you unread (or read), and ⌃⌘U sends its notification to the back of the queue and jumps to the next one, to work through a pile one at a time. A bell in the macOS menu bar shows the unread count and lists them. [Notification hooks](#notifications) can filter or change each one.
@@ -74,7 +75,7 @@ The check time and a skipped version are kept in `update.json` in the support fo
 
 ## GitLab reviews
 
-A GitLab tab (⌘⇧P → New GitLab Tab) shows merge requests the way GitLab's web UI does, in its dark theme (whatever the app's appearance). It's built in as a plugin (`crates/abromux-gitlab`, the `gitlab` Cargo feature, on by default) and writes what a reviewer and an author do: comments, replies, resolving, threads on lines, approvals, editing and deleting your comments, editing the title and description, draft, close and reopen, merging, and running, retrying or cancelling pipelines.
+A GitLab tab (⌘⇧P → New GitLab Tab) shows merge requests the way GitLab's web UI does, in its light or dark theme as the app's appearance is (Settings › App › Appearance). It's built in as a plugin (`crates/abromux-gitlab`, the `gitlab` Cargo feature, on by default) and writes what a reviewer and an author do: comments, replies, resolving, threads on lines, approvals, editing and deleting your comments, editing the title and description, draft, close and reopen, merging, and running, retrying or cancelling pipelines.
 
 - **Sign in** with the GitLab URL and a personal access token with the `api` scope (a `read_api` token works too, but then writing says the token needs `api`). The token is checked, then kept in your login Keychain (service `abromux-gitlab`, account = the URL). New GitLab tabs then open on that GitLab, so you sign in once. `ABROMUX_GITLAB_TOKEN` overrides it.
 - **The list** has the merge requests you're asked to review, the ones you created, and all you can see, open, merged, closed or all of them, with checklist progress, coloured labels, the target branch when it isn't the default, pipeline status, assignees and reviewers, resolved threads ("1 of 4") and Approved, Merged and Closed badges, newest first, and a filter.
@@ -139,7 +140,7 @@ Each workspace's row shows its name, a description if it has one, the focused ta
 - **Color**: right-click → Color, from cmux's sixteen (Red, Crimson, Orange, Amber, Olive, Green, Teal, Aqua, Blue, Navy, Indigo, Purple, Magenta, Rose, Brown, Charcoal) or your own palette (`workspaceColors.colors`). It shows as a bar down the row's left edge, or fills the row with `"indicatorStyle": "solidFill"`. A layout's `"color"` sets it too.
 - **Order**: drag a row to move it. A line shows where it will land, between two rows; between two of a group's workspaces puts it in that group, and above a group's header keeps it out. Dropping it on a header makes it the group's first. Right-click → Move Up / Move Down / Move to Top, or ⌘⇧P → Move Workspace Up / Down. ⌘1…⌘9 follow the order.
 - **Groups**: a header above workspaces that belong together. Right-click a row → Group → New Group starts one (named after the repository, with the name selected so you can type a new one), or ⌘⇧P → Group Workspaces by Folder groups every workspace that shares a repository or folder with another. Click a header to fold it (a folded group still shows the selected workspace, and a dot if one has an unread notification), double-click to rename it, drag it to move the whole group, and use its `+` for a new workspace in the group's folder. Right-click a header to rename, color, ungroup or close it. ⌘N from a workspace in a group puts the new one in the group.
-- **Auto-naming** (off by default): with `"automation": { "workspaceAutoNaming": true }`, the first coding agent to run in a workspace names it; agents started later in other terminals leave the name alone. Claude Code titles its own terminal from the session, so a Claude workspace takes that title, and follows it as Claude Code retitles. Other agents' prompts are turned into a short name by that agent's own CLI (`codex exec`, or `claude -p` on Haiku), and renamed as later prompts move the work on (very short ones like "yes" don't count). That runs a request on your account per rename. A name you give the workspace always wins and stops the renaming; clearing it (an empty rename) starts it again. A try that fails (the CLI timing out, a rate limit) is made again on the next prompt, and after three in a row only every ten minutes. Agents other than Claude Code and Codex are named by whichever of those two is installed. Without either, the name follows the agent's terminal title. A ⇧⌘I workspace left on its made-up name is auto-named this way even with the setting off; typing a name in the ⇧⌘I dialog counts as naming it.
+- **Auto-naming** (on by default; turn it off with `"automation": { "workspaceAutoNaming": false }`): the first coding agent to run in a workspace names it; agents started later in other terminals leave the name alone. Claude Code titles its own terminal from the session, so a Claude workspace takes that title, and follows it as Claude Code retitles. Other agents' prompts are turned into a short name by that agent's own CLI (`codex exec`, or `claude -p` on Haiku), and renamed as later prompts move the work on (very short ones like "yes" don't count). That runs a request on your account per rename. A name you give the workspace always wins and stops the renaming; clearing it (an empty rename) starts it again. A try that fails (the CLI timing out, a rate limit) is made again on the next prompt, and after three in a row only every ten minutes. Agents other than Claude Code and Codex are named by whichever of those two is installed. Without either, the name follows the agent's terminal title. A ⇧⌘I workspace left on its made-up name is auto-named this way even with the setting off; typing a name in the ⇧⌘I dialog counts as naming it.
 
 ## Workspace folders
 
@@ -154,7 +155,7 @@ Closing the workspace keeps its folder.
 
 ### Cleaning up
 
-⇧⌘X (or right-click a workspace with a folder › Clean Up and Delete Folder…) moves the workspace into the **Cleanup** group, which always stays last in the sidebar, and opens a tab in the folder running a cleanup agent: `claude 'Read .abromux/cleanup.md and follow it.'`. It looks for everything the workspace made outside its folder, checks for work that would be lost, shows you what it will remove and keep, and waits for you to agree. Then it removes those things and ends with `abromux folder remove`, which closes the workspace. Claude asks before each command as usual. Set `automation.workspaceCleanupAgent` for another agent CLI; the instruction is passed as its one argument.
+⇧⌘X (or right-click a workspace with a folder › Clean Up and Delete Folder…) moves the workspace into the **Cleanup** group, which always stays last in the sidebar, and opens a tab in the folder running a cleanup agent: `claude 'Read .abromux/cleanup.md and follow it.'`. It looks for everything the workspace made outside its folder, removes those things without asking, and ends with `abromux folder remove`, which closes the workspace. Workspaces are treated as scratch folders for one task, so it only stops to ask when work would really be lost: uncommitted changes or unpushed, unmerged commits in a worktree, or a changed copy of a folder. Things that were there before or are shared with other projects are kept, and listed at the end. Claude asks before each command as usual. Set `automation.workspaceCleanupAgent` for another agent CLI; the instruction is passed as its one argument.
 
 To make that findable, each folder's `AGENTS.md` asks agents to keep track of what they make:
 
@@ -268,6 +269,29 @@ terminal-browser run in a shell (`terminal-browser open ./report.html`, as an ag
 
 abromux looks for `terminal-browser` on PATH, in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`; if it isn't there, the tab falls back to the built-in browser with a warning. The setting applies to tabs opened after it changes; open ones stay as they are. A terminal-browser tab is restored as a browser tab on the page it last showed (its own back/forward history isn't kept). The `abromux browser` automation commands only drive built-in tabs, so `abromux browser open` always opens one (use `terminal-browser action` to drive a terminal-browser).
 
+`"terminalBrowserPanes": true` in `browser` (Settings: General › Browser › terminal-browser new tabs as panes) has terminal-browser open new tabs as abromux panes instead of its own tabs. Links that ask for a new tab (`target=_blank`, ⌘-click, middle-click), the context menu's "Open link in new tab" and terminal-browser's new-tab box then open a terminal-browser split to the right of the browser they came from (`TB_ABROMUX_SPLIT=down`, `left` or `up` in that pane's environment picks another side). Pages opened with `window.open` and window features (OAuth and SSO sign-ins that talk to their opener) stay popups. terminal-browser has no setting for this, so abromux adds a few lines to its `app/browser/dist/main.js`, and takes them out when the setting is off. That file is outside terminal-browser's signed Electron app, so its signature, entitlements and passkeys are untouched. `terminal-browser upgrade` replaces the file; abromux puts the lines back before it next starts a terminal-browser, and if the code they hook into has moved, it changes nothing and says so. A running terminal-browser keeps the code it started with: all of them share one daemon, so a change applies once every terminal-browser has quit. That daemon's environment is the first pane's, so the new pane comes from each browser's own `ABROMUX_SURFACE_ID`; a browser that isn't in an abromux pane opens a normal tab. Shells get `ABROMUX_BIN`, the CLI of the app they run in, which is what the new pane is made with.
+
+### Opening files
+
+```json
+{ "editor": { "program": "tode" } }
+```
+
+AbroMux can open files from Finder. It's listed in Open With for text and source files, and for the code extensions `abromux default-app list` prints (`.rs`, `.ts`, `.toml`… that macOS has no text type for). It never makes itself their default app on its own. Each file opens in a terminal running the editor `program` names, `nvim` (the default) or `tode`, in a new pane to the right of the focused one. That's in the workspace whose folder, or focused terminal's directory, holds the file most closely, else the selected one. The editor starts in the workspace's folder when the file is in it, else in the file's own folder. tode runs as `tode -n <file>`, so it opens in that pane rather than in a tode window already open. Quitting the editor closes the pane. Settings has it under General › Editor. Folders opened the same way (dropped on the Dock icon) open as workspaces.
+
+To have files open in AbroMux on a double-click:
+
+```bash
+abromux default-app code        # every extension `default-app list` prints
+abromux default-app rs ts py    # or just these
+```
+
+That's what Finder's Get Info › Open with › Change All… does, one extension at a time; Change All… there takes it back to another app. It must be the `abromux` inside AbroMux.app (or a nightly), since the app the command belongs to becomes the default.
+
+`abromux edit <file>…` opens files the same way from a shell, in a pane beside that terminal. A file that doesn't exist yet is fine if its folder does. The session saves an editor tab as the file it had open and opens it again on the next launch, in whichever editor is set then.
+
+The pane's tab shows a pencil and the file's name. abromux looks for the editor on PATH, in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`; if it isn't there, a warning says so and nothing opens.
+
 ### Sidebar and workspace settings
 
 These use cmux's key names. Shown with their defaults:
@@ -306,7 +330,7 @@ These use cmux's key names. Shown with their defaults:
     "colors": { "Red": "#C0392B", "Blue": "#1565C0" }
   },
   "workspaceGroups": { "newWorkspacePlacement": "afterCurrent" },
-  "automation": { "workspaceAutoNaming": false, "workspaceCleanupAgent": null }
+  "automation": { "workspaceAutoNaming": true, "workspaceCleanupAgent": null }
 }
 ```
 
@@ -376,7 +400,7 @@ A project can have its own commands. The palette looks from the focused terminal
 
 Reloading the config applies new shortcuts at once, in the menus too.
 
-⌘⇧, (or ⌘⇧P → Reload Config, or `abromux reload-config`) reads the file again without a restart. If it doesn't parse, the current settings stay and a toast shows the error with its line and column, and it does the same at launch. `abromux config check [<file>]` validates a file without the app, and `abromux config path` prints where it's read from. The Ghostty config below is separate and is still read only at launch.
+⌘⇧, (or ⌘⇧P → Reload Config, or `abromux reload-config`) reads the file again without a restart. If it doesn't parse, the current settings stay and a toast shows the error with its line and column, and it does the same at launch. `abromux config check [<file>]` validates a file without the app, `abromux config path` prints where it's read from, and `abromux config open` (or ⌘⇧P → Open Config File) opens it in its default app, making an empty one first if there's none. The Ghostty config below is separate and is still read only at launch.
 
 ### Notifications
 
@@ -445,6 +469,7 @@ abromux join-pane --target-pane pane:2 --pane pane:4   # pane:4's active tab to 
 abromux zoom-pane                           # like ⌘⇧↩; on, off or toggle
 abromux trigger-flash --surface surface:3   # flash its pane, like ⌘⇧H
 abromux markdown README.md                  # a Markdown tab split off to the right; it follows edits to the file
+abromux edit src/main.rs                    # the file in editor.program (nvim or tode), in a pane split off to the right
 abromux browser open https://example.com
 abromux browser eval 'document.title'
 abromux browser zoom 125%                   # or in, out, reset, 1.5; no argument prints it
@@ -602,6 +627,7 @@ History lives in `<git common dir>/abromux-perf/history.jsonl`, outside the tree
 - `src/terminal.rs`: PTY plumbing plus a custom GPUI `Element` that paints the grid
 - `src/browser.rs`: the browser pane (address bar, toolbar, find bar); `src/webauthn.js` and `crates/abromux-platform/src/macos/webauthn.m`: the passkey bridge
 - `src/terminal_browser.rs`: browser tabs that run terminal-browser (`browser.engine`)
+- `src/editor.rs`: files opened from Finder or `abromux edit`, in a terminal editor (`editor.program`); `abromux default-app`
 - `src/workspace.rs`: the workspace, split-tree and surface model
 - `src/main.rs`: the app shell (pane tab bars, splits, actions); `src/sidebar.rs`: the sidebar's rows, groups, menus and drag to reorder
 - `src/bench.rs`: `abromux bench-vt` and `abromux bench-kitty`, the headless parse benchmarks used by `scripts/perf.py`

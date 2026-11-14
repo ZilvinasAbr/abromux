@@ -331,14 +331,14 @@ impl GitLabView {
             .gap_1()
             .child(who)
             .when(!compact && !local && author.id == mr_author, |d| {
-                d.child(badge("Author", c(0xa4a3a8), c(BG)).flex_none())
+                d.child(neutral_badge("Author").flex_none())
             })
             .when_some(
                 self.review
                     .ready()
                     .and_then(|r| r.roles.get(&author.id).copied())
                     .filter(|_| !compact && !local),
-                |d, role| d.child(badge(role, c(0xa4a3a8), c(BG)).flex_none()),
+                |d, role| d.child(neutral_badge(role).flex_none()),
             )
             .children(actions.map(|a| a.flex_none().mt(px(-4.))))
     }

@@ -271,6 +271,7 @@ impl Location {
 
 /// `params`: a saved [`Location`], or `{"url": "<merge request URL>"}`.
 fn open(params: &Value, window: &mut Window, cx: &mut App) -> anyhow::Result<TabHandle> {
+    style::follow_theme(cx);
     let url = params
         .get("url")
         .and_then(Value::as_str)

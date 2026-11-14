@@ -6,6 +6,7 @@ mod channel;
 mod cli;
 mod config;
 mod debug;
+mod editor;
 mod find_bar;
 mod folder;
 mod gitlab;
@@ -34,6 +35,7 @@ mod status;
 mod tabs;
 mod terminal;
 mod terminal_browser;
+mod terminal_browser_panes;
 mod theme;
 mod titlebar;
 mod update;
@@ -68,6 +70,7 @@ actions!(
     [
         About,
         OpenSettings,
+        OpenConfig,
         Quit,
         NewWorkspace,
         NewFolderWorkspace,
@@ -736,6 +739,11 @@ impl AbroMux {
             ));
             // Compose stacks started here are the workspace's, for cleanup.
             env.push(("COMPOSE_PROJECT_NAME".into(), folder::tag(&home)));
+        }
+        // This app's CLI, for programs that call back into it (the stable and
+        // nightly apps each have their own).
+        if let Ok(exe) = std::env::current_exe() {
+            env.push(("ABROMUX_BIN".into(), exe.to_string_lossy().into_owned()));
         }
         env.extend([
             ("ABROMUX_WORKSPACE_ID".into(), format!("workspace:{ws}")),
@@ -1409,9 +1417,10 @@ impl AbroMux {
     /// Right-click › Clean Up and Delete Folder…: a tab in workspace `wi`'s
     /// folder running the cleanup agent (`automation.workspaceCleanupAgent`,
     /// default `claude`) on `.abromux/cleanup.md`. The agent finds what the
-    /// workspace made, asks, removes it, and ends with `abromux folder
-    /// remove`. It runs in a shell, so the shell stays if it stops early.
-    /// The workspace moves to the "Cleanup" group, last in the sidebar.
+    /// workspace made, removes it (asking only if work would be lost), and
+    /// ends with `abromux folder remove`. It runs in a shell, so the shell
+    /// stays if it stops early. The workspace moves to the "Cleanup" group,
+    /// last in the sidebar.
     pub(crate) fn clean_up_folder(
         &mut self,
         wi: usize,
@@ -3079,6 +3088,8 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, a: &keymap::RunCommand, window, cx| {
                 this.run_command(a.index, a.project.clone(), window, cx)
             }))
+            // Also on the root (not only app-wide) so the palette lists it.
+            .on_action(|_: &OpenConfig, _, cx| settings_window::open_config(cx))
             .on_action(cx.listener(|this, _: &ReloadConfig, window, cx| {
                 // A toast says how it went.
                 let _ = this.reload_settings(window, cx);
@@ -3364,7 +3375,14 @@ fn main() {
 }
 
 fn run_app(cwd: Option<String>) {
-    Application::new().with_assets(Assets).run(|cx: &mut App| {
+    let app = Application::new().with_assets(Assets);
+    // Files opened from Finder (editor.rs). They can come before the window
+    // is up, at launch, so they wait in the channel until it is.
+    let (opened_tx, mut opened) = futures::channel::mpsc::unbounded::<Vec<String>>();
+    app.on_open_urls(move |urls| {
+        let _ = opened_tx.unbounded_send(urls);
+    });
+    app.run(move |cx: &mut App| {
         icon::set_dock_icon();
         abromux_platform::prefs::import_once(&alert::SKIP_KEYS);
         gpui_component::init(cx);
@@ -3378,6 +3396,10 @@ fn run_app(cwd: Option<String>) {
         theme::apply_appearance(settings.app.appearance);
         theme::set_dark(theme::appearance_is_dark(cx.window_appearance()), cx);
         cx.set_global(config::Config::load());
+        // Off by default: only takes out hooks an earlier run put in.
+        if let Err(e) = terminal_browser_panes::set(settings.browser.terminal_browser_panes) {
+            eprintln!("abromux: {e}");
+        }
         cx.set_global(settings);
         update::init(cx);
         gitlab::init(cx);
@@ -3391,6 +3413,7 @@ fn run_app(cwd: Option<String>) {
         });
         cx.on_action(|_: &About, cx| about::show(cx));
         cx.on_action(|_: &OpenSettings, cx| settings_window::show(cx));
+        cx.on_action(|_: &OpenConfig, cx| settings_window::open_config(cx));
         // The fixed bindings; the shortcuts users can change are in keymap.rs.
         cx.bind_keys([
             KeyBinding::new("cmd-w", about::CloseAbout, Some("About")),
@@ -3450,35 +3473,56 @@ fn run_app(cwd: Option<String>) {
             .and_then(|s| s.window)
             .map(|w| session::window_bounds(&w))
             .unwrap_or_else(|| Bounds::centered(None, size(px(1280.), px(820.)), cx));
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(640.), px(400.))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some(channel::app_name().into()),
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(px(14.), px(13.))),
-                }),
-                window_background: WindowBackgroundAppearance::Blurred,
-                // Only empty titlebar areas move it (titlebar.rs), not tab drags.
-                is_movable: false,
-                ..Default::default()
-            },
-            |window, cx| {
-                theme::follow(window);
-                if let Some(e) = settings_error {
-                    window.defer(cx, move |window, cx| {
-                        window.push_notification(settings::error_notification(e), cx)
-                    });
-                }
-                let view = cx.new(|cx| AbroMux::new(cwd, session, window, cx));
-                plugins::set_host(view.downgrade(), cx);
-                let layer = cx.new(|cx| alert::Layer::new(view, window, cx));
-                cx.new(|cx| Root::new(layer, window, cx))
-            },
-        )
-        .expect("open window");
+        let host = Rc::new(RefCell::new(None::<WeakEntity<AbroMux>>));
+        let set_host = host.clone();
+        let window = cx
+            .open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_min_size: Some(size(px(640.), px(400.))),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some(channel::app_name().into()),
+                        appears_transparent: true,
+                        traffic_light_position: Some(point(px(14.), px(13.))),
+                    }),
+                    window_background: WindowBackgroundAppearance::Blurred,
+                    // Only empty titlebar areas move it (titlebar.rs), not tab drags.
+                    is_movable: false,
+                    ..Default::default()
+                },
+                |window, cx| {
+                    theme::follow(window);
+                    if let Some(e) = settings_error {
+                        window.defer(cx, move |window, cx| {
+                            window.push_notification(settings::error_notification(e), cx)
+                        });
+                    }
+                    let view = cx.new(|cx| AbroMux::new(cwd, session, window, cx));
+                    plugins::set_host(view.downgrade(), cx);
+                    *set_host.borrow_mut() = Some(view.downgrade());
+                    let layer = cx.new(|cx| alert::Layer::new(view, window, cx));
+                    cx.new(|cx| Root::new(layer, window, cx))
+                },
+            )
+            .expect("open window");
         cx.activate(true);
+        let view = host.borrow_mut().take();
+        cx.spawn(async move |cx| {
+            let Some(view) = view else { return };
+            while let Some(urls) = opened.next().await {
+                let paths = editor::paths(&urls);
+                if paths.is_empty() {
+                    continue;
+                }
+                let open = window.update(cx, |_, window, cx| {
+                    view.update(cx, |v, cx| v.open_paths(paths, window, cx))
+                });
+                if !matches!(open, Ok(Ok(()))) {
+                    break;
+                }
+            }
+        })
+        .detach();
     });
 }
 

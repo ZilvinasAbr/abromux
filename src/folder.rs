@@ -101,6 +101,10 @@ const CLEANUP_MD: &str = "\
 This workspace is finished. Remove everything that was made for it, then
 delete it. You are running inside its folder; the last step ends this session.
 
+Workspaces are scratch folders for one task: nothing in them is meant to
+last. Don't ask the user to confirm; just do it. Stop and ask only when
+something would really be lost (step 2).
+
 1. Find what it made:
    - `abromux folder resources`: what agents recorded in
      `.abromux/resources.md`, and the Docker containers, volumes and
@@ -113,22 +117,26 @@ delete it. You are running inside its folder; the last step ends this session.
      namespaces, images…) and check whether those exist now; processes still
      running from this folder (`lsof -a -d cwd +D \"$PWD\"`, and
      `ps -eo pid,command | grep -F \"$PWD\"`) and the ports they listen on.
-2. Check what would be lost: in each worktree, uncommitted changes and
-   commits not pushed or merged anywhere. Copies are deleted outright, so say
-   if one was changed.
-3. Show the user one list: what you'll remove, and what you'll keep and why.
-   Only remove what was made for this workspace. Anything shared with other
+2. Check what would be lost: in each worktree, uncommitted changes (ignore
+   build output and other generated files) and commits not pushed or merged
+   anywhere (squash merges count as merged). Copies of folders that aren't
+   repos are deleted outright, so check whether one was changed. If any of
+   that turns up, this is the one time to stop: show the user exactly what
+   would be lost and wait for them to say go ahead (then use `--force` in
+   step 5) or stop. Otherwise don't ask anything.
+3. Only remove what was made for this workspace. Anything shared with other
    projects, or that was there before, stays (base images pulled from a
-   registry, a database server other things use). Wait for the user to agree.
+   registry, a database server other things use); keep it without asking
+   and mention it at the end.
 4. Remove it: stop the processes, `docker compose -p \"$COMPOSE_PROJECT_NAME\"
    down -v --rmi local` for the compose project, `docker rm -f`, `docker
    volume rm` and `docker network rm` for labelled leftovers, the commands
    in `.abromux/resources.md`, and so on. Check that each one is gone.
 5. Last, run `abromux folder remove`. It removes the worktrees (keeping their
    branches unless they're merged), deletes this folder and closes the
-   workspace, which ends this session, so tell the user what you did before
-   you run it. If it refuses, tell the user why and stop; don't add
-   `--force` unless they say so.
+   workspace, which ends this session, so first print a short list of what
+   you removed and kept. If it refuses, tell the user why and stop; add
+   `--force` only if they agreed in step 2 to lose that work.
 ";
 
 /// The workspace folder `path` is in, if any: the nearest folder holding

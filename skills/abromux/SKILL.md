@@ -130,6 +130,7 @@ Merge requests from your branches are listed already; tickets and merge requests
 ```bash
 abromux open ~/code/other-repo           # a directory opens a workspace; a URL opens a browser split
 abromux markdown docs/plan.md            # show the user a Markdown file rendered, beside you; it updates as you edit it
+abromux edit src/main.rs                 # open a file for the user in their editor (nvim or tode), beside you
 abromux rename-workspace 'auth refactor' # your workspace
 abromux workspace-action set-description 'Migrating auth to OAuth'   # a line under its name
 abromux workspace-action set-color Teal  # cmux's color names or #rrggbb; clear-color
