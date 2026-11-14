@@ -312,8 +312,6 @@ struct AbroMux {
     groups: Vec<workspace::Group>,
     next_group: usize,
     renaming_group: Option<(usize, Entity<InputState>)>,
-    /// Agent-status sections folded away (`workspaceGroups.groupByAgentStatus`).
-    folded_states: std::collections::HashSet<workspace::AgentState>,
     /// Where a dragged workspace would land: beside workspace id, after it
     /// or before.
     ws_drop: Option<(usize, bool)>,
@@ -395,7 +393,6 @@ impl AbroMux {
             groups: vec![],
             next_group: 0,
             renaming_group: None,
-            folded_states: Default::default(),
             ws_drop: None,
             renaming_tab: None,
             sidebar: true,
@@ -2900,13 +2897,13 @@ impl Render for AbroMux {
                 this.sidebar = true;
                 this.start_rename(this.active, window, cx)
             }))
-            .on_action(
-                cx.listener(|this, _: &NextWorkspace, window, cx| {
-                    this.step_workspace(1, window, cx)
-                }),
-            )
+            .on_action(cx.listener(|this, _: &NextWorkspace, window, cx| {
+                let n = this.workspaces.len();
+                this.select_workspace((this.active + 1) % n, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &PrevWorkspace, window, cx| {
-                this.step_workspace(-1, window, cx)
+                let n = this.workspaces.len();
+                this.select_workspace((this.active + n - 1) % n, window, cx)
             }))
             .on_action(cx.listener(|this, _: &NewTerminal, window, cx| {
                 let cwd = this.focused_cwd(cx);
@@ -2984,17 +2981,17 @@ impl Render for AbroMux {
                     BrowserView::focus_address(b, window, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &Ws1, w, cx| this.select_slot(0, w, cx)))
-            .on_action(cx.listener(|this, _: &Ws2, w, cx| this.select_slot(1, w, cx)))
-            .on_action(cx.listener(|this, _: &Ws3, w, cx| this.select_slot(2, w, cx)))
-            .on_action(cx.listener(|this, _: &Ws4, w, cx| this.select_slot(3, w, cx)))
-            .on_action(cx.listener(|this, _: &Ws5, w, cx| this.select_slot(4, w, cx)))
-            .on_action(cx.listener(|this, _: &Ws6, w, cx| this.select_slot(5, w, cx)))
-            .on_action(cx.listener(|this, _: &Ws7, w, cx| this.select_slot(6, w, cx)))
-            .on_action(cx.listener(|this, _: &Ws8, w, cx| this.select_slot(7, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws1, w, cx| this.select_workspace(0, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws2, w, cx| this.select_workspace(1, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws3, w, cx| this.select_workspace(2, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws4, w, cx| this.select_workspace(3, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws5, w, cx| this.select_workspace(4, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws6, w, cx| this.select_workspace(5, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws7, w, cx| this.select_workspace(6, w, cx)))
+            .on_action(cx.listener(|this, _: &Ws8, w, cx| this.select_workspace(7, w, cx)))
             .on_action(cx.listener(|this, _: &Ws9, w, cx| {
                 let last = this.workspaces.len() - 1;
-                this.select_slot(last, w, cx)
+                this.select_workspace(last, w, cx)
             }))
             .on_action(cx.listener(|this, _: &Tab1, w, cx| this.select_tab(Some(0), w, cx)))
             .on_action(cx.listener(|this, _: &Tab2, w, cx| this.select_tab(Some(1), w, cx)))

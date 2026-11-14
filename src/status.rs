@@ -37,10 +37,6 @@ pub const ICONS: &[&str] = &[
     "pencil",
 ];
 
-/// The pill an agent's hooks set while it works, and while it waits for you.
-pub const AGENT_RUNNING: &str = "Running";
-pub const AGENT_NEEDS_INPUT: &str = "Needs input";
-
 pub const RUNNING: u32 = 0x6a9fd8;
 pub const SUCCESS: u32 = 0x7fb069;
 pub const WARNING: u32 = 0xe0a84f;
