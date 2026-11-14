@@ -1421,6 +1421,7 @@ impl AbroMux {
     /// default `claude`) on `.abromux/cleanup.md`. The agent finds what the
     /// workspace made, asks, removes it, and ends with `abromux folder
     /// remove`. It runs in a shell, so the shell stays if it stops early.
+    /// The workspace moves to the "Cleanup" group, last in the sidebar.
     pub(crate) fn clean_up_folder(
         &mut self,
         wi: usize,
@@ -1448,6 +1449,7 @@ impl AbroMux {
             .clone()
             .filter(|a| !a.trim().is_empty())
             .unwrap_or_else(|| "claude".into());
+        let wi = self.move_to_cleanup(wi, cx);
         let id = self.workspaces[wi].id;
         let s = self.make_terminal(
             id,
@@ -1508,9 +1510,15 @@ impl AbroMux {
     }
 
     /// Put `ws` at `index`, keeping the selected workspace selected.
-    /// Returns where it went.
+    /// Returns where it went: never below the cleanup group unless it's in it.
     fn insert_workspace(&mut self, index: usize, ws: Workspace) -> usize {
-        let index = index.min(self.workspaces.len());
+        let mut index = index.min(self.workspaces.len());
+        if let Some(c) = self.groups.iter().find(|g| g.cleanup)
+            && ws.group != Some(c.id)
+            && let Some((start, _)) = workspace::group_span(&self.workspaces, c.id)
+        {
+            index = index.min(start);
+        }
         self.workspaces.insert(index, ws);
         if self.workspaces.len() > 1 && self.active >= index {
             self.active += 1;

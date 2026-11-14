@@ -834,10 +834,17 @@ pub struct Group {
     pub name: String,
     pub color: Option<u32>,
     pub collapsed: bool,
+    /// The "Cleanup" group: workspaces whose folder is being cleaned up and
+    /// deleted. Always last in the sidebar.
+    pub cleanup: bool,
 }
 
+/// The name the cleanup group gets.
+pub const CLEANUP_GROUP: &str = "Cleanup";
+
 /// Put each group's workspaces right after its first one, keeping every
-/// other order as it was, and drop groups nobody is in.
+/// other order as it was, move the cleanup group to the end, and drop
+/// groups nobody is in.
 pub fn tidy_groups(ws: &mut Vec<Workspace>, groups: &mut Vec<Group>) {
     for w in ws.iter_mut() {
         if w.group.is_some_and(|g| !groups.iter().any(|x| x.id == g)) {
@@ -858,7 +865,13 @@ pub fn tidy_groups(ws: &mut Vec<Workspace>, groups: &mut Vec<Group>) {
             }
         }
     }
-    *ws = out;
+    // The cleanup group goes last, below everything else.
+    let cleanup: Vec<usize> = groups.iter().filter(|g| g.cleanup).map(|g| g.id).collect();
+    let (mut rest, last): (Vec<Workspace>, Vec<Workspace>) = out
+        .into_iter()
+        .partition(|w| !w.group.is_some_and(|g| cleanup.contains(&g)));
+    rest.extend(last);
+    *ws = rest;
     groups.retain(|g| ws.iter().any(|w| w.group == Some(g.id)));
 }
 
@@ -1104,7 +1117,35 @@ mod tests {
             name: format!("g{id}"),
             color: None,
             collapsed: false,
+            cleanup: false,
         }
+    }
+
+    #[test]
+    fn cleanup_group_stays_last() {
+        let mut groups = vec![
+            group(7),
+            Group {
+                cleanup: true,
+                ..group(8)
+            },
+        ];
+        let mut ws = wss(&[Some(8), None, Some(7), Some(8), None]);
+        tidy_groups(&mut ws, &mut groups);
+        assert_eq!(
+            order(&ws),
+            [
+                (1, None),
+                (2, Some(7)),
+                (4, None),
+                (0, Some(8)),
+                (3, Some(8))
+            ]
+        );
+        // Dropping a workspace below it puts it back above.
+        let at = move_workspace(&mut ws, &mut groups, 0, 4, None);
+        assert_eq!(at, 2);
+        assert_eq!(order(&ws)[3..], [(0, Some(8)), (3, Some(8))]);
     }
 
     #[test]
