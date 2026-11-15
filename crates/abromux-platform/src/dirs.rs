@@ -5,8 +5,9 @@ use crate::channel::flavor;
 pub use abromux_core::paths::{home, home_var};
 use std::path::PathBuf;
 
-/// `~/Library/Application Support/abromux` (or `abromux-nightly`, or
-/// `abromux-nightly-<name>`).
+/// `~/Library/Application Support/abromux` on macOS, `$XDG_DATA_HOME/abromux`
+/// (`~/.local/share/abromux`) on Linux; or `abromux-nightly`, or
+/// `abromux-nightly-<name>`.
 pub fn support_dir() -> PathBuf {
     support_dir_of(flavor())
 }
@@ -43,7 +44,20 @@ fn support_dir_of(flavor: Option<&str>) -> PathBuf {
         Some("") => "abromux-nightly".into(),
         Some(name) => format!("abromux-nightly-{name}"),
     };
-    home().join("Library/Application Support").join(dir)
+    base().join(dir)
+}
+
+#[cfg(target_os = "macos")]
+fn base() -> PathBuf {
+    home().join("Library/Application Support")
+}
+
+#[cfg(target_os = "linux")]
+fn base() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home().join(".local/share"))
 }
 
 #[cfg(test)]

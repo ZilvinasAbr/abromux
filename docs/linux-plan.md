@@ -136,19 +136,28 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
 
 ### Phase 1: Linux builds and the tests pass
 
-- [ ] `Cargo.toml`: `gpui` gets the `wayland` feature (plus `x11` as the
+- [x] `Cargo.toml`: `gpui` gets the `wayland` feature (plus `x11` as the
       fallback) on Linux; gpui-component's `webview` and `lb-wry` become
       macOS-only dependencies; `objc` and `block` move to `abromux-platform`
-      as macOS-only.
-- [ ] `scripts/build-libghostty.sh`: pick the Zig download from `uname -sm`
+      as macOS-only. (`objc` and `block` were already gone from the app.)
+      Also `[patch.crates-io] xattr` (`patches/`): libc 0.2.191 dropped the
+      Linux `ENOATTR` that gpui's `xattr` 0.2 needs.
+- [x] `scripts/build-libghostty.sh`: pick the Zig download from `uname -sm`
       (`x86_64-linux`, `aarch64-linux`, `aarch64-macos`).
-- [ ] Linux platform stubs that compile and do nothing; cmux import stays
-      macOS-only (cmux doesn't exist on Linux).
+- [x] Linux platform stubs that compile and do nothing; cmux import stays
+      macOS-only (cmux doesn't exist on Linux). `opener` (`xdg-open`),
+      `process::cwd` (`/proc`) and the support folder
+      (`$XDG_DATA_HOME/abromux`) are real already. The browser has a `none`
+      backend that says there's no built-in browser. cmux import compiles
+      and finds nothing on Linux, so it needed no gate.
 - [ ] CI: an `ubuntu-latest` job (fmt, clippy, test) and an
       `archlinux` container job for the build Omarchy will use. System
       packages: `wayland`, `libxkbcommon`, `vulkan-icd-loader`, `fontconfig`,
       `freetype2`, `clang` (bindgen), plus the `-dev` equivalents on Ubuntu.
-- [ ] `docs/guide.md`: how to build on Linux.
+- [x] `docs/guide.md`: how to build on Linux, and how to run it headless
+      (sway + lavapipe + grim) on a server.
+- [x] Keymap tests compare against gpui's spelling for this OS (`super`
+      for `cmd` on Linux) instead of macOS's.
 
 **Done when:** `cargo test` passes on Linux and `abromux --help` and
 `abromux bench-vt` run there.

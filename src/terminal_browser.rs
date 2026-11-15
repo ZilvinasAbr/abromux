@@ -501,9 +501,18 @@ mod tests {
             translate(&ks(k), &serde_json::from_str(json).unwrap()).map(|t| t.unparse())
         };
         // Defaults: find is ⇧⌘F, devtools ⇧⌘I, console ⌥⌘J.
-        assert_eq!(sent("cmd-f", "{}").as_deref(), Some("cmd-shift-f"));
-        assert_eq!(sent("alt-cmd-i", "null").as_deref(), Some("cmd-shift-i"));
-        assert_eq!(sent("alt-cmd-c", "{}").as_deref(), Some("alt-cmd-j"));
+        assert_eq!(
+            sent("cmd-f", "{}").as_deref(),
+            Some(crate::keymap::tests::os_keys("cmd-shift-f").as_str())
+        );
+        assert_eq!(
+            sent("alt-cmd-i", "null").as_deref(),
+            Some(crate::keymap::tests::os_keys("cmd-shift-i").as_str())
+        );
+        assert_eq!(
+            sent("alt-cmd-c", "{}").as_deref(),
+            Some(crate::keymap::tests::os_keys("alt-cmd-j").as_str())
+        );
         // Its shortcuts.json wins; a key it binds itself goes as is.
         assert_eq!(
             sent("cmd-f", r#"{"find":"ctrl+f"}"#).as_deref(),

@@ -6,3 +6,4 @@
 !.claude/skills/
 .DS_Store
 /dist
+__pycache__/

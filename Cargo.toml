@@ -24,7 +24,9 @@ abromux-platform = { path = "crates/abromux-platform" }
 abromux-browser = { path = "crates/abromux-browser" }
 abromux-gitlab = { path = "crates/abromux-gitlab", optional = true }
 gpui = { version = "=0.2.2", default-features = false, features = ["runtime_shaders"] }
-gpui-component = { version = "=0.5.1", features = ["webview"] }
+gpui-component = "=0.5.1"
+# Markdown tabs' URL scheme (src/markdown.rs); wry's own http, re-exported
+http = "1"
 portable-pty = "0.9"
 anyhow = "1"
 futures = { version = "0.3", features = ["executor"] }
@@ -37,9 +39,19 @@ image = "0.25"
 # Markdown tabs (src/markdown.rs); already a gpui-component dependency
 markdown = "=1.0.0"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui-component = { version = "=0.5.1", features = ["webview"] }
+
+# Wayland, with X11 as the untested fallback (docs/linux-plan.md)
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui = { version = "=0.2.2", default-features = false, features = ["runtime_shaders", "wayland", "x11", "font-kit"] }
 
 [profile.dev]
 debug = 0
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# Local fixes to dependencies; see patches/README.md.
+[patch.crates-io]
+xattr = { path = "patches/xattr" }
