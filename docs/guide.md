@@ -57,7 +57,7 @@ sudo apt install build-essential clang libclang-dev pkg-config libwayland-dev li
   libxkbcommon-x11-dev libfontconfig-dev libfreetype-dev libvulkan-dev libx11-dev libx11-xcb-dev libxcb1-dev
 ```
 
-Then the same `./scripts/build-libghostty.sh` (it fetches the Zig for this machine) and `cargo run --release`. The app needs a Vulkan driver (Mesa's, or `lavapipe` for software rendering) and finds Wayland through `WAYLAND_DISPLAY`. Its support folder is `$XDG_DATA_HOME/abromux` (`~/.local/share/abromux`).
+Then the same `./scripts/build-libghostty.sh` (it fetches the Zig for this machine) and `cargo run --release`. The app needs a Vulkan driver (Mesa's, or `lavapipe` for software rendering) and finds Wayland through `WAYLAND_DISPLAY`. Its files follow the XDG folders: the session, history and caches in `$XDG_DATA_HOME/abromux` (`~/.local/share/abromux`), the control and holder sockets in `$XDG_RUNTIME_DIR/abromux`, prefs and logs in `$XDG_STATE_HOME/abromux` (`~/.local/state/abromux`), and the config in `$XDG_CONFIG_HOME/abromux` as on macOS. A nightly is a build with `ABROMUX_CHANNEL=nightly` (or `nightly-<name>`) set, and uses `abromux-nightly` (`abromux-nightly-<name>`) folders.
 
 To try it without a desktop, as on a server, run it in a headless sway with software Vulkan, type into it through a uinput keyboard, and take screenshots with `grim` (as root; `noop` is libseat's backend for that):
 

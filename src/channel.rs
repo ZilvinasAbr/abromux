@@ -5,5 +5,5 @@
 
 pub use abromux_platform::{
     channel::{app_id, app_name, bundle_id, nightly},
-    dirs::{support_dir, support_dir_named, workspaces_dir},
+    dirs::{runtime_dir, state_dir, support_dir, support_dir_named, workspaces_dir},
 };

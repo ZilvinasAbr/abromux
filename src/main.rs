@@ -3362,7 +3362,7 @@ fn hint_pill(text: String) -> Div {
 
 fn main() {
     // Before anything can reach the holder or read a terminal.
-    hold::set_dir(channel::support_dir());
+    hold::set_dir(channel::runtime_dir());
     pty::on_output(abromux_platform::power::output);
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "bench-vt") {

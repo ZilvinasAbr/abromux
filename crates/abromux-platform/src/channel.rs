@@ -9,21 +9,38 @@ use std::sync::OnceLock;
 
 pub const NIGHTLY_ID: &str = "dev.abromux.nightly";
 
-/// None for stable, Some("") for the nightly, Some(name) for a named one.
+/// None for stable, Some("") for the nightly, Some(name) for a named one:
+/// from the app bundle's Info.plist, else from `ABROMUX_CHANNEL` when this
+/// was built (`nightly` or `nightly-<name>`; Linux has no bundle to say).
 pub fn flavor() -> Option<&'static str> {
     static FLAVOR: OnceLock<Option<String>> = OnceLock::new();
     FLAVOR
         .get_or_init(|| {
-            let exe = std::env::current_exe()
-                .and_then(|e| e.canonicalize())
-                .ok()?;
-            let app = exe
-                .ancestors()
-                .find(|p| p.extension().is_some_and(|e| e == "app"))?;
-            let plist = std::fs::read_to_string(app.join("Contents/Info.plist")).ok()?;
-            flavor_of(&plist).map(str::to_string)
+            bundle_flavor().or_else(|| {
+                built_flavor(option_env!("ABROMUX_CHANNEL").unwrap_or("")).map(str::to_string)
+            })
         })
         .as_deref()
+}
+
+fn bundle_flavor() -> Option<String> {
+    let exe = std::env::current_exe()
+        .and_then(|e| e.canonicalize())
+        .ok()?;
+    let app = exe
+        .ancestors()
+        .find(|p| p.extension().is_some_and(|e| e == "app"))?;
+    let plist = std::fs::read_to_string(app.join("Contents/Info.plist")).ok()?;
+    flavor_of(&plist).map(str::to_string)
+}
+
+/// The flavor `ABROMUX_CHANNEL` names: `nightly`, `nightly-<name>`, or
+/// anything else (`stable`, unset) for stable.
+fn built_flavor(channel: &str) -> Option<&str> {
+    match channel {
+        "nightly" => Some(""),
+        c => c.strip_prefix("nightly-").filter(|n| !n.is_empty()),
+    }
 }
 
 /// The bundle id of the app this binary is in; None outside an app bundle.
@@ -90,5 +107,14 @@ mod tests {
         assert_eq!(flavor_of(&plist("dev.abromux.nightly")), Some(""));
         assert_eq!(flavor_of(&plist("dev.abromux.nightly.zoom")), Some("zoom"));
         assert_eq!(flavor_of(&plist("dev.abromux.nightlyx")), None);
+    }
+
+    #[test]
+    fn built_channels() {
+        assert_eq!(built_flavor(""), None);
+        assert_eq!(built_flavor("stable"), None);
+        assert_eq!(built_flavor("nightly"), Some(""));
+        assert_eq!(built_flavor("nightly-zoom"), Some("zoom"));
+        assert_eq!(built_flavor("nightly-"), None);
     }
 }
