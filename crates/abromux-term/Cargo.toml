@@ -18,4 +18,4 @@ serde_json = { version = "1", features = ["preserve_order"] }
 smol_str = "0.2"
 
 [build-dependencies]
-bindgen = "0.71"
+bindgen = "0.72"
