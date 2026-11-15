@@ -382,7 +382,7 @@ struct Page {
 /// the page's reset remove `key` from the file.
 fn row<T: PartialEq + 'static>(
     title: &'static str,
-    description: &'static str,
+    description: impl Into<SharedString>,
     key: Key,
     get: fn(&Settings) -> T,
     control: impl Fn(T, T, &mut Window, &mut App) -> AnyElement + 'static,
@@ -401,7 +401,7 @@ fn row<T: PartialEq + 'static>(
 
 /// A folder setting: the folder it comes to, and Choose… for the Finder's
 /// folder picker. The reset arrow goes back to the default.
-fn folder_row(title: &'static str, description: &'static str, key: Key) -> Row {
+fn folder_row(title: &'static str, description: impl Into<SharedString>, key: Key) -> Row {
     row(
         title,
         description,
@@ -467,7 +467,7 @@ fn info_row(
 
 fn switch(
     title: &'static str,
-    description: &'static str,
+    description: impl Into<SharedString>,
     key: Key,
     get: fn(&Settings) -> bool,
 ) -> Row {
@@ -507,7 +507,7 @@ fn toggle(on: bool) -> Stateful<Div> {
 /// A dropdown of `(json value, label)` options.
 fn choice(
     title: &'static str,
-    description: &'static str,
+    description: impl Into<SharedString>,
     key: Key,
     options: &'static [(&'static str, &'static str)],
     get: fn(&Settings) -> &'static str,
@@ -538,7 +538,7 @@ fn choice(
 /// [− value +].
 fn stepper(
     title: &'static str,
-    description: &'static str,
+    description: impl Into<SharedString>,
     key: Key,
     get: fn(&Settings) -> f32,
     (min, max, step): (f32, f32, f32),
@@ -604,7 +604,7 @@ fn stepper(
 /// A color, or the app's own choice when the setting has none (`None`).
 fn color(
     title: &'static str,
-    description: &'static str,
+    description: impl Into<SharedString>,
     key: Key,
     get: fn(&Settings) -> Option<Rgba>,
 ) -> Row {
@@ -768,7 +768,10 @@ fn general_page() -> Page {
                 [
                     choice(
                         "Placement",
-                        "Where ⌘N puts a new workspace in the sidebar.",
+                        format!(
+                            "Where {} puts a new workspace in the sidebar.",
+                            crate::keymap::default_label("newWorkspace")
+                        ),
                         &["app", "newWorkspacePlacement"],
                         &[
                             ("top", "Top"),
@@ -810,7 +813,10 @@ fn general_page() -> Page {
                     ),
                     folder_row(
                         "Workspace folders",
-                        "Where ⇧⌘I makes a workspace's own folder.",
+                        format!(
+                            "Where {} makes a workspace's own folder.",
+                            crate::keymap::default_label("newFolderWorkspace")
+                        ),
                         &["app", "workspaceFoldersDirectory"],
                     ),
                 ],
@@ -982,7 +988,10 @@ fn sidebar_page() -> Page {
                     ),
                     switch(
                         "Tracked links",
-                        "The selected workspace's Jira tickets, merge requests and pinned pages, under its row (⌥⌘1…9).",
+                        format!(
+                            "The selected workspace's Jira tickets, merge requests and pinned pages, under its row ({}…9).",
+                            crate::keymap::default_label("link1")
+                        ),
                         &["sidebar", "showLinks"],
                         |s| s.sidebar.show_links,
                     ),
@@ -1146,7 +1155,7 @@ fn save_text(key: Key, value: &str, window: &mut Window, cx: &mut App) {
 /// while it renders, so it can't be read.
 fn text_row(
     title: &'static str,
-    description: &'static str,
+    description: impl Into<SharedString>,
     key: Key,
     fields: &[(Key, Entity<InputState>)],
 ) -> Option<Row> {
@@ -1336,7 +1345,10 @@ fn panes_page() -> Page {
             [
                 stepper(
                     "Resize step",
-                    "How far a divider moves per ⌃⇧H/J/K/L press.",
+                    format!(
+                        "How far a divider moves per {}/J/K/L press.",
+                        crate::keymap::default_label("resizeLeft")
+                    ),
                     &["panes", "resizeStep"],
                     |s| s.panes.resize_step,
                     (5., 200., 5.),
@@ -1436,7 +1448,11 @@ fn shortcut_row(
     Row::Setting {
         title: title(act).into(),
         description: if is_recording && needs_modifier {
-            "Use ⌘, ⌃ or ⌥ with the key (or a function key).".into()
+            if abromux_platform::MACOS {
+                "Use ⌘, ⌃ or ⌥ with the key (or a function key).".into()
+            } else {
+                "Use Ctrl or Alt with the key (or a function key).".into()
+            }
         } else {
             "".into()
         },

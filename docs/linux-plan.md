@@ -150,10 +150,12 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
       (`$XDG_DATA_HOME/abromux`) are real already. The browser has a `none`
       backend that says there's no built-in browser. cmux import compiles
       and finds nothing on Linux, so it needed no gate.
-- [ ] CI: an `ubuntu-latest` job (fmt, clippy, test) and an
-      `archlinux` container job for the build Omarchy will use. System
-      packages: `wayland`, `libxkbcommon`, `vulkan-icd-loader`, `fontconfig`,
-      `freetype2`, `clang` (bindgen), plus the `-dev` equivalents on Ubuntu.
+- [ ] ~~CI: an `ubuntu-latest` job (fmt, clippy, test) and an
+      `archlinux` container job for the build Omarchy will use.~~
+      Skipped, as in Phase 0: no CI; the same checks run locally on Linux
+      (`cargo fmt --check`, `clippy -D warnings`, `cargo test`,
+      `scripts/check-os-calls.sh`). The packages they need are in
+      `docs/guide.md` (Linux).
 - [x] `docs/guide.md`: how to build on Linux, and how to run it headless
       (sway + lavapipe + grim) on a server.
 - [x] Keymap tests compare against gpui's spelling for this OS (`super`
@@ -173,10 +175,11 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
       none; the empty titlebar areas move the window with
       `start_window_move` and a double click maximizes. No traffic-light
       gap on Linux.
-- [ ] Deferred (not Omarchy): on compositors without server-side
-      decorations (GNOME), gpui falls back to client-side ones and the app
-      should draw resize edges and close / maximise / minimise when floating
-      (`Decorations::Client { tiling }`).
+- [x] On compositors without server-side decorations (GNOME), gpui falls
+      back to client-side ones, and the app draws them (`csd.rs`): resize
+      edges and corners on the sides that aren't tiled, and minimise,
+      maximise and close at the top right. `ABROMUX_CLIENT_DECORATIONS=1`
+      asks for them anywhere.
 - [x] `WindowBackgroundAppearance::Opaque` instead of `Blurred` (Hyprland does
       its own blur when the user wants it).
 - [x] Remember the window's size only: nothing to change. On Wayland gpui

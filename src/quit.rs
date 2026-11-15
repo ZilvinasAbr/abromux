@@ -10,6 +10,11 @@ pub const SKIP_KEY: &str = "AbroMuxSkipQuitWarning";
 
 /// Quit, after asking unless the user turned the warning off.
 pub fn request(window: &mut Window, cx: &mut App) {
+    let key = if abromux_platform::MACOS {
+        "Cmd+Q".to_string()
+    } else {
+        crate::keymap::default_label("quit")
+    };
     let rx = alert::confirm(
         window,
         cx,
@@ -17,7 +22,7 @@ pub fn request(window: &mut Window, cx: &mut App) {
             message: &format!("Quit {}?", crate::channel::app_name()),
             info: "This will close all windows and workspaces.",
             button: "Quit",
-            suppress: "Don't warn again for Cmd+Q",
+            suppress: &format!("Don't warn again for {key}"),
             skip_key: SKIP_KEY,
         },
     );
