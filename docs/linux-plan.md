@@ -10,7 +10,7 @@ does today at every step.
 | Question | Decision |
 |---|---|
 | Display server | **Wayland only** to target and test. GPUI's X11 backend stays compiled in as a free fallback, but X11 isn't tested or supported. |
-| Reference desktop | **Omarchy** (Hyprland, Waybar, Mako, walker). If it works there, it ships. |
+| Reference desktop | **Omarchy** (Hyprland, walker, and the Omarchy shell: a Quickshell bar that is also the notification server and the tray; older installs have Waybar and Mako). If it works there, it ships. |
 | Built-in browser on Linux | **Out of scope for now.** Browser tabs use `terminalBrowser`, or the new `system` engine (the default browser). |
 | Shortcuts on Linux | Linux terminal conventions: `ctrl-shift-*` for anything that would steal a key from the shell, plain `ctrl-*` where it's safe, and never `super-*` (Hyprland owns it). |
 | Architecture rule | `cfg(target_os)`, `objc` and other OS calls appear **only** in `abromux-platform` and the browser backends. CI checks this. |
@@ -237,11 +237,13 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
 
 **Desktop services**
 - [x] Notifications: `org.freedesktop.Notifications` via `notify-rust`
-      (shown by Mako on Omarchy), with a `default` action so clicking jumps to
+      (shown by the Omarchy shell, or Mako on older installs), with a `default` action so clicking jumps to
       the terminal, like banner clicks today. notify-rust is pinned to 4.18,
       the last on zbus 5, which gpui's portal code already uses. The click
       also brings the window forward through Hyprland's or sway's IPC
-      (`hyprctl dispatch focuswindow` / `swaymsg focus`, by `app_id`):
+      (`hyprctl dispatch` / `swaymsg focus`, by `app_id`; Hyprland 0.56 takes
+      Lua there, `hl.dsp.focus({ window = ... })`, and older ones
+      `focuswindow`, so it tries the first and falls back):
       Wayland only lets an app raise itself with an activation token, which
       the notification server sends but notify-rust doesn't pass on.
 - [x] Unread badge: `com.canonical.Unity.LauncherEntry` `Update` signals
@@ -249,8 +251,8 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
       Omarchy).
 - [x] Tray bell: StatusNotifierItem via `ksni` (on zbus 5 and async-io, no
       tokio), with the macOS bell's menu and a drawn bell icon (icon theme
-      names differ). Omarchy's Waybar shows it once `tray` is in the bar's
-      modules. Off by default on Linux (`notifications.showInMenuBar`).
+      names differ). The Omarchy shell lists it in the tray drawer behind the
+      bar's `<` (Waybar, on older installs, once `tray` is in its modules). Off by default on Linux (`notifications.showInMenuBar`).
 - [x] Appearance: gpui already follows xdg-desktop-portal's
       `org.freedesktop.appearance color-scheme` on Linux and reports changes
       as window appearance changes. `app.appearance: light|dark` overrides
@@ -294,8 +296,18 @@ Codex (not installed there) was checked with its hook events
 
 **Done when:** on a fresh Omarchy install, someone can install it, open
 workspaces, split panes, run Claude Code and Codex with Running/Needs input in
-the sidebar, get Mako notifications, quit, and get their shells back when it
+the sidebar, get desktop notifications, quit, and get their shells back when it
 starts again, all with shortcuts that don't clash with Hyprland or the shell.
+
+Checked on Omarchy (Hyprland 0.56.2, the Quickshell-based Omarchy shell,
+aarch64), 2026-11-15: installed with `scripts/package-linux.sh` and launched
+from its desktop entry; workspaces, splits and commands work; banners show
+while the window is in the background and clicking one raises it; the tray
+bell registers with the shell's StatusNotifierWatcher; a quit and relaunch
+brings back the workspaces, splits and live shells (a running
+terminal-browser tab too); no default shortcut uses Super or clashes with
+Omarchy's non-Super binds. Claude Code's Running/Needs input wasn't
+rechecked there.
 
 ### Phase 3: browser tabs on Linux, without a built-in browser
 

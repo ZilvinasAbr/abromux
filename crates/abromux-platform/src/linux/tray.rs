@@ -1,5 +1,5 @@
-//! The tray bell: a StatusNotifierItem over D-Bus (ksni), which Waybar's
-//! `tray` module shows on Omarchy, as do KDE and GNOME with the AppIndicator
+//! The tray bell: a StatusNotifierItem over D-Bus (ksni), which the Omarchy
+//! shell's tray (or Waybar's `tray` module) shows, as do KDE and GNOME with the AppIndicator
 //! extension. Its menu is the macOS menu-bar bell's. Off unless
 //! `notifications.showInMenuBar` turns it on.
 

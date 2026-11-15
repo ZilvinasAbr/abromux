@@ -1,5 +1,5 @@
 //! Banners through the desktop's notification server
-//! (`org.freedesktop.Notifications` over D-Bus: Mako on Omarchy, dunst,
+//! (`org.freedesktop.Notifications` over D-Bus: the Omarchy shell, Mako, dunst,
 //! GNOME Shell). Each has a `default` action, which servers run when the
 //! banner is clicked, so a click reports its id like a macOS banner click,
 //! and brings the window forward (`window::raise`).
