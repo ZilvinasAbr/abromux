@@ -165,17 +165,25 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
 ### Phase 2: a usable terminal app on Omarchy
 
 **Window and chrome (Hyprland)**
-- [ ] Set `app_id` to `dev.abromux.app` (`dev.abromux.nightly` for nightly),
-      so Hyprland window rules can match it.
-- [ ] Client-side decorations off by default: in a tiling compositor the
-      window has no title bar; the sidebar and tab strip start at the top.
-      When the window is floating, draw a slim strip with close, maximise and
-      minimise, using GPUI's `Decorations::Client { tiling }` to know which.
-- [ ] `WindowBackgroundAppearance::Opaque` instead of `Blurred` (Hyprland does
+- [x] Set `app_id` to `dev.abromux.app` (`dev.abromux.nightly` for nightly),
+      so Hyprland window rules can match it (`channel::app_id()`, the same
+      ids as the macOS bundle).
+- [x] Server-side decorations: the window has no title bar of its own, and
+      the sidebar and tab strip start at the top. Hyprland and sway draw
+      none; the empty titlebar areas move the window with
+      `start_window_move` and a double click maximizes. No traffic-light
+      gap on Linux.
+- [ ] Deferred (not Omarchy): on compositors without server-side
+      decorations (GNOME), gpui falls back to client-side ones and the app
+      should draw resize edges and close / maximise / minimise when floating
+      (`Decorations::Client { tiling }`).
+- [x] `WindowBackgroundAppearance::Opaque` instead of `Blurred` (Hyprland does
       its own blur when the user wants it).
-- [ ] Remember the window's size only; Wayland doesn't let an app place itself.
-- [ ] Fractional scaling (Omarchy laptops are often at 1.25 or 1.5): check
-      that terminal cell metrics and `sprite.rs` box drawing line up.
+- [x] Remember the window's size only: nothing to change. On Wayland gpui
+      reports the origin as 0,0 and can't place the window, so only the
+      size comes back.
+- [x] Fractional scaling: at 1.25 and 1.5 (sway, headless), the terminal
+      cells and `sprite.rs` box drawing line up with no gaps between rows.
 
 **Shortcuts**
 - [x] Per-OS default tables: `keymap::LINUX` next to `ACTIONS` (still in the

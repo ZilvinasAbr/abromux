@@ -3178,14 +3178,14 @@ impl Render for AbroMux {
                     .bg(rgb(pal().pane_bg))
                     .when(!self.sidebar, |d| {
                         // Same height as the sidebar's titlebar row so the
-                        // traffic lights sit centered in it.
+                        // traffic lights sit centered in it (macOS only).
                         d.child(
                             div()
                                 .h(px(TITLEBAR_H))
                                 .flex_none()
                                 .flex()
                                 .items_center()
-                                .pl(px(80.))
+                                .pl(px(if abromux_platform::MACOS { 80. } else { 10. }))
                                 .pr(px(10.))
                                 .gap_1()
                                 .bg(rgb(pal().tabbar_bg))
@@ -3500,9 +3500,19 @@ fn run_app(cwd: Option<String>) {
                         appears_transparent: true,
                         traffic_light_position: Some(point(px(14.), px(13.))),
                     }),
-                    window_background: WindowBackgroundAppearance::Blurred,
+                    // Hyprland and other compositors blur behind windows
+                    // themselves when the user wants it.
+                    window_background: if abromux_platform::MACOS {
+                        WindowBackgroundAppearance::Blurred
+                    } else {
+                        WindowBackgroundAppearance::Opaque
+                    },
                     // Only empty titlebar areas move it (titlebar.rs), not tab drags.
                     is_movable: false,
+                    // Wayland: the window rules' id, and no titlebar drawn by
+                    // the app (tiling compositors draw none either).
+                    app_id: Some(channel::app_id()),
+                    window_decorations: Some(WindowDecorations::Server),
                     ..Default::default()
                 },
                 |window, cx| {
