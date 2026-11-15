@@ -1617,6 +1617,8 @@ impl AbroMux {
             "window.focus" => {
                 cx.activate(true);
                 window.activate_window();
+                // Wayland ignores an app activating itself; ask the compositor.
+                abromux_platform::window::raise();
                 json!({ "window": "window:1" })
             }
             // For scripts/perf.py: frame timing and synthetic input.

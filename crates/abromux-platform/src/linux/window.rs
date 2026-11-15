@@ -49,7 +49,7 @@ pub fn post_scroll(
 /// notification server has but notify-rust doesn't pass on (and gpui can't
 /// take), so ask the compositor: Hyprland's and sway's IPC, by `app_id`.
 /// Elsewhere the click still shows the terminal, behind other windows.
-pub(crate) fn raise() {
+pub fn raise() {
     let pattern = format!("^{}$", crate::channel::app_id().replace('.', "\\."));
     let run = |cmd: &mut Command| {
         if let Err(e) = cmd.output() {

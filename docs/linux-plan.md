@@ -322,14 +322,24 @@ Wayland. Nothing in the core changes for it.
 
 ### Phase 4: packaging and updates
 
-- [ ] An AUR package `abromux-bin` (PKGBUILD) with a `.desktop` file, a hicolor icon
-      and `abromux` on `PATH`. This is how Omarchy users install things.
-- [ ] A tarball and an AppImage on GitHub releases for other distributions.
-- [ ] Updater: when installed from the AUR, only tell the user there's an
-      update (pacman owns the files); AppImage replaces itself; macOS keeps the dmg path.
-- [ ] No Flatpak: its sandbox would hide the host shells and agents this app runs.
-- [ ] `scripts/nightly.sh` and `scripts/perf.py` on Linux, so performance can be compared there too.
-- [ ] README: Linux badge, install steps, which features are macOS-only.
+- [x] An AUR package `abromux-bin` (`packaging/aur/abromux-bin/PKGBUILD`)
+      with a `.desktop` file, a hicolor icon and `abromux` on `PATH`, from
+      the release tarball. This is how Omarchy users install things.
+- [x] A tarball and an AppImage on GitHub releases for other distributions:
+      `scripts/package-linux.sh --dist` (from a release tag; appimagetool is
+      fetched into `vendor/`). The binary needs the glibc it was built
+      against, so release builds belong on the oldest distribution they
+      should support.
+- [x] Updater: an AppImage downloads its release AppImage, checks the size
+      and SHA-256 (GitHub's asset digest), replaces itself and relaunches;
+      packages (`/usr`, `/opt`) and other copies only say there's an update
+      and how to get it; macOS keeps the dmg path. Linux checks on its own
+      only for an AppImage or a release build.
+- [x] No Flatpak: its sandbox would hide the host shells and agents this app runs.
+- [x] `scripts/nightly.sh` (through `package-linux.sh --nightly`) and
+      `scripts/perf.py` on Linux (memory from `/proc/<pid>/smaps_rollup`'s
+      PSS; no `caffeinate`), so performance can be compared there too.
+- [x] README: Linux badge, install steps, which features are macOS-only.
 
 ## Not on Linux (for now)
 

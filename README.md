@@ -4,13 +4,14 @@
 
 # AbroMux
 
-**A fast terminal and browser workspace for macOS, made for running many coding agents at once.**
+**A fast terminal and browser workspace for macOS and Linux, made for running many coding agents at once.**
 
 Written fully in Rust with [GPUI](https://gpui.rs) and [libghostty](https://github.com/ghostty-org/ghostty).
 
 [![Latest release](https://img.shields.io/github/v/release/ZilvinasAbr/abromux?style=flat-square&color=d97757&label=release)](https://github.com/ZilvinasAbr/abromux/releases/latest)
 [![macOS 13+](https://img.shields.io/badge/macOS-13%2B-2d2b28?style=flat-square&logo=apple&logoColor=white)](#install)
 [![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-2d2b28?style=flat-square)](#install)
+[![Linux](https://img.shields.io/badge/Linux-Wayland-2d2b28?style=flat-square&logo=linux&logoColor=white)](#linux)
 [![Rust](https://img.shields.io/badge/Rust-GPUI-2d2b28?style=flat-square&logo=rust&logoColor=white)](https://gpui.rs)
 [![MIT license](https://img.shields.io/badge/license-MIT-2d2b28?style=flat-square)](LICENSE)
 
@@ -171,6 +172,16 @@ cmux is about 20% faster on plain text, and AbroMux does less than cmux, which e
 ## Install
 
 Download `AbroMux-<version>.dmg` from the [latest release](https://github.com/ZilvinasAbr/abromux/releases/latest), open it and drag AbroMux to Applications. It needs macOS 13 or later on Apple Silicon.
+
+### Linux
+
+AbroMux runs on Wayland; [Omarchy](https://omarchy.org) (Arch and Hyprland) is the desktop it's made against.
+
+- **Arch / Omarchy:** `yay -S abromux-bin` (the AUR package).
+- **Anywhere else:** the AppImage from the [latest release](https://github.com/ZilvinasAbr/abromux/releases/latest) (`chmod +x AbroMux-*.AppImage`, then run it; it updates itself), or the tarball, unpacked into a prefix: `tar -xzf abromux-<version>-x86_64-linux.tar.gz -C ~/.local --strip-components=1`.
+- **From source:** `scripts/build-libghostty.sh && scripts/package-linux.sh` installs into `~/.local` ([guide](docs/guide.md#linux)).
+
+It needs a Vulkan driver (Mesa's is fine). Shortcuts are Linux ones (Ctrl+Shift+P for the palette, nothing on Super, which Hyprland owns), notifications go to Mako or your notification daemon, and the tray bell is in Waybar's tray once you turn it on. The built-in browser is macOS-only: on Linux, browser tabs run [terminal-browser](https://github.com/ZilvinasAbr/terminal-browser) when it's installed and otherwise open pages in your default browser, and the browser automation commands need macOS. cmux session import is macOS-only too.
 
 Then, optionally, put the CLI on your PATH, connect your coding agents, and teach them the CLI:
 

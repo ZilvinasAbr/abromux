@@ -176,3 +176,7 @@ pub fn post_scroll(window: &impl HasWindowHandle, x: f64, y: f64, dy: f64) -> Re
     }
     Ok(())
 }
+
+/// Bring the app's window forward: nothing to add on macOS, where
+/// activating the app does it.
+pub fn raise() {}
