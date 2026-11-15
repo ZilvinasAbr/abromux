@@ -59,6 +59,17 @@ pub fn nightly() -> bool {
     flavor().is_some()
 }
 
+/// The id the window manager knows the app by: the bundle id on macOS, and
+/// the Wayland `app_id` on Linux, so Hyprland window rules can match it.
+/// `dev.abromux.app`, `dev.abromux.nightly` or `dev.abromux.nightly.<name>`.
+pub fn app_id() -> String {
+    match flavor() {
+        None => "dev.abromux.app".into(),
+        Some("") => NIGHTLY_ID.into(),
+        Some(name) => format!("{NIGHTLY_ID}.{name}"),
+    }
+}
+
 pub fn app_name() -> &'static str {
     static NAME: OnceLock<String> = OnceLock::new();
     NAME.get_or_init(|| match flavor() {
