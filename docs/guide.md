@@ -59,18 +59,20 @@ sudo apt install build-essential clang libclang-dev pkg-config libwayland-dev li
 
 Then the same `./scripts/build-libghostty.sh` (it fetches the Zig for this machine) and `cargo run --release`. The app needs a Vulkan driver (Mesa's, or `lavapipe` for software rendering) and finds Wayland through `WAYLAND_DISPLAY`. Its support folder is `$XDG_DATA_HOME/abromux` (`~/.local/share/abromux`).
 
-To try it without a desktop, as on a server, run it in a headless sway with software Vulkan and take screenshots with `grim`:
+To try it without a desktop, as on a server, run it in a headless sway with software Vulkan, type into it through a uinput keyboard, and take screenshots with `grim` (as root; `noop` is libseat's backend for that):
 
 ```bash
-sudo apt install sway grim wtype mesa-vulkan-drivers   # or pacman -S sway grim wtype vulkan-swrast
-export XDG_RUNTIME_DIR=$(mktemp -d) WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
-sway &                                                  # creates $XDG_RUNTIME_DIR/wayland-1
+sudo apt install sway grim ydotool wl-clipboard mesa-vulkan-drivers   # or pacman -S sway grim ydotool wl-clipboard vulkan-swrast
+export XDG_RUNTIME_DIR=$(mktemp -d) YDOTOOL_SOCKET=/tmp/ydotool.sock
+ydotoold --socket-path=$YDOTOOL_SOCKET &                # a keyboard sway reads like a real one
+WLR_BACKENDS=headless,libinput LIBSEAT_BACKEND=noop WLR_RENDERER=pixman sway &
 export WAYLAND_DISPLAY=wayland-1 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
 cargo run &
-abromux send 'ls\n'; grim shot.png
+ydotool type 'ls'; ydotool key 28:1 28:0                # evdev codes: 28 is Enter, 29 Ctrl, 42 Shift, 56 Alt
+grim shot.png
 ```
 
-Each `wtype` run makes a new virtual keyboard, and the app misses the first key after one: type a whole line, Return included, in one `wtype` call.
+Use a uinput keyboard rather than `wtype`: each `wtype` run adds a virtual keyboard to the seat and removes it again, and gpui loses keys around that (and can crash starting up while one is half set up), which a real keyboard never does.
 
 ### Nightly build
 
@@ -613,6 +615,28 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Settings | app menu › Settings… | ⌘, |
 | Reload the config file | | ⌘⇧, |
 | Change any of these keys | | `"shortcuts"` in the [config file](#shortcuts-and-commands) |
+
+### Keys on Linux
+
+The table above has macOS's keys. Linux has its own defaults: nothing is on Super (the compositor's, as in Hyprland), plain Ctrl-letters stay the shell's, and the rest follows Linux terminals. The palette, tooltips and `abromux config shortcuts` show the keys of the OS they run on (`Ctrl+Shift+P`). ⌘-clicking a link is Ctrl-click.
+
+| | Linux |
+|---|---|
+| Command palette / workspace switcher | Ctrl+Shift+P / Ctrl+Shift+S |
+| New workspace / new tab / close tab | Ctrl+Shift+N / Ctrl+Shift+T / Ctrl+Shift+W |
+| Split right / split down | Ctrl+Shift+O / Ctrl+Shift+E |
+| Focus pane | Ctrl+Alt+arrows |
+| Resize pane | Ctrl+Shift+H/J/K/L, as on macOS |
+| Workspace 1–9 / tab 1–9 / link 1–9 | Alt+1–9 / Ctrl+1–9 / Ctrl+Alt+1–9 |
+| Next / previous tab | Ctrl+PageDown / Ctrl+PageUp, or Ctrl+Tab / Ctrl+Shift+Tab |
+| Next / previous workspace | Ctrl+Alt+PageDown / Ctrl+Alt+PageUp |
+| Copy / paste | Ctrl+Shift+C / Ctrl+Shift+V, or Ctrl+Insert / Shift+Insert (Omarchy's Super+C/V send these) |
+| Find, next, previous | Ctrl+Shift+F, Ctrl+Shift+G, Ctrl+Alt+G |
+| Font size | Ctrl+= / Ctrl+- / Ctrl+0 |
+| Toggle sidebar / notifications | Ctrl+Shift+B / Ctrl+Alt+I |
+| Settings / reload config / quit | Ctrl+, / Ctrl+Shift+, / Ctrl+Shift+Q |
+
+Most other actions are on Ctrl+Alt with the macOS letter (rename workspace Ctrl+Alt+R, review changes Ctrl+Alt+D); `abromux config shortcuts` lists them all. In the config file, `secondary-` is ⌘ on macOS and Ctrl on Linux, and `cmd-` is Super on Linux.
 
 ## Performance
 

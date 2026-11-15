@@ -14,6 +14,11 @@
 //!   parts.
 
 pub mod channel;
+
+/// Whether this is the macOS build: for the few choices the app makes by OS
+/// that need no OS call, such as default shortcuts and how keys are written.
+pub const MACOS: bool = cfg!(target_os = "macos");
+
 pub mod dirs;
 pub mod prefs;
 

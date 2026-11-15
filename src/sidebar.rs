@@ -1506,7 +1506,7 @@ impl AbroMux {
             .children(status)
             .when_some(hint, |s, d| {
                 s.child(
-                    hint_pill(format!("⌘{d}"))
+                    hint_pill(crate::keymap::default_label(&format!("workspace{d}")))
                         .absolute()
                         .top(px(6.))
                         .right(px(8.)),
