@@ -5,8 +5,10 @@
 //! - [`channel`] and [`dirs`]: stable or nightly, and where files go.
 //! - [`notify`]: banners and the dock badge; [`tray`]: the menu-bar bell.
 //! - [`power`]: keeping the app awake while terminals print (App Nap).
+//! - [`fonts`]: the default terminal and UI fonts.
 //! - [`appearance`], [`dock`], [`window`]: light or dark, the app icon,
 //!   titlebar drags and the debug snapshots' synthetic input.
+//! - [`primary`]: the primary selection (middle-click paste) on Linux.
 //! - [`prefs`]: small preferences, such as the "Don't ask again" boxes.
 //! - [`opener`]: files and URLs to their default apps; [`process`]: other
 //!   processes' working folders.
@@ -21,6 +23,7 @@ pub const MACOS: bool = cfg!(target_os = "macos");
 
 pub mod dirs;
 pub mod prefs;
+pub mod primary;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -35,6 +38,6 @@ use macos as os;
 #[cfg(target_os = "macos")]
 pub use os::webauthn;
 pub use os::{
-    appearance, browser_native, cursor, dock, file_types, notify, opener, power, process, tray,
-    window,
+    appearance, browser_native, cursor, dock, file_types, fonts, notify, opener, power, process,
+    tray, window,
 };

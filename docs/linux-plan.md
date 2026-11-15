@@ -243,15 +243,24 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
       from the palette, plus a menu button in the sidebar header.
 
 **Terminal**
-- [ ] Shell: use `$SHELL`, else the user's shell from `getpwuid`. Omarchy's
-      default is bash.
-- [ ] Shell integration for bash (OSC 133 prompt marks and the `codex`
-      wrapper), next to the existing zsh one in `src/shell/`. Ghostty's bash
-      integration is the model.
-- [ ] Fonts: honour the Ghostty config (Omarchy ships one); otherwise use
-      fontconfig's `monospace`, which Omarchy sets to a Nerd Font.
-- [ ] Clipboard and primary selection (middle-click paste) through GPUI.
-- [ ] `ABROMUX_SNAPSHOT` / `scripts/drive.sh`: GPUI-side render, or skip on Linux.
+- [x] Shell: use `$SHELL`, else the user's shell from `getpwuid`, else
+      `/bin/sh` (`abromux_core::paths::user_shell`). Omarchy's default is
+      bash.
+- [x] Shell integration for bash (OSC 133 prompt marks and the `codex`
+      wrapper), next to the zsh one in `src/shell/`, started as Ghostty does:
+      `bash --posix -l` with `ENV` pointing at the script, which leaves POSIX
+      mode and reads the login startup files. `redraw=1`, as for zsh: a test
+      squeezing a pane shows at most 2 prompt copies with it, 5 without.
+- [x] Fonts: the Ghostty config's `font-family` (Omarchy ships one) as
+      before; without one, fontconfig's `monospace` (`fc-match`), and its
+      `sans-serif` for the UI (`abromux_platform::fonts`).
+- [x] Primary selection: a selection becomes the primary selection
+      (`copy-on-select = true`, Ghostty's default) and a middle click pastes
+      it (`abromux_platform::primary`). gpui sets it with the last key
+      press's serial, so a selection made before any key press since launch
+      isn't taken by the compositor. The clipboard already worked.
+- [x] `ABROMUX_SNAPSHOT` / `scripts/drive.sh`: skipped on Linux; the window
+      calls answer "not supported on Linux".
 
 **Done when:** on a fresh Omarchy install, someone can install it, open
 workspaces, split panes, run Claude Code and Codex with Running/Needs input in

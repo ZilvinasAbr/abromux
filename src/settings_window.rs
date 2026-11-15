@@ -1899,7 +1899,7 @@ impl Render for SettingsView {
             })
             .size_full()
             .flex()
-            .font_family(".AppleSystemUIFont")
+            .font_family(abromux_platform::fonts::ui())
             .text_size(px(13.))
             .text_color(rgb(pal().text))
             .child(nav)

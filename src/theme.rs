@@ -201,8 +201,8 @@ fn style_components(cx: &mut App) {
     let p = pal();
     let theme = Theme::global_mut(cx);
     theme.background = rgba(0x00000000).into();
-    theme.font_family = ".AppleSystemUIFont".into();
-    theme.mono_font_family = crate::terminal::FONT_FAMILY.into();
+    theme.font_family = abromux_platform::fonts::ui().into();
+    theme.mono_font_family = crate::terminal::mono_font().into();
     theme.popover = rgb(p.menu_bg).into();
     theme.popover_foreground = rgb(p.text).into();
     theme.foreground = rgb(p.text).into();
