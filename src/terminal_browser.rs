@@ -51,6 +51,11 @@ pub fn command(url: &str) -> Option<String> {
     Some(cmd)
 }
 
+/// Whether terminal-browser is installed (`find`).
+pub fn installed() -> bool {
+    find().is_some()
+}
+
 /// `terminal-browser` on PATH or where its installer puts it.
 pub(crate) fn find() -> Option<PathBuf> {
     crate::paths::find_program("terminal-browser")

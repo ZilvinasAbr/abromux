@@ -294,19 +294,27 @@ starts again, all with shortcuts that don't clash with Hyprland or the shell.
 
 ### Phase 3: browser tabs on Linux, without a built-in browser
 
-- [ ] `browser.engine` gains `system`: opening a browser tab or ⌘/Ctrl-clicking
-      a link hands the URL to the default browser. It works on both OSes.
-- [ ] Linux default is `terminalBrowser` when it's installed, else `system`.
-      `webkit` (the built-in browser) is a config error on Linux, with a clear
-      message.
-- [ ] Linked pages (Jira, merge requests in `links.rs`) follow the engine:
+- [x] `browser.engine` gains `system`: opening a page (⌘/Ctrl-clicking a
+      link, `url` commands, tracked links, `new-surface --type browser
+      --url`) hands the URL to the default browser instead of making a tab.
+      It works on both OSes. New Browser Tab still makes a tab whose address
+      bar opens what's typed in the default browser; restored and layout
+      tabs show their address and an Open in browser button, and open
+      nothing by themselves (the `none` page backend).
+- [x] Linux default is `terminalBrowser` when it's installed, else `system`
+      (the setting is now optional; `settings::browser_engine`). `builtIn`
+      is a config error on Linux, with a clear message, and the Settings
+      window doesn't offer it there.
+- [x] Linked pages (Jira, merge requests in `links.rs`) follow the engine:
       a terminal-browser tab, or an external open.
-- [ ] Markdown tabs (`abromux-md://`) on Linux: render in a GPUI view
-      (gpui-component already has a Markdown renderer), or open in the
-      system browser. Decide during the phase.
-- [ ] `abromux browser snapshot|click|fill|cookies|find|...` answer
-      `"not supported with browser engine <x>"` instead of failing silently.
-- [ ] `docs/guide.md` lists which browser features need the built-in engine.
+- [x] Markdown tabs (`abromux-md://`) on Linux: rendered once to an HTML
+      file in the runtime folder (`markdown::export`, a `<base>` at the
+      file's folder, no scripts) and opened in terminal-browser or the
+      default browser. Decided against a GPUI renderer for now: one look
+      for Markdown everywhere, and links and images work. No live reload.
+- [x] `abromux browser snapshot|click|fill|cookies|find|...` answer that
+      they need the built-in browser, which only macOS has.
+- [x] `docs/guide.md` lists which browser features need the built-in engine.
 
 **Later (not planned):** a built-in Linux engine as another `PageBackend`,
 most likely WPE WebKit drawn offscreen into a GPUI texture, which works on

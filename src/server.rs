@@ -2539,6 +2539,11 @@ impl AbroMux {
                     .unwrap_or_else(|| DEFAULT_URL.into());
                 if bool_param(p, "builtIn", false) {
                     self.make_builtin_browser(&url, window, cx)
+                } else if self.open_in_system_browser(&url, window, cx) {
+                    anyhow::bail!(
+                        "browser.engine is \"system\": {url} opened in the default browser, \
+                         and no tab was made"
+                    )
                 } else {
                     self.make_browser(&url, window, cx)
                 }
@@ -2553,7 +2558,15 @@ impl AbroMux {
                     path.display()
                 );
                 anyhow::ensure!(path.exists(), "no such file: {}", path.display());
-                self.make_builtin_browser(&crate::markdown::url_for(path), window, cx)
+                let url = crate::markdown::url_for(path);
+                if self.open_in_system_browser(&url, window, cx) {
+                    anyhow::bail!(
+                        "browser.engine is \"system\": {} opened in the default browser, \
+                         and no tab was made",
+                        path.display()
+                    )
+                }
+                self.make_browser(&url, window, cx)
             }
             t if crate::plugins::find(t).is_some() => {
                 // GitLab turned off: its tab still shows local diffs.

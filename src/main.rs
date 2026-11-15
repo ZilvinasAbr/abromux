@@ -792,6 +792,15 @@ impl AbroMux {
     /// set to `terminalBrowser`, a terminal running `terminal-browser`
     /// (the built-in one, with a warning, if it isn't installed).
     fn make_browser(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> Surface {
+        // Markdown tabs' scheme is the built-in browser's; without one
+        // (Linux), the page as a file for the engine there is.
+        let exported;
+        let url = if !abromux_platform::MACOS && markdown::is_markdown_url(url) {
+            exported = markdown::export(url).unwrap_or_default();
+            exported.as_str()
+        } else {
+            url
+        };
         // Markdown tabs are the built-in browser's.
         if settings::terminal_browser(cx) && !markdown::is_markdown_url(url) {
             match terminal_browser::command(url) {
@@ -808,16 +817,51 @@ impl AbroMux {
                     return s;
                 }
                 None => window.push_notification(
-                    Notification::warning(
+                    Notification::warning(if abromux_platform::MACOS {
                         "`browser.engine` is terminalBrowser, but terminal-browser isn't on \
-                         PATH or in ~/.local/bin, so this tab uses the built-in browser.",
-                    )
+                         PATH or in ~/.local/bin, so this tab uses the built-in browser."
+                    } else {
+                        "`browser.engine` is terminalBrowser, but terminal-browser isn't on \
+                         PATH or in ~/.local/bin; this tab's address bar opens pages in \
+                         the default browser."
+                    })
                     .title("terminal-browser not found"),
                     cx,
                 ),
             }
         }
         self.make_builtin_browser(url, window, cx)
+    }
+
+    /// With `browser.engine` set to `system`, a page opens in the default
+    /// browser rather than in a tab: true when `url` did (or failed to, which
+    /// is said). Markdown tabs open as their rendered file. An empty URL, a
+    /// new browser tab, still makes a tab, whose address bar opens what's
+    /// typed in it.
+    pub(crate) fn open_in_system_browser(
+        &self,
+        url: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if url.is_empty() || url == "about:blank" || !settings::system_browser(cx) {
+            return false;
+        }
+        let target = if markdown::is_markdown_url(url) {
+            match markdown::export(url) {
+                Some(u) => u,
+                None => return false,
+            }
+        } else {
+            url.to_string()
+        };
+        if let Err(e) = abromux_platform::opener::open(&target) {
+            window.push_notification(
+                Notification::error(format!("{target}: {e}")).title("Couldn't open the page"),
+                cx,
+            );
+        }
+        true
     }
 
     /// A tab of plugin `id` (src/plugins.rs), opened on `params`: what it
@@ -1118,6 +1162,7 @@ impl AbroMux {
             .map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx))
         {
             Some(Ok(s)) => s,
+            _ if self.open_in_system_browser(&url, window, cx) => return,
             // It couldn't: the page, as before.
             _ => self.make_browser(&url, window, cx),
         };
@@ -1152,6 +1197,7 @@ impl AbroMux {
             .map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx));
         let surface = match claimed {
             Some(Ok(s)) => s,
+            _ if self.open_in_system_browser(url, window, cx) => return,
             _ => self.make_browser(url, window, cx),
         };
         self.add_tab_to(wi, pane, surface, focus, window, cx);
@@ -1954,7 +2000,11 @@ impl AbroMux {
         cx: &mut Context<Self>,
     ) {
         if let Some(url) = &c.url {
-            let s = self.make_browser(&browser::normalize_url(url), window, cx);
+            let url = browser::normalize_url(url);
+            if self.open_in_system_browser(&url, window, cx) {
+                return;
+            }
+            let s = self.make_browser(&url, window, cx);
             return self.add_tab(s, window, cx);
         }
         if let Some(spec) = &c.workspace {
