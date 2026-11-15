@@ -285,10 +285,12 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
 
 **Agents:** nothing Linux-specific. `abromux hooks install` writes the same
 dot-folder configs (`~/.claude`, `~/.codex`, ...), and the hook command
-reports to the app as on macOS: checked by feeding Claude Code's
-`SessionStart`, `UserPromptSubmit`, `Notification` and `Stop` payloads to
-`abromux hooks claude-event` in an app terminal, which showed Running,
-Needs input and then nothing in the sidebar.
+reports to the app as on macOS. Checked with a real Claude Code session in
+an app terminal on Linux: Running while it worked, cleared with the
+session's title after it answered, Needs input at a permission prompt.
+Codex (not installed there) was checked with its hook events
+(`abromux hooks codex-event`): Running, Needs input on
+`PermissionRequest`, cleared on `Stop`.
 
 **Done when:** on a fresh Omarchy install, someone can install it, open
 workspaces, split panes, run Claude Code and Codex with Running/Needs input in
@@ -328,7 +330,10 @@ Wayland. Nothing in the core changes for it.
 - [x] An AUR package `abromux-bin` (`packaging/aur/abromux-bin/PKGBUILD`)
       with a `.desktop` file, a hicolor icon and `abromux` on `PATH`, from
       the release tarball. This is how Omarchy users install things.
-- [x] A tarball and an AppImage on GitHub releases for other distributions:
+- [x] A tarball and an AppImage on GitHub releases for other distributions
+      (both built and run on Ubuntu 26.04; the AppImage runs from its FUSE
+      mount with `$APPIMAGE` set, its holder survives a quit, and the AUR
+      package built from the tarball installs and runs in an Arch container):
       `scripts/package-linux.sh --dist` (from a release tag; appimagetool is
       fetched into `vendor/`). The binary needs the glibc it was built
       against, so release builds belong on the oldest distribution they
