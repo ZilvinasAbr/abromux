@@ -5,10 +5,17 @@ cd "$(dirname "$0")/.."
 GHOSTTY_REV=${GHOSTTY_REV:-vt-1.0.0}
 ZIG_VERSION=0.17.0
 
+case "$(uname -sm)" in
+  "Darwin arm64") ZIG_HOST=aarch64-macos ;;
+  "Linux x86_64") ZIG_HOST=x86_64-linux ;;
+  "Linux aarch64" | "Linux arm64") ZIG_HOST=aarch64-linux ;;
+  *) echo "build-libghostty.sh: unsupported host $(uname -sm)" >&2; exit 1 ;;
+esac
+
 mkdir -p vendor
 if [ ! -x vendor/zig/zig ]; then
   mkdir -p vendor/zig
-  curl -sL "https://ziglang.org/download/$ZIG_VERSION/zig-aarch64-macos-$ZIG_VERSION.tar.xz" | tar xJ --strip-components=1 -C vendor/zig
+  curl -sfL "https://ziglang.org/download/$ZIG_VERSION/zig-$ZIG_HOST-$ZIG_VERSION.tar.xz" | tar xJ --strip-components=1 -C vendor/zig
 fi
 if [ ! -d vendor/ghostty ]; then
   git clone https://github.com/ghostty-org/ghostty.git vendor/ghostty

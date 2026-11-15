@@ -1,11 +1,15 @@
 //! The page in a browser pane, behind one trait, so the pane doesn't care
-//! what shows it. macOS has [`wkwebview`] (WKWebView through wry).
+//! what shows it. macOS has `wkwebview` (WKWebView through wry); other
+//! systems have `none`, which says there's no built-in browser.
 
 use futures::channel::{mpsc, oneshot};
 use gpui::{AnyElement, App};
-use gpui_component::wry::http::{Request, Response};
+use http::{Request, Response};
 use std::{borrow::Cow, path::PathBuf};
 
+#[cfg(not(target_os = "macos"))]
+pub mod none;
+#[cfg(target_os = "macos")]
 pub mod wkwebview;
 
 /// A script's JSON result, or why it didn't run.
@@ -125,11 +129,20 @@ pub fn new_page(
     window: &mut gpui::Window,
     cx: &mut App,
 ) -> Box<dyn PageBackend> {
-    Box::new(wkwebview::WkPage::new(options, events, window, cx))
+    #[cfg(target_os = "macos")]
+    return Box::new(wkwebview::WkPage::new(options, events, window, cx));
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (window, cx);
+        Box::new(none::NoPage::new(options, events))
+    }
 }
 
 /// Yields after each left click in the app: pages are native views, so gpui
 /// never sees clicks into them.
 pub fn watch_clicks() -> mpsc::UnboundedReceiver<()> {
-    wkwebview::watch_clicks()
+    #[cfg(target_os = "macos")]
+    return wkwebview::watch_clicks();
+    #[cfg(not(target_os = "macos"))]
+    mpsc::unbounded().1
 }

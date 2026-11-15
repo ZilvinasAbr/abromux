@@ -1,6 +1,10 @@
 //! The native (Objective-C) parts, compiled with the frameworks they use.
+//! Nothing to build on other systems.
 
 fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
+    }
     objc("browser_native", "abromux-browser-native");
     objc("cursor", "abromux-cursor");
     objc("webauthn", "abromux-webauthn");

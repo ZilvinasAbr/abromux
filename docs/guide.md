@@ -23,7 +23,7 @@ Everything AbroMux does, in detail. For a quick start, see the [README](../READM
 
 Requirements:
 
-- macOS on Apple Silicon (the libghostty build script fetches an aarch64 Zig)
+- macOS on Apple Silicon, or Linux on x86_64 or aarch64 (see [Linux](#linux))
 - Rust stable (pinned via `rust-toolchain.toml`)
 - Xcode Command Line Tools (clang for bindgen, `codesign`)
 
@@ -44,6 +44,33 @@ ln -sf /Applications/AbroMux.app/Contents/MacOS/abromux ~/.cargo/bin/abromux   #
 ```
 
 Run from the bundle, a bare `abromux` brings the running app to the front, or opens AbroMux.app if it isn't running. A dev build (`cargo run`) always starts its own app.
+
+### Linux
+
+Linux support is in progress ([docs/linux-plan.md](linux-plan.md)): the app builds, runs on Wayland and passes its tests, but notifications, the tray, appearance and the built-in browser aren't there yet, and the default shortcuts are still the macOS ones on `super`. Packages first:
+
+```bash
+# Arch / Omarchy
+sudo pacman -S --needed base-devel clang pkgconf wayland libxkbcommon fontconfig freetype2 vulkan-icd-loader
+# Ubuntu / Debian
+sudo apt install build-essential clang libclang-dev pkg-config libwayland-dev libxkbcommon-dev \
+  libxkbcommon-x11-dev libfontconfig-dev libfreetype-dev libvulkan-dev libx11-dev libx11-xcb-dev libxcb1-dev
+```
+
+Then the same `./scripts/build-libghostty.sh` (it fetches the Zig for this machine) and `cargo run --release`. The app needs a Vulkan driver (Mesa's, or `lavapipe` for software rendering) and finds Wayland through `WAYLAND_DISPLAY`. Its support folder is `$XDG_DATA_HOME/abromux` (`~/.local/share/abromux`).
+
+To try it without a desktop, as on a server, run it in a headless sway with software Vulkan and take screenshots with `grim`:
+
+```bash
+sudo apt install sway grim wtype mesa-vulkan-drivers   # or pacman -S sway grim wtype vulkan-swrast
+export XDG_RUNTIME_DIR=$(mktemp -d) WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+sway &                                                  # creates $XDG_RUNTIME_DIR/wayland-1
+export WAYLAND_DISPLAY=wayland-1 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
+cargo run &
+abromux send 'ls\n'; grim shot.png
+```
+
+Each `wtype` run makes a new virtual keyboard, and the app misses the first key after one: type a whole line, Return included, in one `wtype` call.
 
 ### Nightly build
 

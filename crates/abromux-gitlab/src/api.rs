@@ -650,9 +650,6 @@ impl Client {
         self.write("PUT", &path, serde_json::json!({}))
     }
 
-    /// A new thread on a line of the diff at `refs`: `new_line` for an added
-    /// or unchanged line, `old_line` for a removed (or unchanged) one.
-    #[allow(clippy::too_many_arguments)]
     /// A thread on a line, as `line_comment` starts, but held in your
     /// review until it's submitted (GitLab's "Start a review").
     #[allow(clippy::too_many_arguments)]
@@ -706,6 +703,8 @@ impl Client {
         Ok(())
     }
 
+    /// A new thread on a line of the diff at `refs`: `new_line` for an added
+    /// or unchanged line, `old_line` for a removed (or unchanged) one.
     #[allow(clippy::too_many_arguments)]
     pub fn line_comment(
         &self,

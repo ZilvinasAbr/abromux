@@ -534,8 +534,23 @@ pub fn check_context(s: &str) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// `s` as gpui spells keys on this OS: `cmd` is `super` off macOS.
+    pub(crate) fn os_keys(s: &str) -> String {
+        let cmd = Keystroke::parse("cmd-a").unwrap().unparse();
+        let cmd = cmd.strip_suffix("-a").unwrap().to_string();
+        s.split(' ')
+            .map(|k| {
+                k.split('-')
+                    .map(|m| if m == "cmd" { cmd.as_str() } else { m })
+                    .collect::<Vec<_>>()
+                    .join("-")
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 
     fn keys(s: &str) -> Vec<String> {
         parse_seq(s)
@@ -563,21 +578,21 @@ mod tests {
 
     #[test]
     fn spellings() {
-        assert_eq!(keys("cmd-shift-p"), ["cmd-shift-p"]);
-        assert_eq!(keys("⌘⇧P"), ["cmd-shift-p"]);
-        assert_eq!(keys("cmd-P"), ["cmd-p"]);
-        assert_eq!(keys("command-option-left"), ["alt-cmd-left"]);
-        assert_eq!(keys("⌥⌘←"), ["alt-cmd-left"]);
+        assert_eq!(keys("cmd-shift-p"), [os_keys("cmd-shift-p")]);
+        assert_eq!(keys("⌘⇧P"), [os_keys("cmd-shift-p")]);
+        assert_eq!(keys("cmd-P"), [os_keys("cmd-p")]);
+        assert_eq!(keys("command-option-left"), [os_keys("alt-cmd-left")]);
+        assert_eq!(keys("⌥⌘←"), [os_keys("alt-cmd-left")]);
         assert_eq!(keys("ctrl-a h"), ["ctrl-a", "h"]);
-        assert_eq!(keys("cmd--"), ["cmd--"]);
+        assert_eq!(keys("cmd--"), [os_keys("cmd--")]);
         assert_eq!(keys("f12"), ["f12"]);
     }
 
     #[test]
     fn shift_folds_into_punctuation() {
-        assert_eq!(keys("cmd-shift-]"), ["cmd-}"]);
-        assert_eq!(keys("⌘⇧,"), ["cmd-<"]);
-        assert_eq!(keys("cmd-shift-="), ["cmd-+"]);
+        assert_eq!(keys("cmd-shift-]"), [os_keys("cmd-}")]);
+        assert_eq!(keys("⌘⇧,"), [os_keys("cmd-<")]);
+        assert_eq!(keys("cmd-shift-="), [os_keys("cmd-+")]);
         assert_eq!(
             parse_seq("cmd-}").unwrap(),
             parse_seq("cmd-shift-]").unwrap()
@@ -601,12 +616,12 @@ mod tests {
                 .map(|b| b.keystrokes().iter().map(|k| k.inner().unparse()).collect())
                 .collect()
         };
-        assert_eq!(named("abromux::SplitRight"), ["cmd-k"]);
+        assert_eq!(named("abromux::SplitRight"), [os_keys("cmd-k")]);
         assert!(named("abromux::NewWorkspace").is_empty());
         // An app-wide key takes the default away in every context.
         assert!(named("terminal::ClearScrollback").is_empty());
         assert!(named("abromux::NewTerminal").is_empty());
-        assert_eq!(named("abromux::RunCommand"), ["cmd-t"]);
+        assert_eq!(named("abromux::RunCommand"), [os_keys("cmd-t")]);
         assert_eq!(named("terminal::Find").len(), 3, "one per context");
     }
 
@@ -617,10 +632,22 @@ mod tests {
             k.key_char = Some("x".into());
             record(&k)
         };
-        assert_eq!(rec("cmd-shift-k").as_deref(), Some("cmd-shift-k"));
-        assert_eq!(rec("alt-cmd-left").as_deref(), Some("alt-cmd-left"));
-        assert_eq!(rec("cmd-shift-}").as_deref(), Some("cmd-}"));
-        assert_eq!(rec("cmd-shift-<").as_deref(), Some("cmd-<"));
+        assert_eq!(
+            rec("cmd-shift-k").as_deref(),
+            Some(os_keys("cmd-shift-k").as_str())
+        );
+        assert_eq!(
+            rec("alt-cmd-left").as_deref(),
+            Some(os_keys("alt-cmd-left").as_str())
+        );
+        assert_eq!(
+            rec("cmd-shift-}").as_deref(),
+            Some(os_keys("cmd-}").as_str())
+        );
+        assert_eq!(
+            rec("cmd-shift-<").as_deref(),
+            Some(os_keys("cmd-<").as_str())
+        );
         assert_eq!(rec("f5").as_deref(), Some("f5"));
         assert_eq!(rec("k"), None, "plain keys are for typing");
         assert_eq!(rec("shift-k"), None);

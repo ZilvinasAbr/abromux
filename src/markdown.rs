@@ -10,7 +10,7 @@
 //! response carries a policy without scripts, so HTML in a file can't read
 //! other files.
 
-use gpui_component::wry::http::{Request, Response};
+use http::{Request, Response};
 use std::{
     borrow::Cow,
     collections::HashMap,

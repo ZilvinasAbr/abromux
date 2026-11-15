@@ -54,12 +54,12 @@ pub fn set_bool(key: &str, value: bool) {
 /// itself does it: a bare binary shares the release's support folder but
 /// not its defaults, and would mark the import done with nothing in it.
 pub fn import_once(keys: &[&str]) {
-    if !crate::macos::defaults::bundled() || path().exists() {
+    if !crate::os::defaults::bundled() || path().exists() {
         return;
     }
     with(|m| {
         for key in keys {
-            if crate::macos::defaults::bool(key) {
+            if crate::os::defaults::bool(key) {
                 m.insert((*key).into(), Value::Bool(true));
             }
         }

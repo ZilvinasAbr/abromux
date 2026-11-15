@@ -1,6 +1,6 @@
 //! Everything abromux asks of the operating system, behind one API, so the
-//! rest of the app has no OS calls of its own. Only macOS for now; see
-//! docs/linux-plan.md.
+//! rest of the app has no OS calls of its own: `macos/`, and `linux/`, which
+//! is mostly stubs for now (see docs/linux-plan.md).
 //!
 //! - [`channel`] and [`dirs`]: stable or nightly, and where files go.
 //! - [`notify`]: banners and the dock badge; [`tray`]: the menu-bar bell.
@@ -15,10 +15,21 @@
 
 pub mod channel;
 pub mod dirs;
-mod macos;
 pub mod prefs;
 
-pub use macos::{
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux as os;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos as os;
+
+/// The WKWebView passkey bridge; Linux has no built-in browser.
+#[cfg(target_os = "macos")]
+pub use os::webauthn;
+pub use os::{
     appearance, browser_native, cursor, dock, file_types, notify, opener, power, process, tray,
-    webauthn, window,
+    window,
 };
