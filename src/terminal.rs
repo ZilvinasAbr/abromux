@@ -1653,7 +1653,8 @@ impl TerminalView {
     fn on_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus);
         cx.emit(TerminalEvent::Focused);
-        if ev.button == MouseButton::Left && ev.modifiers.platform {
+        // ⌘-click (Ctrl-click on Linux) opens the link under the pointer.
+        if ev.button == MouseButton::Left && ev.modifiers.secondary() {
             self.pointer = Some(ev.position);
             self.update_link(true);
             if let Some(l) = self.link.take() {
@@ -1711,7 +1712,7 @@ impl TerminalView {
             self.scrollbar_grab = None;
         }
         self.pointer = Some(ev.position);
-        if self.update_link(ev.modifiers.platform && ev.pressed_button.is_none()) {
+        if self.update_link(ev.modifiers.secondary() && ev.pressed_button.is_none()) {
             cx.notify();
         }
         if self.reporting(ev.modifiers) {
@@ -1856,7 +1857,7 @@ impl Render for TerminalView {
                 if !cmd || this.focus.is_focused(window) {
                     this.sync_cmd(cmd);
                 }
-                if this.update_link(cmd) {
+                if this.update_link(ev.modifiers.secondary()) {
                     cx.notify();
                 }
             }))

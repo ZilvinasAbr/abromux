@@ -417,7 +417,8 @@ impl AbroMux {
                 keywords: vec![],
                 title: ws.name(cx).into(),
                 subtitle: ws.cwd(cx).map(|c| tilde(&c).into()),
-                keys: shortcut_digit(i, n).map(|d| format!("⌘{d}").into()),
+                keys: shortcut_digit(i, n)
+                    .map(|d| crate::keymap::default_label(&format!("workspace{d}")).into()),
                 target: Target::Workspace(ws.id),
             })
             .collect()
@@ -675,15 +676,58 @@ fn highlighted(title: &SharedString, positions: &[usize]) -> StyledText {
     StyledText::new(title.clone()).with_highlights(highlights)
 }
 
-/// A shortcut the way macOS menus show it: ⌃⌥⇧⌘ then the key.
+/// A shortcut as this OS shows it: `⇧⌘P` on macOS, `Ctrl+Shift+P` on Linux.
 pub(crate) fn key_label(m: &Modifiers, key: &str) -> String {
-    // gpui folds shift into these keys (cmd-} is ⌘⇧]).
-    let (shift, key) = match key {
+    if abromux_platform::MACOS {
+        mac_key_label(m, key)
+    } else {
+        linux_key_label(m, key)
+    }
+}
+
+/// gpui folds shift into these keys (cmd-} is ⌘⇧]): whether shift is held,
+/// and the key it was on.
+fn unfold_shift<'a>(m: &Modifiers, key: &'a str) -> (bool, &'a str) {
+    match key {
         "{" => (true, "["),
         "}" => (true, "]"),
         "<" => (true, ","),
         k => (m.shift, k),
-    };
+    }
+}
+
+/// The way Linux apps write shortcuts: `Ctrl+Alt+Shift+Super+Key`.
+fn linux_key_label(m: &Modifiers, key: &str) -> String {
+    let (shift, key) = unfold_shift(m, key);
+    let mut parts: Vec<String> = [
+        (m.control, "Ctrl"),
+        (m.alt, "Alt"),
+        (shift, "Shift"),
+        (m.platform, "Super"),
+    ]
+    .into_iter()
+    .filter(|(on, _)| *on)
+    .map(|(_, name)| name.to_string())
+    .collect();
+    parts.push(match key {
+        "pageup" => "PageUp".into(),
+        "pagedown" => "PageDown".into(),
+        "escape" => "Esc".into(),
+        "+" => "Plus".into(),
+        k if k.chars().count() == 1 => k.to_uppercase(),
+        k => {
+            let mut c = k.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect())
+                .unwrap_or_default()
+        }
+    });
+    parts.join("+")
+}
+
+/// A shortcut the way macOS menus show it: ⌃⌥⇧⌘ then the key.
+fn mac_key_label(m: &Modifiers, key: &str) -> String {
+    let (shift, key) = unfold_shift(m, key);
     let mut s = String::new();
     for (on, sym) in [
         (m.control, '⌃'),
@@ -771,7 +815,7 @@ fn is_subsequence(needle: &[char], hay: &[char]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{fuzzy_match, key_label};
+    use super::{fuzzy_match, linux_key_label, mac_key_label};
     use gpui::Modifiers;
 
     fn score(q: &str, t: &str) -> i32 {
@@ -828,12 +872,12 @@ mod tests {
             shift: true,
             ..Default::default()
         };
-        assert_eq!(key_label(&cmd, "}"), "⇧⌘]");
-        assert_eq!(key_label(&cmd, "<"), "⇧⌘,");
-        assert_eq!(key_label(&cmd_shift, "p"), "⇧⌘P");
-        assert_eq!(key_label(&ctrl_shift, "h"), "⌃⇧H");
+        assert_eq!(mac_key_label(&cmd, "}"), "⇧⌘]");
+        assert_eq!(mac_key_label(&cmd, "<"), "⇧⌘,");
+        assert_eq!(mac_key_label(&cmd_shift, "p"), "⇧⌘P");
+        assert_eq!(mac_key_label(&ctrl_shift, "h"), "⌃⇧H");
         assert_eq!(
-            key_label(
+            mac_key_label(
                 &Modifiers {
                     alt: true,
                     platform: true,
@@ -843,5 +887,16 @@ mod tests {
             ),
             "⌥⌘←"
         );
+        assert_eq!(linux_key_label(&ctrl_shift, "p"), "Ctrl+Shift+P");
+        assert_eq!(linux_key_label(&ctrl_shift, "<"), "Ctrl+Shift+,");
+        assert_eq!(linux_key_label(&ctrl_shift, "tab"), "Ctrl+Shift+Tab");
+        let ctrl_alt = Modifiers {
+            control: true,
+            alt: true,
+            ..Default::default()
+        };
+        assert_eq!(linux_key_label(&ctrl_alt, "pagedown"), "Ctrl+Alt+PageDown");
+        assert_eq!(linux_key_label(&ctrl_alt, "left"), "Ctrl+Alt+Left");
+        assert_eq!(linux_key_label(&cmd, "+"), "Super+Plus");
     }
 }

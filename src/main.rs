@@ -2187,14 +2187,19 @@ impl AbroMux {
         .detach();
     }
 
-    /// Show hints after a lone ⌘ or ⌃ has been held for `HINT_DELAY`; any
-    /// other modifier change hides them.
+    /// Show hints after the digit shortcuts' modifiers have been held for
+    /// `HINT_DELAY` (⌘ for workspaces, ⌃ for tabs, ⌥⌘ for links on macOS);
+    /// any other modifier change hides them.
     fn modifiers_changed(&mut self, m: &Modifiers, window: &mut Window, cx: &mut Context<Self>) {
-        let want = match (m.platform, m.control, m.alt, m.shift || m.function) {
-            (true, false, false, false) => Some(Hints::Command),
-            (true, false, true, false) => Some(Hints::Links),
-            (false, true, false, false) => Some(Hints::Control),
-            _ => None,
+        let held = |name: &str| keymap::default_modifiers(name).is_some_and(|d| d == *m);
+        let want = if held("workspace1") {
+            Some(Hints::Command)
+        } else if held("link1") {
+            Some(Hints::Links)
+        } else if held("tab1") {
+            Some(Hints::Control)
+        } else {
+            None
         };
         if want.is_some() && want == self.hints {
             return;
@@ -2263,12 +2268,18 @@ impl AbroMux {
 
     /// Sidebar toggle and new-workspace buttons, shown in the sidebar's
     /// titlebar row or next to the traffic lights when it's hidden. Holding
-    /// ⌘ swaps them for their shortcuts.
+    /// ⌘ swaps them for their shortcuts: the ones whose key is on the held
+    /// modifier, which is all of them on macOS and none on Linux (Alt shows
+    /// the workspace digits; these are on ctrl-shift and ctrl-alt).
     fn titlebar_buttons(&self, cx: &mut Context<Self>) -> [AnyElement; 3] {
         let unread = self.notifications.iter().filter(|n| !n.read).count();
-        let hints = self.hints == Some(Hints::Command);
-        let button = |id: &'static str, name: &str, keys: &str| {
-            if hints {
+        let held = keymap::default_modifiers("workspace1");
+        let hinted = |action: &str| {
+            self.hints == Some(Hints::Command) && keymap::default_modifiers(action) == held
+        };
+        let button = |id: &'static str, name: &str, action: &str| {
+            if hinted(action) {
+                let keys = keymap::default_label(action);
                 div()
                     .id(id)
                     .flex()
@@ -2276,27 +2287,27 @@ impl AbroMux {
                     .items_center()
                     .h(px(22.))
                     .cursor_pointer()
-                    .child(hint_pill(keys.into()))
+                    .child(hint_pill(keys))
             } else {
                 icon_button(id, name)
             }
         };
         [
-            button("toggle-sidebar", "panel-left", "⌘B")
+            button("toggle-sidebar", "panel-left", "toggleSidebar")
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.sidebar = !this.sidebar;
                     cx.notify();
                 }))
                 .into_any_element(),
-            button("notifications-button", "bell", "⌘I")
+            button("notifications-button", "bell", "showNotifications")
                 .relative()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.notifications_open = !this.notifications_open;
                     cx.notify();
                 }))
-                .when(unread > 0 && !hints, |d| {
+                .when(unread > 0 && !hinted("showNotifications"), |d| {
                     d.child(
                         div()
                             .absolute()
@@ -2321,7 +2332,7 @@ impl AbroMux {
                     )
                 })
                 .into_any_element(),
-            button("new-ws", "plus", "⌘N")
+            button("new-ws", "plus", "newWorkspace")
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, window, cx| this.new_workspace_here(window, cx)))
                 .into_any_element(),
@@ -2599,7 +2610,9 @@ impl AbroMux {
                         .child(s.title(cx))
                         .into_any_element(),
                 })
-                .when_some(hint, |d, n| d.child(hint_pill(format!("⌃{n}"))))
+                .when_some(hint, |d, n| {
+                    d.child(hint_pill(keymap::default_label(&format!("tab{n}"))))
+                })
                 .when(hint.is_none() && renaming.is_none(), |d| {
                     d.child(
                         div()
@@ -3451,12 +3464,14 @@ fn run_app(cwd: Option<String>) {
                 browser::RemoveSuggestion,
                 Some("Omnibar > Input"),
             ),
-            // Keybindings run before key listeners; let these reach the PTY.
-            KeyBinding::new("tab", NoAction, Some("Terminal")),
-            KeyBinding::new("shift-tab", NoAction, Some("Terminal")),
-            KeyBinding::new("ctrl-shift-i", NoAction, Some("Terminal")),
             KeyBinding::new("shift-enter", terminal::FindPrevious, Some("FindBar")),
         ]);
+        // Keybindings run before key listeners; let these reach the PTY.
+        cx.bind_keys(
+            keymap::PTY_KEYS
+                .iter()
+                .map(|k| KeyBinding::new(k, NoAction, Some("Terminal"))),
+        );
         menu::init(cx);
         keymap::apply(&cx.global::<settings::Settings>().clone(), cx);
         menu::set_menus(cx);

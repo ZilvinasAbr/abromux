@@ -178,20 +178,37 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
       that terminal cell metrics and `sprite.rs` box drawing line up.
 
 **Shortcuts**
-- [ ] Per-OS default tables in `abromux-core::keymap`. Linux mapping:
+- [x] Per-OS default tables: `keymap::LINUX` next to `ACTIONS` (still in the
+      app, not `abromux-core`: the actions are gpui's), picked by
+      `Act::defaults()` through `abromux_platform::MACOS`. Tests check it
+      covers every action in the same contexts, uses no Super, leaves plain
+      Ctrl-letters to the shell (outside the browser), and takes no key twice
+      or from `PTY_KEYS`. Linux mapping:
   - Terminal-context actions that would clash with the shell use
     `ctrl-shift-*`: new tab `ctrl-shift-t`, close `ctrl-shift-w`, copy and
     paste `ctrl-shift-c`/`v`, find `ctrl-shift-f`, palette `ctrl-shift-p`,
-    switcher `ctrl-shift-k`.
+    switcher `ctrl-shift-s` (not `ctrl-shift-k`: that's Resize Up, as on
+    macOS), splits `ctrl-shift-o`/`e` as in Ghostty.
+  - Less common app actions are `ctrl-alt-<the macOS letter>`; notifications
+    `ctrl-alt-i` (`ctrl-shift-i` goes to the terminal), jump to unread
+    `ctrl-alt-j` (input methods take `ctrl-shift-u`).
   - App actions with no clash stay `ctrl-*`: settings `ctrl-comma`,
-    reload config `ctrl-shift-comma`.
-  - `alt-*` bindings stay as they are; nothing binds `super-*`.
+    reload config `ctrl-shift-comma`; font size `ctrl-=`/`-`/`0`; workspaces
+    `alt-1..9`, tabs `ctrl-1..9`, links `ctrl-alt-1..9`.
+  - Nothing binds `super-*`.
   - Omarchy's universal copy and paste (Super+C/V, sent to apps as
-    `ctrl-insert`/`shift-insert`) must work in terminals.
-- [ ] `terminal.rs`: `m.platform` means Super on Linux. Make "should the app
-      keep this key" ask the keymap instead of checking the platform modifier.
-- [ ] The palette, menus and `abromux` CLI help print `Ctrl+Shift+P`, not `⌘⇧P`.
-- [ ] Config-file shortcuts accept `cmd-` on macOS and `ctrl-`/`super-` on Linux; `secondary-` means either.
+    `ctrl-insert`/`shift-insert`) work in terminals (checked with
+    `wl-copy`).
+- [x] `terminal.rs`: gpui dispatches bound keys before the terminal's key
+      handler, so bound ctrl-shift keys reach the app and unbound ones the
+      shell; nothing to change there. Link clicks and hover use
+      `secondary()` (⌘ on macOS, Ctrl on Linux).
+- [x] The palette, tooltips, hint pills and `abromux config shortcuts` print
+      `Ctrl+Shift+P`, not `⌘⇧P` (`palette::key_label`,
+      `keymap::default_label`). Hints show while the digit keys' modifier is
+      held (Alt for workspaces on Linux). The CLI help text still says ⌘.
+- [x] Config-file shortcuts: gpui already reads `secondary-` as ⌘ on macOS
+      and Ctrl elsewhere, and `cmd-`/`super-` as Super on Linux.
 
 **Paths and channel**
 - [ ] Config: `$XDG_CONFIG_HOME/abromux/` (already the case).

@@ -1368,7 +1368,7 @@ fn title(act: &keymap::Act) -> String {
 
 /// The Shortcuts page's group for an action.
 fn category(act: &keymap::Act) -> &'static str {
-    let in_ctx = |c: &str| act.bindings.iter().any(|(ctx, _)| *ctx == Some(c));
+    let in_ctx = |c: &str| act.defaults().iter().any(|(ctx, _)| *ctx == Some(c));
     let name = act.name.to_ascii_lowercase();
     if in_ctx("Terminal") {
         "Terminal"

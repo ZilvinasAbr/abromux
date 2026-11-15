@@ -520,7 +520,10 @@ impl AbroMux {
                         ),
                 })
                 .when(hints && i < DIGITS, |d| {
-                    d.child(hint_pill(format!("⌥⌘{}", i + 1)))
+                    d.child(hint_pill(crate::keymap::default_label(&format!(
+                        "link{}",
+                        i + 1
+                    ))))
                 })
                 .when(!hints, |d| {
                     d.child(
