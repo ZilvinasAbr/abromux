@@ -22,7 +22,7 @@
 # (`gh release upload v<version> dist/*`), whose AppImage the updater
 # installs. The binary needs the glibc it was built against or newer, so
 # build releases on the oldest distribution they should run on.
-# The AppImage needs appimagetool, fetched once into vendor/.
+# The AppImage needs appimagetool, fetched once into vendor/, and `file`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -153,6 +153,8 @@ files=("dist/$stem.tar.gz")
 # The AppImage: an AppDir with the binary as AppRun. Wayland, Vulkan, fonts
 # and the rest come from the system, as for the tarball.
 if $appimage; then
+  # appimagetool calls `file` (Ubuntu: apt install file).
+  command -v file >/dev/null || { echo "The AppImage needs the file command; install it or pass --no-appimage." >&2; exit 1; }
   appdir="$tmp/AppDir"
   install_tree "$appdir/usr" "$bin"
   ln -s "usr/bin/$bin" "$appdir/AppRun"
