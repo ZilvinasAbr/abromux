@@ -38,7 +38,7 @@ Commands:
   group remove [--workspace <ref>]
   group rename|color|collapse|expand|ungroup [--group <ref>] [<title>|<color>]   (default: the workspace's group)
   group by-folder                                            (group ungrouped workspaces that share a repo/folder)
-  folder [path]                                              (the workspace folder this shell is in; ⇧⌘I makes one)
+  folder [path]                                              (the workspace folder this shell is in; {key:newFolderWorkspace} makes one)
   folder add <path> [--branch <name>]                        (check a project out into it: a git worktree on ws/<folder>, else a copy)
   folder list | all [--closed] | repos | root                (its checkouts; every workspace folder, or those no open
                                                              workspace has; git repos found under ~/repos, ~/src,
@@ -92,20 +92,20 @@ Commands:
                                                              break-pane --pane <ref>: that pane's active tab)
   join-pane --target-pane <ref> [--surface <ref> | --pane <ref>] [--focus <true|false>]   (move a tab, or a pane's
                                                              active tab, to the end of another pane, in any workspace)
-  zoom-pane [--pane <ref>] [--workspace <ref>] [on|off|toggle]   (fill the workspace with the pane, like ⌘⇧↩)
-  trigger-flash [--surface <ref>] [--workspace <ref>]        (flash the pane holding it, like ⌘⇧H)
+  zoom-pane [--pane <ref>] [--workspace <ref>] [on|off|toggle]   (fill the workspace with the pane, like {key:toggleZoom})
+  trigger-flash [--surface <ref>] [--workspace <ref>]        (flash the pane holding it, like {key:flashPane})
   send [--surface <ref>] [--workspace <ref>] <text>          (\\n presses enter; also \\t \\e \\\\)
   send-key [--surface <ref>] [--workspace <ref>] <key>       (enter, tab, escape, up, ctrl-c, alt-b, ...)
   read-screen [--surface <ref>] [--workspace <ref>] [--scrollback] [--lines <n>] [--selection]
   read-selection [--surface <ref>] [--workspace <ref>]       (the selected text, in a terminal or a page)
   capture-pane                                               (alias for read-screen)
-  clear-history [--surface <ref>] [--workspace <ref>]        (clear screen and scrollback, like ⌘K)
+  clear-history [--surface <ref>] [--workspace <ref>]        (clear screen and scrollback, like {key:clearScrollback})
   notify [--title <text>] [--subtitle <text>] [--body <text>] [--surface <ref>]   (rings that terminal's pane)
   list-notifications
   open-notification <id>                                     (select its terminal and mark it read)
   dismiss-notification (--id <id> | --all-read)              (remove one, or every read one)
   mark-notification-read (--id <id> | --workspace <ref> [--surface <ref>] | --all)
-  jump-to-unread                                             (the newest unread notification, like ⌘⇧U)
+  jump-to-unread                                             (the newest unread notification, like {key:jumpToUnread})
   clear-notifications
   set-status <key> <value> [--icon <name>] [--color <#rrggbb>] [--workspace <ref>]   (a pill under the workspace in the sidebar)
   clear-status <key> [--workspace <ref>]
@@ -125,15 +125,15 @@ Commands:
   focus-window [--window <ref>]                              (bring abromux to the front; there is one window)
   sidebar <toggle|show|hide>
   link [list]                                                (this workspace's tracked links: Jira tickets, merge
-                                                             requests, pinned pages; in the sidebar, ⌥⌘1…9)
+                                                             requests, pinned pages; in the sidebar, {key:link1}…9)
   link add <url|PAY-123|group/project!iid>                   (track one here)
   link remove <n|key|url>                                    (untrack it; it isn't tracked again on its own)
   link open <n|key|url> | --all [--focus <true|false>]       (its tab, else a new one in the pane the links are in)
   mr list [mine|recent|workspace]                            (cached GitLab merge requests: the panel's, or one group)
   mr open <url|group/project!iid>                            (in a tab of this workspace, from the cache, then refetched)
   mr refresh [<url|group/project!iid>]                       (check now: everything, or refetch one)
-  mr panel [toggle|show|hide]                                (the merge requests panel on the right, ⌥⌘B)
-  reload-config                                              (read the config file again, like ⌘⇧,)
+  mr panel [toggle|show|hide]                                (the merge requests panel on the right, {key:toggleMergeRequests})
+  reload-config                                              (read the config file again, like {key:reloadConfig})
   config path                                                (where abromux's config.json lives)
   config open                                                (open config.json in its default app; made empty if missing)
   config check [<file>]                                      (validate the config file; needs no running app)
@@ -270,7 +270,7 @@ pub fn run(argv: Vec<String>) -> i32 {
     }
     let as_json = opts.remove("json").is_some();
     if pos.is_empty() || opts.contains_key("help") || pos[0] == "help" {
-        print!("{HELP}");
+        print!("{}", help());
         return 0;
     }
     if let Ok(s) = std::env::var("ABROMUX_SURFACE_ID") {
@@ -490,7 +490,12 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
             .filter(|d| !d.is_empty())
             .map(std::path::PathBuf::from)
             .or_else(|| std::env::current_dir().ok().and_then(|d| folder::find(&d)))
-            .ok_or_else(|| "not in a workspace folder (make one with ⇧⌘I)".to_string())
+            .ok_or_else(|| {
+                format!(
+                    "not in a workspace folder (make one with {})",
+                    crate::keymap::default_label("newFolderWorkspace")
+                )
+            })
     };
     let sub = if pos.is_empty() {
         "path".to_string()
@@ -1291,6 +1296,22 @@ fn wait_for(pos: &[String], opts: &Map<String, Value>) -> Result<(), String> {
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+}
+
+/// `HELP` with each `{key:<action>}` replaced by that action's default key
+/// as this OS writes it (`⇧⌘I`, `Ctrl+Alt+N`).
+fn help() -> String {
+    let mut out = String::new();
+    let mut rest = HELP;
+    while let Some(start) = rest.find("{key:") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 5..];
+        let end = after.find('}').expect("{key:…} is closed");
+        out.push_str(&crate::keymap::default_label(&after[..end]));
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Every command in `HELP`, with its subcommands (`browser zoom`,
@@ -2313,6 +2334,21 @@ fn created(v: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn help_keys_name_actions() {
+        let mut rest = HELP;
+        while let Some(start) = rest.find("{key:") {
+            let after = &rest[start + 5..];
+            let name = &after[..after.find('}').unwrap()];
+            assert!(
+                !crate::keymap::default_label(name).is_empty(),
+                "{name} has no default key"
+            );
+            rest = after;
+        }
+        assert!(!help().contains("{key:"));
+    }
 
     #[test]
     fn completion_knows_commands_and_subcommands() {

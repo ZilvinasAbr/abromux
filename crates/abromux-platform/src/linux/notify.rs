@@ -2,10 +2,13 @@
 //! (`org.freedesktop.Notifications` over D-Bus: Mako on Omarchy, dunst,
 //! GNOME Shell). Each has a `default` action, which servers run when the
 //! banner is clicked, so a click reports its id like a macOS banner click,
-//! and brings the window forward ([`raise`]).
+//! and brings the window forward (`window::raise`).
 
 use futures::channel::mpsc;
-use std::{process::Command, sync::Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Mutex, OnceLock},
+};
 
 static CLICKS: Mutex<Option<mpsc::UnboundedSender<usize>>> = Mutex::new(None);
 
@@ -38,33 +41,35 @@ pub fn post(id: usize, title: &str, body: &str, sound: bool) {
             if action == "default"
                 && let Some(tx) = CLICKS.lock().unwrap().as_ref()
             {
-                raise();
+                super::window::raise();
                 let _ = tx.unbounded_send(id);
             }
         });
     });
 }
 
-/// Bring the app's window forward, as macOS does on a banner click. Wayland
-/// lets an app do that itself only with an activation token, which the
-/// notification server has but notify-rust doesn't pass on (and gpui can't
-/// take), so ask the compositor: Hyprland's and sway's IPC, by `app_id`.
-/// Elsewhere the click still shows the terminal, behind other windows.
-fn raise() {
-    let pattern = format!("^{}$", crate::channel::app_id().replace('.', "\\."));
-    let run = |cmd: &mut Command| {
-        if let Err(e) = cmd.output() {
-            eprintln!("abromux: raising the window: {e}");
-        }
+/// The unread count on the app's launcher icon, none for 0, through the
+/// Unity launcher API: docks that read it (Dash to Dock, Plasma's task
+/// manager) show it on the icon of `<app_id>.desktop`. Omarchy has none, so
+/// it's best effort and errors are dropped.
+pub fn set_badge(count: usize) {
+    static BUS: OnceLock<Option<zbus::blocking::Connection>> = OnceLock::new();
+    let Some(bus) = BUS
+        .get_or_init(|| zbus::blocking::Connection::session().ok())
+        .as_ref()
+    else {
+        return;
     };
-    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
-        run(Command::new("hyprctl").args(["dispatch", "focuswindow", &format!("class:{pattern}")]));
-    } else if std::env::var_os("SWAYSOCK").is_some() {
-        run(Command::new("swaymsg").arg(format!("[app_id=\"{pattern}\"] focus")));
-    }
+    let uri = format!("application://{}.desktop", crate::channel::app_id());
+    let props: HashMap<&str, zbus::zvariant::Value> = HashMap::from([
+        ("count", zbus::zvariant::Value::from(count as i64)),
+        ("count-visible", zbus::zvariant::Value::from(count > 0)),
+    ]);
+    let _ = bus.emit_signal(
+        None::<()>,
+        "/dev/abromux/launcher",
+        "com.canonical.Unity.LauncherEntry",
+        "Update",
+        &(uri, props),
+    );
 }
-
-/// The unread count on the app's launcher icon: not yet. The Unity launcher
-/// API would show it in docks that read it (Dash to Dock, Plasma); Omarchy
-/// has none.
-pub fn set_badge(_count: usize) {}
