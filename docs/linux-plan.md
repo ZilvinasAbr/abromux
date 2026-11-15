@@ -214,7 +214,8 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
 - [x] The palette, tooltips, hint pills and `abromux config shortcuts` print
       `Ctrl+Shift+P`, not `⌘⇧P` (`palette::key_label`,
       `keymap::default_label`). Hints show while the digit keys' modifier is
-      held (Alt for workspaces on Linux). The CLI help text still says ⌘.
+      held (Alt for workspaces on Linux). The CLI help fills in each OS's
+      keys too (`{key:<action>}` in `HELP`).
 - [x] Config-file shortcuts: gpui already reads `secondary-` as ⌘ on macOS
       and Ctrl elsewhere, and `cmd-`/`super-` as Super on Linux.
 
@@ -240,10 +241,13 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
       (`hyprctl dispatch focuswindow` / `swaymsg focus`, by `app_id`):
       Wayland only lets an app raise itself with an activation token, which
       the notification server sends but notify-rust doesn't pass on.
-- [ ] Unread badge: `com.canonical.Unity.LauncherEntry` over D-Bus (best
-      effort; nothing shows it on Omarchy). Not yet.
-- [ ] Tray bell: StatusNotifierItem via `ksni`; Omarchy's Waybar shows it
-      once `tray` is in the bar's modules. Off by default on Linux. Not yet.
+- [x] Unread badge: `com.canonical.Unity.LauncherEntry` `Update` signals
+      over D-Bus for `<app_id>.desktop` (best effort; nothing shows it on
+      Omarchy).
+- [x] Tray bell: StatusNotifierItem via `ksni` (on zbus 5 and async-io, no
+      tokio), with the macOS bell's menu and a drawn bell icon (icon theme
+      names differ). Omarchy's Waybar shows it once `tray` is in the bar's
+      modules. Off by default on Linux (`notifications.showInMenuBar`).
 - [x] Appearance: gpui already follows xdg-desktop-portal's
       `org.freedesktop.appearance color-scheme` on Linux and reports changes
       as window appearance changes. `app.appearance: light|dark` overrides
@@ -275,6 +279,13 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
       isn't taken by the compositor. The clipboard already worked.
 - [x] `ABROMUX_SNAPSHOT` / `scripts/drive.sh`: skipped on Linux; the window
       calls answer "not supported on Linux".
+
+**Agents:** nothing Linux-specific. `abromux hooks install` writes the same
+dot-folder configs (`~/.claude`, `~/.codex`, ...), and the hook command
+reports to the app as on macOS: checked by feeding Claude Code's
+`SessionStart`, `UserPromptSubmit`, `Notification` and `Stop` payloads to
+`abromux hooks claude-event` in an app terminal, which showed Running,
+Needs input and then nothing in the sidebar.
 
 **Done when:** on a fresh Omarchy install, someone can install it, open
 workspaces, split panes, run Claude Code and Codex with Running/Needs input in

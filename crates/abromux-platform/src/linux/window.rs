@@ -2,6 +2,7 @@
 //! (Phase 2); the debug snapshots' synthetic input is macOS-only.
 
 use raw_window_handle::HasWindowHandle;
+use std::process::Command;
 
 pub type Error = &'static str;
 
@@ -40,4 +41,24 @@ pub fn post_scroll(
     _dy: f64,
 ) -> Result<(), Error> {
     Err(UNSUPPORTED)
+}
+
+/// Bring the app's window forward, as macOS does on a banner or menu-bar
+/// click. Wayland
+/// lets an app do that itself only with an activation token, which the
+/// notification server has but notify-rust doesn't pass on (and gpui can't
+/// take), so ask the compositor: Hyprland's and sway's IPC, by `app_id`.
+/// Elsewhere the click still shows the terminal, behind other windows.
+pub(crate) fn raise() {
+    let pattern = format!("^{}$", crate::channel::app_id().replace('.', "\\."));
+    let run = |cmd: &mut Command| {
+        if let Err(e) = cmd.output() {
+            eprintln!("abromux: raising the window: {e}");
+        }
+    };
+    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
+        run(Command::new("hyprctl").args(["dispatch", "focuswindow", &format!("class:{pattern}")]));
+    } else if std::env::var_os("SWAYSOCK").is_some() {
+        run(Command::new("swaymsg").arg(format!("[app_id=\"{pattern}\"] focus")));
+    }
 }

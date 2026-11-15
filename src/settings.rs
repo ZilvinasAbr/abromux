@@ -551,7 +551,8 @@ pub struct NotificationSettings {
     /// Commands each notification passes through, in order
     /// (`crate::notify_hook`).
     pub hooks: Vec<NotificationHook>,
-    /// The bell in the macOS menu bar (`crate::menubar`).
+    /// The bell in the macOS menu bar, or the tray on Linux (off by default
+    /// there).
     pub show_in_menu_bar: bool,
 }
 
@@ -559,7 +560,8 @@ impl Default for NotificationSettings {
     fn default() -> Self {
         NotificationSettings {
             hooks: vec![],
-            show_in_menu_bar: true,
+            // The tray on Linux: off, as not every bar has one.
+            show_in_menu_bar: abromux_platform::MACOS,
         }
     }
 }
