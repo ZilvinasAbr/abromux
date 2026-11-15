@@ -2852,6 +2852,7 @@ impl Render for AbroMux {
             // Also on the app, but the palette lists only what the focused view handles.
             .on_action(|_: &update::CheckForUpdates, _, cx| update::check(true, cx))
             .on_action(|_: &update::ApplyUpdate, _, cx| update::apply(cx))
+            .map(menu::on_help)
             .on_action(
                 cx.listener(|this, _: &NewWorkspace, window, cx| {
                     this.new_workspace_here(window, cx)
@@ -3407,7 +3408,7 @@ fn run_app(cwd: Option<String>) {
         // Light or dark before anything is drawn, and before the Ghostty
         // config picks its theme for it.
         theme::apply_appearance(settings.app.appearance);
-        theme::set_dark(theme::appearance_is_dark(cx.window_appearance()), cx);
+        theme::set_dark(theme::resolve(cx.window_appearance()), cx);
         cx.set_global(config::Config::load());
         // Off by default: only takes out hooks an earlier run put in.
         if let Err(e) = terminal_browser_panes::set(settings.browser.terminal_browser_panes) {
@@ -3429,10 +3430,11 @@ fn run_app(cwd: Option<String>) {
         cx.on_action(|_: &OpenConfig, cx| settings_window::open_config(cx));
         // The fixed bindings; the shortcuts users can change are in keymap.rs.
         cx.bind_keys([
-            KeyBinding::new("cmd-w", about::CloseAbout, Some("About")),
+            // ⌘W, Ctrl+W on Linux (these windows have no shell to take it from).
+            KeyBinding::new("secondary-w", about::CloseAbout, Some("About")),
             KeyBinding::new("escape", about::CloseAbout, Some("About")),
             KeyBinding::new(
-                "cmd-w",
+                "secondary-w",
                 settings_window::CloseSettings,
                 Some("SettingsWindow"),
             ),

@@ -168,6 +168,13 @@ pub const ACTIONS: &[Act] = {
         "zoomIn", Some("Zoom In"), browser::ZoomIn, [(B, ["cmd-=", "cmd-+"]), (BI, ["cmd-=", "cmd-+"])];
         "zoomOut", Some("Zoom Out"), browser::ZoomOut, [(B, ["cmd--"]), (BI, ["cmd--"])];
         "actualSize", Some("Actual Size"), browser::ActualSize, [(B, ["cmd-0"]), (BI, ["cmd-0"])];
+        // The Help menu and About: on Linux, with no menu bar, only here.
+        "about", Some("About"), About, [(None, [])];
+        "openGuide", Some("Help: AbroMux Guide"), menu::OpenGuide, [(None, [])];
+        "openShortcutsHelp", Some("Help: Keyboard Shortcuts"), menu::OpenShortcuts, [(None, [])];
+        "openRepo", Some("Help: GitHub"), menu::OpenRepo, [(None, [])];
+        "openReleases", Some("Help: Releases"), menu::OpenReleases, [(None, [])];
+        "reportIssue", Some("Help: Report an Issue"), menu::OpenIssues, [(None, [])];
         "quit", Some("Quit"), Quit, [(None, ["cmd-q"])];
         "workspace1", None, Ws1, [(None, ["cmd-1"])];
         "workspace2", None, Ws2, [(None, ["cmd-2"])];

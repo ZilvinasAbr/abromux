@@ -46,18 +46,51 @@ pub fn init(cx: &mut App) {
             let _ = w.update(cx, |_, window, _| window.zoom_window());
         }
     });
+    cx.on_action(|a: &OpenGuide, cx| help(a, cx));
+    cx.on_action(|a: &OpenShortcuts, cx| help(a, cx));
+    cx.on_action(|a: &OpenRepo, cx| help(a, cx));
+    cx.on_action(|a: &OpenIssues, cx| help(a, cx));
+    cx.on_action(|a: &OpenReleases, cx| help(a, cx));
+    // macOS's; Linux has no hiding, and Super is the compositor's.
+    if abromux_platform::MACOS {
+        cx.bind_keys([
+            KeyBinding::new("cmd-h", Hide, None),
+            KeyBinding::new("alt-cmd-h", HideOthers, None),
+            KeyBinding::new("cmd-m", Minimize, None),
+        ]);
+    }
+}
+
+/// Open the page a Help action names. Bound on the app (the menu bar) and on
+/// the main window's view (the palette, which on Linux is the only way to
+/// them), through [`on_help`].
+fn help(action: &dyn Action, cx: &mut App) {
     let guide = format!("{REPO}/blob/main/docs/guide.md");
-    let shortcuts = format!("{guide}#keyboard-and-mouse");
-    cx.on_action(move |_: &OpenGuide, cx| cx.open_url(&guide));
-    cx.on_action(move |_: &OpenShortcuts, cx| cx.open_url(&shortcuts));
-    cx.on_action(|_: &OpenRepo, cx| cx.open_url(REPO));
-    cx.on_action(|_: &OpenIssues, cx| cx.open_url(&format!("{REPO}/issues")));
-    cx.on_action(|_: &OpenReleases, cx| cx.open_url(&format!("{REPO}/releases")));
-    cx.bind_keys([
-        KeyBinding::new("cmd-h", Hide, None),
-        KeyBinding::new("alt-cmd-h", HideOthers, None),
-        KeyBinding::new("cmd-m", Minimize, None),
-    ]);
+    let a = action.as_any();
+    let url = if a.is::<OpenGuide>() {
+        guide
+    } else if a.is::<OpenShortcuts>() {
+        format!("{guide}#keyboard-and-mouse")
+    } else if a.is::<OpenRepo>() {
+        REPO.into()
+    } else if a.is::<OpenIssues>() {
+        format!("{REPO}/issues")
+    } else if a.is::<OpenReleases>() {
+        format!("{REPO}/releases")
+    } else {
+        return;
+    };
+    cx.open_url(&url);
+}
+
+/// The Help actions on a view, so the palette lists them.
+pub fn on_help(d: Stateful<Div>) -> Stateful<Div> {
+    d.on_action(|a: &OpenGuide, _, cx| help(a, cx))
+        .on_action(|a: &OpenShortcuts, _, cx| help(a, cx))
+        .on_action(|a: &OpenRepo, _, cx| help(a, cx))
+        .on_action(|a: &OpenIssues, _, cx| help(a, cx))
+        .on_action(|a: &OpenReleases, _, cx| help(a, cx))
+        .on_action(|_: &crate::About, _, cx| crate::about::show(cx))
 }
 
 /// Build the menu bar. macOS shows each item's shortcut from the keymap as
