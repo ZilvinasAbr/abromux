@@ -227,20 +227,29 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
       Info.plist.
 
 **Desktop services**
-- [ ] Notifications: `org.freedesktop.Notifications` via `notify-rust`
+- [x] Notifications: `org.freedesktop.Notifications` via `notify-rust`
       (shown by Mako on Omarchy), with a `default` action so clicking jumps to
-      the terminal, like banner clicks today.
+      the terminal, like banner clicks today. notify-rust is pinned to 4.18,
+      the last on zbus 5, which gpui's portal code already uses. The click
+      also brings the window forward through Hyprland's or sway's IPC
+      (`hyprctl dispatch focuswindow` / `swaymsg focus`, by `app_id`):
+      Wayland only lets an app raise itself with an activation token, which
+      the notification server sends but notify-rust doesn't pass on.
 - [ ] Unread badge: `com.canonical.Unity.LauncherEntry` over D-Bus (best
-      effort; nothing shows it on Omarchy, but it costs little).
+      effort; nothing shows it on Omarchy). Not yet.
 - [ ] Tray bell: StatusNotifierItem via `ksni`; Omarchy's Waybar shows it
-      once `tray` is in the bar's modules. Off by default on Linux.
-- [ ] Appearance: `org.freedesktop.appearance color-scheme` from
-      xdg-desktop-portal, watched for changes, so switching Omarchy's theme
-      flips the app. `app.appearance: light|dark` overrides it.
-- [ ] Power (App Nap): nothing to do.
-- [ ] Opener: `xdg-open`.
-- [ ] Menus: Wayland has no global menu bar, so every menu item is reachable
-      from the palette, plus a menu button in the sidebar header.
+      once `tray` is in the bar's modules. Off by default on Linux. Not yet.
+- [x] Appearance: gpui already follows xdg-desktop-portal's
+      `org.freedesktop.appearance color-scheme` on Linux and reports changes
+      as window appearance changes. `app.appearance: light|dark` overrides
+      it (`theme::resolve`), since there's no app-wide appearance to force
+      as on macOS.
+- [x] Power (App Nap): nothing to do.
+- [x] Opener: `xdg-open` (Phase 1).
+- [x] Menus: Wayland has no global menu bar, so the menu-only items (About
+      and the Help menu) are in the palette too, on both OSes. Hide, Hide
+      Others and Minimize are macOS's and keep their keys there only. No
+      menu button in the sidebar: everything is in the palette.
 
 **Terminal**
 - [x] Shell: use `$SHELL`, else the user's shell from `getpwuid`, else

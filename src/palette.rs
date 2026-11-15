@@ -380,6 +380,7 @@ impl AbroMux {
             .map(|(title, subtitle, keywords, action)| {
                 let title = match title.as_str() {
                     "Quit" => format!("Quit {}", channel::app_name()),
+                    "About" => format!("About {}", channel::app_name()),
                     _ => title,
                 };
                 // The first binding whose context applies is the main one
