@@ -2,6 +2,8 @@
 //! Nothing to build on other systems.
 
 fn main() {
+    // channel.rs reads it with option_env!.
+    println!("cargo:rerun-if-env-changed=ABROMUX_CHANNEL");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }

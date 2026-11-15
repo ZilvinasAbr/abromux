@@ -10,7 +10,7 @@ use std::{path::PathBuf, sync::Mutex};
 static PREFS: Mutex<Option<Map<String, Value>>> = Mutex::new(None);
 
 fn path() -> PathBuf {
-    crate::dirs::support_dir().join("prefs.json")
+    crate::dirs::state_dir().join("prefs.json")
 }
 
 fn with<T>(f: impl FnOnce(&mut Map<String, Value>) -> T) -> T {

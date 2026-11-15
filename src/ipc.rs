@@ -5,13 +5,14 @@ pub use abromux_core::ipc::{err, ok};
 use serde_json::Value;
 use std::{os::unix::net::UnixStream, path::PathBuf};
 
-/// `$ABROMUX_SOCKET_PATH`, else `~/Library/Application Support/abromux/abromux.sock`
-/// (`abromux-nightly/` for the nightly app).
+/// `$ABROMUX_SOCKET_PATH`, else `abromux.sock` in the runtime folder:
+/// `~/Library/Application Support/abromux/` on macOS,
+/// `$XDG_RUNTIME_DIR/abromux/` on Linux (`abromux-nightly/` for the nightly).
 pub fn socket_path() -> PathBuf {
     if let Ok(p) = std::env::var("ABROMUX_SOCKET_PATH") {
         return p.into();
     }
-    crate::channel::support_dir().join("abromux.sock")
+    crate::channel::runtime_dir().join("abromux.sock")
 }
 
 /// One request/response round trip.

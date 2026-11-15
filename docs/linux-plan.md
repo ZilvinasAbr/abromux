@@ -219,12 +219,17 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
       and Ctrl elsewhere, and `cmd-`/`super-` as Super on Linux.
 
 **Paths and channel**
-- [ ] Config: `$XDG_CONFIG_HOME/abromux/` (already the case).
-- [ ] Session, history, folders and caches: `$XDG_DATA_HOME/abromux[-nightly]/`.
-- [ ] Control socket and holder socket: `$XDG_RUNTIME_DIR/abromux[-nightly]/`.
-- [ ] Prefs and logs: `$XDG_STATE_HOME/abromux[-nightly]/`.
-- [ ] Channel set at build time (`ABROMUX_CHANNEL=nightly`), since there's no
-      Info.plist.
+- [x] Config: `$XDG_CONFIG_HOME/abromux/` (already the case).
+- [x] Session, history, folders and caches: `$XDG_DATA_HOME/abromux[-nightly]/`
+      (Phase 1).
+- [x] Control socket and holder socket: `$XDG_RUNTIME_DIR/abromux[-nightly]/`
+      (`dirs::runtime_dir`; the support folder without `XDG_RUNTIME_DIR`).
+- [x] Prefs and logs: `$XDG_STATE_HOME/abromux[-nightly]/` (`dirs::state_dir`:
+      `prefs.json`, `update.json`, `update.log`). On macOS both are the
+      support folder, as before.
+- [x] Channel set at build time (`ABROMUX_CHANNEL=nightly` or
+      `nightly-<name>`), since there's no Info.plist; a bundle's Info.plist
+      still wins on macOS.
 
 **Desktop services**
 - [x] Notifications: `org.freedesktop.Notifications` via `notify-rust`

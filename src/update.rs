@@ -786,7 +786,7 @@ struct Saved {
 
 impl Saved {
     fn path() -> PathBuf {
-        channel::support_dir().join("update.json")
+        channel::state_dir().join("update.json")
     }
 
     fn load() -> Self {
@@ -797,19 +797,20 @@ impl Saved {
     }
 
     fn save(&self) {
-        let _ = std::fs::create_dir_all(channel::support_dir());
+        let _ = std::fs::create_dir_all(channel::state_dir());
         if let Ok(s) = serde_json::to_string_pretty(self) {
             let _ = std::fs::write(Self::path(), s);
         }
     }
 }
 
-/// `update.log` in the support folder.
+/// `update.log` in the state folder (the support folder on macOS).
 fn log(line: &str) {
+    let _ = std::fs::create_dir_all(channel::state_dir());
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(channel::support_dir().join("update.log"))
+        .open(channel::state_dir().join("update.log"))
     {
         let _ = writeln!(f, "{} {line}", now());
     }
@@ -1095,7 +1096,7 @@ fn content(state: &State) -> Vec<AnyElement> {
         ],
         State::Error(f) => {
             let releases = format!("{REPO}/releases/latest");
-            let log_path = channel::support_dir().join("update.log");
+            let log_path = channel::state_dir().join("update.log");
             vec![
                 title(f.title).text_color(rgb(0xe5a050)).into_any_element(),
                 div().child(f.message.clone()).into_any_element(),
