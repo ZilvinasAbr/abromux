@@ -58,9 +58,12 @@ pub struct Release {
     pub url: String,
     /// `published_at`, as GitHub gives it.
     pub published: String,
-    /// The disk image's download URL and size.
-    pub dmg: String,
+    /// The download that installs it on this OS (the disk image on macOS,
+    /// the AppImage on Linux), "" if the release has none; its size, and
+    /// its SHA-256 if GitHub gave one.
+    pub asset: String,
     pub size: u64,
+    pub sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -157,7 +160,24 @@ fn automatic(cx: &App) -> bool {
         .app
         .automatically_check_for_updates
         && !channel::nightly()
-        && bundle().is_some()
+        && if abromux_platform::MACOS {
+            bundle().is_some()
+        } else {
+            appimage().is_some() || release_build()
+        }
+}
+
+/// A build of a release tag (`0.27.0`), not of a commit (`0.27.0+6dea3c2`):
+/// what Linux packages and tarballs are, so they check for updates.
+fn release_build() -> bool {
+    !env!("ABROMUX_VERSION").contains('+')
+}
+
+/// The AppImage this runs from (`$APPIMAGE`, which its runtime sets).
+fn appimage() -> Option<PathBuf> {
+    std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute() && p.is_file())
 }
 
 fn due(saved: &Saved) -> bool {
@@ -286,8 +306,17 @@ pub fn install(cx: &mut App) {
     let State::Available(release) = entity(cx).read(cx).state.clone() else {
         return;
     };
-    let app = bundle();
-    if let Some(f) = location_problem(app.as_deref()) {
+    let app = if abromux_platform::MACOS {
+        bundle()
+    } else {
+        appimage()
+    };
+    let problem = if abromux_platform::MACOS {
+        location_problem(app.as_deref())
+    } else {
+        linux_problem(app.as_deref(), &release)
+    };
+    if let Some(f) = problem {
         log(&format!("can't install: {}", f.message));
         begin(State::Error(f), cx);
         update(cx, |u| u.open = true);
@@ -301,7 +330,7 @@ pub fn install(cx: &mut App) {
         },
         cx,
     );
-    log(&format!("downloading {}", release.dmg));
+    log(&format!("downloading {}", release.asset));
     cx.spawn(async move |cx| {
         if let Err(f) = run_install(generation, release, app, cx).await {
             log(&format!("install failed: {}: {}", f.title, f.message));
@@ -325,15 +354,15 @@ async fn run_install(
     let dir = updates_dir();
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| failure("Update Failed", e.to_string()))?;
-    let dmg = dir.join(format!("AbroMux-{}.dmg", release.version));
-    let part = dmg.with_extension("dmg.part");
+    let dmg = dir.join(format!("AbroMux-{}{}", release.version, asset_suffix()));
+    let part = dmg.with_extension("part");
     let child = Command::new("/usr/bin/curl")
         .args(["-fL", "--silent", "--retry", "2", "--connect-timeout", "30"])
         .arg("-A")
         .arg(user_agent())
         .arg("-o")
         .arg(&part)
-        .arg(&release.dmg)
+        .arg(&release.asset)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -376,6 +405,9 @@ async fn run_install(
         }
     }
     std::fs::rename(&part, &dmg).map_err(|e| failure("Update Failed", e.to_string()))?;
+    if !abromux_platform::MACOS {
+        return install_appimage(&dmg, &release, &app, generation, cx).await;
+    }
     log("downloaded; preparing");
     let next = State::Preparing(release.clone());
     cx.update(|cx| update(cx, |u| u.state = next)).ok();
@@ -439,12 +471,32 @@ fn fetch() -> Result<Release, Failure> {
     parse_release(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// The end of the name of the download that installs a release here:
+/// `.dmg`, or `-x86_64.AppImage` / `-aarch64.AppImage`.
+fn asset_suffix() -> String {
+    if abromux_platform::MACOS {
+        ".dmg".into()
+    } else {
+        format!("-{}.AppImage", std::env::consts::ARCH)
+    }
+}
+
 fn parse_release(json: &str) -> Result<Release, Failure> {
+    // On Linux a release without an AppImage still says there's an update.
+    parse_release_for(json, &asset_suffix(), abromux_platform::MACOS)
+}
+
+/// The release in `json`, with its download ending in `suffix`, which it
+/// must have if `required`.
+fn parse_release_for(json: &str, suffix: &str, required: bool) -> Result<Release, Failure> {
     #[derive(Deserialize)]
     struct Asset {
         name: String,
         size: u64,
         browser_download_url: String,
+        /// `sha256:<hex>`
+        #[serde(default)]
+        digest: Option<String>,
     }
     #[derive(Deserialize)]
     struct Latest {
@@ -466,22 +518,24 @@ fn parse_release(json: &str) -> Result<Release, Failure> {
     if parse_version(&version).is_none() {
         return Err(unreadable());
     }
-    let dmg = latest
-        .assets
-        .into_iter()
-        .find(|a| a.name.ends_with(".dmg"))
-        .ok_or_else(|| {
-            failure(
-                "Update Failed",
-                format!("Release {version} has no disk image to install."),
-            )
-        })?;
+    let asset = latest.assets.into_iter().find(|a| a.name.ends_with(suffix));
+    if asset.is_none() && required {
+        return Err(failure(
+            "Update Failed",
+            format!("Release {version} has no disk image to install."),
+        ));
+    }
+    let sha256 = asset
+        .as_ref()
+        .and_then(|a| a.digest.as_deref()?.strip_prefix("sha256:"))
+        .map(str::to_string);
     Ok(Release {
         version,
         url: latest.html_url,
         published: latest.published_at.unwrap_or_default(),
-        dmg: dmg.browser_download_url,
-        size: dmg.size,
+        size: asset.as_ref().map_or(0, |a| a.size),
+        asset: asset.map(|a| a.browser_download_url).unwrap_or_default(),
+        sha256,
     })
 }
 
@@ -746,12 +800,18 @@ fn swap(staged: &Path, app: &Path) -> Result<(), Failure> {
 
 /// Open `app` again once this process has exited.
 fn relaunch(app: &Path) -> Result<(), Failure> {
+    relaunch_with(Path::new("/usr/bin/open"), &[app])
+}
+
+/// Run `program` with `args` once this process has exited.
+fn relaunch_with(program: &Path, args: &[&Path]) -> Result<(), Failure> {
     Command::new("/bin/sh")
         .arg("-c")
-        .arg(r#"while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open "$2""#)
+        .arg(r#"pid=$1; shift; while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done; exec "$@""#)
         .arg("sh")
         .arg(std::process::id().to_string())
-        .arg(app)
+        .arg(program)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -759,6 +819,116 @@ fn relaunch(app: &Path) -> Result<(), Failure> {
         .spawn()
         .map(|_| ())
         .map_err(|e| failure("Update Failed", format!("Couldn't relaunch: {e}")))
+}
+
+// ---- Linux ----------------------------------------------------------------
+
+/// Why this Linux copy can't replace itself, if it can't: only an AppImage
+/// can. Packages (the AUR's `abromux-bin`) belong to the package manager,
+/// and other copies to whoever unpacked them.
+fn linux_problem(appimage: Option<&Path>, release: &Release) -> Option<Failure> {
+    let name = channel::app_name();
+    if channel::nightly() {
+        return Some(failure(
+            "Nightly Build",
+            format!("{name} is built from source and doesn't install releases."),
+        ));
+    }
+    let Some(appimage) = appimage else {
+        let exe = std::env::current_exe().unwrap_or_default();
+        return Some(if exe.starts_with("/usr") || exe.starts_with("/opt") {
+            failure(
+                "Installed by Your Package Manager",
+                format!(
+                    "Update {name} to {} with your package manager, such as `yay -Syu abromux-bin` for the AUR package.",
+                    release.version
+                ),
+            )
+        } else {
+            failure(
+                "Download the Update",
+                format!(
+                    "This {name} isn't an AppImage, so it can't replace itself. Download {} from the release page.",
+                    release.version
+                ),
+            )
+        });
+    };
+    if release.asset.is_empty() {
+        return Some(failure(
+            "Update Failed",
+            format!(
+                "Release {} has no AppImage for this computer.",
+                release.version
+            ),
+        ));
+    }
+    let dir = appimage.parent()?;
+    let c = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()).ok()?;
+    if unsafe { libc::access(c.as_ptr(), libc::W_OK) } != 0 {
+        return Some(failure(
+            "Updater Permission Error",
+            format!("{name} can't write to {}.", dir.display()),
+        ));
+    }
+    None
+}
+
+/// Check the downloaded AppImage, put it in place of the running one (the
+/// file can be replaced while it runs), and start it once this quits.
+async fn install_appimage(
+    download: &Path,
+    release: &Release,
+    appimage: &Path,
+    generation: u64,
+    cx: &mut AsyncApp,
+) -> Result<(), Failure> {
+    let next = State::Preparing(release.clone());
+    cx.update(|cx| update(cx, |u| u.state = next)).ok();
+    let size = std::fs::metadata(download).map(|m| m.len()).unwrap_or(0);
+    if release.size != 0 && size != release.size {
+        return Err(failure(
+            "Update Failed",
+            format!("The download is {size} bytes, not {}.", release.size),
+        ));
+    }
+    if let Some(want) = &release.sha256 {
+        let out = run(Command::new("sha256sum").arg(download))
+            .map_err(|e| failure("Update Failed", e))?;
+        let got = String::from_utf8_lossy(&out.stdout);
+        if got.split_whitespace().next() != Some(want.as_str()) {
+            return Err(failure(
+                "Update Failed",
+                "The download doesn't match the release's checksum.",
+            ));
+        }
+    }
+    if !cx.update(|cx| current(generation, cx)).unwrap_or(false) {
+        return Ok(());
+    }
+    log("verified; installing");
+    let next = State::Installing(release.clone());
+    cx.update(|cx| update(cx, |u| u.state = next)).ok();
+    // Next to it first, so the rename that replaces it is on one filesystem.
+    let staged = appimage.with_extension("AppImage.new");
+    let denied = |e: std::io::Error| {
+        failure(
+            "Updater Permission Error",
+            format!("Couldn't replace {}: {e}", appimage.display()),
+        )
+    };
+    std::fs::copy(download, &staged).map_err(denied)?;
+    std::fs::set_permissions(&staged, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .map_err(denied)?;
+    if let Err(e) = std::fs::rename(&staged, appimage) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(denied(e));
+    }
+    let _ = std::fs::remove_dir_all(updates_dir());
+    log(&format!("installed {}; relaunching", release.version));
+    relaunch_with(appimage, &[])?;
+    cx.update(|cx| cx.quit()).ok();
+    Ok(())
 }
 
 // ---- saved state ----------------------------------------------------------
@@ -1177,18 +1347,33 @@ mod tests {
                   "browser_download_url": "https://github.com/ZilvinasAbr/abromux/releases/download/v0.12.0/AbroMux-0.12.0.dmg" }
             ]
         }"#;
-        let r = parse_release(json).unwrap();
+        let r = parse_release_for(json, ".dmg", true).unwrap();
         assert_eq!(r.version, "0.12.0");
         assert_eq!(r.size, 13388873);
-        assert!(r.dmg.ends_with("AbroMux-0.12.0.dmg"));
+        assert!(r.asset.ends_with("AbroMux-0.12.0.dmg"));
         assert_eq!(date(&r.published).as_deref(), Some("Nov 1, 2026"));
         assert_eq!(size(r.size), "13.4 MB");
         assert_eq!(
-            parse_release(r#"{"tag_name":"v1.0.0","html_url":"","assets":[]}"#)
-                .unwrap_err()
-                .title,
+            parse_release_for(
+                r#"{"tag_name":"v1.0.0","html_url":"","assets":[]}"#,
+                ".dmg",
+                true
+            )
+            .unwrap_err()
+            .title,
             "Update Failed"
         );
+        // Linux: the AppImage for this architecture, with its checksum; a
+        // release without one still says there's an update.
+        let linux = r#"{"tag_name":"v0.31.0","html_url":"","assets":[
+            {"name":"abromux-0.31.0-x86_64-linux.tar.gz","size":5,"browser_download_url":"https://x/t"},
+            {"name":"AbroMux-0.31.0-x86_64.AppImage","size":9,"browser_download_url":"https://x/a",
+             "digest":"sha256:abc123"}]}"#;
+        let r = parse_release_for(linux, "-x86_64.AppImage", false).unwrap();
+        assert_eq!((r.asset.as_str(), r.size), ("https://x/a", 9));
+        assert_eq!(r.sha256.as_deref(), Some("abc123"));
+        let r = parse_release_for(linux, "-aarch64.AppImage", false).unwrap();
+        assert_eq!((r.asset.as_str(), r.size, r.sha256), ("", 0, None));
         assert_eq!(
             parse_release("nope").unwrap_err().title,
             "Update Feed Error"
@@ -1215,8 +1400,9 @@ mod tests {
             version: "0.13.0".into(),
             url: String::new(),
             published: String::new(),
-            dmg: String::new(),
+            asset: String::new(),
             size: 200,
+            sha256: None,
         };
         assert_eq!(
             pill_text(&State::Available(r.clone())),
@@ -1253,7 +1439,7 @@ mod tests {
         let ok = Command::new("/usr/bin/curl")
             .args(["-fsSL", "-o"])
             .arg(&dmg)
-            .arg(&r.dmg)
+            .arg(&r.asset)
             .status()
             .unwrap()
             .success();

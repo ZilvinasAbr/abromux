@@ -1,0 +1,37 @@
+# Maintainer: Zilvinas Abromavicius
+# The release tarball from scripts/package-linux.sh --dist, installed under
+# /usr. After a release: set pkgver, reset pkgrel, run `updpkgsums` and
+# `makepkg --printsrcinfo > .SRCINFO`, and push to the AUR (see ../README.md).
+pkgname=abromux-bin
+pkgver=0.30.0
+pkgrel=1
+pkgdesc="Terminal workspaces for coding agents (Claude Code, Codex), on libghostty-vt and GPUI"
+arch=('x86_64' 'aarch64')
+url="https://github.com/ZilvinasAbr/abromux"
+license=('MIT')
+# Linked: glibc, libgcc, xcb and xkbcommon. Loaded at run time: Wayland,
+# Vulkan (a driver too), fontconfig and freetype. xdg-open opens links.
+depends=('glibc' 'gcc-libs' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11'
+         'wayland' 'vulkan-icd-loader' 'vulkan-driver' 'fontconfig' 'freetype2'
+         'xdg-utils')
+optdepends=('mako: notification banners (or another notification daemon)'
+            'waybar: the tray bell (notifications.showInMenuBar)'
+            'wl-clipboard: copy and paste from the CLI'
+            'zsh: shell integration for zsh (bash has it too)')
+provides=('abromux')
+conflicts=('abromux')
+options=('!strip' '!debug')
+source_x86_64=("$url/releases/download/v$pkgver/abromux-$pkgver-x86_64-linux.tar.gz")
+source_aarch64=("$url/releases/download/v$pkgver/abromux-$pkgver-aarch64-linux.tar.gz")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+  cd "abromux-$pkgver-$CARCH-linux"
+  install -Dm755 bin/abromux "$pkgdir/usr/bin/abromux"
+  install -Dm644 share/applications/dev.abromux.app.desktop \
+    "$pkgdir/usr/share/applications/dev.abromux.app.desktop"
+  cp -r share/icons "$pkgdir/usr/share/"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

@@ -59,6 +59,8 @@ sudo apt install build-essential clang libclang-dev pkg-config libwayland-dev li
 
 Then the same `./scripts/build-libghostty.sh` (it fetches the Zig for this machine) and `cargo run --release`. The app needs a Vulkan driver (Mesa's, or `lavapipe` for software rendering) and finds Wayland through `WAYLAND_DISPLAY`. Its files follow the XDG folders: the session, history and caches in `$XDG_DATA_HOME/abromux` (`~/.local/share/abromux`), the control and holder sockets in `$XDG_RUNTIME_DIR/abromux`, prefs and logs in `$XDG_STATE_HOME/abromux` (`~/.local/state/abromux`), and the config in `$XDG_CONFIG_HOME/abromux` as on macOS. A nightly is a build with `ABROMUX_CHANNEL=nightly` (or `nightly-<name>`) set, and uses `abromux-nightly` (`abromux-nightly-<name>`) folders.
 
+To install it as a desktop app, `scripts/package-linux.sh` builds a release binary and installs it into `~/.local` (`--prefix` for another): `bin/abromux`, the desktop entry `dev.abromux.app.desktop` (named after the window's Wayland `app_id`, so docks and launchers match them) and the icons. `scripts/nightly.sh` does the same for `abromux-nightly`, with its own app id, icon and folders. `scripts/package-linux.sh --dist`, from a release tag, makes the tarball and AppImage for the GitHub release, and `packaging/aur/` has the AUR package.
+
 To try it without a desktop, as on a server, run it in a headless sway with software Vulkan, type into it through a uinput keyboard, and take screenshots with `grim` (as root; `noop` is libseat's backend for that):
 
 ```bash
@@ -100,7 +102,9 @@ AbroMux checks for updates like cmux does (cmux uses Sparkle; AbroMux does the s
 
 Nothing downloads until you choose Install and Relaunch. **Check for Updates…** (in the AbroMux menu, the command palette, or Settings › App › Updates) checks right away and also tells you when you're already on the latest version. The palette's **Apply Update (If Available)** installs a found update, or checks if there isn't one yet. Turn the daily check off with `"app": { "automaticallyCheckForUpdates": false }` or the switch in Settings.
 
-The check time and a skipped version are kept in `update.json` in the support folder, and each step is written to `update.log` there. An app running from the disk image or from a folder you can't write to says so and won't install; move it into Applications first. Nightly builds only check: they come from `scripts/nightly.sh`, not from releases. To try the flow from a nightly, launch it with `ABROMUX_UPDATE_FROM=0.1.0` so it thinks it's on an old version (`ABROMUX_UPDATE_FEED` points the check at another releases API URL). `cargo test update::tests::live -- --ignored` downloads, verifies and swaps the real latest release in a scratch folder.
+On Linux the check is the same, and what Install does depends on how AbroMux was installed: an AppImage downloads the release's `AbroMux-<version>-<arch>.AppImage`, checks its size and SHA-256 against the release, replaces itself and relaunches; the AUR package says to update it with your AUR helper (pacman owns its files); a tarball or other copy says to download the release. Linux checks run on their own only for an AppImage or a release build, not for one built from a commit.
+
+The check time and a skipped version are kept in `update.json` in the support folder (the state folder on Linux), and each step is written to `update.log` there. An app running from the disk image or from a folder you can't write to says so and won't install; move it into Applications first. Nightly builds only check: they come from `scripts/nightly.sh`, not from releases. To try the flow from a nightly, launch it with `ABROMUX_UPDATE_FROM=0.1.0` so it thinks it's on an old version (`ABROMUX_UPDATE_FEED` points the check at another releases API URL). `cargo test update::tests::live -- --ignored` downloads, verifies and swaps the real latest release in a scratch folder.
 
 ## GitLab reviews
 

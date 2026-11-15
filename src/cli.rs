@@ -8,7 +8,7 @@ use std::{io::IsTerminal, path::Path};
 const HELP: &str = "abromux - control abromux via Unix socket
 
 Usage:
-  abromux                       Launch the app (from AbroMux.app: focus it if running)
+  abromux                       Launch the app (installed: focus it if running)
   abromux <path>                Open a directory in a new workspace (launches abromux if needed)
   abromux [--json] [--socket <path>] <command> [options]
 
@@ -2167,11 +2167,23 @@ fn open_dir(dir: &str) -> i32 {
 /// Bare `abromux` from an installed AbroMux.app: bring the running app forward, or
 /// start the bundle through Launch Services rather than as a second app tied
 /// to this terminal. None means "run the app here": dev builds outside a
-/// bundle, and the bundle's own launch from Finder or `open`.
+/// bundle, and the bundle's own launch from Finder or `open`. On Linux an
+/// installed copy (anything not run from a `target/` folder) brings the
+/// running app of its channel forward, as a launcher click should, and
+/// otherwise runs here.
 pub fn launch() -> Option<i32> {
     let exe = std::env::current_exe()
         .and_then(|e| e.canonicalize())
         .ok()?;
+    if !abromux_platform::MACOS {
+        let dev = exe
+            .ancestors()
+            .any(|p| p.file_name().is_some_and(|n| n == "target"));
+        if !dev && ipc::call("window.focus", json!({})).is_ok() {
+            return Some(0);
+        }
+        return None;
+    }
     let bundle = exe
         .ancestors()
         .find(|p| p.extension().is_some_and(|e| e == "app"))?;

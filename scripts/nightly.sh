@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build the working tree as-is into /Applications/AbroMux Nightly.app (neon icon,
 # own socket and session) and point an `abromux-nightly` CLI at it. The release
-# AbroMux.app and `abromux` are left alone.
+# AbroMux.app and `abromux` are left alone. On Linux it installs
+# abromux-nightly into ~/.local instead (scripts/package-linux.sh --nightly).
 #
 #   scripts/nightly.sh                 # /Applications
 #   scripts/nightly.sh ~/Applications  # or another folder
@@ -20,6 +21,13 @@ while (($#)); do
   shift
 done
 app="AbroMux Nightly${flavor:+ $flavor}"
+
+# Linux: abromux-nightly in ~/.local/bin (or the folder given), with its own
+# desktop entry, icon and folders.
+if [[ "$(uname -s)" == Linux ]]; then
+  [[ "$dest" == /Applications ]] && dest="$HOME/.local"
+  exec scripts/package-linux.sh --nightly ${flavor:+--name "$flavor"} --prefix "$dest"
+fi
 
 scripts/bundle-app.sh --nightly ${flavor:+--name "$flavor"} "$dest"
 ln -sf "$dest/$app.app/Contents/MacOS/abromux" ~/.cargo/bin/abromux-nightly${flavor:+-$flavor}

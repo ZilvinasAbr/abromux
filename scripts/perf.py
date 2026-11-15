@@ -229,6 +229,16 @@ def gen_data(d: Path):
 
 
 def footprint_mb(pid):
+    if sys.platform == "linux":
+        # PSS, shared pages split among their users: the nearest to macOS's
+        # footprint.
+        try:
+            for line in Path(f"/proc/{pid}/smaps_rollup").read_text().splitlines():
+                if line.startswith("Pss:"):
+                    return int(line.split()[1]) / 1024
+        except OSError:
+            pass
+        return None
     out = sh("footprint", "-p", str(pid), check=False)
     m = re.search(r"Footprint: ([\d.]+) ([KMG]B)", out)
     if not m:
@@ -1028,11 +1038,13 @@ def cmd_run(a):
     suite.headless()
     loads.append(load_avg())
     if not a.headless:
-        caffeinate = subprocess.Popen(["caffeinate", "-d", "-i"])
+        # macOS: keep the display awake, or the window's frames throttle.
+        caffeinate = subprocess.Popen(["caffeinate", "-d", "-i"]) if shutil.which("caffeinate") else None
         try:
             suite.app()
         finally:
-            caffeinate.terminate()
+            if caffeinate:
+                caffeinate.terminate()
         loads.append(load_avg())
 
     now = dt.datetime.now(dt.timezone.utc)
