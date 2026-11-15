@@ -16,52 +16,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
-/// A merge request on the configured GitLab: its project's full path and
-/// its number there.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct MrKey {
-    pub project: String,
-    pub iid: u64,
-}
-
-impl MrKey {
-    pub fn new(project: impl Into<String>, iid: u64) -> Self {
-        Self {
-            project: project.into(),
-            iid,
-        }
-    }
-
-    /// `group/project!12`, GitLab's own way to write it.
-    pub fn reference(&self) -> String {
-        format!("{}!{}", self.project, self.iid)
-    }
-
-    /// `https://host/group/project/-/merge_requests/12[/…]`, or
-    /// `group/project!12`.
-    pub fn parse(s: &str) -> Option<MrKey> {
-        let s = s.trim();
-        if let Some((project, iid)) = s.rsplit_once('!')
-            && !project.contains("://")
-        {
-            let project = project.trim_matches('/');
-            return (!project.is_empty() && project.contains('/'))
-                .then(|| Some(MrKey::new(project, iid.trim().parse().ok()?)))
-                .flatten();
-        }
-        if !(s.starts_with("https://") || s.starts_with("http://")) {
-            return None;
-        }
-        // The key leaves the host out: one GitLab is set up at a time.
-        let (_, project, iid) = abromux_gitlab::api::parse_mr_url(s)?;
-        Some(MrKey::new(&project, iid))
-    }
-
-    /// The project's last path segment.
-    pub fn project_name(&self) -> &str {
-        self.project.rsplit('/').next().unwrap_or(&self.project)
-    }
-}
+pub use abromux_core::links::MrKey;
 
 /// What the frequent, cheap check returns for a merge request.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -424,7 +379,7 @@ mod tests {
 
     #[test]
     fn stale_flags() {
-        let mut m = mr("g/p", 1);
+        let m = mr("g/p", 1);
         assert!(m.review_stale());
         assert!(m.wants_review());
         let mut m = with_diff(m, 1);

@@ -117,7 +117,14 @@ BARE_PROMPT = "abromux-perf> "
 
 
 def sh(*cmd, check=True, **kw):
-    return subprocess.run(cmd, check=check, capture_output=True, text=True, **kw).stdout.strip()
+    """A command's output. With check=False, a program that isn't there (a
+    macOS tool on Linux) gives "" too."""
+    try:
+        return subprocess.run(cmd, check=check, capture_output=True, text=True, **kw).stdout.strip()
+    except FileNotFoundError:
+        if check:
+            raise
+        return ""
 
 
 def log(*a):
@@ -162,6 +169,8 @@ def git_info():
 
 
 def machine_info():
+    if sys.platform == "linux":
+        return linux_machine_info()
     ctl = lambda k: sh("sysctl", "-n", k, check=False)
     m = {
         "model": ctl("hw.model"),
@@ -170,6 +179,29 @@ def machine_info():
         "mem_gb": round(int(ctl("hw.memsize") or 0) / 2**30),
         "os": sh("sw_vers", "-productVersion", check=False),
         "power": "ac" if "AC Power" in sh("pmset", "-g", "batt", check=False) else "battery",
+    }
+    m["id"] = hashlib.sha1(f"{m['model']}|{m['chip']}|{m['mem_gb']}".encode()).hexdigest()[:10]
+    return m
+
+
+def linux_machine_info():
+    def field(path, key):
+        try:
+            for line in Path(path).read_text().splitlines():
+                k, _, v = line.partition(":" if ":" in line else "=")
+                if k.strip() == key:
+                    return v.strip().strip('"')
+        except OSError:
+            pass
+        return ""
+    mem_kb = int((field("/proc/meminfo", "MemTotal").split() or ["0"])[0])
+    m = {
+        "model": sh("cat", "/sys/class/dmi/id/product_name", check=False),
+        "chip": field("/proc/cpuinfo", "model name"),
+        "cores": os.cpu_count() or 0,
+        "mem_gb": round(mem_kb / 2**20),
+        "os": field("/etc/os-release", "PRETTY_NAME"),
+        "power": "ac",
     }
     m["id"] = hashlib.sha1(f"{m['model']}|{m['chip']}|{m['mem_gb']}".encode()).hexdigest()[:10]
     return m
@@ -197,6 +229,16 @@ def gen_data(d: Path):
 
 
 def footprint_mb(pid):
+    if sys.platform == "linux":
+        # PSS, shared pages split among their users: the nearest to macOS's
+        # footprint.
+        try:
+            for line in Path(f"/proc/{pid}/smaps_rollup").read_text().splitlines():
+                if line.startswith("Pss:"):
+                    return int(line.split()[1]) / 1024
+        except OSError:
+            pass
+        return None
     out = sh("footprint", "-p", str(pid), check=False)
     m = re.search(r"Footprint: ([\d.]+) ([KMG]B)", out)
     if not m:
@@ -996,11 +1038,13 @@ def cmd_run(a):
     suite.headless()
     loads.append(load_avg())
     if not a.headless:
-        caffeinate = subprocess.Popen(["caffeinate", "-d", "-i"])
+        # macOS: keep the display awake, or the window's frames throttle.
+        caffeinate = subprocess.Popen(["caffeinate", "-d", "-i"]) if shutil.which("caffeinate") else None
         try:
             suite.app()
         finally:
-            caffeinate.terminate()
+            if caffeinate:
+                caffeinate.terminate()
         loads.append(load_avg())
 
     now = dt.datetime.now(dt.timezone.utc)

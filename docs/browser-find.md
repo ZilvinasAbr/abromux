@@ -1,6 +1,6 @@
 # Find in page for browser panes
 
-Terminal panes have ⌘F (see `src/terminal.rs`), and browser panes now do too (`src/browser_find.rs`, `src/browser.rs`), built with option 1 below. This is how cmux does it, and how abromux copied it.
+Terminal panes have ⌘F (see `src/terminal.rs`), and browser panes now do too (`crates/abromux-browser/src/find.rs`, `src/browser.rs`), built with option 1 below. This is how cmux does it, and how abromux copied it.
 
 ## How cmux does it
 

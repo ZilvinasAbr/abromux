@@ -88,7 +88,8 @@ pub fn show(cx: &mut App) {
         |window, cx| {
             crate::theme::follow(window);
             let view = cx.new(|cx| SettingsView::new(window, cx));
-            cx.new(|cx| Root::new(view, window, cx))
+            let layer = cx.new(|cx| crate::alert::Layer::new(view, window, cx));
+            cx.new(|cx| Root::new(layer, window, cx))
         },
     );
     if let Ok(handle) = handle {
@@ -381,7 +382,7 @@ struct Page {
 /// the page's reset remove `key` from the file.
 fn row<T: PartialEq + 'static>(
     title: &'static str,
-    description: &'static str,
+    description: impl Into<SharedString>,
     key: Key,
     get: fn(&Settings) -> T,
     control: impl Fn(T, T, &mut Window, &mut App) -> AnyElement + 'static,
@@ -400,7 +401,7 @@ fn row<T: PartialEq + 'static>(
 
 /// A folder setting: the folder it comes to, and Choose… for the Finder's
 /// folder picker. The reset arrow goes back to the default.
-fn folder_row(title: &'static str, description: &'static str, key: Key) -> Row {
+fn folder_row(title: &'static str, description: impl Into<SharedString>, key: Key) -> Row {
     row(
         title,
         description,
@@ -466,7 +467,7 @@ fn info_row(
 
 fn switch(
     title: &'static str,
-    description: &'static str,
+    description: impl Into<SharedString>,
     key: Key,
     get: fn(&Settings) -> bool,
 ) -> Row {
@@ -506,7 +507,7 @@ fn toggle(on: bool) -> Stateful<Div> {
 /// A dropdown of `(json value, label)` options.
 fn choice(
     title: &'static str,
-    description: &'static str,
+    description: impl Into<SharedString>,
     key: Key,
     options: &'static [(&'static str, &'static str)],
     get: fn(&Settings) -> &'static str,
@@ -537,7 +538,7 @@ fn choice(
 /// [− value +].
 fn stepper(
     title: &'static str,
-    description: &'static str,
+    description: impl Into<SharedString>,
     key: Key,
     get: fn(&Settings) -> f32,
     (min, max, step): (f32, f32, f32),
@@ -603,7 +604,7 @@ fn stepper(
 /// A color, or the app's own choice when the setting has none (`None`).
 fn color(
     title: &'static str,
-    description: &'static str,
+    description: impl Into<SharedString>,
     key: Key,
     get: fn(&Settings) -> Option<Rgba>,
 ) -> Row {
@@ -716,10 +717,11 @@ fn placement(p: Placement) -> &'static str {
     }
 }
 
-fn engine(e: BrowserEngine) -> &'static str {
-    match e {
+fn engine(e: Option<BrowserEngine>) -> &'static str {
+    match e.unwrap_or_else(crate::settings::default_engine) {
         BrowserEngine::BuiltIn => "builtIn",
         BrowserEngine::TerminalBrowser => "terminalBrowser",
+        BrowserEngine::System => "system",
     }
 }
 
@@ -766,7 +768,10 @@ fn general_page() -> Page {
                 [
                     choice(
                         "Placement",
-                        "Where ⌘N puts a new workspace in the sidebar.",
+                        format!(
+                            "Where {} puts a new workspace in the sidebar.",
+                            crate::keymap::default_label("newWorkspace")
+                        ),
                         &["app", "newWorkspacePlacement"],
                         &[
                             ("top", "Top"),
@@ -808,7 +813,10 @@ fn general_page() -> Page {
                     ),
                     folder_row(
                         "Workspace folders",
-                        "Where ⇧⌘I makes a workspace's own folder.",
+                        format!(
+                            "Where {} makes a workspace's own folder.",
+                            crate::keymap::default_label("newFolderWorkspace")
+                        ),
                         &["app", "workspaceFoldersDirectory"],
                     ),
                 ],
@@ -819,12 +827,21 @@ fn general_page() -> Page {
                     choice(
                         "Browser",
                         "What new browser tabs open in. terminal-browser runs in a terminal \
-                         tab; `abromux browser open` stays built-in for automation.",
+                         tab; the default browser opens pages outside abromux, with no \
+                         tab. `abromux browser open` stays built-in for automation (macOS).",
                         &["browser", "engine"],
-                        &[
-                            ("builtIn", "Built-in"),
-                            ("terminalBrowser", "terminal-browser"),
-                        ],
+                        if abromux_platform::MACOS {
+                            &[
+                                ("builtIn", "Built-in"),
+                                ("terminalBrowser", "terminal-browser"),
+                                ("system", "Default browser"),
+                            ]
+                        } else {
+                            &[
+                                ("terminalBrowser", "terminal-browser"),
+                                ("system", "Default browser"),
+                            ]
+                        },
                         |s| engine(s.browser.engine),
                     ),
                     switch(
@@ -971,7 +988,10 @@ fn sidebar_page() -> Page {
                     ),
                     switch(
                         "Tracked links",
-                        "The selected workspace's Jira tickets, merge requests and pinned pages, under its row (⌥⌘1…9).",
+                        format!(
+                            "The selected workspace's Jira tickets, merge requests and pinned pages, under its row ({}…9).",
+                            crate::keymap::default_label("link1")
+                        ),
                         &["sidebar", "showLinks"],
                         |s| s.sidebar.show_links,
                     ),
@@ -1135,7 +1155,7 @@ fn save_text(key: Key, value: &str, window: &mut Window, cx: &mut App) {
 /// while it renders, so it can't be read.
 fn text_row(
     title: &'static str,
-    description: &'static str,
+    description: impl Into<SharedString>,
     key: Key,
     fields: &[(Key, Entity<InputState>)],
 ) -> Option<Row> {
@@ -1325,7 +1345,10 @@ fn panes_page() -> Page {
             [
                 stepper(
                     "Resize step",
-                    "How far a divider moves per ⌃⇧H/J/K/L press.",
+                    format!(
+                        "How far a divider moves per {}/J/K/L press.",
+                        crate::keymap::default_label("resizeLeft")
+                    ),
                     &["panes", "resizeStep"],
                     |s| s.panes.resize_step,
                     (5., 200., 5.),
@@ -1367,7 +1390,7 @@ fn title(act: &keymap::Act) -> String {
 
 /// The Shortcuts page's group for an action.
 fn category(act: &keymap::Act) -> &'static str {
-    let in_ctx = |c: &str| act.bindings.iter().any(|(ctx, _)| *ctx == Some(c));
+    let in_ctx = |c: &str| act.defaults().iter().any(|(ctx, _)| *ctx == Some(c));
     let name = act.name.to_ascii_lowercase();
     if in_ctx("Terminal") {
         "Terminal"
@@ -1425,7 +1448,11 @@ fn shortcut_row(
     Row::Setting {
         title: title(act).into(),
         description: if is_recording && needs_modifier {
-            "Use ⌘, ⌃ or ⌥ with the key (or a function key).".into()
+            if abromux_platform::MACOS {
+                "Use ⌘, ⌃ or ⌥ with the key (or a function key).".into()
+            } else {
+                "Use Ctrl or Alt with the key (or a function key).".into()
+            }
         } else {
             "".into()
         },
@@ -1913,7 +1940,7 @@ impl Render for SettingsView {
             })
             .size_full()
             .flex()
-            .font_family(".AppleSystemUIFont")
+            .font_family(abromux_platform::fonts::ui())
             .text_size(px(13.))
             .text_color(rgb(pal().text))
             .child(nav)

@@ -5,7 +5,8 @@
 //! A notification is read once you look at its terminal: the window is
 //! active and it's the focused tab of the selected workspace.
 
-use crate::{AbroMux, TITLEBAR_H, banner, menubar, notify_hook, theme::*, workspace::Workspace};
+use crate::{AbroMux, TITLEBAR_H, notify_hook, theme::*, workspace::Workspace};
+use abromux_platform::{notify, tray};
 use gpui::{prelude::*, *};
 use std::time::{Duration, SystemTime};
 
@@ -103,7 +104,7 @@ impl AbroMux {
         if hooked {
             self.run_hooks(id, surface, &title, &body, viewing, hooks, window, cx);
         } else if !bell && !window.is_window_active() {
-            banner::post(id, banner_title(&title), &body, true);
+            notify::post(id, banner_title(&title), &body, true);
         }
         self.notifications.push(Notification {
             id,
@@ -214,7 +215,7 @@ impl AbroMux {
         }
         let n = &self.notifications[i];
         if out.effects.desktop && !window.is_window_active() {
-            banner::post(id, banner_title(&n.title), &n.body, out.effects.sound);
+            notify::post(id, banner_title(&n.title), &n.body, out.effects.sound);
         }
         self.refresh_unread(cx);
     }
@@ -264,7 +265,7 @@ impl AbroMux {
         let unread = self.notifications.iter().filter(|n| !n.read).count();
         if unread != self.badge {
             self.badge = unread;
-            banner::set_badge(unread);
+            notify::set_badge(unread);
         }
         self.update_menubar(unread, cx);
     }
@@ -274,15 +275,15 @@ impl AbroMux {
         let show = cx
             .try_global::<crate::settings::Settings>()
             .is_none_or(|s| s.notifications.show_in_menu_bar);
-        let recent: Vec<menubar::Entry> = self
+        let recent: Vec<tray::Entry> = self
             .notifications
             .iter()
             .rev()
             .filter(|n| !n.read)
             .take(MENU_RECENT)
-            .map(|n| menubar::Entry {
+            .map(|n| tray::Entry {
                 id: n.id,
-                text: n.text(),
+                text: menu_line(&n.text()),
             })
             .collect();
         let mut key = format!("{show} {unread}");
@@ -291,18 +292,18 @@ impl AbroMux {
         }
         if self.menubar.as_ref() != Some(&key) {
             self.menubar = Some(key);
-            menubar::update(show, unread, &recent);
+            tray::update(show, unread, &recent);
         }
     }
 
     /// Something chosen in the menu-bar extra.
     pub(crate) fn menubar_pick(
         &mut self,
-        pick: menubar::Pick,
+        pick: tray::Pick,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use menubar::Pick;
+        use tray::Pick;
         if !matches!(pick, Pick::MarkAllRead | Pick::ClearAll | Pick::Quit) {
             cx.activate(true);
             window.activate_window();
@@ -687,6 +688,15 @@ enum Unread {
     Surface(EntityId),
 }
 
+/// A menu-bar item's title: one line of at most 60 characters.
+fn menu_line(text: &str) -> String {
+    let line = crate::one_line(text);
+    match line.char_indices().nth(59) {
+        Some((i, _)) => format!("{}…", &line[..i]),
+        None => line,
+    }
+}
+
 fn banner_title(title: &str) -> &str {
     if title.is_empty() {
         crate::channel::app_name()
@@ -702,6 +712,15 @@ fn ago(d: Duration) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn long_menu_lines_are_cut() {
+        use super::menu_line;
+        assert_eq!(menu_line("a\nb"), "a b");
+        let long = "x".repeat(80);
+        assert_eq!(menu_line(&long).chars().count(), 60);
+        assert!(menu_line(&long).ends_with('…'));
+    }
+
     #[test]
     fn ages() {
         use std::time::Duration;

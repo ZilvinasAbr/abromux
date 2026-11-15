@@ -26,8 +26,11 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// UI monospace font (sidebar metadata); terminals use the Ghostty config's.
-pub const FONT_FAMILY: &str = "JetBrains Mono";
+/// UI monospace font (sidebar metadata); terminals use the Ghostty config's,
+/// which defaults to the same.
+pub fn mono_font() -> String {
+    abromux_platform::fonts::monospace()
+}
 
 /// Fonts for characters the terminal's face lacks, before macOS's own: the
 /// Ghostty config's further `font-family` lines, then the Nerd Fonts
@@ -295,7 +298,7 @@ impl TerminalView {
         // A held terminal comes back as it was left, plus what it printed since.
         let mut term = opened
             .snapshot
-            .and_then(|s| ghostty::Terminal::from_snapshot(&s).ok())
+            .and_then(|s| ghostty::Terminal::from_snapshot(&s, crate::theme::is_dark()).ok())
             .map(|t| configure(t, &config))
             .unwrap_or_else(|| new_term(cols, rows, &config));
         term.write(&opened.backlog);
@@ -476,7 +479,7 @@ impl TerminalView {
             // Shells without OSC 7 integration (stock zsh/bash): ask macOS
             // where the shell is, at most twice a second while it's printing.
             self.cwd_checked = std::time::Instant::now();
-            if let Some(cwd) = self.pty.pid().and_then(process_cwd)
+            if let Some(cwd) = self.pty.pid().and_then(abromux_platform::process::cwd)
                 && cwd != self.cwd
             {
                 self.cwd = cwd;
@@ -658,6 +661,20 @@ impl TerminalView {
         }
     }
 
+    /// Text just selected with the mouse: to the primary selection, and to
+    /// the clipboard too with `copy-on-select = clipboard`.
+    fn copy_selected(&self, cx: &mut App) {
+        let Some(text) = self.term.selection_text() else {
+            return;
+        };
+        if self.config.select_to_primary {
+            abromux_platform::primary::write(cx, text.clone());
+        }
+        if self.config.copy_on_select {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
     fn resize(&mut self, cols: u16, rows: u16) {
         let (cw, ch) = (
             (f32::from(self.cell.width) * self.scale).round().max(1.) as u32,
@@ -751,7 +768,7 @@ impl TerminalView {
         }
         self.pty
             .pid()
-            .and_then(process_cwd)
+            .and_then(abromux_platform::process::cwd)
             .unwrap_or_else(|| self.cwd.clone())
     }
 
@@ -1653,7 +1670,8 @@ impl TerminalView {
     fn on_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus);
         cx.emit(TerminalEvent::Focused);
-        if ev.button == MouseButton::Left && ev.modifiers.platform {
+        // ⌘-click (Ctrl-click on Linux) opens the link under the pointer.
+        if ev.button == MouseButton::Left && ev.modifiers.secondary() {
             self.pointer = Some(ev.position);
             self.update_link(true);
             if let Some(l) = self.link.take() {
@@ -1671,6 +1689,13 @@ impl TerminalView {
             self.report_mouse(MouseAction::Press, Some(b), ev.modifiers, ev.position);
             return;
         }
+        // A middle click pastes the primary selection (Linux).
+        if ev.button == MouseButton::Middle {
+            if let Some(text) = abromux_platform::primary::read(cx) {
+                self.paste(&text, cx);
+            }
+            return;
+        }
         if ev.button != MouseButton::Left {
             return;
         }
@@ -1678,9 +1703,7 @@ impl TerminalView {
         if ev.click_count >= 2 {
             self.term.select_word(cell.0, cell.1);
             self.selecting = None;
-            if self.config.copy_on_select {
-                self.copy(cx);
-            }
+            self.copy_selected(cx);
         } else {
             self.term.clear_selection();
             self.selecting = Some(cell);
@@ -1692,8 +1715,8 @@ impl TerminalView {
     fn on_mouse_up(&mut self, ev: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.scrollbar_grab = None;
         // A click without a drag leaves no selection, so nothing is copied.
-        if self.selecting.take().is_some() && self.config.copy_on_select {
-            self.copy(cx);
+        if self.selecting.take().is_some() {
+            self.copy_selected(cx);
         }
         if let Some(b) = button_code(ev.button)
             && (self.mouse_buttons & (1 << b) != 0 || self.reporting(ev.modifiers))
@@ -1711,7 +1734,7 @@ impl TerminalView {
             self.scrollbar_grab = None;
         }
         self.pointer = Some(ev.position);
-        if self.update_link(ev.modifiers.platform && ev.pressed_button.is_none()) {
+        if self.update_link(ev.modifiers.secondary() && ev.pressed_button.is_none()) {
             cx.notify();
         }
         if self.reporting(ev.modifiers) {
@@ -1856,7 +1879,7 @@ impl Render for TerminalView {
                 if !cmd || this.focus.is_focused(window) {
                     this.sync_cmd(cmd);
                 }
-                if this.update_link(cmd) {
+                if this.update_link(ev.modifiers.secondary()) {
                     cx.notify();
                 }
             }))
@@ -1919,8 +1942,10 @@ impl Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, ()) {
-        let mut style = Style::default();
-        style.size = Size::full();
+        let style = Style {
+            size: Size::full(),
+            ..Default::default()
+        };
         (window.request_layout(style, [], cx), ())
     }
 
@@ -2456,8 +2481,8 @@ fn spawn_shell(
     attach: Option<&str>,
     cx: &mut Context<TerminalView>,
 ) -> (Opened, Feed) {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let mut argv = vec![shell.clone(), "-l".into()];
+    let shell = abromux_core::paths::user_shell();
+    let mut argv = vec![shell, "-l".into()];
     if let Some(c) = command {
         argv.extend(["-c".into(), c.to_string()]);
     }
@@ -2473,7 +2498,7 @@ fn spawn_shell(
         .try_global::<Config>()
         .is_none_or(|c| c.shell_integration)
     {
-        vars.extend(crate::shell::inject(&shell, env));
+        vars.extend(crate::shell::inject(&mut argv, env));
     }
     // Held shells are for taking back next launch; a run that won't restore
     // a session (ABROMUX_NO_RESTORE, demos, scripted tests) would only leave
@@ -2530,7 +2555,8 @@ fn drain(
 
 /// A libghostty-vt terminal with the config's colors and cursor.
 fn new_term(cols: u16, rows: u16, config: &Config) -> ghostty::Terminal {
-    let term = ghostty::Terminal::new(cols, rows).expect("libghostty-vt terminal");
+    let term = ghostty::Terminal::new(cols, rows, crate::theme::is_dark())
+        .expect("libghostty-vt terminal");
     configure(term, config)
 }
 
@@ -2577,39 +2603,11 @@ fn shell_escape(path: &str) -> String {
     out
 }
 
-/// A process's current directory, via libproc's PROC_PIDVNODEPATHINFO.
-fn process_cwd(pid: u32) -> Option<String> {
-    unsafe extern "C" {
-        fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut u8, size: i32) -> i32;
-    }
-    const PROC_PIDVNODEPATHINFO: i32 = 9;
-    // struct proc_vnodepathinfo { vnode_info_path cdir, rdir }, where
-    // vnode_info_path is a 152-byte vnode_info followed by char[MAXPATHLEN].
-    const VNODE_INFO: usize = 152;
-    const MAXPATHLEN: usize = 1024;
-    let mut buf = [0u8; 2 * (VNODE_INFO + MAXPATHLEN)];
-    let n = unsafe {
-        proc_pidinfo(
-            pid as i32,
-            PROC_PIDVNODEPATHINFO,
-            0,
-            buf.as_mut_ptr(),
-            buf.len() as i32,
-        )
-    };
-    if n as usize != buf.len() {
-        return None;
-    }
-    let path = &buf[VNODE_INFO..VNODE_INFO + MAXPATHLEN];
-    let end = path.iter().position(|&b| b == 0)?;
-    (end > 0).then(|| String::from_utf8_lossy(&path[..end]).into_owned())
-}
-
 fn mods(m: Modifiers) -> ffi::GhosttyMods {
-    (m.shift as u16) * ffi::GHOSTTY_MODS_SHIFT as u16
-        | (m.control as u16) * ffi::GHOSTTY_MODS_CTRL as u16
-        | (m.alt as u16) * ffi::GHOSTTY_MODS_ALT as u16
-        | (m.platform as u16) * ffi::GHOSTTY_MODS_SUPER as u16
+    ((m.shift as u16) * ffi::GHOSTTY_MODS_SHIFT as u16)
+        | ((m.control as u16) * ffi::GHOSTTY_MODS_CTRL as u16)
+        | ((m.alt as u16) * ffi::GHOSTTY_MODS_ALT as u16)
+        | ((m.platform as u16) * ffi::GHOSTTY_MODS_SUPER as u16)
 }
 
 fn button_code(b: MouseButton) -> Option<u8> {
@@ -2797,20 +2795,13 @@ mod tests {
     }
 
     #[test]
-    fn reads_a_process_cwd() {
-        let here = std::env::current_dir().unwrap().canonicalize().unwrap();
-        let got = super::process_cwd(std::process::id()).map(std::path::PathBuf::from);
-        assert_eq!(got.map(|p| p.canonicalize().unwrap()), Some(here));
-    }
-
-    #[test]
     fn mouse_reports_land_in_the_cell_under_the_pointer() {
         use crate::ghostty::{MouseAction, Terminal};
         use gpui::{point, px, size};
         // Cells are 7.9 px wide on screen; truncated to 7 px the encoder
         // used to report column ~170 for a click on column 150.
         let cell = size(px(7.9), px(17.6));
-        let mut t = Terminal::new(200, 40).unwrap();
+        let mut t = Terminal::new(200, 40, crate::theme::is_dark()).unwrap();
         t.write(b"\x1b[?1000h\x1b[?1006h");
         for (col, row) in [(0u16, 0u16), (150, 30), (199, 39)] {
             let at = point(
@@ -2833,7 +2824,7 @@ mod tests {
         // On a 2x screen 7.9x17.6 pt cells are 16x35 px to the program
         // (terminal-browser draws its page in those pixels).
         let cell = size(px(7.9), px(17.6));
-        let mut t = Terminal::new(200, 40).unwrap();
+        let mut t = Terminal::new(200, 40, crate::theme::is_dark()).unwrap();
         t.write(b"\x1b[?1003h\x1b[?1016h");
         let at = point(
             px(super::PADDING + 7.9 * 100.),

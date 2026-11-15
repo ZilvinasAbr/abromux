@@ -436,59 +436,8 @@ pub struct Workspace {
     seen_pane: usize,
 }
 
-pub struct Status {
-    pub key: String,
-    pub value: String,
-    pub icon: Option<String>,
-    pub color: Option<u32>,
-    /// The terminal it describes (an agent's status), cleared when it closes.
-    pub owner: Option<EntityId>,
-}
-
-pub struct Progress {
-    /// 0.0–1.0.
-    pub value: f32,
-    pub label: Option<String>,
-}
-
-pub struct LogEntry {
-    pub level: LogLevel,
-    pub source: Option<String>,
-    pub message: String,
-    pub at: std::time::SystemTime,
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum LogLevel {
-    Info,
-    Progress,
-    Success,
-    Warning,
-    Error,
-}
-
-impl LogLevel {
-    pub fn parse(s: &str) -> Option<Self> {
-        Some(match s {
-            "info" => Self::Info,
-            "progress" => Self::Progress,
-            "success" => Self::Success,
-            "warning" | "warn" => Self::Warning,
-            "error" => Self::Error,
-            _ => return None,
-        })
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Info => "info",
-            Self::Progress => "progress",
-            Self::Success => "success",
-            Self::Warning => "warning",
-            Self::Error => "error",
-        }
-    }
-}
+pub type Status = abromux_core::status::Status<EntityId>;
+pub use abromux_core::status::{LogEntry, LogLevel, Progress};
 
 /// A workspace or group colour: `#rgb` or `#rrggbb` (the `#` is optional).
 pub use abromux_plugin::color::parse_rgb as parse_color;

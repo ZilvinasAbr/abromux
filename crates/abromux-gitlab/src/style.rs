@@ -1,5 +1,12 @@
 //! GitLab's dark theme, as its web UI computes it (read off GitLab 19.5 with
-//! the dev box's `bob` in dark mode), and the small pieces built from it.
+//! the dev box's `bob` in dark mode), its light one, and the small pieces
+//! built from them.
+//!
+//! The colors in this file and through the plugin are the dark theme's.
+//! [`c`] and [`ca`] turn them into the light theme's counterparts (`light`)
+//! while abromux's appearance is light ([`follow_theme`]), so one name or
+//! hex serves both. A color that must stay as it is (a label's own, white
+//! on a filled button) goes through [`fixed`] or [`on_fill`].
 
 use crate::highlight::Tok;
 use gpui::{prelude::*, *};
@@ -137,12 +144,178 @@ impl Element for Zoomed {
     }
 }
 
+static DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Is the tab drawn in GitLab's dark theme?
+pub fn is_dark() -> bool {
+    DARK.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn set_dark(dark: bool) {
+    DARK.store(dark, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Draw in abromux's appearance: gpui-component's theme, which the app
+/// keeps light or dark with it, now and whenever it changes (the app then
+/// redraws its windows). Once per app.
+pub fn follow_theme(cx: &mut App) {
+    use gpui_component::Theme;
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    set_dark(Theme::global(cx).is_dark());
+    ONCE.call_once(|| {
+        cx.observe_global::<Theme>(|cx| set_dark(Theme::global(cx).is_dark()))
+            .detach();
+    });
+}
+
+/// A color of the theme in use: `hex` is the dark theme's.
 pub fn c(hex: u32) -> Hsla {
+    rgb(if is_dark() { hex } else { light(hex) }).into()
+}
+
+/// [`c`] with alpha: `hex_rgba` is the dark theme's.
+pub fn ca(hex_rgba: u32) -> Hsla {
+    rgba(if is_dark() {
+        hex_rgba
+    } else {
+        light_alpha(hex_rgba)
+    })
+    .into()
+}
+
+/// A color as it is, in both themes.
+pub fn fixed(hex: u32) -> Hsla {
     rgb(hex).into()
 }
 
-pub fn ca(hex_rgba: u32) -> Hsla {
-    rgba(hex_rgba).into()
+/// Text and icons on a filled (blue, red) button: white in both themes.
+pub fn on_fill() -> Hsla {
+    fixed(0xffffff)
+}
+
+/// GitLab's light theme (19.5, light mode) for each dark color the plugin
+/// uses; any other color is the same in both.
+fn light(hex: u32) -> u32 {
+    match hex {
+        BG => 0xffffff,
+        CARD => 0xfbfafd,
+        RAISED => 0xececef,
+        BORDER => 0xdcdcde,
+        TEXT => 0x3a383f,
+        MUTED => 0x626168,
+        HEADING => 0x18171d,
+        LINK => 0x1068bf,
+        GREEN => 0x108548,
+        // Also the closed badge's text.
+        RED => 0xdd2b0e,
+        // Also JavaScript files' icons.
+        ORANGE => 0xab6100,
+
+        CODE_BG => 0xfbfafd,
+        // Also the background of a mention of you.
+        SELECTED_BG => 0xfdf1dd,
+        SELECTED_NUM_BG => 0xf5d9a8,
+        EMPTY_BG => 0xf6f6f8,
+        CODE_TEXT => 0x28272d,
+        ADD_BG => 0xecfdf0,
+        // Line numbers and signs on changed lines: GitLab's dimmed text.
+        ADD_NUM => 0x587a60,
+        DEL_BG => 0xfbe9eb,
+        DEL_NUM => 0x8f5a60,
+        HUNK_BG => 0xfafafa,
+        HUNK_TEXT => 0x737278,
+
+        // Syntax (GitLab's light "white" theme).
+        0xb294bb => 0xa626a4, // keyword
+        0xb5bd68 => 0x50a14f, // string
+        0x969896 => 0x8a8a8f, // comment
+        0xde935f => 0xb35c00, // number, attribute
+        0x81a2be => 0x2f5bbf, // function
+        0xf0c674 => 0x8a6100, // namespace, type
+        0x8abeb7 => 0x0e7c86, // operator
+        0xcc6666 => 0xc8312f, // variable, tag
+
+        // Badges and status circles: (dark bg, dark fg) → GitLab's light pairs.
+        0x0d532a => 0xc3e6cd, // success
+        0x91d4a8 => 0x24663b,
+        0x002c26 => 0xc3e6cd,
+        0x8d1300 => 0xfdd4cd, // danger
+        0xfdd4cd => 0xae1800,
+        0x5a0e17 => 0xfdd4cd,
+        0x064787 => 0xcbe2f9, // info
+        0xcbe2f9 => 0x0b5cad,
+        0x1d2153 => 0xcbe2f9,
+        0x64a7e9 => 0x0b5cad,
+        0x5c3900 => 0xf5d9a8, // warning
+        0xf5d9a8 => 0x8f4700,
+        0xa4a3a8 => 0xececef, // neutral (counts, "Author")
+        0x22306a => 0xe9f3fc, // merged / closed widgets
+        0x641c28 => 0xfcf1ef,
+
+        // Branch names and mentions of others.
+        0x254581 => 0xe9f3fc,
+        0xc8e0f9 => 0x0b5cad,
+        // A mention of you.
+        0xfada9c => 0x8f4700,
+
+        // Buttons and fields.
+        0x2b4a73 => 0x9dc7f1, // disabled confirm
+        0x6e1f14 => 0xf5a99c, // disabled danger
+        0x646163 => 0xececef, // expand lines
+        0x7a777a => 0xdcdcde,
+        0x747273 => 0x89888d,
+        0x89888d => 0xa4a3a8,
+        0x3e1d22 => 0xfcf1ef, // error alert
+        0x7a2e3a => 0xfdd4cd,
+
+        // Pipelines and the checkbox.
+        0x63a6e9 => 0x1068bf,
+        0xe9a03b => 0xc17d10,
+
+        // Renamed paths' changed part.
+        0xac203a => 0xfac5cd,
+        0x0b645a => 0xc3e6cd,
+
+        // Identicons: GitLab's light ones are pastel with dark initials.
+        0x5c2b8c | 0x5b3a6e => 0xf4f0ff,
+        0x2b5c8c | 0x2f4a73 => 0xe9f3fc,
+        0x2b8c6e | 0x1d5a46 => 0xecf4ee,
+        0x8c6e2b | 0x6b5b1f => 0xfdf1dd,
+        0x8c2b4e | 0x6e3a2f => 0xfcf1ef,
+        0x4e8c2b | 0x355a6b => 0xe5f6ff,
+        0x2b8c8c | 0x5e3a4f => 0xf9eef6,
+        0xe9d1f5 => 0x5c2b8c,
+        0xd2e4f9 => 0x0b5cad,
+        0xc4f0dc => 0x24663b,
+        0xf5e6b3 => 0x8f4700,
+        0xf9d3c9 => 0xae1800,
+        0xcde9f2 => 0x0b5c8c,
+        0xf5d1e3 => 0x8c2b4e,
+
+        other => other,
+    }
+}
+
+/// [`light`] for a color with alpha.
+fn light_alpha(hex_rgba: u32) -> u32 {
+    match hex_rgba {
+        // Line numbers.
+        LINE_NUM => 0x0000004d,
+        ADD_WORD => 0x6be08c66,
+        DEL_WORD => 0xf5788a66,
+        // GitLab's grey button fills and hovers read heavier on white.
+        0x89888d26 => 0x89888d14,
+        0x89888d40 => 0x89888d1f,
+        0x89888d55 => 0x89888d29,
+        0x89888d66 => 0x89888d29,
+        0x89888d99 => 0x89888d40,
+        // The reply field's inset.
+        0x05050666 => 0xffffffff,
+        // The search's scrim.
+        0x00000066 => 0x00000033,
+        0x00000033 => 0x0000001a,
+        other => other,
+    }
 }
 
 pub const BG: u32 = 0x18171d;
@@ -215,7 +388,7 @@ pub fn md_style() -> gpui_component::text::TextViewStyle {
     };
     gpui_component::text::TextViewStyle {
         code_block,
-        is_dark: true,
+        is_dark: is_dark(),
         heading_base_font_size: px(14.),
         heading_font_size: Some(std::sync::Arc::new(heading)),
         ..Default::default()
@@ -254,6 +427,23 @@ pub fn badge(text: impl Into<SharedString>, bg: Hsla, fg: Hsla) -> Div {
         .child(text.into())
 }
 
+/// A state pill in the list ("Merged", "Approved"): `bright` on `deep` in
+/// the dark theme; in the light one GitLab draws it pale with dark text,
+/// which is the two swapped.
+pub fn status_badge(text: impl Into<SharedString>, bright: u32, deep: u32) -> Div {
+    let (bg, fg) = status_colors(bright, deep);
+    badge(text, bg, fg)
+}
+
+/// The background and text of a [`status_badge`].
+pub fn status_colors(bright: u32, deep: u32) -> (Hsla, Hsla) {
+    if is_dark() {
+        (c(bright), c(deep))
+    } else {
+        (c(deep), c(bright))
+    }
+}
+
 /// "4 hours ago", with the exact time on hover as in GitLab.
 pub fn when(iso: &str) -> Stateful<Div> {
     let exact: SharedString = crate::time::exact(iso).into();
@@ -285,7 +475,7 @@ pub fn pipeline_icon(p: &crate::types::Pipeline, size: f32) -> Svg {
 
 /// `#1068bf` → a color; grey for anything else.
 pub fn hex(s: &str) -> Hsla {
-    abromux_plugin::color::parse_rgb(s).map_or(c(0x737278), c)
+    abromux_plugin::color::parse_rgb(s).map_or(c(0x737278), fixed)
 }
 
 /// A label as GitLab 19.5 draws it: a pill in its color with its text
@@ -313,7 +503,13 @@ pub fn label_pill(l: &crate::types::Label) -> Div {
 
 /// The grey count next to a tab's name.
 pub fn count_badge(n: usize) -> Div {
-    badge(n.to_string(), c(0xa4a3a8), c(BG))
+    neutral_badge(n.to_string())
+}
+
+/// GitLab's grey badge (a count, "Author", "Generated").
+pub fn neutral_badge(text: impl Into<SharedString>) -> Div {
+    let fg = if is_dark() { c(BG) } else { fixed(0x535158) };
+    badge(text, c(0xa4a3a8), fg)
 }
 
 /// A branch name: `rate-limiter`.
@@ -420,5 +616,29 @@ pub fn checkbox(on: bool) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .when(on, |d| d.child(app_icon("check", 12., c(BG))))
+        .when(on, |d| d.child(app_icon("check", 12., on_fill())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ADD_BG, BG, CARD, CODE_BG, DEL_BG, HUNK_BG, LINE_NUM, RAISED, TEXT, light, light_alpha,
+    };
+
+    #[test]
+    fn light_theme_maps_dark_colors_and_keeps_the_rest() {
+        assert_eq!(light(BG), 0xffffff);
+        assert_eq!(light(TEXT), 0x3a383f);
+        assert_eq!(light(0x123456), 0x123456);
+        assert_eq!(light_alpha(LINE_NUM), 0x0000004d);
+        assert_eq!(light_alpha(0x1f75cb99), 0x1f75cb99);
+        // Every light background is lighter than its dark one.
+        for bg in [BG, CARD, RAISED, CODE_BG, ADD_BG, DEL_BG, HUNK_BG] {
+            assert!(luma(light(bg)) > luma(bg), "{bg:06x}");
+        }
+    }
+
+    fn luma(hex: u32) -> u32 {
+        (hex >> 16 & 0xff) * 3 + (hex >> 8 & 0xff) * 6 + (hex & 0xff)
+    }
 }

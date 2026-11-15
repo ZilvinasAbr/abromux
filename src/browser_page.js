@@ -1,5 +1,5 @@
 // Runs at document start in every frame of a browser pane (installed by
-// browser_native.m). It reports to abromux through the `abromuxPage`
+// crates/abromux-platform/src/macos/browser_native.m). It reports to abromux through the `abromuxPage`
 // handler:
 //   - the frame's token, so `browser frame` can run scripts in it
 //   - console messages, page errors and network requests, in batches

@@ -1,27 +1,16 @@
 mod about;
-mod activity;
-mod agent;
 mod alert;
-mod banner;
 mod bench;
 mod browser;
-mod browser_auto;
-mod browser_find;
-mod browser_history;
-mod browser_native;
 mod channel;
 mod cli;
-mod cmux;
 mod config;
-mod cursor;
+mod csd;
 mod debug;
-mod downloads;
 mod editor;
 mod find_bar;
 mod folder;
-mod ghostty;
 mod gitlab;
-mod hold;
 mod icon;
 mod ipc;
 mod keymap;
@@ -30,15 +19,10 @@ mod link;
 mod links;
 mod markdown;
 mod menu;
-mod menubar;
 mod naming;
 mod notification;
-mod notify_hook;
-mod osc99;
 mod palette;
-mod paths;
 mod plugins;
-mod pty;
 mod quit;
 mod server;
 mod session;
@@ -56,9 +40,13 @@ mod terminal_browser_panes;
 mod theme;
 mod titlebar;
 mod update;
-mod webauthn;
 mod workspace;
 
+use abromux_browser::{
+    auto as browser_auto, downloads, find as browser_find, history as browser_history,
+};
+use abromux_core::{agent, cmux, notify_hook, osc99, paths};
+use abromux_term::{ghostty, hold, pty};
 use browser::{BrowserEvent, BrowserView};
 use futures::StreamExt;
 use gpui::{prelude::*, *};
@@ -179,11 +167,14 @@ const DEFAULT_URL: &str = "";
 /// How long a lone ⌘ or ⌃ must be held before shortcut hints show (cmux's value).
 const HINT_DELAY: Duration = Duration::from_millis(300);
 /// Sidebar width: default and the range its edge can be dragged within.
-const SIDEBAR_WIDTH: f32 = 232.;
+const SIDEBAR_WIDTH: f32 = abromux_core::session::SIDEBAR_WIDTH;
 const SIDEBAR_MIN: f32 = 180.;
 const SIDEBAR_MAX: f32 = 480.;
 /// Height of the titlebar row the traffic lights sit in.
 const TITLEBAR_H: f32 = 38.;
+/// The prefs key of "Don't ask again" when closing a tab or workspace
+/// running Claude Code.
+const SKIP_CLOSE_CLAUDE_KEY: &str = "AbroMuxSkipCloseClaudeWarning";
 const TABBAR_H: f32 = 30.;
 /// How wide the area is that grabs a pane divider (drawn 1px wide).
 const DIVIDER_GRAB: f32 = 9.;
@@ -433,7 +424,7 @@ impl AbroMux {
         .detach();
         cx.observe(&update::entity(cx), |_, _, cx| cx.notify())
             .detach();
-        let mut menubar_picks = menubar::init();
+        let mut menubar_picks = abromux_platform::tray::init();
         cx.spawn_in(window, async move |this, cx| {
             while let Some(pick) = menubar_picks.next().await {
                 if this
@@ -448,7 +439,7 @@ impl AbroMux {
         // The merge requests panel follows the cache.
         cx.observe(&gitlab::store(cx), |_, _, cx| cx.notify())
             .detach();
-        let mut banner_clicks = banner::init();
+        let mut banner_clicks = abromux_platform::notify::init();
         cx.spawn_in(window, async move |this, cx| {
             while let Some(id) = banner_clicks.next().await {
                 if this
@@ -802,6 +793,15 @@ impl AbroMux {
     /// set to `terminalBrowser`, a terminal running `terminal-browser`
     /// (the built-in one, with a warning, if it isn't installed).
     fn make_browser(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> Surface {
+        // Markdown tabs' scheme is the built-in browser's; without one
+        // (Linux), the page as a file for the engine there is.
+        let exported;
+        let url = if !abromux_platform::MACOS && markdown::is_markdown_url(url) {
+            exported = markdown::export(url).unwrap_or_default();
+            exported.as_str()
+        } else {
+            url
+        };
         // Markdown tabs are the built-in browser's.
         if settings::terminal_browser(cx) && !markdown::is_markdown_url(url) {
             match terminal_browser::command(url) {
@@ -818,16 +818,51 @@ impl AbroMux {
                     return s;
                 }
                 None => window.push_notification(
-                    Notification::warning(
+                    Notification::warning(if abromux_platform::MACOS {
                         "`browser.engine` is terminalBrowser, but terminal-browser isn't on \
-                         PATH or in ~/.local/bin, so this tab uses the built-in browser.",
-                    )
+                         PATH or in ~/.local/bin, so this tab uses the built-in browser."
+                    } else {
+                        "`browser.engine` is terminalBrowser, but terminal-browser isn't on \
+                         PATH or in ~/.local/bin; this tab's address bar opens pages in \
+                         the default browser."
+                    })
                     .title("terminal-browser not found"),
                     cx,
                 ),
             }
         }
         self.make_builtin_browser(url, window, cx)
+    }
+
+    /// With `browser.engine` set to `system`, a page opens in the default
+    /// browser rather than in a tab: true when `url` did (or failed to, which
+    /// is said). Markdown tabs open as their rendered file. An empty URL, a
+    /// new browser tab, still makes a tab, whose address bar opens what's
+    /// typed in it.
+    pub(crate) fn open_in_system_browser(
+        &self,
+        url: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if url.is_empty() || url == "about:blank" || !settings::system_browser(cx) {
+            return false;
+        }
+        let target = if markdown::is_markdown_url(url) {
+            match markdown::export(url) {
+                Some(u) => u,
+                None => return false,
+            }
+        } else {
+            url.to_string()
+        };
+        if let Err(e) = abromux_platform::opener::open(&target) {
+            window.push_notification(
+                Notification::error(format!("{target}: {e}")).title("Couldn't open the page"),
+                cx,
+            );
+        }
+        true
     }
 
     /// A tab of plugin `id` (src/plugins.rs), opened on `params`: what it
@@ -1128,6 +1163,7 @@ impl AbroMux {
             .map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx))
         {
             Some(Ok(s)) => s,
+            _ if self.open_in_system_browser(&url, window, cx) => return,
             // It couldn't: the page, as before.
             _ => self.make_browser(&url, window, cx),
         };
@@ -1162,6 +1198,7 @@ impl AbroMux {
             .map(|p| self.make_plugin(p.id, &serde_json::json!({ "url": url }), window, cx));
         let surface = match claimed {
             Some(Ok(s)) => s,
+            _ if self.open_in_system_browser(url, window, cx) => return,
             _ => self.make_browser(url, window, cx),
         };
         self.add_tab_to(wi, pane, surface, focus, window, cx);
@@ -1213,12 +1250,10 @@ impl AbroMux {
         } else if idx < pane.active {
             pane.active -= 1;
         }
-        if pane.tabs.is_empty() {
-            if !ws.remove_pane(pane_id) {
-                // Last pane in the workspace: closing it closes the workspace.
-                self.close_workspace(wi, window, cx);
-                return;
-            }
+        // Last pane in the workspace: closing it closes the workspace.
+        if pane.tabs.is_empty() && !ws.remove_pane(pane_id) {
+            self.close_workspace(wi, window, cx);
+            return;
         }
         self.focus_active(window, cx);
         cx.notify();
@@ -1279,12 +1314,13 @@ impl AbroMux {
         }
         let rx = alert::confirm(
             window,
+            cx,
             alert::Confirm {
                 message: "Close tab?",
                 info: "Claude Code is running in this tab. Closing it will end the session.",
                 button: "Close",
                 suppress: "Don't ask again",
-                skip_key: "AbroMuxSkipCloseClaudeWarning",
+                skip_key: SKIP_CLOSE_CLAUDE_KEY,
             },
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -1316,12 +1352,13 @@ impl AbroMux {
         let ws_id = ws.id;
         let rx = alert::confirm(
             window,
+            cx,
             alert::Confirm {
                 message: "Close workspace?",
                 info: "Claude Code is running in this workspace. Closing it will close all of its panels and end the session.",
                 button: "Close",
                 suppress: "Don't ask again",
-                skip_key: "AbroMuxSkipCloseClaudeWarning",
+                skip_key: SKIP_CLOSE_CLAUDE_KEY,
             },
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -1438,9 +1475,11 @@ impl AbroMux {
         cx: &mut Context<Self>,
     ) {
         let Some(home) = self.workspaces.get(wi).and_then(|w| w.home.clone()) else {
-            let note =
-                Notification::warning("Only a workspace made with ⇧⌘I has a folder to clean up.")
-                    .title("Not a workspace folder");
+            let note = Notification::warning(format!(
+                "Only a workspace made with {} has a folder to clean up.",
+                keymap::default_label("newFolderWorkspace")
+            ))
+            .title("Not a workspace folder");
             return window.push_notification(note, cx);
         };
         let ask = match folder::write_cleanup(&home) {
@@ -1964,7 +2003,11 @@ impl AbroMux {
         cx: &mut Context<Self>,
     ) {
         if let Some(url) = &c.url {
-            let s = self.make_browser(&browser::normalize_url(url), window, cx);
+            let url = browser::normalize_url(url);
+            if self.open_in_system_browser(&url, window, cx) {
+                return;
+            }
+            let s = self.make_browser(&url, window, cx);
             return self.add_tab(s, window, cx);
         }
         if let Some(spec) = &c.workspace {
@@ -2197,14 +2240,19 @@ impl AbroMux {
         .detach();
     }
 
-    /// Show hints after a lone ⌘ or ⌃ has been held for `HINT_DELAY`; any
-    /// other modifier change hides them.
+    /// Show hints after the digit shortcuts' modifiers have been held for
+    /// `HINT_DELAY` (⌘ for workspaces, ⌃ for tabs, ⌥⌘ for links on macOS);
+    /// any other modifier change hides them.
     fn modifiers_changed(&mut self, m: &Modifiers, window: &mut Window, cx: &mut Context<Self>) {
-        let want = match (m.platform, m.control, m.alt, m.shift || m.function) {
-            (true, false, false, false) => Some(Hints::Command),
-            (true, false, true, false) => Some(Hints::Links),
-            (false, true, false, false) => Some(Hints::Control),
-            _ => None,
+        let held = |name: &str| keymap::default_modifiers(name).is_some_and(|d| d == *m);
+        let want = if held("workspace1") {
+            Some(Hints::Command)
+        } else if held("link1") {
+            Some(Hints::Links)
+        } else if held("tab1") {
+            Some(Hints::Control)
+        } else {
+            None
         };
         if want.is_some() && want == self.hints {
             return;
@@ -2241,6 +2289,7 @@ impl AbroMux {
             || self.palette.is_some()
             || update::popover_open(cx)
             || browser::menus_open()
+            || alert::is_open(cx)
             // Also while dragging a tab, so drop targets show over pages and
             // get the mouse.
             || cx.has_active_drag();
@@ -2272,12 +2321,18 @@ impl AbroMux {
 
     /// Sidebar toggle and new-workspace buttons, shown in the sidebar's
     /// titlebar row or next to the traffic lights when it's hidden. Holding
-    /// ⌘ swaps them for their shortcuts.
+    /// ⌘ swaps them for their shortcuts: the ones whose key is on the held
+    /// modifier, which is all of them on macOS and none on Linux (Alt shows
+    /// the workspace digits; these are on ctrl-shift and ctrl-alt).
     fn titlebar_buttons(&self, cx: &mut Context<Self>) -> [AnyElement; 3] {
         let unread = self.notifications.iter().filter(|n| !n.read).count();
-        let hints = self.hints == Some(Hints::Command);
-        let button = |id: &'static str, name: &str, keys: &str| {
-            if hints {
+        let held = keymap::default_modifiers("workspace1");
+        let hinted = |action: &str| {
+            self.hints == Some(Hints::Command) && keymap::default_modifiers(action) == held
+        };
+        let button = |id: &'static str, name: &str, action: &str| {
+            if hinted(action) {
+                let keys = keymap::default_label(action);
                 div()
                     .id(id)
                     .flex()
@@ -2285,27 +2340,27 @@ impl AbroMux {
                     .items_center()
                     .h(px(22.))
                     .cursor_pointer()
-                    .child(hint_pill(keys.into()))
+                    .child(hint_pill(keys))
             } else {
                 icon_button(id, name)
             }
         };
         [
-            button("toggle-sidebar", "panel-left", "⌘B")
+            button("toggle-sidebar", "panel-left", "toggleSidebar")
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.sidebar = !this.sidebar;
                     cx.notify();
                 }))
                 .into_any_element(),
-            button("notifications-button", "bell", "⌘I")
+            button("notifications-button", "bell", "showNotifications")
                 .relative()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.notifications_open = !this.notifications_open;
                     cx.notify();
                 }))
-                .when(unread > 0 && !hints, |d| {
+                .when(unread > 0 && !hinted("showNotifications"), |d| {
                     d.child(
                         div()
                             .absolute()
@@ -2330,7 +2385,7 @@ impl AbroMux {
                     )
                 })
                 .into_any_element(),
-            button("new-ws", "plus", "⌘N")
+            button("new-ws", "plus", "newWorkspace")
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, window, cx| this.new_workspace_here(window, cx)))
                 .into_any_element(),
@@ -2608,7 +2663,9 @@ impl AbroMux {
                         .child(s.title(cx))
                         .into_any_element(),
                 })
-                .when_some(hint, |d, n| d.child(hint_pill(format!("⌃{n}"))))
+                .when_some(hint, |d, n| {
+                    d.child(hint_pill(keymap::default_label(&format!("tab{n}"))))
+                })
                 .when(hint.is_none() && renaming.is_none(), |d| {
                     d.child(
                         div()
@@ -2843,11 +2900,12 @@ impl Render for AbroMux {
             .size_full()
             .flex()
             .text_color(rgb(pal().text))
-            .font_family(".AppleSystemUIFont")
+            .font_family(abromux_platform::fonts::ui())
             .on_action(cx.listener(|_, _: &Quit, window, cx| quit::request(window, cx)))
             // Also on the app, but the palette lists only what the focused view handles.
             .on_action(|_: &update::CheckForUpdates, _, cx| update::check(true, cx))
             .on_action(|_: &update::ApplyUpdate, _, cx| update::apply(cx))
+            .map(menu::on_help)
             .on_action(
                 cx.listener(|this, _: &NewWorkspace, window, cx| {
                     this.new_workspace_here(window, cx)
@@ -3174,14 +3232,14 @@ impl Render for AbroMux {
                     .bg(rgb(pal().pane_bg))
                     .when(!self.sidebar, |d| {
                         // Same height as the sidebar's titlebar row so the
-                        // traffic lights sit centered in it.
+                        // traffic lights sit centered in it (macOS only).
                         d.child(
                             div()
                                 .h(px(TITLEBAR_H))
                                 .flex_none()
                                 .flex()
                                 .items_center()
-                                .pl(px(80.))
+                                .pl(px(if abromux_platform::MACOS { 80. } else { 10. }))
                                 .pr(px(10.))
                                 .gap_1()
                                 .bg(rgb(pal().tabbar_bg))
@@ -3238,6 +3296,9 @@ impl Render for AbroMux {
             .children(updates)
             .children(palette)
             .children(toasts)
+            // Only where the compositor leaves decorations to the app (GNOME).
+            .children(csd::controls(window))
+            .children(csd::edges(window))
     }
 }
 
@@ -3284,7 +3345,7 @@ impl Render for DraggedTab {
             .opacity(0.9)
             .text_size(px(12.))
             .text_color(rgb(pal().text))
-            .font_family(".AppleSystemUIFont")
+            .font_family(abromux_platform::fonts::ui())
             .child(
                 icon(self.icon)
                     .size(px(12.))
@@ -3300,13 +3361,7 @@ fn surface_has_claude(s: &Surface, cx: &App) -> bool {
     matches!(s, Surface::Terminal(t) if t.read(cx).has_claude())
 }
 
-pub(crate) fn one_line(s: &str) -> String {
-    s.split(['\n', '\r'])
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
+pub(crate) use abromux_core::text::one_line;
 
 /// Focus a new rename field with its text selected, so typing replaces the
 /// old name. The selection waits for the field's focus event: that comes
@@ -3362,6 +3417,9 @@ fn hint_pill(text: String) -> Div {
 }
 
 fn main() {
+    // Before anything can reach the holder or read a terminal.
+    hold::set_dir(channel::runtime_dir());
+    pty::on_output(abromux_platform::power::output);
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "bench-vt") {
         std::process::exit(bench::vt(&args[1..]));
@@ -3369,7 +3427,7 @@ fn main() {
     if args.first().is_some_and(|a| a == "bench-kitty") {
         std::process::exit(bench::kitty(&args[1..]));
     }
-    // The background process that keeps shells running (`"persistence": "abromux"`, hold.rs).
+    // The background process that keeps shells running (`"persistence": "abromux"`, abromux_term::hold).
     if args.first().is_some_and(|a| a == "hold") {
         if let Err(e) = hold::serve(&hold::socket_path()) {
             eprintln!("abromux hold: {e}");
@@ -3396,6 +3454,7 @@ fn run_app(cwd: Option<String>) {
     });
     app.run(move |cx: &mut App| {
         icon::set_dock_icon();
+        abromux_platform::prefs::import_once(&alert::SKIP_KEYS);
         gpui_component::init(cx);
         // A broken config file starts with the defaults, and says so once the window is up.
         let (settings, settings_error) = match settings::load() {
@@ -3405,7 +3464,7 @@ fn run_app(cwd: Option<String>) {
         // Light or dark before anything is drawn, and before the Ghostty
         // config picks its theme for it.
         theme::apply_appearance(settings.app.appearance);
-        theme::set_dark(theme::appearance_is_dark(cx.window_appearance()), cx);
+        theme::set_dark(theme::resolve(cx.window_appearance()), cx);
         cx.set_global(config::Config::load());
         // Off by default: only takes out hooks an earlier run put in.
         if let Err(e) = terminal_browser_panes::set(settings.browser.terminal_browser_panes) {
@@ -3427,10 +3486,11 @@ fn run_app(cwd: Option<String>) {
         cx.on_action(|_: &OpenConfig, cx| settings_window::open_config(cx));
         // The fixed bindings; the shortcuts users can change are in keymap.rs.
         cx.bind_keys([
-            KeyBinding::new("cmd-w", about::CloseAbout, Some("About")),
+            // ⌘W, Ctrl+W on Linux (these windows have no shell to take it from).
+            KeyBinding::new("secondary-w", about::CloseAbout, Some("About")),
             KeyBinding::new("escape", about::CloseAbout, Some("About")),
             KeyBinding::new(
-                "cmd-w",
+                "secondary-w",
                 settings_window::CloseSettings,
                 Some("SettingsWindow"),
             ),
@@ -3462,12 +3522,14 @@ fn run_app(cwd: Option<String>) {
                 browser::RemoveSuggestion,
                 Some("Omnibar > Input"),
             ),
-            // Keybindings run before key listeners; let these reach the PTY.
-            KeyBinding::new("tab", NoAction, Some("Terminal")),
-            KeyBinding::new("shift-tab", NoAction, Some("Terminal")),
-            KeyBinding::new("ctrl-shift-i", NoAction, Some("Terminal")),
             KeyBinding::new("shift-enter", terminal::FindPrevious, Some("FindBar")),
         ]);
+        // Keybindings run before key listeners; let these reach the PTY.
+        cx.bind_keys(
+            keymap::PTY_KEYS
+                .iter()
+                .map(|k| KeyBinding::new(k, NoAction, Some("Terminal"))),
+        );
         menu::init(cx);
         keymap::apply(&cx.global::<settings::Settings>().clone(), cx);
         menu::set_menus(cx);
@@ -3482,7 +3544,7 @@ fn run_app(cwd: Option<String>) {
         let bounds = session
             .as_ref()
             .and_then(|s| s.window)
-            .map(|w| w.bounds())
+            .map(|w| session::window_bounds(&w))
             .unwrap_or_else(|| Bounds::centered(None, size(px(1280.), px(820.)), cx));
         let host = Rc::new(RefCell::new(None::<WeakEntity<AbroMux>>));
         let set_host = host.clone();
@@ -3496,9 +3558,28 @@ fn run_app(cwd: Option<String>) {
                         appears_transparent: true,
                         traffic_light_position: Some(point(px(14.), px(13.))),
                     }),
-                    window_background: WindowBackgroundAppearance::Blurred,
+                    // Hyprland and other compositors blur behind windows
+                    // themselves when the user wants it.
+                    window_background: if abromux_platform::MACOS {
+                        WindowBackgroundAppearance::Blurred
+                    } else {
+                        WindowBackgroundAppearance::Opaque
+                    },
                     // Only empty titlebar areas move it (titlebar.rs), not tab drags.
                     is_movable: false,
+                    // Wayland: the window rules' id, and no titlebar drawn by
+                    // the app (tiling compositors draw none either).
+                    app_id: Some(channel::app_id()),
+                    // ABROMUX_CLIENT_DECORATIONS=1 asks for the app's own
+                    // (csd.rs), which GNOME gives anyway.
+                    window_decorations: Some(
+                        if std::env::var_os("ABROMUX_CLIENT_DECORATIONS").is_some_and(|v| v == "1")
+                        {
+                            WindowDecorations::Client
+                        } else {
+                            WindowDecorations::Server
+                        },
+                    ),
                     ..Default::default()
                 },
                 |window, cx| {
@@ -3511,7 +3592,8 @@ fn run_app(cwd: Option<String>) {
                     let view = cx.new(|cx| AbroMux::new(cwd, session, window, cx));
                     plugins::set_host(view.downgrade(), cx);
                     *set_host.borrow_mut() = Some(view.downgrade());
-                    cx.new(|cx| Root::new(view, window, cx))
+                    let layer = cx.new(|cx| alert::Layer::new(view, window, cx));
+                    cx.new(|cx| Root::new(layer, window, cx))
                 },
             )
             .expect("open window");

@@ -51,6 +51,11 @@ pub fn command(url: &str) -> Option<String> {
     Some(cmd)
 }
 
+/// Whether terminal-browser is installed (`find`).
+pub fn installed() -> bool {
+    find().is_some()
+}
+
 /// `terminal-browser` on PATH or where its installer puts it.
 pub(crate) fn find() -> Option<PathBuf> {
     crate::paths::find_program("terminal-browser")
@@ -501,9 +506,18 @@ mod tests {
             translate(&ks(k), &serde_json::from_str(json).unwrap()).map(|t| t.unparse())
         };
         // Defaults: find is ⇧⌘F, devtools ⇧⌘I, console ⌥⌘J.
-        assert_eq!(sent("cmd-f", "{}").as_deref(), Some("cmd-shift-f"));
-        assert_eq!(sent("alt-cmd-i", "null").as_deref(), Some("cmd-shift-i"));
-        assert_eq!(sent("alt-cmd-c", "{}").as_deref(), Some("alt-cmd-j"));
+        assert_eq!(
+            sent("cmd-f", "{}").as_deref(),
+            Some(crate::keymap::tests::os_keys("cmd-shift-f").as_str())
+        );
+        assert_eq!(
+            sent("alt-cmd-i", "null").as_deref(),
+            Some(crate::keymap::tests::os_keys("cmd-shift-i").as_str())
+        );
+        assert_eq!(
+            sent("alt-cmd-c", "{}").as_deref(),
+            Some(crate::keymap::tests::os_keys("alt-cmd-j").as_str())
+        );
         // Its shortcuts.json wins; a key it binds itself goes as is.
         assert_eq!(
             sent("cmd-f", r#"{"find":"ctrl+f"}"#).as_deref(),

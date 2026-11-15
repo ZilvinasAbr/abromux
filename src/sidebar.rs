@@ -66,7 +66,7 @@ fn drag_chip(name: SharedString) -> Div {
         .text_size(px(12.5))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(rgb(pal().text))
-        .font_family(".AppleSystemUIFont")
+        .font_family(abromux_platform::fonts::ui())
         .truncate()
         .child(name)
 }
@@ -1506,7 +1506,7 @@ impl AbroMux {
             .children(status)
             .when_some(hint, |s, d| {
                 s.child(
-                    hint_pill(format!("⌘{d}"))
+                    hint_pill(crate::keymap::default_label(&format!("workspace{d}")))
                         .absolute()
                         .top(px(6.))
                         .right(px(8.)),
@@ -1527,7 +1527,7 @@ impl AbroMux {
                         .child(
                             div()
                                 .truncate()
-                                .font_family(terminal::FONT_FAMILY)
+                                .font_family(terminal::mono_font())
                                 .child(text),
                         )
                 }))

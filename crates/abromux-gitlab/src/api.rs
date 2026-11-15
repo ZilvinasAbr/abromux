@@ -650,9 +650,6 @@ impl Client {
         self.write("PUT", &path, serde_json::json!({}))
     }
 
-    /// A new thread on a line of the diff at `refs`: `new_line` for an added
-    /// or unchanged line, `old_line` for a removed (or unchanged) one.
-    #[allow(clippy::too_many_arguments)]
     /// A thread on a line, as `line_comment` starts, but held in your
     /// review until it's submitted (GitLab's "Start a review").
     #[allow(clippy::too_many_arguments)]
@@ -706,6 +703,8 @@ impl Client {
         Ok(())
     }
 
+    /// A new thread on a line of the diff at `refs`: `new_line` for an added
+    /// or unchanged line, `old_line` for a removed (or unchanged) one.
     #[allow(clippy::too_many_arguments)]
     pub fn line_comment(
         &self,
@@ -1400,16 +1399,7 @@ pub fn parse_project_mrs_url(url: &str) -> Option<(String, String)> {
         .then(|| (format!("{scheme}://{authority}"), project.to_string()))
 }
 
-/// A merge request's web URL, `https://host[:port]/group/project/-/merge_requests/12[/diffs…]`,
-/// as (host URL, project path, iid). GitLab under a sub-path isn't told
-/// apart from a group: the first path segment is taken as one.
-pub fn parse_mr_url(url: &str) -> Option<(String, String, u64)> {
-    let (scheme, rest) = url.trim().split_once("://")?;
-    let (authority, path) = rest.split_once('/')?;
-    let (project, after) = path.split_once("/-/merge_requests/")?;
-    let iid = after.split(['/', '?', '#']).next()?.parse().ok()?;
-    (!project.is_empty()).then(|| (format!("{scheme}://{authority}"), project.to_string(), iid))
-}
+pub use abromux_core::links::parse_mr_url;
 
 /// One GraphQL note's reactions, `(note id, them)`, if it has some. Its
 /// ids are global ("gid://gitlab/DiffNote/12"): the number is the REST id.

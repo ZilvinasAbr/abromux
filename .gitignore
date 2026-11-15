@@ -2,7 +2,9 @@
 /vendor/ghostty
 /vendor/zig
 /vendor/ghostty-vt-out
+/vendor/appimagetool-*
 .claude/*
 !.claude/skills/
 .DS_Store
 /dist
+__pycache__/

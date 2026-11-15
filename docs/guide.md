@@ -12,7 +12,7 @@ Everything AbroMux does, in detail. For a quick start, see the [README](../READM
 - **Files from Finder** open in a terminal editor, Neovim or tode (`editor.program`), in a new pane beside the focused one: pick AbroMux in a file's Open With menu, or make it the default app for a file type (see [Opening files](#opening-files)).
 - **Workspaces** sit in a left sidebar, cmux style. Each entry shows the name, the focused tab's title, the git branch and the cwd, plus whatever scripts report through the CLI: status pills (`set-status`), a progress bar (`set-progress`) and the newest `log` line.
 - **Coding agents** (Claude Code, Codex, Gemini CLI, Droid, Cursor CLI, OpenCode and Pi) show up in the sidebar once you've run `abromux hooks install`: a "Running" pill while the agent works and "Needs input" when it asks for permission (Cursor's hooks can't say when it asks). When it asks, or finishes a turn, its terminal gets a notification ("Codex: Asks to run …", "Claude Code: <the start of its reply>"). Their tabs show the agent's logo (Claude Code and Codex) or a robot.
-- **Notifications** come from terminal programs (OSC 9, OSC 99 and OSC 777, as Claude Code, Codex and others send them), from the bell, and from `abromux notify`. One you aren't looking at rings its pane, puts a dot on its tab and on its workspace, shows its text under the workspace in the sidebar, counts on the dock icon, and, while AbroMux is in the background, shows a macOS banner that takes you to it when clicked (banners need AbroMux.app; a `cargo run` build has the rest). It's read once you look at that terminal. ⌘I lists them all; ⌘⇧U jumps to the newest unread one. ⌥⌘U marks the terminal in front of you unread (or read), and ⌃⌘U sends its notification to the back of the queue and jumps to the next one, to work through a pile one at a time. A bell in the macOS menu bar shows the unread count and lists them. [Notification hooks](#notifications) can filter or change each one.
+- **Notifications** come from terminal programs (OSC 9, OSC 99 and OSC 777, as Claude Code, Codex and others send them), from the bell, and from `abromux notify`. One you aren't looking at rings its pane, puts a dot on its tab and on its workspace, shows its text under the workspace in the sidebar, counts on the dock icon, and, while AbroMux is in the background, shows a macOS banner that takes you to it when clicked (banners need AbroMux.app; a `cargo run` build has the rest). On Linux the banner goes to the desktop's notification server (Mako on Omarchy); clicking it shows the terminal and, on Hyprland and sway, brings the window forward. It's read once you look at that terminal. ⌘I lists them all; ⌘⇧U jumps to the newest unread one. ⌥⌘U marks the terminal in front of you unread (or read), and ⌃⌘U sends its notification to the back of the queue and jumps to the next one, to work through a pile one at a time. A bell in the macOS menu bar shows the unread count and lists them; on Linux it's a tray icon (StatusNotifierItem, shown by Waybar's `tray` module), off unless `"notifications": { "showInMenuBar": true }`. [Notification hooks](#notifications) can filter or change each one.
 - **Links** in terminal output underline while you hold ⌘ over them: URLs, OSC 8 hyperlinks, and paths to files that exist (relative ones from the shell's directory, `path:line` too). ⌘-click opens web links in a browser to the right of the terminal (a new tab there if that pane already shows one), Markdown files the same way as Markdown tabs, and anything else with its default app.
 - **A merge requests panel** on the right (⌥⌘B) lists the workspace's, yours and the ones you opened lately; they're kept cached and fresh in the background, so any of them opens at once in a GitLab tab (see "GitLab merge requests").
 - **Panes** split right or down, and each pane has a tab bar of terminal and browser tabs. Drag a divider to resize. Drag a tab to reorder it, onto another pane's tab bar or middle to move it there, onto a pane's edge to split that pane, or onto the outer edge of the pane area to split the whole workspace (full width or height), or onto a workspace in the sidebar to move it into that workspace. A highlight shows where it will land. Move Tab to New Workspace (⌘⇧P) gives the focused tab a workspace of its own.
@@ -23,7 +23,7 @@ Everything AbroMux does, in detail. For a quick start, see the [README](../READM
 
 Requirements:
 
-- macOS on Apple Silicon (the libghostty build script fetches an aarch64 Zig)
+- macOS on Apple Silicon, or Linux on x86_64 or aarch64 (see [Linux](#linux))
 - Rust stable (pinned via `rust-toolchain.toml`)
 - Xcode Command Line Tools (clang for bindgen, `codesign`)
 
@@ -45,6 +45,37 @@ ln -sf /Applications/AbroMux.app/Contents/MacOS/abromux ~/.cargo/bin/abromux   #
 
 Run from the bundle, a bare `abromux` brings the running app to the front, or opens AbroMux.app if it isn't running. A dev build (`cargo run`) always starts its own app.
 
+### Linux
+
+Linux support is in progress ([docs/linux-plan.md](linux-plan.md)): the app builds, runs on Wayland and passes its tests, but notifications, the tray, appearance and the built-in browser aren't there yet, and the default shortcuts are still the macOS ones on `super`. Packages first:
+
+```bash
+# Arch / Omarchy
+sudo pacman -S --needed base-devel clang pkgconf wayland libxkbcommon fontconfig freetype2 vulkan-icd-loader
+# Ubuntu / Debian
+sudo apt install build-essential clang libclang-dev pkg-config libwayland-dev libxkbcommon-dev \
+  libxkbcommon-x11-dev libfontconfig-dev libfreetype-dev libvulkan-dev libx11-dev libx11-xcb-dev libxcb1-dev
+```
+
+Then the same `./scripts/build-libghostty.sh` (it fetches the Zig for this machine) and `cargo run --release`. The app needs a Vulkan driver (Mesa's, or `lavapipe` for software rendering) and finds Wayland through `WAYLAND_DISPLAY`. The window has no title bar of its own where the compositor draws none (Hyprland, sway); on GNOME, which leaves decorations to apps, it draws resize edges and minimize, maximize and close buttons at its top right (`ABROMUX_CLIENT_DECORATIONS=1` asks for them on any compositor). Its files follow the XDG folders: the session, history and caches in `$XDG_DATA_HOME/abromux` (`~/.local/share/abromux`), the control and holder sockets in `$XDG_RUNTIME_DIR/abromux`, prefs and logs in `$XDG_STATE_HOME/abromux` (`~/.local/state/abromux`), and the config in `$XDG_CONFIG_HOME/abromux` as on macOS. A nightly is a build with `ABROMUX_CHANNEL=nightly` (or `nightly-<name>`) set, and uses `abromux-nightly` (`abromux-nightly-<name>`) folders.
+
+To install it as a desktop app, `scripts/package-linux.sh` builds a release binary and installs it into `~/.local` (`--prefix` for another): `bin/abromux`, the desktop entry `dev.abromux.app.desktop` (named after the window's Wayland `app_id`, so docks and launchers match them) and the icons. `scripts/nightly.sh` does the same for `abromux-nightly`, with its own app id, icon and folders. `scripts/package-linux.sh --dist`, from a release tag, makes the tarball and AppImage for the GitHub release, and `packaging/aur/` has the AUR package.
+
+To try it without a desktop, as on a server, run it in a headless sway with software Vulkan, type into it through a uinput keyboard, and take screenshots with `grim` (as root; `noop` is libseat's backend for that):
+
+```bash
+sudo apt install sway grim ydotool wl-clipboard mesa-vulkan-drivers   # or pacman -S sway grim ydotool wl-clipboard vulkan-swrast
+export XDG_RUNTIME_DIR=$(mktemp -d) YDOTOOL_SOCKET=/tmp/ydotool.sock
+ydotoold --socket-path=$YDOTOOL_SOCKET &                # a keyboard sway reads like a real one
+WLR_BACKENDS=headless,libinput LIBSEAT_BACKEND=noop WLR_RENDERER=pixman sway &
+export WAYLAND_DISPLAY=wayland-1 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
+cargo run &
+ydotool type 'ls'; ydotool key 28:1 28:0                # evdev codes: 28 is Enter, 29 Ctrl, 42 Shift, 56 Alt
+grim shot.png
+```
+
+Use a uinput keyboard rather than `wtype`: each `wtype` run adds a virtual keyboard to the seat and removes it again, and gpui loses keys around that (and can crash starting up while one is half set up), which a real keyboard never does.
+
 ### Nightly build
 
 To try the working tree as an app without replacing the release AbroMux.app:
@@ -59,7 +90,7 @@ A named nightly (bundle id `dev.abromux.nightly.<name>`, support folder `abromux
 
 A nightly others can download: commit, then `scripts/bundle-app.sh --nightly --dist` builds a notarized `dist/AbroMux-Nightly-<version>.dmg`, published as a GitHub pre-release tagged `nightly-<commit>`. Pre-releases are never GitHub's "latest" release, so the release app's update check doesn't offer them.
 
-AbroMux Nightly runs next to AbroMux. It has a neon icon (`assets/app/abromux-nightly.svg`), its own name, the bundle id `dev.abromux.nightly` (so separate notification permissions and settings), and its own socket and session in `~/Library/Application Support/abromux-nightly/`. It's signed like the release but never notarized: `scripts/bundle-app.sh --nightly` is what `nightly.sh` calls, and it refuses `--dist`. The binary decides which one it is at runtime from the bundle it sits in (`src/channel.rs`); `cargo run` counts as the release. Install agent hooks from the release `abromux`, not `abromux-nightly`: hooks point at the binary you install them from, and do nothing once that app is gone.
+AbroMux Nightly runs next to AbroMux. It has a neon icon (`assets/app/abromux-nightly.svg`), its own name, the bundle id `dev.abromux.nightly` (so separate notification permissions and settings), and its own socket and session in `~/Library/Application Support/abromux-nightly/`. It's signed like the release but never notarized: `scripts/bundle-app.sh --nightly` is what `nightly.sh` calls, and it refuses `--dist`. The binary decides which one it is at runtime from the bundle it sits in (`crates/abromux-platform/src/channel.rs`); `cargo run` counts as the release. Install agent hooks from the release `abromux`, not `abromux-nightly`: hooks point at the binary you install them from, and do nothing once that app is gone.
 
 ## Updates
 
@@ -71,11 +102,13 @@ AbroMux checks for updates like cmux does (cmux uses Sparkle; AbroMux does the s
 
 Nothing downloads until you choose Install and Relaunch. **Check for Updates…** (in the AbroMux menu, the command palette, or Settings › App › Updates) checks right away and also tells you when you're already on the latest version. The palette's **Apply Update (If Available)** installs a found update, or checks if there isn't one yet. Turn the daily check off with `"app": { "automaticallyCheckForUpdates": false }` or the switch in Settings.
 
-The check time and a skipped version are kept in `update.json` in the support folder, and each step is written to `update.log` there. An app running from the disk image or from a folder you can't write to says so and won't install; move it into Applications first. Nightly builds only check: they come from `scripts/nightly.sh`, not from releases. To try the flow from a nightly, launch it with `ABROMUX_UPDATE_FROM=0.1.0` so it thinks it's on an old version (`ABROMUX_UPDATE_FEED` points the check at another releases API URL). `cargo test update::tests::live -- --ignored` downloads, verifies and swaps the real latest release in a scratch folder.
+On Linux the check is the same, and what Install does depends on how AbroMux was installed: an AppImage downloads the release's `AbroMux-<version>-<arch>.AppImage`, checks its size and SHA-256 against the release, replaces itself and relaunches; the AUR package says to update it with your AUR helper (pacman owns its files); a tarball or other copy says to download the release. Linux checks run on their own only for an AppImage or a release build, not for one built from a commit.
+
+The check time and a skipped version are kept in `update.json` in the support folder (the state folder on Linux), and each step is written to `update.log` there. An app running from the disk image or from a folder you can't write to says so and won't install; move it into Applications first. Nightly builds only check: they come from `scripts/nightly.sh`, not from releases. To try the flow from a nightly, launch it with `ABROMUX_UPDATE_FROM=0.1.0` so it thinks it's on an old version (`ABROMUX_UPDATE_FEED` points the check at another releases API URL). `cargo test update::tests::live -- --ignored` downloads, verifies and swaps the real latest release in a scratch folder.
 
 ## GitLab reviews
 
-A GitLab tab (⌘⇧P → New GitLab Tab) shows merge requests the way GitLab's web UI does, in its dark theme (whatever the app's appearance). It's built in as a plugin (`crates/abromux-gitlab`, the `gitlab` Cargo feature, on by default) and writes what a reviewer and an author do: comments, replies, resolving, threads on lines, approvals, editing and deleting your comments, editing the title and description, draft, close and reopen, merging, and running, retrying or cancelling pipelines.
+A GitLab tab (⌘⇧P → New GitLab Tab) shows merge requests the way GitLab's web UI does, in its light or dark theme as the app's appearance is (Settings › App › Appearance). It's built in as a plugin (`crates/abromux-gitlab`, the `gitlab` Cargo feature, on by default) and writes what a reviewer and an author do: comments, replies, resolving, threads on lines, approvals, editing and deleting your comments, editing the title and description, draft, close and reopen, merging, and running, retrying or cancelling pipelines.
 
 - **Sign in** with the GitLab URL and a personal access token with the `api` scope (a `read_api` token works too, but then writing says the token needs `api`). The token is checked, then kept in your login Keychain (service `abromux-gitlab`, account = the URL). New GitLab tabs then open on that GitLab, so you sign in once. `ABROMUX_GITLAB_TOKEN` overrides it.
 - **The list** has the merge requests you're asked to review, the ones you created, and all you can see, open, merged, closed or all of them, with checklist progress, coloured labels, the target branch when it isn't the default, pipeline status, assignees and reviewers, resolved threads ("1 of 4") and Approved, Merged and Closed badges, newest first, and a filter.
@@ -112,7 +145,7 @@ Comments go to a coding agent instead of GitLab. A new thread (or a submitted re
 
 ## Passkeys
 
-Browser panes sign in with passkeys (iCloud Keychain, a phone over Bluetooth) and security keys, the way cmux does. WKWebView only allows WebAuthn for an app's own associated domains, so `src/webauthn.js` replaces `navigator.credentials.create/get` for public-key requests in the top frame and hands them to `src/webauthn.m`, which runs them through AuthenticationServices' web-browser APIs with the page's origin and challenge, and passes the credential back. Conditional (autofill) requests stay pending, since there's no autofill UI; sites show their "Sign in with a passkey" button instead. Frames and U2F `appid` requests are left to WebKit.
+Browser panes sign in with passkeys (iCloud Keychain, a phone over Bluetooth) and security keys, the way cmux does. WKWebView only allows WebAuthn for an app's own associated domains, so `src/webauthn.js` replaces `navigator.credentials.create/get` for public-key requests in the top frame and hands them to `crates/abromux-platform/src/macos/webauthn.m`, which runs them through AuthenticationServices' web-browser APIs with the page's origin and challenge, and passes the credential back. Conditional (autofill) requests stay pending, since there's no autofill UI; sites show their "Sign in with a passkey" button instead. Frames and U2F `appid` requests are left to WebKit.
 
 The web-browser APIs need the restricted `com.apple.developer.web-browser.public-key-credential` entitlement, which Apple grants per App ID and only a provisioning profile can carry. Without it the bridge stays out of the way and WebKit handles WebAuthn as before (for most sites, not at all). To turn it on:
 
@@ -261,7 +294,7 @@ The palette (⌘⇧P) has **Persistence: abromux** and **Persistence: cmux-like*
 { "browser": { "engine": "terminalBrowser" } }
 ```
 
-`engine` is `builtIn` (the default, the WebKit browser pane) or `terminalBrowser` (`"terminal-browser"` works too); Settings has it under General › Browser. With `terminalBrowser`, every new browser tab (⌘⇧L, the globe, ⌘-clicked links, `url` commands, layouts, `abromux new-surface --type browser`) is a terminal running `terminal-browser open --no-merge <url>` in your login shell, and closing the browser closes the tab. The tab shows a globe and the page's title, as a built-in one does: abromux asks terminal-browser's control socket (`~/.local/state/terminal-browser-*/instances/*.sock`) for the active tab's title and URL, matched to the tab by its tty.
+`engine` is `builtIn` (the WebKit browser pane, macOS only), `terminalBrowser` (`"terminal-browser"` works too) or `system` (your default browser); Settings has it under General › Browser. Without one, it's `builtIn` on macOS, and on Linux `terminalBrowser` if terminal-browser is installed, else `system`. With `system`, pages open in your default browser (`open`, `xdg-open`) instead of a tab: ⌘/Ctrl-clicked links, `url` commands, tracked links, `abromux new-surface --type browser --url …` (which says no tab was made) and Markdown files. New Browser Tab still makes a tab, whose address bar sends what you type there to the default browser; tabs restored from a session or made by a layout show their address and an Open in browser button, and open nothing by themselves. With `terminalBrowser`, every new browser tab (⌘⇧L, the globe, ⌘-clicked links, `url` commands, layouts, `abromux new-surface --type browser`) is a terminal running `terminal-browser open --no-merge <url>` in your login shell, and closing the browser closes the tab. The tab shows a globe and the page's title, as a built-in one does: abromux asks terminal-browser's control socket (`~/.local/state/terminal-browser-*/instances/*.sock`) for the active tab's title and URL, matched to the tab by its tty.
 
 A terminal-browser tab takes the built-in browser's keys: ⌘L, ⌘R, ⌘[ / ⌘], ⌘= / ⌘- / ⌘0 (zoom), and ⌘A, ⌘C, ⌘X, ⌘Z, ⇧⌘Z in the page. ⌘F (find), ⌥⌘I (devtools) and ⌥⌘C (console) work as in the built-in browser: abromux sends terminal-browser the key it binds to the same command in its `shortcuts.json` (`~/.config/terminal-browser/`, or its settings with ⌃,), by default ⇧⌘F, ⇧⌘I and ⌥⌘J, read on each press. Its own keys work too, except ⇧⌘I, which is abromux's New Workspace Folder; F12 opens devtools. Window-level keys (⌘T, ⌘W, ⌘P, ⌘N, …) stay abromux's. ⌘-click opens a link in a new terminal-browser tab, the pointer follows the page (a hand over links), and the page gets key releases, focus and blur, and sideways scrolling. The Edit menu's Copy, Cut and Select All (and their keys) go to the page or its address bar, so ⌘L then ⌘C copies the URL. ⌘R on a local file (`file://`) reloads it through `terminal-browser action … reload`, since terminal-browser's own ⌘R does nothing there.
 
@@ -270,6 +303,10 @@ terminal-browser run in a shell (`terminal-browser open ./report.html`, as an ag
 abromux looks for `terminal-browser` on PATH, in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`; if it isn't there, the tab falls back to the built-in browser with a warning. The setting applies to tabs opened after it changes; open ones stay as they are. A terminal-browser tab is restored as a browser tab on the page it last showed (its own back/forward history isn't kept). The `abromux browser` automation commands only drive built-in tabs, so `abromux browser open` always opens one (use `terminal-browser action` to drive a terminal-browser).
 
 `"terminalBrowserPanes": true` in `browser` (Settings: General › Browser › terminal-browser new tabs as panes) has terminal-browser open new tabs as abromux panes instead of its own tabs. Links that ask for a new tab (`target=_blank`, ⌘-click, middle-click), the context menu's "Open link in new tab" and terminal-browser's new-tab box then open a terminal-browser split to the right of the browser they came from (`TB_ABROMUX_SPLIT=down`, `left` or `up` in that pane's environment picks another side). Pages opened with `window.open` and window features (OAuth and SSO sign-ins that talk to their opener) stay popups. terminal-browser has no setting for this, so abromux adds a few lines to its `app/browser/dist/main.js`, and takes them out when the setting is off. That file is outside terminal-browser's signed Electron app, so its signature, entitlements and passkeys are untouched. `terminal-browser upgrade` replaces the file; abromux puts the lines back before it next starts a terminal-browser, and if the code they hook into has moved, it changes nothing and says so. A running terminal-browser keeps the code it started with: all of them share one daemon, so a change applies once every terminal-browser has quit. That daemon's environment is the first pane's, so the new pane comes from each browser's own `ABROMUX_SURFACE_ID`; a browser that isn't in an abromux pane opens a normal tab. Shells get `ABROMUX_BIN`, the CLI of the app they run in, which is what the new pane is made with.
+
+#### Without the built-in browser (Linux)
+
+Linux has no built-in browser, so these need macOS: the `abromux browser` automation commands (snapshot, click, fill, eval, cookies, find, …, which answer that they need it), find in page, the web inspector and console, downloads, passkeys, and per-tab zoom and back/forward history. Markdown tabs (`abromux new-surface --type markdown`) are rendered once to an HTML file in `$XDG_RUNTIME_DIR/abromux/markdown/` and opened in terminal-browser or the default browser, with links and images resolving next to the file; they don't follow later edits to the file (open it again).
 
 ### Opening files
 
@@ -434,13 +471,13 @@ Reloading the config applies new shortcuts at once, in the menus too.
 
 ## Ghostty config
 
-Terminals read your Ghostty config: `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`), then `~/Library/Application Support/com.mitchellh.ghostty/config`, plus their `config-file` includes. abromux uses `theme` (from `~/.config/ghostty/themes` or Ghostty.app; `light:A,dark:B` follows the app's appearance), `font-family` (further `font-family` lines are fallbacks, as in Ghostty), `font-size`, `foreground`, `background`, `palette`, `cursor-color`, `cursor-text`, `cursor-style`, `selection-background`/`-foreground`, `keybind`s whose action is `text:`, `csi:` or `esc:`, and `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` (on by default, as in Ghostty: pasting text that could run commands, such as a newline when the program hasn't turned on bracketed paste, asks first; Enter pastes, Esc cancels). Programs can copy to the clipboard with OSC 52, as terminal-browser, Neovim and tmux do (`clipboard-write = deny` stops them; there's no prompt, so `ask` refuses too). `copy-on-select = clipboard` copies a selection to the clipboard when you let go of the mouse (Ghostty's default `true` uses a selection pasteboard macOS doesn't have, so it does nothing here). `mouse-scroll-multiplier` scales scrolling, as one number or `precision:<n>,discrete:<n>` for the trackpad and the mouse wheel. `scrollbar = never` hides the overlay scrollbar. `shell-integration = none` turns off abromux's shell integration (below). Other keys are ignored for now. Changes apply to new terminals.
+Terminals read your Ghostty config: `~/.config/ghostty/config` (or `$XDG_CONFIG_HOME`), then `~/Library/Application Support/com.mitchellh.ghostty/config`, plus their `config-file` includes. abromux uses `theme` (from `~/.config/ghostty/themes` or Ghostty.app; `light:A,dark:B` follows the app's appearance), `font-family` (further `font-family` lines are fallbacks, as in Ghostty; without one, JetBrains Mono on macOS and fontconfig's `monospace` on Linux), `font-size`, `foreground`, `background`, `palette`, `cursor-color`, `cursor-text`, `cursor-style`, `selection-background`/`-foreground`, `keybind`s whose action is `text:`, `csi:` or `esc:`, and `clipboard-paste-protection` / `clipboard-paste-bracketed-safe` (on by default, as in Ghostty: pasting text that could run commands, such as a newline when the program hasn't turned on bracketed paste, asks first; Enter pastes, Esc cancels). Programs can copy to the clipboard with OSC 52, as terminal-browser, Neovim and tmux do (`clipboard-write = deny` stops them; there's no prompt, so `ask` refuses too). `copy-on-select = clipboard` copies a selection to the clipboard when you let go of the mouse. On Linux a selection also becomes the primary selection, which a middle click pastes (Ghostty's default `copy-on-select = true`; `false` turns it off); macOS has no primary selection. `mouse-scroll-multiplier` scales scrolling, as one number or `precision:<n>,discrete:<n>` for the trackpad and the mouse wheel. `scrollbar = never` hides the overlay scrollbar. `shell-integration = none` turns off abromux's shell integration (below). Other keys are ignored for now. Changes apply to new terminals.
 
 Ghostty has Nerd Font symbols built in; abromux doesn't, so for the icons Neovim, eza or starship draw it falls back to the Nerd Fonts you have installed (symbols-only and "Mono" ones first), after your `font-family` fallbacks and before macOS's own fonts. Install one (`brew install --cask font-symbols-only-nerd-font`) if icons show as boxes.
 
 ## Shell integration
 
-zsh starts with a small integration (`src/shell/zsh`, written to `~/Library/Application Support/abromux/shell-integration/zsh`) that marks the prompt with OSC 133. abromux sets `ZDOTDIR` to that folder; its `.zshenv` puts your `ZDOTDIR` back, runs your `.zshenv`, and zsh reads the rest of your config as usual. With the marks, resizing a pane blanks the prompt for zsh to redraw instead of rewrapping it, which used to pile up pieces of the prompt line. One copy can still stay behind when a narrower pane wraps the prompt, until the pane widens again: since Ghostty `dde3d4d6b`, libghostty-vt clears the prompt after the reflow, from its last wrapped row only (Ghostty 1.3.1 cleared first). A `zsh` started inside a pane doesn't get the integration. Other shells have none yet.
+zsh and bash start with a small integration (`src/shell/zsh` and `src/shell/bash`, written to `shell-integration/` in the support folder) that marks the prompt with OSC 133 and wraps `codex`. The shell is `$SHELL`, else your login shell from the user database. bash starts as `bash --posix -l` with `ENV` pointing at the script: in POSIX mode bash reads only `$ENV`, and the script leaves POSIX mode and reads `/etc/profile` and the first of `~/.bash_profile`, `~/.bash_login` and `~/.profile`, as a login bash does (as Ghostty's integration does). Its history file stays `~/.bash_history` unless you set `HISTFILE`. abromux sets `ZDOTDIR` to that folder; its `.zshenv` puts your `ZDOTDIR` back, runs your `.zshenv`, and zsh reads the rest of your config as usual. With the marks, resizing a pane blanks the prompt for zsh to redraw instead of rewrapping it, which used to pile up pieces of the prompt line. One copy can still stay behind when a narrower pane wraps the prompt, until the pane widens again: since Ghostty `dde3d4d6b`, libghostty-vt clears the prompt after the reflow, from its last wrapped row only (Ghostty 1.3.1 cleared first). bash redraws its prompt the same way. A `zsh` or `bash` started inside a pane doesn't get the integration. Other shells have none yet.
 
 ## CLI
 
@@ -587,6 +624,28 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Reload the config file | | ⌘⇧, |
 | Change any of these keys | | `"shortcuts"` in the [config file](#shortcuts-and-commands) |
 
+### Keys on Linux
+
+The table above has macOS's keys. Linux has its own defaults: nothing is on Super (the compositor's, as in Hyprland), plain Ctrl-letters stay the shell's, and the rest follows Linux terminals. The palette, tooltips and `abromux config shortcuts` show the keys of the OS they run on (`Ctrl+Shift+P`). ⌘-clicking a link is Ctrl-click.
+
+| | Linux |
+|---|---|
+| Command palette / workspace switcher | Ctrl+Shift+P / Ctrl+Shift+S |
+| New workspace / new tab / close tab | Ctrl+Shift+N / Ctrl+Shift+T / Ctrl+Shift+W |
+| Split right / split down | Ctrl+Shift+O / Ctrl+Shift+E |
+| Focus pane | Ctrl+Alt+arrows |
+| Resize pane | Ctrl+Shift+H/J/K/L, as on macOS |
+| Workspace 1–9 / tab 1–9 / link 1–9 | Alt+1–9 / Ctrl+1–9 / Ctrl+Alt+1–9 |
+| Next / previous tab | Ctrl+PageDown / Ctrl+PageUp, or Ctrl+Tab / Ctrl+Shift+Tab |
+| Next / previous workspace | Ctrl+Alt+PageDown / Ctrl+Alt+PageUp |
+| Copy / paste | Ctrl+Shift+C / Ctrl+Shift+V, or Ctrl+Insert / Shift+Insert (Omarchy's Super+C/V send these) |
+| Find, next, previous | Ctrl+Shift+F, Ctrl+Shift+G, Ctrl+Alt+G |
+| Font size | Ctrl+= / Ctrl+- / Ctrl+0 |
+| Toggle sidebar / notifications | Ctrl+Shift+B / Ctrl+Alt+I |
+| Settings / reload config / quit | Ctrl+, / Ctrl+Shift+, / Ctrl+Shift+Q |
+
+Most other actions are on Ctrl+Alt with the macOS letter (rename workspace Ctrl+Alt+R, review changes Ctrl+Alt+D); `abromux config shortcuts` lists them all. In the config file, `secondary-` is ⌘ on macOS and Ctrl on Linux, and `cmd-` is Super on Linux.
+
 ## Performance
 
 `scripts/perf.py run` builds a release binary and measures it:
@@ -620,19 +679,22 @@ History lives in `<git common dir>/abromux-perf/history.jsonl`, outside the tree
 
 ## Layout
 
-- `src/ghostty/`: FFI bindings and a safe wrapper (`Terminal`, `Frame` snapshots, key encoding, selection)
+- `crates/abromux-core`: logic with no UI and no OS calls (paths, the OSC 99 scanner, the control-socket protocol, the settings model as it moves there)
+- `crates/abromux-term`: `ghostty/`, the libghostty-vt bindings and a safe wrapper (`Terminal`, `Frame` snapshots, key encoding, selection); `pty.rs` and `hold.rs`, the PTYs and the holder that keeps shells running
+- `crates/abromux-platform`: every OS service the app uses (notifications, the menu-bar bell, App Nap, appearance, the dock, window drags, prefs, the channel and its folders), with the Objective-C parts in `src/macos/`
+- `crates/abromux-browser`: the browser page behind `PageBackend` (`backend/wkwebview.rs` on macOS), plus automation, find, history and downloads
 - `src/terminal.rs`: PTY plumbing plus a custom GPUI `Element` that paints the grid
-- `src/browser.rs`: the webview pane; `src/webauthn.{rs,js,m}`: the passkey bridge
+- `src/browser.rs`: the browser pane (address bar, toolbar, find bar); `src/webauthn.js` and `crates/abromux-platform/src/macos/webauthn.m`: the passkey bridge
 - `src/terminal_browser.rs`: browser tabs that run terminal-browser (`browser.engine`)
 - `src/editor.rs`: files opened from Finder or `abromux edit`, in a terminal editor (`editor.program`); `abromux default-app`
 - `src/workspace.rs`: the workspace, split-tree and surface model
 - `src/main.rs`: the app shell (pane tab bars, splits, actions); `src/sidebar.rs`: the sidebar's rows, groups, menus and drag to reorder
 - `src/bench.rs`: `abromux bench-vt` and `abromux bench-kitty`, the headless parse benchmarks used by `scripts/perf.py`
-- `src/server.rs`: the control socket's method handlers; `src/cli.rs`: the `abromux` commands; `src/ipc.rs`: the shared wire format
+- `src/server.rs`: the control socket's method handlers; `src/cli.rs`: the `abromux` commands; `src/ipc.rs` and `crates/abromux-core/src/ipc.rs`: the shared wire format
 - `src/plugins.rs`: the plugins built in; `crates/abromux-plugin`: the interface a plugin's tab implements; `crates/abromux-gitlab`: the GitLab review tab
 - `dev/gitlab/`: a GitLab in Docker with review fixtures, and scripts to drive and screenshot the plugin (see its README)
 
 ## Known POC limits
 
 - Native webviews always draw above GPUI content. Hidden tabs and workspaces are hidden explicitly, and the app's popovers swap a page they cover for a still bitmap of it (see "Popovers over pages"); a popover the app doesn't know about (a new one) would still draw under the page.
-- While a page has keyboard focus, keys with ⌘ or ⌃ go to the app first (`abx_page_shortcuts_install` in `src/browser_native.m`): a shortcut the app handles doesn't reach the page, so a site can't use ⌘T, ⌘W, ⌘L and the like for itself. Other ⌘ keys (⌘C, ⌘A, ⌘B in an editor) reach the page as usual.
+- While a page has keyboard focus, keys with ⌘ or ⌃ go to the app first (`abx_page_shortcuts_install` in `crates/abromux-platform/src/macos/browser_native.m`): a shortcut the app handles doesn't reach the page, so a site can't use ⌘T, ⌘W, ⌘L and the like for itself. Other ⌘ keys (⌘C, ⌘A, ⌘B in an editor) reach the page as usual.

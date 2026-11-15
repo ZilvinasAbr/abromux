@@ -1,15 +1,15 @@
-#![allow(unexpected_cfgs)] // objc's msg_send!
-
 //! Colours and small shared widgets: cmux's layout in Claude's warm neutrals
 //! with the terracotta orange accent, light or dark.
 //!
 //! The app's appearance setting (`app.appearance`: system, light or dark)
 //! sets macOS's appearance for the app ([`apply_appearance`]); the windows'
 //! effective appearance then picks the palette ([`set_dark`]), so "system"
-//! follows macOS as it changes.
+//! follows macOS as it changes. On Linux the windows' appearance is the
+//! desktop's (xdg-desktop-portal's `color-scheme`, which gpui watches), and
+//! a light or dark setting overrides it ([`resolve`]).
 
 use gpui::{prelude::*, *};
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering::Relaxed};
 
 /// The UI's colours, as `0xrrggbb` (or `0xrrggbbaa` where noted).
 pub struct Palette {
@@ -145,24 +145,26 @@ impl Appearance {
 /// follow macOS's. The palette follows in [`sync`], when the windows
 /// report their new appearance.
 pub fn apply_appearance(a: Appearance) {
-    use objc::{class, msg_send, runtime::Object, sel, sel_impl};
-    #[link(name = "AppKit", kind = "framework")]
-    unsafe extern "C" {
-        static NSAppearanceNameAqua: *mut Object;
-        static NSAppearanceNameDarkAqua: *mut Object;
-    }
-    unsafe {
-        let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
-        let appearance: *mut Object = match a {
-            Appearance::System => std::ptr::null_mut(),
-            Appearance::Light => {
-                msg_send![class!(NSAppearance), appearanceNamed: NSAppearanceNameAqua]
-            }
-            Appearance::Dark => {
-                msg_send![class!(NSAppearance), appearanceNamed: NSAppearanceNameDarkAqua]
-            }
-        };
-        let _: () = msg_send![app, setAppearance: appearance];
+    use abromux_platform::appearance::{Look, set};
+    SETTING.store(a as u8, Relaxed);
+    set(match a {
+        Appearance::System => Look::System,
+        Appearance::Light => Look::Light,
+        Appearance::Dark => Look::Dark,
+    });
+}
+
+/// The appearance setting last applied, as `Appearance as u8`.
+static SETTING: AtomicU8 = AtomicU8::new(Appearance::System as u8);
+
+/// Whether to use the dark palette with the windows' appearance `a`: the
+/// setting's, unless it follows the system. (On macOS the windows already
+/// report the setting's appearance; on Linux they report the desktop's.)
+pub fn resolve(a: WindowAppearance) -> bool {
+    match SETTING.load(Relaxed) {
+        x if x == Appearance::Light as u8 => false,
+        x if x == Appearance::Dark as u8 => true,
+        _ => appearance_is_dark(a),
     }
 }
 
@@ -182,7 +184,7 @@ pub fn set_dark(dark: bool, cx: &mut App) -> bool {
 /// Make the app's setting macOS's appearance for the app, and follow it.
 pub fn apply(a: Appearance, cx: &mut App) {
     apply_appearance(a);
-    sync(appearance_is_dark(cx.window_appearance()), cx);
+    sync(resolve(cx.window_appearance()), cx);
 }
 
 /// Follow a window's appearance (it changed, or the setting did): the
@@ -199,7 +201,7 @@ pub fn sync(dark: bool, cx: &mut App) {
 /// Keep the palette following `window`'s appearance as macOS's changes.
 pub fn follow(window: &Window) {
     window
-        .observe_window_appearance(|window, cx| sync(appearance_is_dark(window.appearance()), cx))
+        .observe_window_appearance(|window, cx| sync(resolve(window.appearance()), cx))
         .detach();
 }
 
@@ -216,8 +218,8 @@ fn style_components(cx: &mut App) {
     let p = pal();
     let theme = Theme::global_mut(cx);
     theme.background = rgba(0x00000000).into();
-    theme.font_family = ".AppleSystemUIFont".into();
-    theme.mono_font_family = crate::terminal::FONT_FAMILY.into();
+    theme.font_family = abromux_platform::fonts::ui().into();
+    theme.mono_font_family = crate::terminal::mono_font().into();
     theme.popover = rgb(p.menu_bg).into();
     theme.popover_foreground = rgb(p.text).into();
     theme.foreground = rgb(p.text).into();

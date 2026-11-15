@@ -61,6 +61,10 @@ pub struct Config {
     /// (`copy-on-select = clipboard`). Ghostty's default `true` copies to a
     /// selection pasteboard that macOS doesn't have, so only `clipboard` counts.
     pub copy_on_select: bool,
+    /// Selecting text makes it the primary selection, for a middle click to
+    /// paste (Linux; `copy-on-select = true`, Ghostty's default, or
+    /// `clipboard`).
+    pub select_to_primary: bool,
     /// Rows per trackpad row and per wheel notch (`mouse-scroll-multiplier`,
     /// either one number or `precision:<n>,discrete:<n>`).
     pub scroll_precision: f32,
@@ -74,7 +78,8 @@ impl Global for Config {}
 impl Default for Config {
     fn default() -> Self {
         Self {
-            font_family: "JetBrains Mono".into(),
+            // JetBrains Mono on macOS, fontconfig's monospace on Linux.
+            font_family: abromux_platform::fonts::monospace(),
             font_fallbacks: vec![],
             font_size: 14.,
             foreground: None,
@@ -101,6 +106,7 @@ impl Default for Config {
             clipboard_write: true,
             shell_integration: true,
             copy_on_select: false,
+            select_to_primary: true,
             scroll_precision: 1.,
             scroll_discrete: 1.,
             scrollbar: true,
@@ -180,7 +186,11 @@ impl Config {
                 }
                 "clipboard-write" => c.clipboard_write = unquote(v) == "allow",
                 "shell-integration" => c.shell_integration = v != "none",
-                "copy-on-select" => c.copy_on_select = unquote(v) == "clipboard",
+                "copy-on-select" => {
+                    let v = unquote(v);
+                    c.copy_on_select = v == "clipboard";
+                    c.select_to_primary = v != "false";
+                }
                 "mouse-scroll-multiplier" => {
                     for part in unquote(v).split(',') {
                         let (kind, n) = part.split_once(':').unwrap_or(("", part));
@@ -468,8 +478,12 @@ mod tests {
         let c = Config::from_entries(&entries(
             "copy-on-select = clipboard\nmouse-scroll-multiplier = 3\nscrollbar = never",
         ));
-        assert!(c.copy_on_select && !c.scrollbar);
+        assert!(c.copy_on_select && c.select_to_primary && !c.scrollbar);
         assert_eq!((c.scroll_precision, c.scroll_discrete), (3., 3.));
+        // Ghostty's default, `true`: the primary selection only.
+        assert!(d.select_to_primary);
+        let c = Config::from_entries(&entries("copy-on-select = false"));
+        assert!(!c.copy_on_select && !c.select_to_primary);
         let c = Config::from_entries(&entries(
             "copy-on-select = true\nmouse-scroll-multiplier = precision:0.5,discrete:4",
         ));

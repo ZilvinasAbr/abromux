@@ -2290,7 +2290,7 @@ impl GitLabView {
                             .rounded(px(8.))
                             .bg(c(0x1068bf))
                             .cursor_pointer()
-                            .text_color(c(HEADING))
+                            .text_color(on_fill())
                             .child("Connect")
                             .on_click(cx.listener(move |v, _, _, cx| {
                                 let h = host.read(cx).value().to_string();
@@ -2625,21 +2625,21 @@ impl GitLabView {
                                                 people.iter().map(|u| self.avatars.of(u, 16.)),
                                             ))
                                             .when(m.state == "merged", |d| {
-                                                d.child(badge("Merged", c(0x64a7e9), c(0x1d2153)))
+                                                d.child(status_badge("Merged", 0x64a7e9, 0x1d2153))
                                             })
                                             .when(m.state == "closed", |d| {
-                                                d.child(badge("Closed", c(0xfc7988), c(0x5a0e17)))
+                                                d.child(status_badge("Closed", 0xfc7988, 0x5a0e17))
                                             })
                                             .when(
                                                 self.approved.contains(&m.id)
                                                     && m.state == "opened",
                                                 |d| {
                                                     d.child(
-                                                        badge("Approved", c(GREEN), c(0x002c26))
+                                                        status_badge("Approved", GREEN, 0x002c26)
                                                             .child(icon(
                                                                 "check-circle",
                                                                 12.,
-                                                                c(0x002c26),
+                                                                status_colors(GREEN, 0x002c26).1,
                                                             ))
                                                             .flex_row_reverse(),
                                                     )

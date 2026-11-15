@@ -1,0 +1,28 @@
+[package]
+name = "abromux-browser"
+version = "0.1.0"
+edition = "2024"
+description = "Browser panes' pages, history, find, automation and downloads, over a PageBackend"
+license = "MIT"
+publish = false
+
+[dependencies]
+abromux-platform = { path = "../abromux-platform" }
+gpui = { version = "=0.2.2", default-features = false, features = ["runtime_shaders"] }
+# the Protocol type (wry's own http, re-exported)
+http = "1"
+anyhow = "1"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui-component = { version = "=0.5.1", features = ["webview"] }
+# WebKit inspector in release builds (⌥⌘I); same crate gpui-component uses
+lb-wry = { version = "=0.53.3", features = ["devtools"] }
+# the WKWebView backend (src/backend/wkwebview.rs)
+objc = "0.2"
+block = "0.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui = { version = "=0.2.2", default-features = false, features = ["runtime_shaders", "wayland", "x11", "font-kit"] }

@@ -156,50 +156,28 @@ impl Default for GitlabSettings {
     }
 }
 
-/// How terminals come back after abromux quits. Applies to terminals opened
-/// after it's set; ones already running in the holder are taken back
-/// whatever it says.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum Persistence {
-    /// `"abromux"`: shells run in abromux's holder (`crate::hold`) and keep
-    /// running; the next launch takes them back as they were.
-    #[default]
-    Abromux,
-    /// `"cmux-like"`: shells end with the app; the next launch starts new
-    /// ones in the same folders, replays their output and resumes coding
-    /// agents, as cmux does.
-    CmuxLike,
-}
-
-impl Persistence {
-    /// Its value in the config file.
-    pub fn key(self) -> &'static str {
-        match self {
-            Persistence::Abromux => "abromux",
-            Persistence::CmuxLike => "cmux-like",
-        }
-    }
-}
+pub use abromux_core::settings::{NotificationHook, Persistence};
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct BrowserSettings {
-    /// What a browser tab is.
-    pub engine: BrowserEngine,
+    /// What a browser tab is; None for this OS's default ([`browser_engine`]).
+    pub engine: Option<BrowserEngine>,
     /// terminal-browser opens new tabs as abromux splits beside it
     /// (`crate::terminal_browser_panes`).
     pub terminal_browser_panes: bool,
 }
 
-/// The built-in WebKit browser, or a terminal running `terminal-browser`.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+/// The built-in WebKit browser (macOS only), a terminal running
+/// `terminal-browser`, or the system's default browser (no tab: pages open
+/// there).
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum BrowserEngine {
-    #[default]
     BuiltIn,
     #[serde(alias = "terminal-browser")]
     TerminalBrowser,
+    System,
 }
 
 /// Files abromux is asked to open (`crate::editor`).
@@ -575,7 +553,8 @@ pub struct NotificationSettings {
     /// Commands each notification passes through, in order
     /// (`crate::notify_hook`).
     pub hooks: Vec<NotificationHook>,
-    /// The bell in the macOS menu bar (`crate::menubar`).
+    /// The bell in the macOS menu bar, or the tray on Linux (off by default
+    /// there).
     pub show_in_menu_bar: bool,
 }
 
@@ -583,45 +562,9 @@ impl Default for NotificationSettings {
     fn default() -> Self {
         NotificationSettings {
             hooks: vec![],
-            show_in_menu_bar: true,
+            // The tray on Linux: off, as not every bar has one.
+            show_in_menu_bar: abromux_platform::MACOS,
         }
-    }
-}
-
-/// One `notifications.hooks` entry: a shell command that gets the
-/// notification as JSON on stdin and may print it back changed.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct NotificationHook {
-    #[serde(deserialize_with = "non_blank")]
-    pub id: String,
-    #[serde(deserialize_with = "non_blank")]
-    pub command: String,
-    /// Default 20, as in cmux.
-    #[serde(default, deserialize_with = "positive")]
-    pub timeout_seconds: Option<f64>,
-    #[serde(default = "yes")]
-    pub enabled: bool,
-}
-
-fn yes() -> bool {
-    true
-}
-
-fn non_blank<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    let s = String::deserialize(d)?.trim().to_string();
-    if s.is_empty() {
-        return Err(serde::de::Error::custom("must not be blank"));
-    }
-    Ok(s)
-}
-
-fn positive<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
-    match Option::<f64>::deserialize(d)? {
-        Some(t) if !(t.is_finite() && t > 0.) => Err(serde::de::Error::custom(
-            "timeoutSeconds must be greater than 0",
-        )),
-        t => Ok(t),
     }
 }
 
@@ -896,10 +839,33 @@ fn named_colors<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<(String, u32)>, D
     Ok(colors)
 }
 
+/// What browser tabs are: the config file's `browser.engine`, else this
+/// OS's default, the built-in browser on macOS, and on Linux (which has
+/// none) terminal-browser if it's installed, else the default browser.
+pub fn browser_engine(cx: &gpui::App) -> BrowserEngine {
+    let set = cx.try_global::<Settings>().and_then(|s| s.browser.engine);
+    set.unwrap_or_else(default_engine)
+}
+
+/// This OS's browser engine when the config file names none.
+pub fn default_engine() -> BrowserEngine {
+    if abromux_platform::MACOS {
+        BrowserEngine::BuiltIn
+    } else if crate::terminal_browser::installed() {
+        BrowserEngine::TerminalBrowser
+    } else {
+        BrowserEngine::System
+    }
+}
+
 /// Whether browser tabs open as `terminal-browser`.
 pub fn terminal_browser(cx: &gpui::App) -> bool {
-    cx.try_global::<Settings>()
-        .is_some_and(|s| s.browser.engine == BrowserEngine::TerminalBrowser)
+    browser_engine(cx) == BrowserEngine::TerminalBrowser
+}
+
+/// Whether pages open in the system's default browser instead of a tab.
+pub fn system_browser(cx: &gpui::App) -> bool {
+    browser_engine(cx) == BrowserEngine::System
 }
 
 /// The toast for a config file that couldn't be read. It stays until
@@ -1027,6 +993,12 @@ fn parse(text: &str) -> Result<Settings, serde_json::Error> {
     let s: Settings = serde_json::from_str(text)?;
     for c in &s.commands {
         c.check().map_err(serde::de::Error::custom)?;
+    }
+    if !abromux_platform::MACOS && s.browser.engine == Some(BrowserEngine::BuiltIn) {
+        return Err(serde::de::Error::custom(
+            "browser.engine \"builtIn\" (the WebKit browser) is macOS-only; \
+             use \"terminalBrowser\" or \"system\" (the default browser)",
+        ));
     }
     Ok(s)
 }
@@ -1360,13 +1332,25 @@ mod tests {
 
     #[test]
     fn browser_engine() {
-        assert_eq!(Settings::default().browser.engine, BrowserEngine::BuiltIn);
+        assert_eq!(Settings::default().browser.engine, None);
         for v in ["terminalBrowser", "terminal-browser"] {
             let s = parse(&format!(r#"{{"browser": {{"engine": "{v}"}}}}"#)).unwrap();
-            assert_eq!(s.browser.engine, BrowserEngine::TerminalBrowser);
+            assert_eq!(s.browser.engine, Some(BrowserEngine::TerminalBrowser));
         }
-        let s = parse(r#"{"browser": {"engine": "builtIn"}}"#).unwrap();
-        assert_eq!(s.browser.engine, BrowserEngine::BuiltIn);
+        let s = parse(r#"{"browser": {"engine": "system"}}"#).unwrap();
+        assert_eq!(s.browser.engine, Some(BrowserEngine::System));
+        // The WebKit browser is macOS's; Linux says so.
+        let builtin = parse(r#"{"browser": {"engine": "builtIn"}}"#);
+        if abromux_platform::MACOS {
+            assert_eq!(
+                builtin.unwrap().browser.engine,
+                Some(BrowserEngine::BuiltIn)
+            );
+        } else {
+            let e = builtin.unwrap_err().to_string();
+            assert!(e.contains("macOS-only"), "{e}");
+            assert_ne!(default_engine(), BrowserEngine::BuiltIn);
+        }
         assert!(!Settings::default().browser.terminal_browser_panes);
         let s = parse(r#"{"browser": {"terminalBrowserPanes": true}}"#).unwrap();
         assert!(s.browser.terminal_browser_panes);
