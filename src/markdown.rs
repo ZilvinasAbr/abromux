@@ -389,6 +389,57 @@ fn esc(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// The policy of an exported page (`export`): the same, for `file:` URLs.
+const FILE_CSP: &str = "default-src 'none'; img-src file: data: https: http:; \
+    media-src file: https: http:; style-src 'unsafe-inline' file:; \
+    font-src file: data: https:; script-src 'none'; object-src 'none'; \
+    form-action 'none'";
+
+/// A Markdown tab's page as a file, for browsers without the
+/// `abromux-md://` scheme (Linux: terminal-browser or the default browser):
+/// rendered now and written to the runtime folder, as a `file://` URL. Its
+/// `<base>` is the file's folder, so relative links and images resolve
+/// there. It doesn't follow the file as it changes; opening it again does.
+pub fn export(url: &str) -> Option<String> {
+    export_to(url, &crate::channel::runtime_dir().join("markdown"))
+}
+
+fn export_to(url: &str, out: &Path) -> Option<String> {
+    let path = path_of(url)?;
+    let body = if path.is_dir() {
+        listing(&path)
+    } else {
+        body_of(&path)
+    };
+    let dir = if path.is_dir() {
+        path.clone()
+    } else {
+        path.parent()?.to_path_buf()
+    };
+    // Back from the viewer's URLs (`local_links`) to files.
+    let file_url = |p: &Path| url_for(p).replacen(PREFIX, "file://", 1);
+    let body = body.replace(&format!("{PREFIX}/"), "file:///");
+    let html = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"{FILE_CSP}\">\
+         <meta name=\"color-scheme\" content=\"light dark\">\
+         <base href=\"{}/\"><title>{}</title><style>{STYLE}</style></head>\
+         <body><article class=\"markdown-body\">{body}</article></body></html>",
+        file_url(&dir),
+        esc(&file_name(&path))
+    );
+    std::fs::create_dir_all(out).ok()?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&path, &mut h);
+    let file = out.join(format!(
+        "{:016x}-{}.html",
+        std::hash::Hasher::finish(&h),
+        file_name(&path)
+    ));
+    std::fs::write(&file, html).ok()?;
+    Some(file_url(&file))
+}
+
 fn page(title: &str, body: &str) -> String {
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
@@ -444,6 +495,37 @@ details > summary { cursor: pointer; }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exports_a_page_for_other_browsers() {
+        let dir = std::env::temp_dir().join(format!("abromux-md-export-{}", std::process::id()));
+        let out = dir.join("out");
+        std::fs::create_dir_all(&dir).unwrap();
+        let md = dir.join("my notes.md");
+        std::fs::write(
+            &md,
+            "# Hi\n\n![logo](img/logo.png) [other](file:///etc/hosts)\n",
+        )
+        .unwrap();
+        let url = export_to(&url_for(&md), &out).unwrap();
+        assert!(
+            url.starts_with("file:///") && url.ends_with("my%20notes.md.html"),
+            "{url}"
+        );
+        let file = std::fs::read_dir(&out)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let html = std::fs::read_to_string(file).unwrap();
+        let base = format!("<base href=\"file://{}/\">", dir.display());
+        assert!(html.contains(&base), "{html}");
+        assert!(html.contains("src=\"img/logo.png\""));
+        assert!(html.contains("href=\"file:///etc/hosts\""));
+        assert!(!html.contains(PREFIX) && html.contains("script-src 'none'"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn urls_round_trip_paths_with_spaces_and_unicode() {

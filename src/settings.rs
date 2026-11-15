@@ -161,21 +161,23 @@ pub use abromux_core::settings::{NotificationHook, Persistence};
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct BrowserSettings {
-    /// What a browser tab is.
-    pub engine: BrowserEngine,
+    /// What a browser tab is; None for this OS's default ([`browser_engine`]).
+    pub engine: Option<BrowserEngine>,
     /// terminal-browser opens new tabs as abromux splits beside it
     /// (`crate::terminal_browser_panes`).
     pub terminal_browser_panes: bool,
 }
 
-/// The built-in WebKit browser, or a terminal running `terminal-browser`.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+/// The built-in WebKit browser (macOS only), a terminal running
+/// `terminal-browser`, or the system's default browser (no tab: pages open
+/// there).
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum BrowserEngine {
-    #[default]
     BuiltIn,
     #[serde(alias = "terminal-browser")]
     TerminalBrowser,
+    System,
 }
 
 /// Files abromux is asked to open (`crate::editor`).
@@ -837,10 +839,33 @@ fn named_colors<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<(String, u32)>, D
     Ok(colors)
 }
 
+/// What browser tabs are: the config file's `browser.engine`, else this
+/// OS's default, the built-in browser on macOS, and on Linux (which has
+/// none) terminal-browser if it's installed, else the default browser.
+pub fn browser_engine(cx: &gpui::App) -> BrowserEngine {
+    let set = cx.try_global::<Settings>().and_then(|s| s.browser.engine);
+    set.unwrap_or_else(default_engine)
+}
+
+/// This OS's browser engine when the config file names none.
+pub fn default_engine() -> BrowserEngine {
+    if abromux_platform::MACOS {
+        BrowserEngine::BuiltIn
+    } else if crate::terminal_browser::installed() {
+        BrowserEngine::TerminalBrowser
+    } else {
+        BrowserEngine::System
+    }
+}
+
 /// Whether browser tabs open as `terminal-browser`.
 pub fn terminal_browser(cx: &gpui::App) -> bool {
-    cx.try_global::<Settings>()
-        .is_some_and(|s| s.browser.engine == BrowserEngine::TerminalBrowser)
+    browser_engine(cx) == BrowserEngine::TerminalBrowser
+}
+
+/// Whether pages open in the system's default browser instead of a tab.
+pub fn system_browser(cx: &gpui::App) -> bool {
+    browser_engine(cx) == BrowserEngine::System
 }
 
 /// The toast for a config file that couldn't be read. It stays until
@@ -968,6 +993,12 @@ fn parse(text: &str) -> Result<Settings, serde_json::Error> {
     let s: Settings = serde_json::from_str(text)?;
     for c in &s.commands {
         c.check().map_err(serde::de::Error::custom)?;
+    }
+    if !abromux_platform::MACOS && s.browser.engine == Some(BrowserEngine::BuiltIn) {
+        return Err(serde::de::Error::custom(
+            "browser.engine \"builtIn\" (the WebKit browser) is macOS-only; \
+             use \"terminalBrowser\" or \"system\" (the default browser)",
+        ));
     }
     Ok(s)
 }
@@ -1301,13 +1332,25 @@ mod tests {
 
     #[test]
     fn browser_engine() {
-        assert_eq!(Settings::default().browser.engine, BrowserEngine::BuiltIn);
+        assert_eq!(Settings::default().browser.engine, None);
         for v in ["terminalBrowser", "terminal-browser"] {
             let s = parse(&format!(r#"{{"browser": {{"engine": "{v}"}}}}"#)).unwrap();
-            assert_eq!(s.browser.engine, BrowserEngine::TerminalBrowser);
+            assert_eq!(s.browser.engine, Some(BrowserEngine::TerminalBrowser));
         }
-        let s = parse(r#"{"browser": {"engine": "builtIn"}}"#).unwrap();
-        assert_eq!(s.browser.engine, BrowserEngine::BuiltIn);
+        let s = parse(r#"{"browser": {"engine": "system"}}"#).unwrap();
+        assert_eq!(s.browser.engine, Some(BrowserEngine::System));
+        // The WebKit browser is macOS's; Linux says so.
+        let builtin = parse(r#"{"browser": {"engine": "builtIn"}}"#);
+        if abromux_platform::MACOS {
+            assert_eq!(
+                builtin.unwrap().browser.engine,
+                Some(BrowserEngine::BuiltIn)
+            );
+        } else {
+            let e = builtin.unwrap_err().to_string();
+            assert!(e.contains("macOS-only"), "{e}");
+            assert_ne!(default_engine(), BrowserEngine::BuiltIn);
+        }
         assert!(!Settings::default().browser.terminal_browser_panes);
         let s = parse(r#"{"browser": {"terminalBrowserPanes": true}}"#).unwrap();
         assert!(s.browser.terminal_browser_panes);

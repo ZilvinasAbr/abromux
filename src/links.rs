@@ -329,6 +329,11 @@ impl AbroMux {
             }
             return Some(id.1);
         }
+        if !matches!(link.kind, Kind::Mr if crate::plugins::enabled("gitlab", cx))
+            && self.open_in_system_browser(&link.url, window, cx)
+        {
+            return None;
+        }
         let surface = match link.kind {
             Kind::Mr if crate::plugins::enabled("gitlab", cx) => self
                 .make_plugin(
