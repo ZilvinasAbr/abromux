@@ -5,6 +5,7 @@ mod browser;
 mod channel;
 mod cli;
 mod config;
+mod csd;
 mod debug;
 mod editor;
 mod find_bar;
@@ -1474,9 +1475,11 @@ impl AbroMux {
         cx: &mut Context<Self>,
     ) {
         let Some(home) = self.workspaces.get(wi).and_then(|w| w.home.clone()) else {
-            let note =
-                Notification::warning("Only a workspace made with ⇧⌘I has a folder to clean up.")
-                    .title("Not a workspace folder");
+            let note = Notification::warning(format!(
+                "Only a workspace made with {} has a folder to clean up.",
+                keymap::default_label("newFolderWorkspace")
+            ))
+            .title("Not a workspace folder");
             return window.push_notification(note, cx);
         };
         let ask = match folder::write_cleanup(&home) {
@@ -3293,6 +3296,9 @@ impl Render for AbroMux {
             .children(updates)
             .children(palette)
             .children(toasts)
+            // Only where the compositor leaves decorations to the app (GNOME).
+            .children(csd::controls(window))
+            .children(csd::edges(window))
     }
 }
 
@@ -3564,7 +3570,16 @@ fn run_app(cwd: Option<String>) {
                     // Wayland: the window rules' id, and no titlebar drawn by
                     // the app (tiling compositors draw none either).
                     app_id: Some(channel::app_id()),
-                    window_decorations: Some(WindowDecorations::Server),
+                    // ABROMUX_CLIENT_DECORATIONS=1 asks for the app's own
+                    // (csd.rs), which GNOME gives anyway.
+                    window_decorations: Some(
+                        if std::env::var_os("ABROMUX_CLIENT_DECORATIONS").is_some_and(|v| v == "1")
+                        {
+                            WindowDecorations::Client
+                        } else {
+                            WindowDecorations::Server
+                        },
+                    ),
                     ..Default::default()
                 },
                 |window, cx| {

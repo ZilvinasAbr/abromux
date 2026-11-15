@@ -173,10 +173,11 @@ every one (`scripts/perf.py run` doesn't regress, nightly checked by hand).
       none; the empty titlebar areas move the window with
       `start_window_move` and a double click maximizes. No traffic-light
       gap on Linux.
-- [ ] Deferred (not Omarchy): on compositors without server-side
-      decorations (GNOME), gpui falls back to client-side ones and the app
-      should draw resize edges and close / maximise / minimise when floating
-      (`Decorations::Client { tiling }`).
+- [x] On compositors without server-side decorations (GNOME), gpui falls
+      back to client-side ones, and the app draws them (`csd.rs`): resize
+      edges and corners on the sides that aren't tiled, and minimise,
+      maximise and close at the top right. `ABROMUX_CLIENT_DECORATIONS=1`
+      asks for them anywhere.
 - [x] `WindowBackgroundAppearance::Opaque` instead of `Blurred` (Hyprland does
       its own blur when the user wants it).
 - [x] Remember the window's size only: nothing to change. On Wayland gpui
