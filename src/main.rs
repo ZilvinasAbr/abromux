@@ -2847,7 +2847,7 @@ impl Render for AbroMux {
             .size_full()
             .flex()
             .text_color(rgb(pal().text))
-            .font_family(".AppleSystemUIFont")
+            .font_family(abromux_platform::fonts::ui())
             .on_action(cx.listener(|_, _: &Quit, window, cx| quit::request(window, cx)))
             // Also on the app, but the palette lists only what the focused view handles.
             .on_action(|_: &update::CheckForUpdates, _, cx| update::check(true, cx))
@@ -3288,7 +3288,7 @@ impl Render for DraggedTab {
             .opacity(0.9)
             .text_size(px(12.))
             .text_color(rgb(pal().text))
-            .font_family(".AppleSystemUIFont")
+            .font_family(abromux_platform::fonts::ui())
             .child(
                 icon(self.icon)
                     .size(px(12.))

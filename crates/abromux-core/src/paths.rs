@@ -34,6 +34,29 @@ pub fn xdg_config() -> PathBuf {
         .unwrap_or_else(|| home().join(".config"))
 }
 
+/// The user's shell: `$SHELL`, else the login shell in the user database
+/// (`getpwuid`), else `/bin/sh`. Omarchy's is bash, macOS's zsh.
+pub fn user_shell() -> String {
+    std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(passwd_shell)
+        .unwrap_or_else(|| "/bin/sh".into())
+}
+
+fn passwd_shell() -> Option<String> {
+    // SAFETY: getpwuid returns a pointer into static storage (or null), read
+    // before anything else could call it again on this thread.
+    unsafe {
+        let pw = libc::getpwuid(libc::getuid());
+        if pw.is_null() || (*pw).pw_shell.is_null() {
+            return None;
+        }
+        let shell = std::ffi::CStr::from_ptr((*pw).pw_shell).to_str().ok()?;
+        (!shell.is_empty()).then(|| shell.to_string())
+    }
+}
+
 /// The Ghostty config files abromux reads, in the order it reads them: a
 /// setting in a later one wins.
 pub fn ghostty_configs() -> [PathBuf; 2] {
@@ -63,6 +86,12 @@ pub fn find_program(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_shell_is_set() {
+        let shell = user_shell();
+        assert!(shell.starts_with('/'), "{shell}");
+    }
 
     #[test]
     fn tilde() {

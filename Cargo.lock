@@ -78,6 +78,7 @@ dependencies = [
  "block",
  "cc",
  "futures",
+ "gpui",
  "objc",
  "raw-window-handle",
  "serde_json",

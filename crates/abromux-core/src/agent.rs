@@ -702,7 +702,7 @@ fn title_from(kind: Kind, prompts: &[String], current: Option<&str>) -> Option<S
         ),
         _ => return None,
     };
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let shell = crate::paths::user_shell();
     let mut cmd = Command::new(shell);
     cmd.args(["-lc", &script, "abromux", &ask])
         .current_dir(&dir)

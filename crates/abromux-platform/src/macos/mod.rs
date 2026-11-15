@@ -9,6 +9,7 @@ pub mod cursor;
 pub(crate) mod defaults;
 pub mod dock;
 pub mod file_types;
+pub mod fonts;
 pub mod notify;
 pub mod opener;
 pub mod power;

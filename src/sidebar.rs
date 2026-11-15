@@ -66,7 +66,7 @@ fn drag_chip(name: SharedString) -> Div {
         .text_size(px(12.5))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(rgb(pal().text))
-        .font_family(".AppleSystemUIFont")
+        .font_family(abromux_platform::fonts::ui())
         .truncate()
         .child(name)
 }
@@ -1527,7 +1527,7 @@ impl AbroMux {
                         .child(
                             div()
                                 .truncate()
-                                .font_family(terminal::FONT_FAMILY)
+                                .font_family(terminal::mono_font())
                                 .child(text),
                         )
                 }))

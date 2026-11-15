@@ -26,8 +26,11 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// UI monospace font (sidebar metadata); terminals use the Ghostty config's.
-pub const FONT_FAMILY: &str = "JetBrains Mono";
+/// UI monospace font (sidebar metadata); terminals use the Ghostty config's,
+/// which defaults to the same.
+pub fn mono_font() -> String {
+    abromux_platform::fonts::monospace()
+}
 
 /// Fonts for characters the terminal's face lacks, before macOS's own: the
 /// Ghostty config's further `font-family` lines, then the Nerd Fonts
@@ -655,6 +658,20 @@ impl TerminalView {
                 true
             }
             None => false,
+        }
+    }
+
+    /// Text just selected with the mouse: to the primary selection, and to
+    /// the clipboard too with `copy-on-select = clipboard`.
+    fn copy_selected(&self, cx: &mut App) {
+        let Some(text) = self.term.selection_text() else {
+            return;
+        };
+        if self.config.select_to_primary {
+            abromux_platform::primary::write(cx, text.clone());
+        }
+        if self.config.copy_on_select {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
 
@@ -1672,6 +1689,13 @@ impl TerminalView {
             self.report_mouse(MouseAction::Press, Some(b), ev.modifiers, ev.position);
             return;
         }
+        // A middle click pastes the primary selection (Linux).
+        if ev.button == MouseButton::Middle {
+            if let Some(text) = abromux_platform::primary::read(cx) {
+                self.paste(&text, cx);
+            }
+            return;
+        }
         if ev.button != MouseButton::Left {
             return;
         }
@@ -1679,9 +1703,7 @@ impl TerminalView {
         if ev.click_count >= 2 {
             self.term.select_word(cell.0, cell.1);
             self.selecting = None;
-            if self.config.copy_on_select {
-                self.copy(cx);
-            }
+            self.copy_selected(cx);
         } else {
             self.term.clear_selection();
             self.selecting = Some(cell);
@@ -1693,8 +1715,8 @@ impl TerminalView {
     fn on_mouse_up(&mut self, ev: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.scrollbar_grab = None;
         // A click without a drag leaves no selection, so nothing is copied.
-        if self.selecting.take().is_some() && self.config.copy_on_select {
-            self.copy(cx);
+        if self.selecting.take().is_some() {
+            self.copy_selected(cx);
         }
         if let Some(b) = button_code(ev.button)
             && (self.mouse_buttons & (1 << b) != 0 || self.reporting(ev.modifiers))
@@ -2459,8 +2481,8 @@ fn spawn_shell(
     attach: Option<&str>,
     cx: &mut Context<TerminalView>,
 ) -> (Opened, Feed) {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let mut argv = vec![shell.clone(), "-l".into()];
+    let shell = abromux_core::paths::user_shell();
+    let mut argv = vec![shell, "-l".into()];
     if let Some(c) = command {
         argv.extend(["-c".into(), c.to_string()]);
     }
@@ -2476,7 +2498,7 @@ fn spawn_shell(
         .try_global::<Config>()
         .is_none_or(|c| c.shell_integration)
     {
-        vars.extend(crate::shell::inject(&shell, env));
+        vars.extend(crate::shell::inject(&mut argv, env));
     }
     // Held shells are for taking back next launch; a run that won't restore
     // a session (ABROMUX_NO_RESTORE, demos, scripted tests) would only leave

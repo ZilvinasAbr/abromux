@@ -83,7 +83,7 @@ impl Render for About {
             .items_center()
             .pt(px(48.))
             .bg(rgba(pal().sidebar_bg))
-            .font_family(".AppleSystemUIFont")
+            .font_family(abromux_platform::fonts::ui())
             .text_color(rgb(pal().text))
             .child(
                 img(Arc::new(Image::from_bytes(
@@ -129,7 +129,7 @@ impl Render for About {
                             .flex()
                             .flex_col()
                             .gap(px(4.))
-                            .font_family(crate::terminal::FONT_FAMILY)
+                            .font_family(crate::terminal::mono_font())
                             .text_color(rgb(pal().muted))
                             .child(version.to_string())
                             .when(!build.is_empty(), |d| d.child(build))
