@@ -27,6 +27,8 @@
 //!   → `{"ok":true,"id":"..","pid":n}`
 //! - `{"op":"attach","id":".."}` → `{"ok":true,"pid":n,"backlog":len}`
 //! - `{"op":"kill"}` (the connection's terminal) → `{"ok":true}`
+//! - `{"op":"status"}` (the connection's terminal, once its output ended)
+//!   → `{"ok":true,"code":n|null}`: its exit status, null if a signal ended it
 //!
 //! The socket is `hold.sock` in the app's support folder (so the release and
 //! nightly apps each have their own holder), or `$ABROMUX_HOLD_SOCKET`.
@@ -296,6 +298,22 @@ fn handle(
                 t.backlog = backlog;
             }
         }
+        Some("status") => {
+            let t = c.term.as_ref().and_then(|id| terms.get_mut(id));
+            let mut code = None;
+            if let Some(t) = t {
+                // Its output ended; give the process a moment to be reaped.
+                for _ in 0..30 {
+                    if let Ok(Some(s)) = t.child.try_wait() {
+                        code = s.signal().is_none().then(|| s.exit_code() as i32);
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            let c = clients.get_mut(&cid).unwrap();
+            let _ = writeln!(c.stream, "{}", json!({ "ok": true, "code": code }));
+        }
         Some("kill") => {
             if let Some(t) = c.term.take().and_then(|id| terms.remove(&id)) {
                 hang_up(t);
@@ -419,6 +437,16 @@ impl Held {
             backlog,
             conn,
         })
+    }
+
+    /// The program's exit status, once it has ended (None if unknown).
+    pub fn status(&mut self) -> Option<i32> {
+        writeln!(self.conn, "{}", json!({ "op": "status" })).ok()?;
+        let _ = self.conn.set_read_timeout(Some(Duration::from_secs(2)));
+        let mut line = String::new();
+        std::io::BufRead::read_line(&mut std::io::BufReader::new(&self.conn), &mut line).ok()?;
+        let reply: Value = serde_json::from_str(&line).ok()?;
+        reply["code"].as_i64().map(|c| c as i32)
     }
 
     /// End the program and forget the terminal (closing its tab).

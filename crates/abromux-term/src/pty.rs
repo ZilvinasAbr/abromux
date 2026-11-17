@@ -136,6 +136,24 @@ impl Pty {
         }
     }
 
+    /// How the program exited, once its output has ended: its exit status,
+    /// or None if it was killed by a signal or that isn't known (a holder
+    /// from an older abromux). Waits a moment for it to be reaped.
+    pub fn exit_status(&mut self) -> Option<i32> {
+        match self {
+            Pty::Local { child, .. } => {
+                for _ in 0..30 {
+                    if let Ok(Some(status)) = child.try_wait() {
+                        return status.signal().is_none().then(|| status.exit_code() as i32);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                None
+            }
+            Pty::Held { held, .. } => held.status(),
+        }
+    }
+
     /// End the program for good. Dropping a `Pty` ends a local shell too, but
     /// only lets go of a held one.
     pub fn kill(&mut self) {

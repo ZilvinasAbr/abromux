@@ -1,5 +1,6 @@
 mod about;
 mod alert;
+mod api;
 mod bench;
 mod browser;
 mod channel;
@@ -8,6 +9,7 @@ mod config;
 mod csd;
 mod debug;
 mod editor;
+mod events;
 mod find_bar;
 mod folder;
 mod gitlab;
@@ -46,7 +48,7 @@ mod workspace;
 use abromux_browser::{
     auto as browser_auto, downloads, find as browser_find, history as browser_history,
 };
-use abromux_core::{agent, cmux, notify_hook, osc99, paths};
+use abromux_core::{agent, cmux, notify_hook, osc99, paths, program_status};
 use abromux_term::{ghostty, hold, pty};
 use browser::{BrowserEvent, BrowserView};
 use futures::StreamExt;
@@ -296,6 +298,11 @@ struct AbroMux {
     next_surface: usize,
     /// Stable `surface:N` numbers handed out to the control socket.
     surface_refs: HashMap<EntityId, usize>,
+    /// How closed terminals' programs exited, by surface number (`abromux
+    /// wait`, the `surface.closed` event).
+    exits: HashMap<usize, Option<i32>>,
+    /// The app as `abromux events` last saw it.
+    events: events::State,
     socket: Option<std::path::PathBuf>,
     /// Last seen window frame, for the session file.
     window_bounds: Option<Bounds<Pixels>>,
@@ -382,6 +389,8 @@ impl AbroMux {
             next_pane: 0,
             next_surface: 0,
             surface_refs: Default::default(),
+            exits: Default::default(),
+            events: Default::default(),
             socket: None,
             window_bounds: None,
             placements: placement::Placements::new(
@@ -535,6 +544,7 @@ impl AbroMux {
         .detach();
         this.place_window(window, cx);
         this.socket = server::start(window, cx);
+        Self::watch_events(cx);
         let restored = session.is_some_and(|s| this.restore(s, window, cx));
         if !restored || cwd.is_some() {
             this.new_workspace(cwd, window, cx);
@@ -798,14 +808,37 @@ impl AbroMux {
         cx.subscribe_in(&term, window, |this, term, ev, window, cx| {
             let id = term.entity_id();
             match ev {
-                TerminalEvent::Exited => this.close_surface(id, window, cx),
+                TerminalEvent::Exited => {
+                    if let Some(&n) = this.surface_refs.get(&id) {
+                        let code = term.read(cx).exit_code;
+                        this.exits.insert(n, code);
+                        // Keep the last few hundred for `abromux wait`.
+                        if this.exits.len() > 512
+                            && let Some(&old) = this.exits.keys().min()
+                        {
+                            this.exits.remove(&old);
+                        }
+                    }
+                    this.close_surface(id, window, cx)
+                }
+                TerminalEvent::CommandFinished(code) => {
+                    this.emit_for(
+                        "command.finished",
+                        id,
+                        serde_json::json!({ "exit_code": code }),
+                    );
+                }
                 TerminalEvent::Focused => this.focus_surface(id, cx),
                 TerminalEvent::OpenLink(target) => this.open_link(id, target.clone(), window, cx),
                 TerminalEvent::Bell => {
+                    this.emit_for("bell", id, serde_json::json!({}));
                     this.add_notification(id, String::new(), String::new(), true, window, cx);
                 }
                 TerminalEvent::Notification { title, body } => {
                     this.add_notification(id, title.clone(), body.clone(), false, window, cx);
+                }
+                TerminalEvent::ProgramStatus(was) => {
+                    this.program_status_changed(id, was.clone(), window, cx);
                 }
                 TerminalEvent::TitleChanged => {
                     this.name_from_title(id, cx);
@@ -1722,7 +1755,7 @@ impl AbroMux {
         cx.notify();
     }
 
-    fn find_tab(&self, id: EntityId) -> Option<Surface> {
+    pub(crate) fn find_tab(&self, id: EntityId) -> Option<Surface> {
         self.workspaces
             .iter()
             .flat_map(|w| w.surfaces())

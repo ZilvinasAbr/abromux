@@ -10,7 +10,9 @@ use crate::{
         self, CursorStyle as Caret, Frame, ImageLayer, ImagePixels, MouseAction, MouseGeometry,
         Rgb, ffi,
     },
-    link, osc99,
+    link,
+    osc99::{self, Found},
+    program_status,
     settings::{Persistence, Settings},
     sprite,
     theme::*,
@@ -149,12 +151,31 @@ pub enum TerminalEvent {
         title: String,
         body: String,
     },
+    /// The program's status records changed (OSC 7501, OSC 9;4): what it
+    /// was before, as shown.
+    ProgramStatus(Option<program_status::Shown>),
+    /// A command the shell ran finished (OSC 133 D), with its exit status.
+    CommandFinished(Option<i32>),
     /// ⌘-click on a link.
     OpenLink(link::Target),
     Exited,
     Focused,
     /// The shell was restarted in place (`respawn-pane`).
     Respawned,
+}
+
+/// The commands the shell runs, from its OSC 133 marks (abromux's shell
+/// integration, or the shell's own).
+#[derive(Default, Clone, Copy)]
+pub struct Commands {
+    /// The shell marks its commands: without that, nothing below is known.
+    pub marked: bool,
+    /// A command is running (between its C and D marks).
+    pub running: bool,
+    /// How many have finished.
+    pub finished: u64,
+    /// The last one's exit status.
+    pub last_exit: Option<i32>,
 }
 
 /// The link under the pointer while ⌘ is held: its viewport row, columns
@@ -238,6 +259,11 @@ pub struct TerminalView {
     /// The coding agent running here, as its hooks last reported it.
     pub agent: Option<Agent>,
     osc99: osc99::Scanner,
+    /// What programs here report about themselves (OSC 7501, OSC 9;4).
+    pub program: program_status::Records,
+    pub commands: Commands,
+    /// The program's exit status, once it has exited (None if unknown).
+    pub exit_code: Option<i32>,
     /// Last pointer position over the terminal, for ⌘ pressed without moving.
     pointer: Option<Point<Pixels>>,
     link: Option<HoverLink>,
@@ -343,6 +369,9 @@ impl TerminalView {
             searching: false,
             agent: None,
             osc99: Default::default(),
+            program: Default::default(),
+            commands: Commands::default(),
+            exit_code: None,
             pointer: None,
             link: None,
             custom_title: None,
@@ -448,6 +477,12 @@ impl TerminalView {
         self.find.open = false;
         self.find.count = (0, None);
         self.osc99 = Default::default();
+        self.commands = Commands::default();
+        let was = self.program.shown();
+        self.program.reset();
+        if was.is_some() {
+            cx.emit(TerminalEvent::ProgramStatus(was));
+        }
         self.dirty = true;
         cx.emit(TerminalEvent::Respawned);
         cx.emit(TerminalEvent::TitleChanged);
@@ -455,7 +490,38 @@ impl TerminalView {
     }
 
     fn process(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
-        let kitty = self.osc99.feed(bytes);
+        let mut kitty = vec![];
+        let was = self.program.shown();
+        let mut status_changed = false;
+        for found in self.osc99.feed(bytes) {
+            match found {
+                Found::Notification(title, body) => kitty.push((title, body)),
+                Found::Status(program_status::Report::Query) => {
+                    self.pty.write(program_status::DETECT_REPLY)
+                }
+                Found::Status(report) => status_changed |= self.program.apply(report),
+                Found::Progress(record) => status_changed |= self.program.conemu(record),
+                Found::Prompt => {
+                    self.commands.marked = true;
+                    status_changed |= self.program.prompt();
+                }
+                Found::CommandStart => {
+                    self.commands.marked = true;
+                    self.commands.running = true;
+                }
+                Found::CommandDone(code) => {
+                    let c = &mut self.commands;
+                    // A D with no C before it (the first prompt, a ⌃C at
+                    // the prompt) ran nothing.
+                    if std::mem::take(&mut c.running) {
+                        c.finished += 1;
+                        c.last_exit = code;
+                        cx.emit(TerminalEvent::CommandFinished(code));
+                    }
+                    c.marked = true;
+                }
+            }
+        }
         self.term.write(bytes);
         if std::mem::take(&mut self.clear_pending) {
             self.term.write(b"\x1b[3J");
@@ -494,6 +560,9 @@ impl TerminalView {
         }
         if let Some(text) = fx.clipboard {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+        if status_changed {
+            cx.emit(TerminalEvent::ProgramStatus(was));
         }
         self.run_search(cx);
         self.watch_hold(cx);
@@ -593,6 +662,11 @@ impl TerminalView {
     }
 
     fn input(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+        // Typing here is seeing what finished or failed.
+        let was = self.program.shown();
+        if self.program.seen() {
+            cx.emit(TerminalEvent::ProgramStatus(was));
+        }
         self.term.clear_selection();
         self.term.scroll_to_bottom();
         self.dirty = true;
@@ -2543,6 +2617,7 @@ fn drain(
             if q.closed || !woke {
                 let _ = this.update(cx, |this, cx| {
                     if this.generation == generation && !this.frozen {
+                        this.exit_code = this.pty.exit_status();
                         cx.emit(TerminalEvent::Exited)
                     }
                 });

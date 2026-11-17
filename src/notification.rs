@@ -106,6 +106,13 @@ impl AbroMux {
         } else if !bell && !window.is_window_active() {
             notify::post(id, banner_title(&title), &body, true);
         }
+        if !bell {
+            self.emit_for(
+                "notification",
+                surface,
+                serde_json::json!({ "id": id, "title": title, "body": body }),
+            );
+        }
         self.notifications.push(Notification {
             id,
             surface,

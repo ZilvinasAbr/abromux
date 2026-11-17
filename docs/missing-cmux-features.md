@@ -112,9 +112,9 @@ So the list below reads in context:
 
 What's missing beyond the browser commands above:
 
-- [ ] **UUID handles** (`--id-format uuids|both`). abromux has only short refs and indexes.
+- [x] **UUID handles** (`--id-format uuids|both`). *(partial: no UUIDs; refs stay the same across restarts, and `--workspace`/`--surface` take names, with `--label` to name a new tab)*
 - [ ] **Socket auth**: control modes, socket password, and only allowing processes started inside the app.
-- [ ] **`capabilities`, `events`**: an event stream with cursors, filters and reconnect.
+- [x] **`capabilities`, `events`**: an event stream with cursors, filters and reconnect. *(partial: `abromux events` with filters by name, workspace and surface, and `rpc list`/`rpc describe` for the methods; no cursors or replay after a reconnect)*
 - [x] **`wait-for`**: named signals between scripts. *(signal files in `$TMPDIR`, as in cmux)*
 - [x] **`read-selection`**, and `read-screen --selection`. *(also in browser tabs)*
 - [x] **Starting a workspace from a JSON layout**: `new-workspace --layout <json>` and `--description`. *(`--layout` from JSON or `@file`, and `--description`)*

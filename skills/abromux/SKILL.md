@@ -23,7 +23,7 @@ If `ABROMUX_SURFACE_ID` is empty, you aren't inside abromux: say so and stop. Do
 - **pane** (`pane:5`): one split region. Each pane has a tab bar.
 - **surface** (`surface:3`): one tab, a `terminal` or a `browser`.
 
-Refs are stable while the thing exists; use them, not indexes (`--surface 2` is a 0-based index and shifts as tabs come and go).
+Refs are stable while the thing exists, and across restarts; use them, not indexes (`--surface 2` is a 0-based index and shifts as tabs come and go). `--workspace` and `--surface` also take a name: a workspace's name, or a tab's name from `--label`/`rename-tab` (case aside). A name that fits more than one thing is an error listing them (exit status 3, as for a target that isn't there).
 
 **Default target is you.** Without `--surface`/`--workspace`, commands act on the terminal you run in. `abromux send 'x'` with no `--surface` types into your own terminal. Always pass `--surface` for another terminal, and never run `close-surface` without one: it closes your own.
 
@@ -50,6 +50,14 @@ The first ref printed is the new terminal. Keep it; every later command needs it
 - `new-workspace --name <title> --cwd <dir> [--description <text>] [--group group:N]`: a new sidebar entry.
 - `new-workspace --name <title> --cwd <dir> --layout '<json>'`: a new workspace already split, in cmux's layout format: `{"direction": "horizontal", "split": 0.5, "children": [{"pane": {"surfaces": [{"command": "npm run dev"}]}}, {"pane": {"surfaces": [{"type": "browser", "url": "localhost:3000"}]}}]}`. `--layout @file.json` reads it from a file.
 - All take `--command <text>` (typed into the new shell, then Enter), `--cwd <dir>` and `--type browser --url <url>`.
+- `new-split`, `new-surface` and `new-pane` take `--label <name>`: name the tab so you (and the user) can target it as `--surface <name>`.
+- Add `--wait` to run a `--command` to completion: the CLI waits for it to finish and exits with its status. The terminal stays open with the output, so read it afterwards with `read-screen`:
+
+```bash
+abromux new-split right --no-focus --label tests --command 'cargo test' --wait --timeout 900
+echo $?                                    # cargo test's exit status
+abromux read-screen --surface tests --scrollback --lines 80
+```
 
 ## Talk to another terminal
 
@@ -60,12 +68,17 @@ abromux read-screen --surface surface:7              # what's visible now
 abromux read-screen --surface surface:7 --scrollback --lines 200   # include scrollback, last 200 lines
 ```
 
-`send` without a trailing `\n` types text but doesn't run it. There is no wait-for-output command: poll `read-screen` with a short `sleep` between reads until the prompt or the line you expect appears, and give up after a reasonable time. To know exactly when a command you sent finishes, chain a signal onto it and wait for that:
+`send` without a trailing `\n` types text but doesn't run it. To know when a command you sent finishes, `wait` for it: it returns when the command running in that terminal ends, and exits with its status.
 
 ```bash
-abromux send --surface surface:7 'cargo build; abromux wait-for -S build-7\n'
-abromux wait-for build-7 --timeout 600      # returns once the build is done (exit 1 on timeout)
+abromux send --surface surface:7 'cargo build\n'
+abromux wait surface:7 --timeout 600        # exits with cargo build's status
+abromux wait surface:7 --close              # or: until the tab closes (its program's status)
 ```
+
+`wait` knows commands from the shell integration's marks (zsh and bash in abromux). Without them it waits for the tab to close. For output you expect while something keeps running (a dev server's "listening"), poll `read-screen` with a short `sleep` between reads, and give up after a reasonable time.
+
+`abromux events` follows what happens, one line per event (`--json` for JSON lines): tabs and workspaces opening, closing, retitling and changing directory, commands finishing, programs' status, agents' state, notifications. Filter with `--events command.finished,surface.` (names, or prefixes ending in `.`), `--workspace` or `--surface`, and stop with `--for <seconds>` or `--count <n>`.
 
 `abromux read-selection --surface surface:7` prints what the user selected there (a terminal or a browser tab).
 
@@ -107,6 +120,8 @@ abromux log --level success --source deploy 'Deployed to staging'   # info|progr
 abromux notify --title 'Done' --body 'All 213 tests pass'
 ```
 
+Programs can report their own state with the Program Status Protocol (OSC 7501): `printf '\e]7501;state=working:app=deploy:progress=40\e\\'`, with `state` idle, working, done, blocked (`kind=permission|question|auth`) or error, and `msg`/`title` as base64. AbroMux shows it as a pill under the workspace, and notifies when it turns blocked, done or error. ConEmu's `\e]9;4;1;40\a` progress works too.
+
 `notify` marks your terminal: it rings the pane, dots the tab and workspace, and shows a macOS banner if abromux is in the background. Use it once when a long task finishes or you need the user, not for every step. Coding agents with hooks (`abromux hooks install`: Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode, Pi) already notify when they finish a turn or ask for permission, so don't duplicate that.
 
 Clear status pills and progress you set once they no longer apply.
@@ -144,6 +159,9 @@ abromux mark-notification-read --workspace workspace:2   # or --id N, --all; dis
 abromux tab-action --tab surface:7 close-others   # close-left/right, new-terminal-right, duplicate, rename <title>, mark-unread...
 abromux clear-history --surface surface:7    # like ⌘K
 abromux rpc <method> '<json>'            # raw socket call
+abromux rpc list                         # every socket method; rpc describe <method> for its parameters (JSON Schema)
 ```
+
+Exit statuses: 0 done, 1 failed, 2 bad command line, 3 target not found or ambiguous, 4 abromux isn't running; `wait` and `--wait` exit with the waited-for command's status.
 
 The user may be running AbroMux Nightly. `abromux` still talks to the right app: it uses `$ABROMUX_SOCKET_PATH`, which each terminal gets.

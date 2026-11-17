@@ -41,6 +41,8 @@ pub struct Status<O> {
     pub color: Option<u32>,
     /// The terminal it describes (an agent's status), cleared when it closes.
     pub owner: Option<O>,
+    /// What a program in `owner` reports itself (OSC 7501), not its hooks.
+    pub program: bool,
 }
 
 pub struct Progress {

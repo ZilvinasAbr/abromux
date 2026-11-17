@@ -14,9 +14,17 @@ Usage:
 
 Targets:
   --workspace, --pane and --surface take a ref (workspace:2, pane:5, surface:3)
-  or a 0-based index. Without one, commands act on the terminal abromux runs in
-  ($ABROMUX_SURFACE_ID), else on whatever is focused.
+  or a 0-based index; --workspace and --surface also take a name (a workspace's
+  name, a tab's name from rename-tab or --label; case aside). Without one,
+  commands act on the terminal abromux runs in ($ABROMUX_SURFACE_ID), else on
+  whatever is focused. Refs stay the same across restarts; names can change, so
+  scripts that must keep working should keep the ref a command printed.
   --json prints the raw JSON result instead of text.
+
+Exit status:
+  0 done, 1 failed, 2 bad command line, 3 a target not found or a name that fits
+  more than one, 4 abromux isn't running. wait and --wait exit with the status
+  of what they waited for.
 
 Commands:
   ping | version | identify
@@ -59,8 +67,11 @@ Commands:
   resize-pane [--pane <id|ref|index>] [--workspace <id|ref|index>] [-L|-R|-U|-D] [--amount <px>]   (default -R, panes.resizeStep: 20px)
   new-pane [--type <terminal|browser>] [--direction <left|right|up|down>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>]
   new-split <left|right|up|down> [--surface <ref>] [--workspace <ref>] [--type <terminal|browser>] [--url <url>] [--command <text>] [--focus <true|false>]
-  list-pane-surfaces [--workspace <ref>] [--pane <ref>]
   new-surface [--type <terminal|browser>] [--pane <ref>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>]
+                                                             (new-pane, new-split and new-surface also take --label <name>,
+                                                             to target the tab by that name, and --wait [--timeout <s>]:
+                                                             wait for --command to finish and exit with its status)
+  list-pane-surfaces [--workspace <ref>] [--pane <ref>]      (with each terminal's command state and program status)
   gitlab [<merge request URL>] [--pane <ref>] [--focus <true|false>]   (a GitLab review tab; no URL: the list)
   diff [<X..Y|X...Y|X> | --merge-base <X> | --since-fork] [--cwd <dir>] [--title <text>] [--agent <command>]
        [--send-here | --send-to <surface>] [--direction <dir> | --pane <ref>] [--focus <true|false>]
@@ -115,6 +126,14 @@ Commands:
   log [--level <info|progress|success|warning|error>] [--source <name>] [--workspace <ref>] <message>
   list-log [--limit <n>] [--workspace <ref>]
   clear-log [--workspace <ref>]
+  wait [<surface>] [--close] [--timeout <seconds>]           (until the command running in that terminal finishes, then exit
+                                                             with its status; --close: until the tab closes. Needs the shell
+                                                             integration's marks, else waits for the tab to close)
+  events [--events <name,prefix.,...>] [--workspace <ref>] [--surface <ref>] [--for <seconds>] [--count <n>]
+                                                             (print what happens as it happens, one line each; --json: one
+                                                             JSON object per line. Events: workspace.created|closed|renamed|
+                                                             selected, surface.created|closed|moved|title|cwd|focused,
+                                                             command.finished, program.status, agent, notification, bell)
   wait-for [-S|--signal] <name> [--timeout <seconds>]        (wait until another script signals <name>; default 30s)
   completion <zsh|bash|fish>                                 (a shell completion script: eval \"$(abromux completion zsh)\")
   open <path-or-url>...                                      (directories open workspaces, URLs open browser splits)
@@ -144,7 +163,9 @@ Commands:
   skills install|uninstall                                   (Claude Code and Codex skills that teach them this CLI)
   skills show [abromux|abromux-browser]                      (print a skill: an agent-facing guide)
   quit
-  rpc <method> [json-params]
+  rpc <method> [json-params]                                 (call a control-socket method directly)
+  rpc list [-q]                                              (every method; -q: just the names)
+  rpc describe <method>                                      (what it does, its parameters and their JSON Schema)
 
   markdown [open] <file>... [--direction <dir>] [--focus <true|false>]
                                                              (a Markdown tab split next to the caller; follows edits)
@@ -195,6 +216,10 @@ Commands:
 /// Flags that take no value.
 const SWITCHES: &[&str] = &[
     "json",
+    "wait",
+    "quiet",
+    "close",
+    "fail-fast",
     "resolve",
     "send-here",
     "unresolved",
@@ -240,6 +265,9 @@ fn parse(args: &[String]) -> Result<Args, String> {
                 let v = it.next().ok_or_else(|| format!("--{k} needs a value"))?;
                 opts.insert(k.replace('-', "_"), json!(v));
             }
+            None if a == "-q" => {
+                opts.insert("quiet".into(), json!(true));
+            }
             None if a == "-h" => {
                 opts.insert("help".into(), json!(true));
             }
@@ -262,7 +290,10 @@ pub fn run(argv: Vec<String>) -> i32 {
     }
     let Args { mut pos, mut opts } = match parse(&argv) {
         Ok(a) => a,
-        Err(e) => return fail(e),
+        Err(e) => {
+            ipc::set_failure_status(2);
+            return fail(e);
+        }
     };
     if let Some(Value::String(s)) = opts.remove("socket") {
         // SAFETY: single-threaded at this point; read back by ipc::socket_path.
@@ -281,9 +312,167 @@ pub fn run(argv: Vec<String>) -> i32 {
         return open_dir(&cmd);
     }
     match dispatch(&cmd, pos, opts, as_json) {
-        Ok(()) => 0,
+        Ok(()) => EXIT_STATUS.load(std::sync::atomic::Ordering::Relaxed),
         Err(e) => fail(e),
     }
+}
+
+/// `rpc list [-q]` and `rpc describe <method>`: the control socket's
+/// methods, as the running app describes them (this CLI's own list when the
+/// app is older and can't).
+fn rpc_docs(pos: &[String], opts: &Map<String, Value>, as_json: bool) -> Result<(), String> {
+    let one = match pos[0].as_str() {
+        "describe" => Some(pos.get(1).ok_or_else(|| {
+            ipc::set_failure_status(2);
+            "rpc describe: missing <method>".to_string()
+        })?),
+        _ => None,
+    };
+    let params = json!({ "method": one });
+    let v = match ipc::call("system.methods", params.clone()) {
+        Ok(v) => v,
+        Err(e) if e.to_string().contains("unknown method") => {
+            crate::api::methods(&params).map_err(|e| e.to_string())?
+        }
+        Err(e) if one.is_none() && e.to_string().contains("not running") => {
+            ipc::set_failure_status(1);
+            crate::api::methods(&params).map_err(|e| e.to_string())?
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+    } else if one.is_some() {
+        print!("{}", crate::api::describe_text(&v));
+    } else {
+        let quiet = opts.contains_key("q") || opts.contains_key("quiet");
+        for m in v.as_array().into_iter().flatten() {
+            let name = m["name"].as_str().unwrap_or_default();
+            if quiet {
+                println!("{name}");
+            } else {
+                println!(
+                    "{name:<32} {}",
+                    m["description"].as_str().unwrap_or_default()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The exit status of a command that succeeded: 0, or for `wait` and
+/// `--wait` the status of what was waited for.
+static EXIT_STATUS: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// `wait` and `--wait`: wait for `surface`'s command (or, with `--close`,
+/// for it to close), print what happened, and exit with its status.
+fn wait_surface(mut opts: Map<String, Value>, as_json: bool) -> Result<(), String> {
+    opts.remove("wait");
+    let v = call("surface.wait", opts)?;
+    let status = match v["exit_code"].as_i64() {
+        Some(c) => c.clamp(0, 255) as i32,
+        None if v["signaled"] == true => 1,
+        None => 0,
+    };
+    EXIT_STATUS.store(status, std::sync::atomic::Ordering::Relaxed);
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+    }
+    Ok(())
+}
+
+/// `events`: print what happens in the app, one line each, until
+/// interrupted (`--for` seconds, or `--count` events, end it sooner).
+fn events(opts: Map<String, Value>, as_json: bool) -> Result<(), String> {
+    use std::io::{BufRead, Write};
+    let path = ipc::socket_path();
+    let mut conn = std::os::unix::net::UnixStream::connect(&path).map_err(|e| {
+        ipc::set_failure_status(4);
+        format!("abromux is not running ({}: {e})", path.display())
+    })?;
+    let count = match opts.get("count") {
+        Some(Value::String(c)) => Some(c.parse::<usize>().map_err(|_| "--count needs a number")?),
+        _ => None,
+    };
+    if let Some(Value::String(f)) = opts.get("for") {
+        let secs: f64 = f.parse().map_err(|_| "--for needs a number of seconds")?;
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs_f64(secs.max(0.)));
+            std::process::exit(0);
+        });
+    }
+    let mut params = Map::new();
+    for k in ["events", "workspace", "surface", "caller"] {
+        if let Some(v) = opts.get(k) {
+            params.insert(k.into(), v.clone());
+        }
+    }
+    let req = json!({ "id": 1, "method": "events.subscribe", "params": params });
+    writeln!(conn, "{req}").map_err(|e| e.to_string())?;
+    let mut lines = std::io::BufReader::new(conn).lines();
+    let ack: Value = lines
+        .next()
+        .and_then(Result::ok)
+        .and_then(|l| serde_json::from_str(&l).ok())
+        .ok_or("events: no answer from abromux")?;
+    if ack["ok"] != true {
+        if ack["code"] == "target" {
+            ipc::set_failure_status(3);
+        }
+        return Err(ack["error"].as_str().unwrap_or("refused").to_string());
+    }
+    for (seen, line) in lines.enumerate() {
+        let Ok(line) = line else { break };
+        if as_json {
+            println!("{line}");
+        } else if let Ok(ev) = serde_json::from_str::<Value>(&line) {
+            println!("{}", event_line(&ev));
+        }
+        let _ = std::io::stdout().flush();
+        if count.is_some_and(|c| seen + 1 >= c) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// One event for reading: its time, name, where, and the rest.
+fn event_line(ev: &Value) -> String {
+    let secs = ev["time"].as_f64().unwrap_or(0.) as libc::time_t;
+    // SAFETY: localtime_r fills `tm` from `secs`.
+    let tm = unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&secs, &mut tm);
+        tm
+    };
+    let mut rest: Vec<String> = ev
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(k, v)| {
+            !["event", "time", "surface", "workspace"].contains(&k.as_str()) && !v.is_null()
+        })
+        .map(|(k, v)| match v {
+            Value::String(s) => format!("{k}={s:?}"),
+            v => format!("{k}={v}"),
+        })
+        .collect();
+    rest.sort();
+    let at = [s(&ev["surface"]), s(&ev["workspace"])]
+        .into_iter()
+        .filter(|x| !x.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "{:02}:{:02}:{:02}  {:<18} {:<28} {}",
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec,
+        s(&ev["event"]),
+        at,
+        rest.join(" ")
+    )
 }
 
 /// `abromux diff …`: any git diff reviewed in the GitLab tab
@@ -659,9 +848,11 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
     Ok(())
 }
 
+/// Report a failure; its status is 1, or 2 for a bad command line, 3 for a
+/// target that wasn't found or was ambiguous, 4 when abromux isn't running.
 fn fail(e: impl std::fmt::Display) -> i32 {
     eprintln!("abromux: {e}");
-    1
+    ipc::failure_status()
 }
 
 fn call(method: &str, params: Map<String, Value>) -> Result<Value, String> {
@@ -721,6 +912,7 @@ fn dispatch(
     }
     let mut first = |name: &str, opts: &mut Map<String, Value>| -> Result<(), String> {
         if pos.is_empty() {
+            ipc::set_failure_status(2);
             return Err(format!("{cmd}: missing <{name}>"));
         }
         opts.insert(name.into(), json!(pos.remove(0)));
@@ -1227,6 +1419,9 @@ fn dispatch(
         "default-app" => return default_app(pos),
         "markdown" | "md" => return markdown(pos, opts),
         "browser" => return browser(pos, opts, as_json),
+        "rpc" if matches!(pos.first().map(String::as_str), Some("list" | "describe")) => {
+            return rpc_docs(&pos, &opts, as_json);
+        }
         "rpc" => {
             let method = pos.first().ok_or("rpc: missing <method>")?.clone();
             let params = match pos.get(1) {
@@ -1244,9 +1439,38 @@ fn dispatch(
             );
             return Ok(());
         }
-        _ => return Err(format!("unknown command {cmd:?} (see `abromux --help`)")),
+        "wait" => {
+            if let Some(t) = pos.first() {
+                opts.insert("surface".into(), json!(t));
+            }
+            return wait_surface(opts, as_json);
+        }
+        "events" => return events(opts, as_json),
+        _ => {
+            ipc::set_failure_status(2);
+            return Err(format!("unknown command {cmd:?} (see `abromux --help`)"));
+        }
     };
-    print_result(&call(method, opts)?, fmt, as_json);
+    // `--wait` on a new terminal: until the command it was given finishes.
+    let wait = opts.remove("wait").is_some()
+        && matches!(method, "surface.split" | "surface.create" | "pane.create");
+    let timeout = opts.remove("timeout").filter(|_| wait);
+    let v = call(method, opts)?;
+    print_result(&v, fmt, as_json && !wait);
+    if wait {
+        let r = v["surface"]["ref"]
+            .as_str()
+            .or(v["ref"].as_str())
+            .unwrap_or_default();
+        let mut w = Map::new();
+        w.insert("surface".into(), json!(r));
+        // The first command to finish there, not one before it.
+        w.insert("after".into(), json!(0));
+        if let Some(t) = timeout {
+            w.insert("timeout".into(), t);
+        }
+        return wait_surface(w, as_json);
+    }
     Ok(())
 }
 

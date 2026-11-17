@@ -26,6 +26,7 @@ use gpui::{App, AsyncApp, Axis, Context, Entity, EntityId, Keystroke, Timer, Win
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Write},
+    os::fd::AsRawFd,
     os::unix::net::{UnixListener, UnixStream},
     path::PathBuf,
     time::{Duration, Instant},
@@ -207,13 +208,13 @@ pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> 
                     .spawn(async move |_| {
                         let resp = match fut.await {
                             Ok(v) => ipc::ok(&id, v),
-                            Err(e) => ipc::err(&id, format!("{e:#}")),
+                            Err(e) => error_reply(&id, &e),
                         };
                         let _ = reply.send(resp);
                     })
                     .detach(),
                 Err(e) => {
-                    let _ = reply.send(ipc::err(&id, format!("{e:#}")));
+                    let _ = reply.send(error_reply(&id, &e));
                 }
             }
         }
@@ -232,6 +233,7 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
+    let peer = stream.as_raw_fd();
     // Dropped when this returns, which is when the connection closes.
     let (_open, closed) = oneshot::channel::<()>();
     let gone = closed.shared();
@@ -241,6 +243,21 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
             continue;
         }
         let resp = match serde_json::from_str::<Value>(&line) {
+            Ok(req) if req["method"] == "events.subscribe" => {
+                // Listen before asking, so nothing in between is missed.
+                let events = crate::events::subscribe();
+                let (reply_tx, reply_rx) = oneshot::channel();
+                if tx.unbounded_send((req, reply_tx, gone.clone())).is_err() {
+                    return;
+                }
+                let resp = futures::executor::block_on(reply_rx)
+                    .unwrap_or_else(|_| ipc::err(&Value::Null, "app closed"));
+                if writer.write_all(format!("{resp}\n").as_bytes()).is_err() || resp["ok"] != true {
+                    return;
+                }
+                stream_events(&mut writer, peer, events, &resp["result"]);
+                return;
+            }
             Ok(req) => {
                 let (reply_tx, reply_rx) = oneshot::channel();
                 if tx.unbounded_send((req, reply_tx, gone.clone())).is_err() {
@@ -255,6 +272,52 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
         out.push('\n');
         if writer.write_all(out.as_bytes()).is_err() {
             return;
+        }
+    }
+}
+
+/// Write each event that passes `filter` to `writer` until the caller hangs up.
+fn stream_events(
+    writer: &mut UnixStream,
+    peer: std::os::fd::RawFd,
+    events: std::sync::mpsc::Receiver<String>,
+    filter: &Value,
+) {
+    use std::sync::mpsc::RecvTimeoutError;
+    let filtered = ["events", "workspace", "surface"]
+        .iter()
+        .any(|k| !filter[*k].is_null() && filter[*k] != json!([]));
+    loop {
+        match events.recv_timeout(Duration::from_secs(1)) {
+            Ok(line) if line.is_empty() => {}
+            Ok(line) => {
+                if filtered
+                    && !serde_json::from_str(&line)
+                        .is_ok_and(|ev: Value| crate::events::matches(&ev, filter))
+                {
+                    continue;
+                }
+                if writer.write_all(format!("{line}\n").as_bytes()).is_err() {
+                    return;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                // Quiet for a while: is anyone still there?
+                let mut b = 0u8;
+                // SAFETY: peeks at most one byte into `b`, without blocking.
+                let n = unsafe {
+                    libc::recv(
+                        peer,
+                        (&raw mut b).cast(),
+                        1,
+                        libc::MSG_PEEK | libc::MSG_DONTWAIT,
+                    )
+                };
+                if n == 0 {
+                    return;
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => return,
         }
     }
 }
@@ -314,11 +377,24 @@ fn bool_param(p: &Value, key: &str, default: bool) -> bool {
     }
 }
 
-/// `kind:N` → N as a ref, a bare number → an index.
+/// `kind:N` → N as a ref, a bare number → an index, anything else → a
+/// label (a workspace's name, a tab's name, a group's name).
 enum Sel {
     Ref(usize),
     Index(usize),
+    Label(String),
 }
+
+/// The kinds of refs, so `surface:3` given for a pane is a mistake rather
+/// than a label.
+const REF_KINDS: &[&str] = &[
+    "workspace",
+    "pane",
+    "surface",
+    "group",
+    "tab",
+    "notification",
+];
 
 fn parse_sel(s: &str, kind: &str) -> anyhow::Result<Sel> {
     if let Some(n) = s.strip_prefix(kind).and_then(|r| r.strip_prefix(':')) {
@@ -326,9 +402,74 @@ fn parse_sel(s: &str, kind: &str) -> anyhow::Result<Sel> {
             n.parse().with_context(|| format!("bad {kind} ref {s:?}"))?,
         ));
     }
-    s.parse()
-        .map(Sel::Index)
-        .map_err(|_| anyhow!("expected {kind}:N or an index, got {s:?}"))
+    if let Ok(i) = s.parse() {
+        return Ok(Sel::Index(i));
+    }
+    if let Some((k, _)) = s.split_once(':')
+        && REF_KINDS.contains(&k)
+    {
+        return Err(
+            TargetError(format!("expected {kind}:N, an index or a name, got {s:?}")).into(),
+        );
+    }
+    Ok(Sel::Label(s.to_string()))
+}
+
+/// A workspace, pane, surface or group that isn't there, or a name that
+/// fits more than one: the CLI exits with status 3 for it.
+#[derive(Debug)]
+pub(crate) struct TargetError(String);
+
+impl std::fmt::Display for TargetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for TargetError {}
+
+/// The one of `found` (ref, name) that `label` names; an error naming them
+/// all when it's more than one.
+fn one_labelled<T>(kind: &str, label: &str, found: Vec<(T, String, String)>) -> anyhow::Result<T> {
+    match found.len() {
+        0 => Err(TargetError(format!("no {kind} named {label:?}")).into()),
+        1 => Ok(found.into_iter().next().unwrap().0),
+        _ => {
+            let list: Vec<String> = found
+                .iter()
+                .map(|(_, r, name)| format!("  {r}  {name}"))
+                .collect();
+            Err(TargetError(format!(
+                "{kind} name {label:?} is ambiguous; use a ref:\n{}",
+                list.join("\n")
+            ))
+            .into())
+        }
+    }
+}
+
+/// A method the app doesn't have (an older app than the CLI, or a typo).
+#[derive(Debug)]
+struct MethodNotFound(String);
+
+impl std::fmt::Display for MethodNotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown method {:?} (see `abromux rpc list`)", self.0)
+    }
+}
+
+impl std::error::Error for MethodNotFound {}
+
+/// An error reply for `e`, with a `code` for the kinds that have one:
+/// `target` (not found or ambiguous), `method_not_found`.
+fn error_reply(id: &Value, e: &anyhow::Error) -> Value {
+    if e.chain().any(|c| c.is::<TargetError>()) {
+        ipc::err_code(id, format!("{e:#}"), "target")
+    } else if e.chain().any(|c| c.is::<MethodNotFound>()) {
+        ipc::err_code(id, format!("{e:#}"), "method_not_found")
+    } else {
+        ipc::err(id, format!("{e:#}"))
+    }
 }
 
 fn direction(d: &str) -> anyhow::Result<(Axis, bool)> {
@@ -375,8 +516,11 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<Reply> {
+        let named = self.resolve_names(p, cx)?;
+        let p = named.as_ref().unwrap_or(p);
         let v = match method {
             "system.ping" => json!("pong"),
+            "system.methods" => crate::api::methods(p)?,
             "system.identify" => {
                 let caller = self.caller(p).map(
                     |(wi, _, s)| json!({ "workspace": self.ws_ref(wi), "surface": self.sref(&s) }),
@@ -969,6 +1113,46 @@ impl AbroMux {
                 json!(t.update(cx, |t, _| t.read_text(scrollback, lines)))
             }
 
+            // Until the command running in a terminal finishes (or, with
+            // `close`, the terminal closes): its exit status.
+            "surface.wait" => return self.wait_surface(p, cx),
+
+            // The connection becomes a stream of events (`serve` does the
+            // streaming); this resolves its filters.
+            "events.subscribe" => {
+                let workspace = str_param(p, "workspace")
+                    .map(|w| self.find_workspace(w).map(|wi| self.ws_ref(wi)))
+                    .transpose()?;
+                let surface = str_param(p, "surface")
+                    .map(|s| self.find_surface(s, None).map(|(_, _, s)| self.sref(&s)))
+                    .transpose()?;
+                let names: Vec<String> = match p.get("events") {
+                    Some(Value::String(s)) => s.split(',').map(|x| x.trim().to_string()).collect(),
+                    Some(Value::Array(a)) => a
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(String::from)
+                        .collect(),
+                    _ => vec![],
+                };
+                for n in &names {
+                    if !crate::events::NAMES
+                        .iter()
+                        .any(|(e, _)| crate::events::name_matches(e, n))
+                    {
+                        bail!(
+                            "no event {n:?}; there are {}",
+                            crate::events::NAMES
+                                .iter()
+                                .map(|(e, _)| *e)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                    }
+                }
+                json!({ "workspace": workspace, "surface": surface, "events": names })
+            }
+
             // A plugin tab's own command (crates/abromux-plugin: Tab::command).
             "surface.plugin" => {
                 let (_, _, s) = self.surface_target(p)?;
@@ -1368,6 +1552,7 @@ impl AbroMux {
                         icon,
                         color,
                         owner: None,
+                        program: false,
                     },
                     cx,
                 );
@@ -1661,7 +1846,7 @@ impl AbroMux {
                 cx.defer(|cx| cx.quit());
                 json!(null)
             }
-            _ => bail!("unknown method {method:?}"),
+            _ => return Err(MethodNotFound(method.to_string()).into()),
         };
         Ok(Reply::Now(v))
     }
@@ -2080,6 +2265,74 @@ impl AbroMux {
         ))
     }
 
+    /// `surface.wait`: until the command in a terminal finishes (from the
+    /// shell integration's marks; without them, until it closes), or with
+    /// `close` until it closes. `after` waits for a command after that many
+    /// had finished (`new-split --command … --wait`), not one already done.
+    fn wait_surface(&mut self, p: &Value, cx: &mut Context<Self>) -> anyhow::Result<Reply> {
+        let (_, _, s) = self.surface_target(p)?;
+        let close = bool_param(p, "close", false);
+        let term = match &s {
+            Surface::Terminal(t) => Some(t.clone()),
+            _ if close => None,
+            _ => bail!("only a terminal runs commands to wait for (use --close for any tab)"),
+        };
+        let n = self.surface_refs.get(&s.entity_id()).copied().unwrap_or(0);
+        let after = p.get("after").and_then(|v| match v {
+            Value::String(s) => s.parse().ok(),
+            v => v.as_u64(),
+        });
+        let timeout = match p.get("timeout") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(t)) => Some(t.parse::<f64>().context("bad --timeout")?),
+            Some(v) => Some(v.as_f64().context("bad --timeout")?),
+        };
+        let deadline = timeout.map(|t| Instant::now() + Duration::from_secs_f64(t.max(0.)));
+        let this = cx.weak_entity();
+        let acx = cx.to_async();
+        Ok(Reply::Later(
+            async move {
+                let surface = format!("surface:{n}");
+                loop {
+                    let alive = this
+                        .read_with(&acx, |this, _| this.surface_refs.values().any(|&r| r == n))
+                        .unwrap_or(false);
+                    if !alive {
+                        // Exited by itself: its status, None if a signal ended
+                        // it. Not there: the tab was closed.
+                        let exit = this
+                            .read_with(&acx, |this, _| this.exits.get(&n).copied())
+                            .ok()
+                            .flatten();
+                        return Ok(json!({ "surface": surface, "closed": true,
+                                          "exit_code": exit.flatten(),
+                                          "signaled": exit == Some(None) }));
+                    }
+                    if !close
+                        && let Some(c) = term
+                            .as_ref()
+                            .and_then(|t| t.read_with(&acx, |t, _| t.commands).ok())
+                        && c.marked
+                    {
+                        let done = match after {
+                            Some(a) => c.finished > a,
+                            None => !c.running,
+                        };
+                        if done {
+                            return Ok(json!({ "surface": surface, "closed": false,
+                                              "exit_code": c.last_exit }));
+                        }
+                    }
+                    if deadline.is_some_and(|d| Instant::now() >= d) {
+                        bail!("timed out waiting for {surface}");
+                    }
+                    Timer::after(WAIT_POLL).await;
+                }
+            }
+            .boxed_local(),
+        ))
+    }
+
     /// Status and notifications from a coding agent's hooks (agent.rs).
     fn agent_event(
         &mut self,
@@ -2099,6 +2352,17 @@ impl AbroMux {
             return;
         };
         let (label, title) = (kind.label(), kind.title());
+        let state = match &event {
+            AgentEvent::Working => "working",
+            AgentEvent::NeedsInput(_) => "needs_input",
+            AgentEvent::Stopped(_) => "stopped",
+            AgentEvent::Ended => "ended",
+        };
+        self.emit_for(
+            "agent",
+            surface,
+            json!({ "agent": kind.as_str(), "state": state }),
+        );
         match event {
             AgentEvent::Working => {
                 self.set_agent_status(surface, label, Some(("Running", RUNNING)), cx)
@@ -2250,11 +2514,36 @@ impl AbroMux {
     }
 
     fn find_workspace(&self, s: &str) -> anyhow::Result<usize> {
-        match parse_sel(s, "workspace")? {
+        self.find_workspace_in(s, None)
+    }
+
+    /// A workspace by ref, index or name (case aside; its custom name
+    /// before the one it shows).
+    fn find_workspace_in(&self, s: &str, cx: Option<&App>) -> anyhow::Result<usize> {
+        let found = match parse_sel(s, "workspace")? {
             Sel::Ref(id) => self.workspaces.iter().position(|w| w.id == id),
             Sel::Index(i) => (i < self.workspaces.len()).then_some(i),
-        }
-        .with_context(|| format!("no workspace {s}"))
+            Sel::Label(l) => {
+                let named = |name: &dyn Fn(&Workspace) -> Option<String>| {
+                    self.workspaces
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, w)| {
+                            let n = name(w)?;
+                            n.eq_ignore_ascii_case(&l).then(|| (i, self.ws_ref(i), n))
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let mut found = named(&|w| w.custom_name.clone());
+                if found.is_empty()
+                    && let Some(cx) = cx
+                {
+                    found = named(&|w| Some(w.name(cx)));
+                }
+                return one_labelled("workspace", &l, found);
+            }
+        };
+        found.ok_or_else(|| TargetError(format!("no workspace {s}")).into())
     }
 
     /// The `--workspace` argument, required.
@@ -2297,6 +2586,62 @@ impl AbroMux {
         Ok(self.caller(p).map(|(wi, _, _)| wi).unwrap_or(self.active))
     }
 
+    /// A tab by its own name (`rename-tab`, `--label`), case aside: in
+    /// workspace `within` when given, else anywhere.
+    fn surface_named(&self, l: &str, within: Option<usize>, cx: &App) -> anyhow::Result<String> {
+        let found = within
+            .map_or_else(|| (0..self.workspaces.len()).collect(), |w| vec![w])
+            .into_iter()
+            .flat_map(|wi| self.workspaces[wi].surfaces().cloned().collect::<Vec<_>>())
+            .filter_map(|t| {
+                let name = t.custom_title(cx)?;
+                name.eq_ignore_ascii_case(l).then(|| {
+                    let r = self.sref(&t);
+                    (r.clone(), r, name)
+                })
+            })
+            .collect();
+        one_labelled("surface", l, found)
+    }
+
+    /// Workspace, surface, tab and group names in `p` turned into refs, so
+    /// the request can find them the usual way. None if it names nothing.
+    fn resolve_names(&self, p: &Value, cx: &App) -> anyhow::Result<Option<Value>> {
+        let is_name = |k: &str, kind: &str| {
+            str_param(p, k).is_some_and(|s| matches!(parse_sel(s, kind), Ok(Sel::Label(_))))
+        };
+        let keys = [
+            ("workspace", "workspace"),
+            ("surface", "surface"),
+            ("tab", "surface"),
+            ("group", "group"),
+        ];
+        if !keys.iter().any(|(k, kind)| is_name(k, kind)) {
+            return Ok(None);
+        }
+        let mut q = p.clone();
+        let mut within = None;
+        if is_name("workspace", "workspace") {
+            let wi = self.find_workspace_in(str_param(p, "workspace").unwrap(), Some(cx))?;
+            q["workspace"] = json!(self.ws_ref(wi));
+            within = Some(wi);
+        } else if let Some(w) = str_param(p, "workspace") {
+            within = self.find_workspace(w).ok();
+        }
+        for k in ["surface", "tab"] {
+            if is_name(k, "surface") {
+                q[k] = json!(self.surface_named(str_param(p, k).unwrap(), within, cx)?);
+            }
+        }
+        if is_name("group", "group") {
+            q["group"] = json!(format!(
+                "group:{}",
+                self.find_group(str_param(p, "group").unwrap())?
+            ));
+        }
+        Ok(Some(q))
+    }
+
     /// A surface ref, or an index into `within`'s surfaces in tree order.
     fn find_surface(
         &self,
@@ -2314,8 +2659,13 @@ impl AbroMux {
                 .flat_map(all)
                 .find(|(_, _, t)| self.surface_refs.get(&t.entity_id()) == Some(&n)),
             Sel::Index(i) => all(within.unwrap_or(self.active)).into_iter().nth(i),
+            // Names were turned into refs before the request ran
+            // (`resolve_names`); one left here names nothing.
+            Sel::Label(l) => {
+                return Err(TargetError(format!("no surface named {l:?}")).into());
+            }
         }
-        .with_context(|| format!("no surface {s}"))
+        .ok_or_else(|| TargetError(format!("no surface {s}")).into())
     }
 
     /// `--surface`, else the focused surface of `--workspace`, else the
@@ -2387,8 +2737,14 @@ impl AbroMux {
                 let wi = self.workspace_target(p)?;
                 self.workspaces[wi].panes().nth(i).map(|p| (wi, p.id))
             }
+            Sel::Label(_) => {
+                return Err(TargetError(format!(
+                    "panes have no names: give pane:N or an index, not {s:?}"
+                ))
+                .into());
+            }
         }
-        .with_context(|| format!("no pane {s}"))
+        .ok_or_else(|| TargetError(format!("no pane {s}")).into())
     }
 
     /// `--surface`, else `--pane`'s active tab, else the usual target.
@@ -2512,7 +2868,23 @@ impl AbroMux {
     }
 
     /// A terminal (`--cwd`, `--command`) or browser (`--url`) for workspace `wi`.
+    /// A new tab as `p` says (`type`, `url`, `command`, …), named `label`
+    /// if given, so scripts can target it by that name.
     fn make_surface(
+        &mut self,
+        wi: usize,
+        p: &Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Surface> {
+        let s = self.make_surface_of_type(wi, p, window, cx)?;
+        if let Some(label) = str_param(p, "label") {
+            s.set_custom_title(Some(one_line(label)), cx);
+        }
+        Ok(s)
+    }
+
+    fn make_surface_of_type(
         &mut self,
         wi: usize,
         p: &Value,
@@ -2620,10 +2992,25 @@ impl AbroMux {
 
     fn describe_surface(&self, s: &Surface, active: bool, cx: &App) -> Value {
         let mut v = json!({ "ref": self.sref(s), "title": s.title(cx), "active": active });
+        if let Some(label) = s.custom_title(cx) {
+            v["label"] = json!(label);
+        }
         match s {
             Surface::Terminal(t) => {
+                let t = t.read(cx);
                 v["type"] = json!("terminal");
-                v["cwd"] = json!(t.read(cx).cwd);
+                v["cwd"] = json!(t.cwd);
+                if t.commands.marked {
+                    v["command"] = json!({
+                        "running": t.commands.running,
+                        "finished": t.commands.finished,
+                        "last_exit_code": t.commands.last_exit,
+                    });
+                }
+                let status = crate::events::program_status_json(t.program.shown().as_ref());
+                if !status.is_null() {
+                    v["program_status"] = status;
+                }
             }
             Surface::Browser(b) => {
                 v["type"] = json!("browser");
@@ -2655,8 +3042,17 @@ impl AbroMux {
         match parse_sel(s, "group")? {
             Sel::Ref(id) => self.groups.iter().any(|g| g.id == id).then_some(id),
             Sel::Index(i) => self.groups.get(i).map(|g| g.id),
+            Sel::Label(l) => {
+                let found = self
+                    .groups
+                    .iter()
+                    .filter(|g| g.name.eq_ignore_ascii_case(&l))
+                    .map(|g| (g.id, format!("group:{}", g.id), g.name.clone()))
+                    .collect();
+                return one_labelled("group", &l, found);
+            }
         }
-        .with_context(|| format!("no group {s}"))
+        .ok_or_else(|| TargetError(format!("no group {s}")).into())
     }
 
     fn describe_group(&self, id: usize) -> Value {
