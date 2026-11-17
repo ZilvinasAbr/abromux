@@ -72,6 +72,7 @@ pub fn convert(v: &Value) -> Result<Session, String> {
         mr_panel: false,
         workspaces,
         groups: vec![],
+        placements: vec![],
     })
 }
 

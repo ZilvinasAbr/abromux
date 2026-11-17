@@ -14,6 +14,36 @@ pub fn number(_window: &impl HasWindowHandle) -> Result<isize, Error> {
     Err(UNSUPPORTED)
 }
 
+/// A rectangle in global screen points, from the top left, y going down.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Frame {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// A connected screen: all of it, and the part windows go in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Screen {
+    pub frame: Frame,
+    pub visible: Frame,
+}
+
+/// Wayland doesn't let a window know or pick where it is (the compositor
+/// places it), so there are none to place it by.
+pub fn screens() -> Vec<Screen> {
+    Vec::new()
+}
+
+pub fn frame(_window: &impl HasWindowHandle) -> Result<Option<Frame>, Error> {
+    Err(UNSUPPORTED)
+}
+
+pub fn set_frame(_window: &impl HasWindowHandle, _to: Frame) -> Result<(), Error> {
+    Err(UNSUPPORTED)
+}
+
 /// A synthetic mouse event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mouse {

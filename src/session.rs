@@ -162,6 +162,7 @@ impl AbroMux {
                     cleanup: g.cleanup,
                 })
                 .collect(),
+            placements: self.placements.list(),
         }
     }
 

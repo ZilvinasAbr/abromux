@@ -10,7 +10,8 @@ use crate::{
     NewFolderWorkspace, NewGroup, NewTerminal, NewWorkspace, NextTab, NextWorkspace, OpenConfig,
     OpenSettings, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab, RenameWorkspace,
     ReopenSession, SplitDown, SplitRight, ToggleGroup, ToggleNotifications, ToggleSidebar,
-    ToggleUnread, ToggleZoom, Ungroup, WorkspaceSwitcher, browser, channel, terminal,
+    ToggleUnread, ToggleWorkspaceUnread, ToggleZoom, Ungroup, WorkspaceSwitcher, browser, channel,
+    terminal,
 };
 use gpui::*;
 
@@ -145,6 +146,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action("Review Changes", crate::ReviewChanges),
                 MenuItem::action("Review Changes in Hunk", crate::ReviewInHunk),
                 MenuItem::action("Open Workspace in Neovim", crate::OpenInNeovim),
+                MenuItem::action("Open Workspace in Editor", crate::OpenInEditor),
                 MenuItem::separator(),
                 MenuItem::action("Reopen Previous Session", ReopenSession),
                 MenuItem::action("Import cmux Session", ImportCmuxSession),
@@ -207,6 +209,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action("Show Notifications", ToggleNotifications),
                 MenuItem::action("Jump to Latest Unread", JumpToUnread),
                 MenuItem::action("Toggle Unread", ToggleUnread),
+                MenuItem::action("Toggle Workspace Unread", ToggleWorkspaceUnread),
                 MenuItem::action(
                     "Mark as Oldest Unread and Jump to Next",
                     MarkOldestUnreadAndJumpNext,

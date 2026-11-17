@@ -24,6 +24,21 @@ pub struct Session {
     pub workspaces: Vec<WorkspaceState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<GroupState>,
+    /// Where the window was with each arrangement of screens it has been
+    /// on, latest last, so it goes back when a monitor comes back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub placements: Vec<Placement>,
+}
+
+/// The window's frame (global screen points, from the primary screen's top
+/// left) while the screens were `screens`, a key for their arrangement.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Placement {
+    pub screens: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -308,6 +323,13 @@ mod tests {
                 color: None,
                 collapsed: true,
                 cleanup: false,
+            }],
+            placements: vec![Placement {
+                screens: "0,0,1512x982".into(),
+                x: 10.,
+                y: 40.,
+                width: 800.,
+                height: 600.,
             }],
         };
         let json = serde_json::to_string(&s).unwrap();

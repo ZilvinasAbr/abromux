@@ -129,9 +129,12 @@ pub const ACTIONS: &[Act] = {
         "reviewInHunk", Some("Review Changes in Hunk (Each Repository Beside)"), ReviewInHunk,
             [(None, [])];
         "openInNeovim", Some("Open Workspace in Neovim"), OpenInNeovim, [(None, [])];
+        "openInEditor", Some("Open Workspace in Editor"), OpenInEditor, [(None, [])];
         "showNotifications", Some("Show Notifications"), ToggleNotifications, [(None, ["cmd-i"])];
         "jumpToUnread", Some("Jump to Latest Unread"), JumpToUnread, [(None, ["cmd-shift-u"])];
         "toggleUnread", Some("Toggle Unread"), ToggleUnread, [(None, ["alt-cmd-u"])];
+        "toggleWorkspaceUnread", Some("Mark Workspace as Unread, or Read"),
+            ToggleWorkspaceUnread, [(None, [])];
         "markOldestUnreadAndJumpNext", Some("Mark as Oldest Unread and Jump to Next"),
             MarkOldestUnreadAndJumpNext, [(None, ["ctrl-cmd-u"])];
         "commandPalette", None, CommandPalette, [(None, ["cmd-shift-p"])];

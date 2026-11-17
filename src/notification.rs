@@ -388,6 +388,25 @@ impl AbroMux {
         true
     }
 
+    /// Workspace `wi` unread if it's read (its focused tab, which switching
+    /// to it lands on, so switching to it reads it again), or every tab in
+    /// it read if anything in it is unread.
+    pub(crate) fn toggle_workspace_unread(&mut self, wi: usize, cx: &mut Context<Self>) {
+        let Some(ws) = self.workspaces.get(wi) else {
+            return;
+        };
+        if self.ws_unread(ws) {
+            let ids: Vec<EntityId> = ws.surfaces().map(|s| s.entity_id()).collect();
+            for id in ids {
+                self.mark_surface_read(id);
+            }
+        } else if let Some(id) = ws.focused_surface().map(|s| s.entity_id()) {
+            self.mark_surface_unread(id);
+        }
+        self.refresh_unread(cx);
+        cx.notify();
+    }
+
     /// ⌃⌘U: put the focused terminal's newest notification at the back of
     /// the unread queue (unread, but oldest), then jump to the newest unread
     /// elsewhere. Works through a pile of them one at a time, coming back to
