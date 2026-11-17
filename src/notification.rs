@@ -5,7 +5,7 @@
 //! A notification is read once you look at its terminal: the window is
 //! active and it's the focused tab of the selected workspace.
 
-use crate::{AbroMux, TITLEBAR_H, notify_hook, theme::*, workspace::Workspace};
+use crate::{AbroMux, TITLEBAR_H, notify_hook, settings::Alert, theme::*, workspace::Workspace};
 use abromux_platform::{notify, tray};
 use gpui::{prelude::*, *};
 use std::time::{Duration, SystemTime};
@@ -26,6 +26,35 @@ pub struct Notification {
     pub bell: bool,
 }
 
+/// What a notification says happened, for `notifications.needsInput`,
+/// `done` and `error` (and the hooks' `kind`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Kind {
+    /// Text a program or `abromux notify` sent (OSC 9/99/777).
+    Message,
+    /// A bell (BEL): no banner, and repeats merge.
+    Bell,
+    /// An agent or program waits for you.
+    NeedsInput,
+    /// An agent finished its turn, or a program is done.
+    Done,
+    /// A program failed.
+    Error,
+}
+
+impl Kind {
+    /// For the hooks' `notification.kind`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Message => "message",
+            Kind::Bell => "bell",
+            Kind::NeedsInput => "needsInput",
+            Kind::Done => "done",
+            Kind::Error => "error",
+        }
+    }
+}
+
 impl Notification {
     /// One line for the sidebar and lists: "title: body".
     pub fn text(&self) -> String {
@@ -39,16 +68,25 @@ impl Notification {
 
 impl AbroMux {
     /// Record a notification from `surface`. Returns its id, or None for a
-    /// bell you were looking at.
+    /// bell you were looking at or a kind turned off.
     pub(crate) fn add_notification(
         &mut self,
         surface: EntityId,
         title: String,
         body: String,
-        bell: bool,
+        kind: Kind,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
+        let bell = kind == Kind::Bell;
+        let alert = cx
+            .try_global::<crate::settings::Settings>()
+            .map_or(Alert::Banner, |s| s.notifications.alert(kind));
+        if alert == Alert::Off {
+            return None;
+        }
+        // An unread-only kind starts with no banner; hooks may still ask one.
+        let banner = alert == Alert::Banner;
         let viewing = self.viewing(surface, window);
         if bell && viewing {
             return None;
@@ -102,15 +140,29 @@ impl AbroMux {
             .collect();
         let hooked = !bell && !hooks.is_empty();
         if hooked {
-            self.run_hooks(id, surface, &title, &body, viewing, hooks, window, cx);
-        } else if !bell && !window.is_window_active() {
+            let effects = notify_hook::Effects {
+                desktop: banner,
+                sound: banner,
+                ..Default::default()
+            };
+            let note = notify_hook::Input {
+                id,
+                kind: Some(kind.as_str().into()),
+                title: title.clone(),
+                body: body.clone(),
+                focused_panel: viewing,
+                effects,
+                ..Default::default()
+            };
+            self.run_hooks(surface, note, hooks, window, cx);
+        } else if !bell && banner && !window.is_window_active() {
             notify::post(id, banner_title(&title), &body, true);
         }
         if !bell {
             self.emit_for(
                 "notification",
                 surface,
-                serde_json::json!({ "id": id, "title": title, "body": body }),
+                serde_json::json!({ "id": id, "title": title, "body": body, "kind": kind.as_str() }),
             );
         }
         self.notifications.push(Notification {
@@ -148,38 +200,33 @@ impl AbroMux {
         }
     }
 
-    /// Pass notification `id` through `notifications.hooks` off the main
-    /// thread, then apply what they decided (`notify_hook`). It's recorded
-    /// meanwhile; its banner waits for them.
-    #[allow(clippy::too_many_arguments)]
+    /// Pass notification `note` (its id, kind, text and starting effects)
+    /// through `notifications.hooks` off the main thread, then apply what
+    /// they decided (`notify_hook`). It's recorded meanwhile; its banner
+    /// waits for them.
     fn run_hooks(
         &self,
-        id: usize,
         surface: EntityId,
-        title: &str,
-        body: &str,
-        viewing: bool,
+        note: notify_hook::Input,
         hooks: Vec<crate::settings::NotificationHook>,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        let id = note.id;
         let ws = self.workspaces.iter().find(|w| w.contains(surface));
         let input = notify_hook::Input {
-            id,
             workspace: ws.map(|w| format!("workspace:{}", w.id)),
             surface: self
                 .surface_refs
                 .get(&surface)
                 .map(|r| format!("surface:{r}")),
-            title: title.into(),
-            body: body.into(),
             cwd: ws.and_then(|w| w.cwd(cx)),
             app_focused: window.is_window_active(),
-            focused_panel: viewing,
             socket: self
                 .socket
                 .as_ref()
                 .map(|p| p.to_string_lossy().into_owned()),
+            ..note
         };
         let task = cx.background_spawn(async move { notify_hook::run(&hooks, &input) });
         cx.spawn_in(window, async move |this, cx| {

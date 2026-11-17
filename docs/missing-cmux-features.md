@@ -60,7 +60,7 @@ So the list below reads in context:
 - [x] **Session restore**: save on quit and restore on relaunch. That covers windows, workspaces, the split layout, working directories, scrollback (best effort) and browser URLs with their history. It also covers reopening the previous session (⌘⇧O, `restore-session`). *(⌘⇧O reopens the launch session's workspaces that aren't open; `restore-session --from stable|nightly|<file>` and `--export`)*
 - [x] **Workspace descriptions**: edit with ⌥⌘E and show them in the sidebar. *(also `new-workspace --description`, `workspace-action set-description`)*
 - [x] **Workspace colors**: per-workspace color, indicator style and selection color. *(partial: `leftRail` and `solidFill` styles only; `workspace-action set-color`, the right-click menu)*
-- [x] **Reordering workspaces**: drag in the sidebar, plus `reorder-workspace(s)` in the CLI. *(also `workspace-action move-up/move-down/move-top`)*
+- [x] **Reordering workspaces**: drag in the sidebar, plus `reorder-workspace(s)` in the CLI. *(also `workspace-action move-up/move-down/move-top/move-bottom`)*
 - [x] **Workspace groups**: grouping by cwd and choosing where new workspaces are placed. *(partial: groups you make, or Group Workspaces by Folder, with `workspaceGroups.newWorkspacePlacement`; no `byCwd` icons or header context-menu entries from the config; `abromux group …` instead of cmux's group flags beyond `new-workspace --group`)*
 - [x] **More sidebar metadata**:
   - [x] the latest notification's text

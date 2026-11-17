@@ -535,6 +535,13 @@ fn choice(
     })
 }
 
+/// `notifications.needsInput`, `done` and `error`.
+const ALERTS: &[(&str, &str)] = &[
+    ("banner", "Banner"),
+    ("unread", "Unread only"),
+    ("off", "Off"),
+];
+
 /// [− value +].
 fn stepper(
     title: &'static str,
@@ -889,6 +896,34 @@ fn general_page() -> Page {
                                 .on_click(|_, _, cx| crate::update::check(true, cx))
                                 .into_any_element()
                         },
+                    ),
+                ],
+            ),
+            group(
+                "Notifications",
+                [
+                    choice(
+                        "Needs input",
+                        "A coding agent (or a program that says so) waits for you: a \
+                         permission prompt or a question.",
+                        &["notifications", "needsInput"],
+                        ALERTS,
+                        |s| s.notifications.needs_input.as_str(),
+                    ),
+                    choice(
+                        "Done",
+                        "A coding agent finished its turn, or a program is done. \
+                         Unread marks the tab and workspace without a banner.",
+                        &["notifications", "done"],
+                        ALERTS,
+                        |s| s.notifications.done.as_str(),
+                    ),
+                    choice(
+                        "Failed",
+                        "A program reports it failed.",
+                        &["notifications", "error"],
+                        ALERTS,
+                        |s| s.notifications.error.as_str(),
                     ),
                 ],
             ),

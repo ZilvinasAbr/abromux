@@ -3,6 +3,7 @@
 //! (`set-progress`) and the newest `log` entry. Agent hooks set a pill for
 //! the agent in each terminal ("Running", "Needs input").
 
+use crate::notification::Kind as NoteKind;
 use crate::workspace::Surface;
 use crate::{
     AbroMux,
@@ -100,10 +101,12 @@ impl AbroMux {
             "{label} {}",
             self.surface_refs.get(&surface).copied().unwrap_or(0)
         );
-        // Keep the pill where it is when only its state changes.
+        // One pill per terminal: the hooks' replaces what the agent also
+        // reports as a program (Claude Code's OSC 9;4 progress). Keep the
+        // pill where it is when only its state changes.
         self.workspaces[wi]
             .status
-            .retain(|s| s.owner != Some(surface) || s.program || state.is_some() && s.key == key);
+            .retain(|s| s.owner != Some(surface) || state.is_some() && !s.program && s.key == key);
         match state {
             Some((value, color)) => self.set_status(
                 wi,
@@ -123,7 +126,9 @@ impl AbroMux {
 
     /// A program in terminal `surface` changed what it reports about itself
     /// (OSC 7501, OSC 9;4): its pill follows what it shows now, and becoming
-    /// blocked, done or failed notifies, as an agent's hooks do.
+    /// blocked, done or failed notifies, as an agent's hooks do. Not while an
+    /// agent with hooks runs there: Claude Code's own OSC 9;4 would be a
+    /// second pill and a second notification for what its hooks report.
     pub(crate) fn program_status_changed(
         &mut self,
         surface: EntityId,
@@ -134,9 +139,13 @@ impl AbroMux {
         let Some(Surface::Terminal(term)) = self.find_tab(surface) else {
             return;
         };
-        let (now, title) = {
+        let (now, title, hooked) = {
             let t = term.read(cx);
-            (t.program.shown(), t.shown_title().to_string())
+            (
+                t.program.shown(),
+                t.shown_title().to_string(),
+                t.agent.is_some(),
+            )
         };
         if now != was {
             self.emit_for(
@@ -152,7 +161,7 @@ impl AbroMux {
         self.workspaces[wi]
             .status
             .retain(|s| !(s.owner == Some(surface) && s.program));
-        let Some(now) = now else {
+        let Some(now) = now.filter(|_| !hooked) else {
             cx.notify();
             return;
         };
@@ -190,7 +199,12 @@ impl AbroMux {
                 Some(w) => format!("{w}: {body}"),
                 None => body,
             };
-            self.add_notification(surface, who, body, false, window, cx);
+            let kind = match r.state {
+                State::Blocked => NoteKind::NeedsInput,
+                State::Error => NoteKind::Error,
+                _ => NoteKind::Done,
+            };
+            self.add_notification(surface, who, body, kind, window, cx);
         }
     }
 

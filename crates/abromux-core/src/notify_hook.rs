@@ -8,7 +8,8 @@
 //! {
 //!   "version": 1,
 //!   "notification": { "id": 7, "workspaceId": "workspace:2", "surfaceId": "surface:5",
-//!                     "title": "Claude Code", "subtitle": "", "body": "Needs your input" },
+//!                     "title": "Claude Code", "subtitle": "", "body": "Needs your input",
+//!                     "kind": "needsInput" },
 //!   "context": { "cwd": "/path", "hookId": "filter", "appFocused": false, "focusedPanel": false },
 //!   "effects": { "record": true, "markUnread": true, "desktop": true, "sound": true }
 //! }
@@ -59,6 +60,8 @@ impl Default for Effects {
 #[derive(Clone, Debug, Default)]
 pub struct Input {
     pub id: usize,
+    /// What happened: `needsInput`, `done`, `error` or `message`.
+    pub kind: Option<String>,
     pub workspace: Option<String>,
     pub surface: Option<String>,
     pub title: String,
@@ -68,6 +71,9 @@ pub struct Input {
     pub focused_panel: bool,
     /// For the hook's environment, so it can call `abromux` back.
     pub socket: Option<String>,
+    /// What happens unless a hook says otherwise (`notifications.done:
+    /// "unread"` starts with no banner).
+    pub effects: Effects,
 }
 
 /// What the hooks made of it.
@@ -91,6 +97,7 @@ pub fn payload(input: &Input) -> Value {
             "title": input.title,
             "subtitle": "",
             "body": input.body,
+            "kind": input.kind,
         },
         "context": {
             "cwd": input.cwd,
@@ -99,10 +106,10 @@ pub fn payload(input: &Input) -> Value {
             "focusedPanel": input.focused_panel,
         },
         "effects": {
-            "record": true,
-            "markUnread": true,
-            "desktop": true,
-            "sound": true,
+            "record": input.effects.record,
+            "markUnread": input.effects.mark_unread,
+            "desktop": input.effects.desktop,
+            "sound": input.effects.sound,
         },
     })
 }
@@ -112,7 +119,7 @@ pub fn run(hooks: &[NotificationHook], input: &Input) -> Outcome {
     let unchanged = |error| Outcome {
         title: input.title.clone(),
         body: input.body.clone(),
-        effects: Effects::default(),
+        effects: input.effects,
         error,
     };
     let mut doc = payload(input);
@@ -156,15 +163,16 @@ fn outcome(doc: &Value, input: &Input) -> Outcome {
         };
     }
     let e = &doc["effects"];
-    let flag = |key: &str| e[key].as_bool().unwrap_or(true);
+    let flag = |key: &str, default: bool| e[key].as_bool().unwrap_or(default);
+    let d = input.effects;
     Outcome {
         title,
         body: text("body", &input.body),
         effects: Effects {
-            record: flag("record"),
-            mark_unread: flag("markUnread"),
-            desktop: flag("desktop"),
-            sound: flag("sound"),
+            record: flag("record", d.record),
+            mark_unread: flag("markUnread", d.mark_unread),
+            desktop: flag("desktop", d.desktop),
+            sound: flag("sound", d.sound),
         },
         error: None,
     }
@@ -276,6 +284,33 @@ mod tests {
         assert_eq!(run(&[], &input()), plain);
         assert_eq!(run(&[hook("quiet", "cat >/dev/null")], &input()), plain);
         assert_eq!(run(&[hook("echo", "cat")], &input()), plain);
+    }
+
+    #[test]
+    fn kind_and_starting_effects_reach_hooks() {
+        let quiet = Effects {
+            desktop: false,
+            sound: false,
+            ..Default::default()
+        };
+        let input = Input {
+            kind: Some("done".into()),
+            effects: quiet,
+            ..input()
+        };
+        // A hook that prints nothing, or one that fails, leaves them as set.
+        assert_eq!(run(&[], &input).effects, quiet);
+        assert_eq!(run(&[hook("bad", "exit 1")], &input).effects, quiet);
+        // It sees the kind, and can ask for the banner back.
+        let out = run(
+            &[hook(
+                "banner",
+                r#"sed '/"kind":"done"/s/"desktop":false/"desktop":true/'"#,
+            )],
+            &input,
+        );
+        assert_eq!(out.error, None);
+        assert!(out.effects.desktop && !out.effects.sound);
     }
 
     #[test]

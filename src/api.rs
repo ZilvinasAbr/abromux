@@ -135,7 +135,7 @@ pub const METHODS: &[Method] = &[
         "workspace.action",
         "workspace-action",
         "One of the sidebar's workspace actions.",
-        "@workspace;action:string rename, clear-name, set-description, clear-description, set-color, clear-color, move-up, move-down, move-top, close-others, close-above, close-below, mark-read, mark-unread;\
+        "@workspace;action:string rename, clear-name, set-description, clear-description, set-color, clear-color, move-up, move-down, move-top, move-bottom, close-others, close-above, close-below, mark-read, mark-unread;\
          title?:string For rename;description?:string For set-description;color?:string For set-color: a palette name or #rrggbb",
     ),
     m(
