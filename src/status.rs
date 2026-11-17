@@ -3,12 +3,14 @@
 //! (`set-progress`) and the newest `log` entry. Agent hooks set a pill for
 //! the agent in each terminal ("Running", "Needs input").
 
+use crate::workspace::Surface;
 use crate::{
     AbroMux,
     settings::SidebarSettings,
     theme::*,
     workspace::{LogEntry, LogLevel, Progress, Status, Workspace},
 };
+use abromux_core::program_status::{self, Kind, Shown, State};
 use abromux_core::status::KEEP_LOG;
 pub use abromux_core::status::{ERROR, ICONS, RUNNING, SUCCESS, WARNING};
 use gpui::{prelude::*, *};
@@ -101,7 +103,7 @@ impl AbroMux {
         // Keep the pill where it is when only its state changes.
         self.workspaces[wi]
             .status
-            .retain(|s| s.owner != Some(surface) || state.is_some() && s.key == key);
+            .retain(|s| s.owner != Some(surface) || s.program || state.is_some() && s.key == key);
         match state {
             Some((value, color)) => self.set_status(
                 wi,
@@ -111,10 +113,84 @@ impl AbroMux {
                     icon: None,
                     color: Some(color),
                     owner: Some(surface),
+                    program: false,
                 },
                 cx,
             ),
             None => cx.notify(),
+        }
+    }
+
+    /// A program in terminal `surface` changed what it reports about itself
+    /// (OSC 7501, OSC 9;4): its pill follows what it shows now, and becoming
+    /// blocked, done or failed notifies, as an agent's hooks do.
+    pub(crate) fn program_status_changed(
+        &mut self,
+        surface: EntityId,
+        was: Option<Shown>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(Surface::Terminal(term)) = self.find_tab(surface) else {
+            return;
+        };
+        let (now, title) = {
+            let t = term.read(cx);
+            (t.program.shown(), t.shown_title().to_string())
+        };
+        if now != was {
+            self.emit_for(
+                "program.status",
+                surface,
+                serde_json::json!({ "status": crate::events::program_status_json(now.as_ref()) }),
+            );
+        }
+        let Some(wi) = self.workspaces.iter().position(|w| w.contains(surface)) else {
+            return;
+        };
+        let n = self.surface_refs.get(&surface).copied().unwrap_or(0);
+        self.workspaces[wi]
+            .status
+            .retain(|s| !(s.owner == Some(surface) && s.program));
+        let Some(now) = now else {
+            cx.notify();
+            return;
+        };
+        let r = &now.record;
+        let app = r.app.as_deref().map(program_status::display);
+        let (value, color) = pill_text(&now);
+        self.set_status(
+            wi,
+            Status {
+                key: format!("{} {n}", app.as_deref().unwrap_or("Program")),
+                value,
+                icon: None,
+                color: Some(color),
+                owner: Some(surface),
+                program: true,
+            },
+            cx,
+        );
+        let changed = was
+            .as_ref()
+            .is_none_or(|w| w.id != now.id || w.record.state != r.state);
+        if changed && matches!(r.state, State::Blocked | State::Done | State::Error) {
+            let who = app.unwrap_or(title);
+            let what = r.title.as_deref().map(program_status::display);
+            let body = r
+                .msg
+                .as_deref()
+                .map(program_status::display)
+                .unwrap_or_else(|| match r.state {
+                    State::Blocked => blocked_text(r.kind).into(),
+                    State::Error => "Failed".into(),
+                    _ => "Finished".into(),
+                });
+            let body = match what {
+                Some(w) => format!("{w}: {body}"),
+                None => body,
+            };
+            self.add_notification(surface, who, body, false, window, cx);
         }
     }
 
@@ -282,3 +358,36 @@ impl AbroMux {
 }
 
 pub use abromux_core::status::{log_json, status_json};
+
+fn blocked_text(kind: Option<Kind>) -> &'static str {
+    match kind {
+        Some(Kind::Permission) => "Needs approval",
+        Some(Kind::Question) => "Needs an answer",
+        Some(Kind::Auth) => "Needs a sign-in",
+        None => "Needs input",
+    }
+}
+
+/// The pill for a program's status: "Working 40%", "Needs approval",
+/// "Done", "Failed", after the record's title when it has one.
+fn pill_text(shown: &Shown) -> (String, u32) {
+    let r = &shown.record;
+    let (text, color) = match r.state {
+        State::Working => (
+            match r.progress {
+                Some(p) => format!("Working {p}%"),
+                None => "Working".into(),
+            },
+            RUNNING,
+        ),
+        State::Blocked => (blocked_text(r.kind).into(), WARNING),
+        State::Done => ("Done".into(), SUCCESS),
+        State::Error => ("Failed".into(), ERROR),
+        State::Idle => ("Idle".into(), pal().muted),
+    };
+    let text = match r.title.as_deref() {
+        Some(t) if !shown.id.is_empty() => format!("{}: {text}", program_status::display(t)),
+        _ => text,
+    };
+    (text, color)
+}

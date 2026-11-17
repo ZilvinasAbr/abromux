@@ -73,6 +73,10 @@ pub struct WindowState {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct WorkspaceState {
+    /// Its `workspace:N`, kept when it's restored so scripts and the
+    /// `$ABROMUX_WORKSPACE_ID` of held shells still name it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<usize>,
     #[serde(default)]
     pub name: Option<String>,
     /// Index of the focused pane in tree order.
@@ -268,6 +272,7 @@ mod tests {
             sidebar_width: 300.,
             mr_panel: true,
             workspaces: vec![WorkspaceState {
+                id: Some(4),
                 name: Some("api".into()),
                 auto_name: None,
                 name_surface: None,

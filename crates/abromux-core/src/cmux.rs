@@ -103,6 +103,7 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
     let title = str_of(ws, "customTitle").map(str::to_string);
     let by_user = ws["customTitleSource"].as_str().is_none_or(|s| s == "user");
     Some(WorkspaceState {
+        id: None,
         name: title.clone().filter(|_| by_user),
         auto_name: title.filter(|_| !by_user),
         name_surface: None,

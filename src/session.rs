@@ -126,6 +126,7 @@ impl AbroMux {
             .workspaces
             .iter()
             .map(|ws| WorkspaceState {
+                id: Some(ws.id),
                 name: ws.custom_name.clone(),
                 auto_name: ws.auto_title.clone(),
                 name_surface: ws.name_surface,
@@ -355,10 +356,23 @@ impl AbroMux {
         for ws in &states {
             self.next_surface = self.next_surface.max(ws.root.max_surface());
         }
+        // Each comes back as the workspace it was, unless that number is
+        // taken (a workspace open now, or another session's added to this one).
+        let mut taken: std::collections::HashSet<usize> =
+            self.workspaces.iter().map(|w| w.id).collect();
+        let keep: Vec<Option<usize>> = states
+            .iter()
+            .map(|s| s.id.filter(|id| *id > 0 && taken.insert(*id)))
+            .collect();
+        self.next_ws = self
+            .next_ws
+            .max(keep.iter().flatten().copied().max().unwrap_or(0));
         let mut ids = vec![];
-        for state in states {
-            self.next_ws += 1;
-            let id = self.next_ws;
+        for (state, keep) in states.into_iter().zip(keep) {
+            let id = keep.unwrap_or_else(|| {
+                self.next_ws += 1;
+                self.next_ws
+            });
             // Its new shells get the folder's env before it's in the list.
             let home = state.home.map(std::path::PathBuf::from);
             self.building_home = home.clone();
