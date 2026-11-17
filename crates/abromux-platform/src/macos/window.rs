@@ -1,6 +1,6 @@
 //! Things done to the app's own windows that GPUI has no call for: moving
-//! one by its titlebar, and the window number and synthetic input behind
-//! the debug snapshots and `debug.*` RPCs.
+//! one by its titlebar, its frame across screens, and the window number and
+//! synthetic input behind the debug snapshots and `debug.*` RPCs.
 
 use objc::{class, msg_send, runtime::Object, sel, sel_impl};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -173,6 +173,103 @@ pub fn post_scroll(window: &impl HasWindowHandle, x: f64, y: f64, dy: f64) -> Re
         // handler would re-enter it.
         let _: () =
             msg_send![view, performSelector: sel!(scrollWheel:) withObject: ev afterDelay: 0f64];
+    }
+    Ok(())
+}
+
+/// A rectangle in global screen points: from the top left of the primary
+/// screen, y going down (as CoreGraphics counts, not AppKit).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Frame {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// A connected screen: all of it, and the part windows go in (without the
+/// menu bar and Dock).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Screen {
+    pub frame: Frame,
+    pub visible: Frame,
+}
+
+/// The primary screen's height, which AppKit's bottom-left y is flipped by.
+unsafe fn primary_height() -> Option<f64> {
+    let screens: *mut Object = unsafe { msg_send![class!(NSScreen), screens] };
+    let count: usize = unsafe { msg_send![screens, count] };
+    if count == 0 {
+        return None;
+    }
+    let main: *mut Object = unsafe { msg_send![screens, objectAtIndex: 0usize] };
+    let frame: Rect = unsafe { msg_send![main, frame] };
+    Some(frame.size.y)
+}
+
+fn flip(r: Rect, primary: f64) -> Frame {
+    Frame {
+        x: r.origin.x,
+        y: primary - r.origin.y - r.size.y,
+        width: r.size.x,
+        height: r.size.y,
+    }
+}
+
+/// The screens connected now, the primary one first.
+pub fn screens() -> Vec<Screen> {
+    unsafe {
+        let Some(primary) = primary_height() else {
+            return Vec::new();
+        };
+        let screens: *mut Object = msg_send![class!(NSScreen), screens];
+        let count: usize = msg_send![screens, count];
+        (0..count)
+            .map(|i| {
+                let s: *mut Object = msg_send![screens, objectAtIndex: i];
+                let frame: Rect = msg_send![s, frame];
+                let visible: Rect = msg_send![s, visibleFrame];
+                Screen {
+                    frame: flip(frame, primary),
+                    visible: flip(visible, primary),
+                }
+            })
+            .collect()
+    }
+}
+
+/// Where `window` is, in global screen points (its whole frame, titlebar
+/// included). None while it's full screen, which isn't a place to keep.
+pub fn frame(window: &impl HasWindowHandle) -> Result<Option<Frame>, Error> {
+    let win = ns_window(window)?;
+    unsafe {
+        const FULL_SCREEN: usize = 1 << 14;
+        let mask: usize = msg_send![win, styleMask];
+        if mask & FULL_SCREEN != 0 {
+            return Ok(None);
+        }
+        let primary = primary_height().ok_or("no screen")?;
+        let r: Rect = msg_send![win, frame];
+        Ok(Some(flip(r, primary)))
+    }
+}
+
+/// Move and size `window` to `to`, in global screen points.
+pub fn set_frame(window: &impl HasWindowHandle, to: Frame) -> Result<(), Error> {
+    let win = ns_window(window)?;
+    unsafe {
+        let primary = primary_height().ok_or("no screen")?;
+        let r = Rect {
+            origin: Point {
+                x: to.x,
+                y: primary - to.y - to.height,
+            },
+            size: Point {
+                x: to.width,
+                y: to.height,
+            },
+        };
+        let _: () = msg_send![win, setFrame: r display: true];
     }
     Ok(())
 }

@@ -602,6 +602,7 @@ impl AbroMux {
         };
         let ws = &app.workspaces[index];
         let (color, group, described) = (ws.color, ws.group, ws.description.is_some());
+        let unread = app.ws_unread(ws);
         let has_folder = ws.home.is_some();
         let n = app.workspaces.len();
         let groups: Vec<(usize, String)> =
@@ -698,6 +699,18 @@ impl AbroMux {
             Self::color_menu(m, color, set_color.clone(), cx)
         })
         .submenu("Group", window, cx, groups_menu)
+        .item(
+            PopupMenuItem::new(if unread {
+                "Mark as Read"
+            } else {
+                "Mark as Unread"
+            })
+            .on_click(act(|t, i, _, cx| t.toggle_workspace_unread(i, cx))),
+        )
+        .item(
+            PopupMenuItem::new("Open in Editor")
+                .on_click(act(|t, i, w, cx| t.open_workspace_in_editor(i, w, cx))),
+        )
         .separator()
         .item(
             PopupMenuItem::new("Move Up")
@@ -1196,10 +1209,12 @@ impl AbroMux {
         let group: SharedString = format!("ws-{}", ws.id).into();
         let hint =
             shortcut_digit(i, self.workspaces.len()).filter(|_| self.hints == Some(Hints::Command));
-        let unread = self.latest_unread(ws).map(|n| n.text());
-        let latest = unread
-            .clone()
+        let latest = self
+            .latest_unread(ws)
+            .map(|n| n.text())
             .filter(|_| details && sb.show_notification_message);
+        // A notification, or a tab marked unread by hand.
+        let dot = self.ws_unread(ws);
         let status = details
             .then(|| self.render_ws_status(ws, filled, &sb))
             .flatten();
@@ -1324,7 +1339,7 @@ impl AbroMux {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .when(unread.is_some(), |s| {
+                    .when(dot, |s| {
                         s.child(
                             div()
                                 .size(px(7.))

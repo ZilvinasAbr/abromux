@@ -52,8 +52,9 @@ pub fn claiming(url: &str, cx: &App) -> Option<&'static Plugin> {
     all().iter().find(|p| enabled(p.id, cx) && (p.claims)(url))
 }
 
-/// A plugin's link: in a browser beside the focused tab, as a terminal's
-/// ⌘-click does.
+/// A plugin's link: in a new tab next to the plugin's, in its pane, as a
+/// browser page's new-tab link does (a tab this workspace has for it
+/// already, if there is one).
 fn open_url(url: &str, window: &mut Window, cx: &mut App) {
     let view = cx.try_global::<Shell>().and_then(|s| s.0.upgrade());
     let Some(view) = view else {
@@ -66,6 +67,10 @@ fn open_url(url: &str, window: &mut Window, cx: &mut App) {
     window.defer(cx, move |window, cx| {
         view.update(cx, |this, cx| {
             match this.ws().focused_surface().map(|s| s.entity_id()) {
+                Some(id) if url.starts_with("http://") || url.starts_with("https://") => {
+                    this.open_tab_beside(id, &url, true, window, cx)
+                }
+                // A file or other scheme: as a terminal's ⌘-click opens it.
                 Some(id) => this.open_link(id, crate::link::Target::Url(url), window, cx),
                 None => cx.open_url(&url),
             }

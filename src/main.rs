@@ -22,6 +22,7 @@ mod menu;
 mod naming;
 mod notification;
 mod palette;
+mod placement;
 mod plugins;
 mod quit;
 mod server;
@@ -132,6 +133,7 @@ actions!(
         ToggleNotifications,
         JumpToUnread,
         ToggleUnread,
+        ToggleWorkspaceUnread,
         MarkOldestUnreadAndJumpNext,
         CommandPalette,
         WorkspaceSwitcher,
@@ -158,7 +160,8 @@ actions!(
         RefreshMergeRequests,
         ReviewChanges,
         ReviewInHunk,
-        OpenInNeovim
+        OpenInNeovim,
+        OpenInEditor
     ]
 );
 
@@ -296,6 +299,8 @@ struct AbroMux {
     socket: Option<std::path::PathBuf>,
     /// Last seen window frame, for the session file.
     window_bounds: Option<Bounds<Pixels>>,
+    /// Where the window was on each arrangement of screens.
+    placements: placement::Placements,
     renaming: Option<(usize, Entity<InputState>)>,
     /// The workspace whose description is being edited (⌥⌘E).
     describing: Option<(usize, Entity<InputState>)>,
@@ -379,6 +384,12 @@ impl AbroMux {
             surface_refs: Default::default(),
             socket: None,
             window_bounds: None,
+            placements: placement::Placements::new(
+                session
+                    .as_ref()
+                    .map(|s| s.placements.clone())
+                    .unwrap_or_default(),
+            ),
             renaming: None,
             describing: None,
             groups: vec![],
@@ -522,6 +533,7 @@ impl AbroMux {
             }
         })
         .detach();
+        this.place_window(window, cx);
         this.socket = server::start(window, cx);
         let restored = session.is_some_and(|s| this.restore(s, window, cx));
         if !restored || cwd.is_some() {
@@ -604,6 +616,27 @@ impl AbroMux {
         self.new_workspace(Some(format!("{parent}/gpui-experiments")), window, cx);
         send(self.ws().focused_surface(), "printf '\\a'\r", cx);
         self.select_workspace(0, window, cx);
+    }
+
+    /// Put the window where it was on these screens, and keep track of it:
+    /// as it moves, and as monitors come and go (which doesn't always move
+    /// it, so the screens are looked at every couple of seconds too).
+    fn place_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.placements.place(window);
+        cx.observe_window_bounds(window, |this, window, _| this.placements.sync(window))
+            .detach();
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                Timer::after(Duration::from_secs(2)).await;
+                if this
+                    .update_in(cx, |this, window, _| this.placements.sync(window))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Keep the session file current: layout every few seconds, everything
@@ -3021,6 +3054,9 @@ impl Render for AbroMux {
             .on_action(
                 cx.listener(|this, _: &OpenInNeovim, window, cx| this.open_in_neovim(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &OpenInEditor, window, cx| {
+                this.open_workspace_in_editor(this.active, window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &ReviewInHunk, window, cx| this.review_in_hunk(window, cx)),
             )
@@ -3127,6 +3163,9 @@ impl Render for AbroMux {
             }))
             .on_action(cx.listener(|this, _: &ToggleUnread, _, cx| {
                 this.toggle_unread(cx);
+            }))
+            .on_action(cx.listener(|this, _: &ToggleWorkspaceUnread, _, cx| {
+                this.toggle_workspace_unread(this.active, cx);
             }))
             .on_action(
                 cx.listener(|this, _: &MarkOldestUnreadAndJumpNext, window, cx| {

@@ -1,6 +1,7 @@
 //! `browser.terminalBrowserPanes`: terminal-browser opens what would be a new
 //! tab of its own (a `target=_blank` link, ⌘- or middle-click, "Open link in
-//! new tab", its new-tab box) as an abromux split beside the browser.
+//! new tab", its new-tab box) as an abromux browser tab in the browser's pane
+//! (or a split beside it, with `TB_ABROMUX_SPLIT`).
 //!
 //! terminal-browser has no setting for that, so abromux puts a few lines into
 //! its `app/browser/dist/main.js` (the JS its daemon runs) and takes them out
@@ -227,7 +228,7 @@ mod tests {
         assert_eq!(wanted(&ours, false).unwrap().as_deref(), Some(STOCK));
         assert_eq!(wanted(STOCK, false).unwrap(), None, "nothing to take out");
         // An older helper is swapped for this one.
-        let old = ours.replace(" v1 (begin)", " v0 (begin)");
+        let old = ours.replace(" v2 (begin)", " v1 (begin)");
         assert_eq!(wanted(&old, true).unwrap().as_deref(), Some(&*ours));
     }
 

@@ -1206,9 +1206,7 @@ impl GitLabView {
         }
         // `/` or `s`: search merge requests, as on GitLab's pages (not
         // while typing in the list's or the file tree's search).
-        let in_field = [&self.list_search, &self.tree_search]
-            .iter()
-            .any(|f| f.read(cx).focus_handle(cx).is_focused(window));
+        let in_field = self.in_field(window, cx);
         if (k.key == "/" || k.key == "s")
             && !k.modifiers.modified()
             && !in_field
@@ -1254,7 +1252,9 @@ impl GitLabView {
             cx.stop_propagation();
             return;
         }
-        if !self.in_mr() || k.modifiers.modified() {
+        // The single-key shortcuts below are letters: in a text field
+        // (the file tree's search, say) they're the field's.
+        if !self.in_mr() || k.modifiers.modified() || in_field {
             return;
         }
         match k.key.as_str() {
@@ -1273,6 +1273,19 @@ impl GitLabView {
             _ => return,
         }
         cx.stop_propagation();
+    }
+
+    /// Whether a text field of the tab has the keys: the list's or the
+    /// file tree's search, or the sign-in fields.
+    fn in_field(&self, window: &Window, cx: &App) -> bool {
+        let focused = |f: &Entity<InputState>| f.read(cx).focus_handle(cx).is_focused(window);
+        focused(&self.list_search)
+            || focused(&self.tree_search)
+            || self
+                .sign_in
+                .as_ref()
+                .is_some_and(|(host, token)| focused(host) || focused(token))
+            || self.boxes.typing(window, cx)
     }
 
     /// Draw GitLab tabs at `z` times GitLab's sizes (all of them: the zoom

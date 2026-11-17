@@ -145,6 +145,38 @@ impl AbroMux {
         best.0
     }
 
+    /// Workspace `wi`'s folder (else its focused terminal's directory) in
+    /// the editor `editor.program` names, in a new tab of its focused pane;
+    /// the workspace is selected.
+    pub(crate) fn open_workspace_in_editor(
+        &mut self,
+        wi: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ws) = self.workspaces.get(wi) else {
+            return;
+        };
+        let dir = ws.home.clone().or_else(|| ws.cwd(cx).map(PathBuf::from));
+        let Some(dir) = dir else {
+            let e = "The workspace has no folder, and its terminal no directory.";
+            window.push_notification(Notification::warning(e).title("Can't open the editor"), cx);
+            return;
+        };
+        let id = ws.id;
+        let cwd = Some(dir.to_string_lossy().into_owned());
+        match self.make_editor(id, &dir, cwd, window, cx) {
+            Ok(s) => {
+                if wi != self.active {
+                    self.select_workspace(wi, window, cx);
+                }
+                self.add_tab(s, window, cx);
+            }
+            Err(e) => window
+                .push_notification(Notification::warning(e).title("Can't open the editor"), cx),
+        }
+    }
+
     /// Edit `file` in a new pane right of pane `pane` of workspace `wi`,
     /// which `focus` selects. The new tab and its pane's id.
     pub(crate) fn edit_file(
