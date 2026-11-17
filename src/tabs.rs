@@ -157,10 +157,9 @@ impl AbroMux {
             g.collapsed = false;
         }
         // By owner: inserting may have shifted the source workspace along.
-        let from = self
-            .workspaces
-            .iter()
-            .position(|w| w.id != ws_id && w.status.iter().any(|s| s.owner == Some(id)));
+        let from = self.workspaces.iter().position(|w| {
+            w.id != ws_id && (w.is_pinned(id) || w.status.iter().any(|s| s.owner == Some(id)))
+        });
         if let Some(from) = from {
             self.carry_status(from, index, id, cx);
         }
@@ -194,8 +193,16 @@ impl AbroMux {
         self.workspaces.iter().position(|w| w.contains(id))
     }
 
-    /// The sidebar pills tab `id`'s agent set go with it to workspace `to`.
+    /// The sidebar pills tab `id`'s agent set go with it to workspace `to`,
+    /// and so does its pin.
     fn carry_status(&mut self, from: usize, to: usize, id: EntityId, cx: &mut Context<Self>) {
+        if self.workspaces[from].is_pinned(id) {
+            self.workspaces[from].pinned.retain(|p| *p != id);
+            self.workspaces[to].pin(id);
+            if let Some(l) = self.workspaces[from].pinned_for.remove(&id) {
+                self.workspaces[to].pinned_for.insert(id, l);
+            }
+        }
         let (moved, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.workspaces[from].status)
             .into_iter()
             .partition(|s| s.owner == Some(id));

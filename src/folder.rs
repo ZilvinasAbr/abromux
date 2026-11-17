@@ -67,14 +67,18 @@ Commit in the worktrees as usual: the commits land in the original repo.
 
 ## Tickets and merge requests
 
-Track the Jira tickets and GitLab merge requests this work is for, so they
-show under the workspace in the sidebar:
+Pin the Jira tickets and GitLab merge requests this work is for, so they
+show under the workspace in the sidebar. Each opens in a pinned tab, hidden
+until the user shows it:
 
     abromux link add PAY-1423
     abromux link add https://gitlab.example.com/group/project/-/merge_requests/12
 
-`abromux link` lists them; `abromux link remove <key>` untracks one that's
-no longer part of the work.
+Any tab can be pinned, a terminal running a long task too:
+`abromux tab pin [--surface <ref>]`. Closing a pinned tab only hides it.
+`abromux link` lists the pinned tabs; `abromux link remove <key>` (or
+`abromux tab unpin --surface <ref>`) unpins one that's no longer part of the
+work.
 
 ## Resources outside this folder
 

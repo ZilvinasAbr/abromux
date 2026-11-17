@@ -1,4 +1,8 @@
-//! The command palette (⌘⇧P) and workspace switcher (⌘P), as in cmux.
+//! The command palette (⌘⇧P) and the switcher (⌘P), as in cmux.
+//!
+//! ⌘P lists the selected workspace's tabs, pinned ones first (hidden ones
+//! too), then its suggested links. Tab widens it to every workspace and
+//! their tabs; Tab again narrows it back.
 //!
 //! Commands are the app's actions with a title. Only the ones that apply to
 //! what had focus when the palette opened are listed (terminal commands for
@@ -18,7 +22,10 @@ use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputEvent, InputState};
 use std::path::Path;
 
-actions!(palette, [SelectNext, SelectPrev, Confirm, Dismiss]);
+actions!(
+    palette,
+    [SelectNext, SelectPrev, Confirm, Dismiss, ToggleScope]
+);
 
 /// Key context of the palette, for its bindings in main.rs.
 pub const CONTEXT: &str = "CommandPalette";
@@ -42,6 +49,10 @@ pub enum Mode {
 enum Target {
     Action(Box<dyn Action>),
     Workspace(usize),
+    /// A tab, hidden or not, in any workspace.
+    Tab(EntityId),
+    /// A suggested link of workspace `.0` (by id), opened in a pinned tab.
+    Link(usize, crate::links::Link),
     Mr(crate::gitlab::model::MrKey),
 }
 
@@ -52,6 +63,9 @@ struct Entry {
     keywords: Vec<String>,
     keys: Option<SharedString>,
     target: Target,
+    /// Drawn left of the title: an icon's name, and its colour if not the
+    /// text's.
+    icon: Option<(&'static str, Option<u32>)>,
 }
 
 pub struct Palette {
@@ -67,6 +81,9 @@ pub struct Palette {
     scroll: ScrollHandle,
     /// NewFolder: the made-up name an empty input stands for.
     suggested: String,
+    /// Workspaces (⌘P): every workspace and tab, not just this workspace's
+    /// tabs (Tab switches).
+    pub wide: bool,
 }
 
 /// A palette command: its title, subtitle, extra search words and action.
@@ -177,6 +194,7 @@ fn mr_entries(cx: &App) -> Vec<Entry> {
                 subtitle: Some(sub.join(" · ").into()),
                 keys: None,
                 target: Target::Mr(m.key.clone()),
+                icon: Some(("gitlab", crate::links::Kind::Mr.color())),
             }
         })
         .collect()
@@ -209,14 +227,14 @@ impl AbroMux {
         self.notifications_open = false;
         let entries = match mode {
             Mode::Commands => self.command_entries(window, cx),
-            Mode::Workspaces => self.workspace_entries(cx),
+            Mode::Workspaces => self.switcher_entries(false, cx),
             Mode::NewFolder | Mode::OpenLink(_) => vec![],
             Mode::MergeRequests => mr_entries(cx),
         };
         let suggested = crate::folder::random_name();
         let placeholder = match mode {
             Mode::Commands => "Type a command".to_string(),
-            Mode::Workspaces => "Search workspaces".to_string(),
+            Mode::Workspaces => SCOPE_NARROW.to_string(),
             Mode::NewFolder => suggested.clone(),
             Mode::OpenLink(_) => "Paste a link".to_string(),
             Mode::MergeRequests => "Search merge requests, or paste a link".to_string(),
@@ -278,6 +296,7 @@ impl AbroMux {
             prev_focus,
             scroll: ScrollHandle::new(),
             suggested,
+            wide: false,
         };
         palette.filter("");
         self.palette = Some(palette);
@@ -355,7 +374,156 @@ impl AbroMux {
                 None => self.restore_focus(p.prev_focus, window, cx),
             },
             Target::Mr(k) => self.open_mr(k, window, cx),
+            Target::Tab(id) => {
+                if self.pin_workspace(id).is_some() {
+                    self.reveal_tab(id, window, cx);
+                } else {
+                    self.restore_focus(p.prev_focus, window, cx);
+                }
+            }
+            Target::Link(ws, link) => match self.ws_index(ws) {
+                Some(wi) => {
+                    if wi != self.active {
+                        self.select_workspace(wi, window, cx);
+                    }
+                    self.show_link(wi, &link, true, false, window, cx);
+                }
+                None => self.restore_focus(p.prev_focus, window, cx),
+            },
         }
+    }
+
+    /// Tab in ⌘P: this workspace's tabs, or every workspace and tab.
+    fn toggle_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(wide) = self
+            .palette
+            .as_ref()
+            .filter(|p| p.mode == Mode::Workspaces)
+            .map(|p| !p.wide)
+        else {
+            return;
+        };
+        let entries = self.switcher_entries(wide, cx);
+        let Some(p) = &mut self.palette else { return };
+        p.wide = wide;
+        p.entries = entries;
+        let query = p.input.read(cx).value().to_string();
+        p.input.update(cx, |i, cx| {
+            i.set_placeholder(if wide { SCOPE_WIDE } else { SCOPE_NARROW }, window, cx)
+        });
+        p.filter(&query);
+        cx.notify();
+    }
+
+    /// ⌘P's rows. Narrow: the selected workspace's pinned tabs (with their
+    /// ⌥⌘N), its other tabs, then its suggested links. Wide: every
+    /// workspace, then every workspace's tabs, each named with its
+    /// workspace.
+    fn switcher_entries(&self, wide: bool, cx: &App) -> Vec<Entry> {
+        let mut out = vec![];
+        if wide {
+            out.extend(self.workspace_entries(cx));
+        }
+        let wis: Vec<usize> = if wide {
+            (0..self.workspaces.len()).collect()
+        } else {
+            vec![self.active]
+        };
+        for wi in wis {
+            out.extend(self.tab_entries(wi, wide, cx));
+        }
+        out
+    }
+
+    /// Workspace `wi`'s tabs and suggestions as ⌘P rows.
+    fn tab_entries(&self, wi: usize, wide: bool, cx: &App) -> Vec<Entry> {
+        let ws = &self.workspaces[wi];
+        let ws_name = ws.name(cx);
+        let items = self.items(wi, cx);
+        let detail = |s: &Surface| -> Option<String> {
+            match s {
+                Surface::Browser(b) => Some(b.read(cx).url.clone()),
+                Surface::Terminal(_) => s.cwd(cx).map(|c| tilde(&c)),
+                Surface::Plugin(_) => None,
+            }
+        };
+        let subtitle = |parts: Vec<String>| -> Option<SharedString> {
+            let mut parts = parts;
+            if wide {
+                parts.insert(0, ws_name.clone());
+            }
+            let parts: Vec<String> = parts.into_iter().filter(|p| !p.is_empty()).collect();
+            (!parts.is_empty()).then(|| parts.join("  ·  ").into())
+        };
+        let title_of = |s: &Surface, link: Option<&crate::links::Link>| -> String {
+            match link {
+                Some(l) if l.kind != crate::links::Kind::Web => match l.label() {
+                    Some(t) => format!("{} {t}", l.short_key()),
+                    None => l.short_key(),
+                },
+                _ => s.title(cx),
+            }
+        };
+        // As the sidebar draws it: a ticket's or merge request's mark, else
+        // the tab's own (an agent's logo, a terminal, a page).
+        let icon_of = |s: &Surface, link: Option<&crate::links::Link>| match link {
+            Some(l) if l.kind != crate::links::Kind::Web => Some((l.kind.icon(), l.kind.color())),
+            _ => Some((s.icon(cx), None)),
+        };
+        let mut out = vec![];
+        let mut listed = vec![];
+        for (i, it) in items.iter().enumerate() {
+            let keys = (i < crate::links::DIGITS && !wide)
+                .then(|| crate::keymap::default_label(&format!("link{}", i + 1)).into());
+            match (&it.tab, &it.link) {
+                (Some((s, hidden)), link) => {
+                    listed.push(s.entity_id());
+                    let state = if *hidden { "pinned, hidden" } else { "pinned" };
+                    out.push(Entry {
+                        title: title_of(s, link.as_ref()).into(),
+                        subtitle: subtitle(vec![state.into(), detail(s).unwrap_or_default()]),
+                        keywords: link.iter().map(|l| l.key.clone()).collect(),
+                        keys,
+                        target: Target::Tab(s.entity_id()),
+                        icon: icon_of(s, link.as_ref()),
+                    });
+                }
+                (None, Some(l)) => out.push(Entry {
+                    title: title_of_link(l).into(),
+                    subtitle: subtitle(vec!["suggested".into(), l.url.clone()]),
+                    keywords: vec![l.key.clone()],
+                    keys,
+                    target: Target::Link(ws.id, l.clone()),
+                    icon: Some((l.kind.icon(), l.kind.color())),
+                }),
+                (None, None) => {}
+            }
+        }
+        // Pinned ones come first; the rest follow in layout order.
+        let rest: Vec<Entry> = ws
+            .surfaces()
+            .filter(|s| !listed.contains(&s.entity_id()))
+            .map(|s| {
+                let link = self.tab_link(wi, s, cx);
+                Entry {
+                    title: title_of(s, link.as_ref()).into(),
+                    subtitle: subtitle(vec![detail(s).unwrap_or_default()]),
+                    keywords: link.iter().map(|l| l.key.clone()).collect(),
+                    keys: None,
+                    target: Target::Tab(s.entity_id()),
+                    icon: icon_of(s, link.as_ref()),
+                }
+            })
+            .collect();
+        // Suggestions go last, after the open tabs.
+        let split = out
+            .iter()
+            .position(|e| matches!(e.target, Target::Link(..)))
+            .unwrap_or(out.len());
+        let suggestions = out.split_off(split);
+        out.extend(rest);
+        out.extend(suggestions);
+        out
     }
 
     /// The commands that apply to what has focus now, with their shortcuts.
@@ -404,6 +572,7 @@ impl AbroMux {
                     keywords,
                     keys,
                     target: Target::Action(action),
+                    icon: None,
                 }
             })
             .collect()
@@ -421,6 +590,7 @@ impl AbroMux {
                 keys: shortcut_digit(i, n)
                     .map(|d| crate::keymap::default_label(&format!("workspace{d}")).into()),
                 target: Target::Workspace(ws.id),
+                icon: Some(("folder", None)),
             })
             .collect()
     }
@@ -437,6 +607,9 @@ impl AbroMux {
                 cx.listener(|this, _: &Confirm, window, cx| this.confirm_palette(window, cx)),
             )
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.close_palette(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &ToggleScope, window, cx| this.toggle_scope(window, cx)),
+            )
     }
 
     fn move_selection(&mut self, by: isize, cx: &mut Context<Self>) {
@@ -477,6 +650,11 @@ impl AbroMux {
                         }
                         this.confirm_palette(window, cx);
                     }))
+                    .children(e.icon.map(|(name, color)| {
+                        icon(name)
+                            .size(px(14.))
+                            .text_color(color.map_or(rgb(pal().muted), rgb))
+                    }))
                     .child(
                         div()
                             .flex_1()
@@ -511,7 +689,8 @@ impl AbroMux {
             .collect();
         let empty: SharedString = match p.mode {
             Mode::Commands => "No commands match your search.".into(),
-            Mode::Workspaces => "No workspaces match your search.".into(),
+            Mode::Workspaces if p.wide => "No workspaces or tabs match your search.".into(),
+            Mode::Workspaces => "No tabs here match. Tab searches every workspace.".into(),
             Mode::MergeRequests => {
                 if crate::gitlab::model::MrKey::parse(&p.input.read(cx).value()).is_some() {
                     "Enter to open this merge request".into()
@@ -658,6 +837,17 @@ impl Palette {
         self.matches = scored.into_iter().map(|(_, i, pos)| (i, pos)).collect();
         self.selected = 0;
         self.scroll.scroll_to_item(0);
+    }
+}
+
+const SCOPE_NARROW: &str = "Search this workspace's tabs  ·  Tab: every workspace";
+const SCOPE_WIDE: &str = "Search every workspace and tab  ·  Tab: just this workspace";
+
+/// A suggested link's row title: its key and title.
+fn title_of_link(l: &crate::links::Link) -> String {
+    match l.label() {
+        Some(t) => format!("{} {t}", l.short_key()),
+        None => l.short_key(),
     }
 }
 

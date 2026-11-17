@@ -28,7 +28,7 @@ impl AbroMux {
         prompt: String,
         cx: &mut Context<Self>,
     ) {
-        let Some(ws) = self.workspaces.iter().find(|w| w.contains(surface)) else {
+        let Some(ws) = self.workspaces.iter().find(|w| w.owns(surface)) else {
             return;
         };
         let on = cx
@@ -67,7 +67,7 @@ impl AbroMux {
     /// Auto-naming is on for the workspace holding `surface`, and it isn't
     /// named by hand.
     fn naming_on(&self, surface: gpui::EntityId, cx: &Context<Self>) -> Option<usize> {
-        let i = self.workspaces.iter().position(|w| w.contains(surface))?;
+        let i = self.workspaces.iter().position(|w| w.owns(surface))?;
         let on = cx
             .global::<crate::settings::Settings>()
             .automation
@@ -78,7 +78,7 @@ impl AbroMux {
 
     /// `surface` is the terminal whose agent names its workspace.
     fn names_workspace(&self, surface: gpui::EntityId) -> bool {
-        let Some(ws) = self.workspaces.iter().find(|w| w.contains(surface)) else {
+        let Some(ws) = self.workspaces.iter().find(|w| w.owns(surface)) else {
             return false;
         };
         ws.name_surface.is_some() && ws.name_surface == self.surface_refs.get(&surface).copied()

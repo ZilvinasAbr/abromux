@@ -193,7 +193,7 @@ impl AbroMux {
             .try_global::<crate::settings::Settings>()
             .is_none_or(|s| s.app.reorder_on_notification);
         if let Some(i) = on
-            .then(|| self.workspaces.iter().position(|w| w.contains(surface)))
+            .then(|| self.workspaces.iter().position(|w| w.owns(surface)))
             .flatten()
         {
             self.workspace_to_top(i, cx);
@@ -213,7 +213,7 @@ impl AbroMux {
         cx: &mut Context<Self>,
     ) {
         let id = note.id;
-        let ws = self.workspaces.iter().find(|w| w.contains(surface));
+        let ws = self.workspaces.iter().find(|w| w.owns(surface));
         let input = notify_hook::Input {
             workspace: ws.map(|w| format!("workspace:{}", w.id)),
             surface: self
@@ -277,7 +277,7 @@ impl AbroMux {
     fn surface_title(&self, surface: EntityId, cx: &App) -> Option<String> {
         self.workspaces
             .iter()
-            .flat_map(|w| w.surfaces())
+            .flat_map(|w| w.all_surfaces())
             .find(|s| s.entity_id() == surface)
             .map(|s| s.title(cx))
     }
@@ -397,7 +397,7 @@ impl AbroMux {
     }
 
     pub(crate) fn ws_unread(&self, ws: &Workspace) -> bool {
-        self.latest_unread(ws).is_some() || self.manual_unread.iter().any(|&s| ws.contains(s))
+        self.latest_unread(ws).is_some() || self.manual_unread.iter().any(|&s| ws.owns(s))
     }
 
     /// Mark everything from `surface` read, a manual mark included.
@@ -502,7 +502,7 @@ impl AbroMux {
             .or_else(|| {
                 self.manual_unread
                     .iter()
-                    .find(|&&s| Some(s) != skip && self.workspaces.iter().any(|w| w.contains(s)))
+                    .find(|&&s| Some(s) != skip && self.workspaces.iter().any(|w| w.owns(s)))
                     .map(|&s| Unread::Surface(s))
             })
     }
@@ -514,7 +514,9 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(wi) = self.workspaces.iter().position(|w| w.contains(surface)) else {
+        // A hidden pinned tab comes back into the layout first.
+        self.show_hidden(surface, false, window, cx);
+        let Some(wi) = self.workspaces.iter().position(|w| w.owns(surface)) else {
             return false;
         };
         self.mark_surface_read(surface);
@@ -544,7 +546,7 @@ impl AbroMux {
         self.notifications
             .iter()
             .rev()
-            .find(|n| !n.read && ws.contains(n.surface))
+            .find(|n| !n.read && ws.owns(n.surface))
     }
 
     /// A closed surface takes its notifications with it.
@@ -566,7 +568,8 @@ impl AbroMux {
         n.read = true;
         let surface = n.surface;
         self.manual_unread.remove(&surface);
-        let Some(wi) = self.workspaces.iter().position(|w| w.contains(surface)) else {
+        self.show_hidden(surface, false, window, cx);
+        let Some(wi) = self.workspaces.iter().position(|w| w.owns(surface)) else {
             return false;
         };
         self.notifications_open = false;
@@ -603,7 +606,7 @@ impl AbroMux {
                 let place = self
                     .workspaces
                     .iter()
-                    .find(|w| w.contains(n.surface))
+                    .find(|w| w.owns(n.surface))
                     .map(|w| w.name(cx))
                     .unwrap_or_default();
                 let age = ago(now.duration_since(n.at).unwrap_or_default());

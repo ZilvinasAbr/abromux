@@ -423,17 +423,36 @@ pub struct Workspace {
     pub progress: Option<Progress>,
     /// `abromux log` entries, oldest first; the sidebar shows the newest.
     pub log: Vec<LogEntry>,
-    /// Its tracked links (`crate::links`), in the sidebar's order.
+    /// Links tracked before tabs were pinned (`crate::links`): suggested
+    /// under the pinned tabs until a tab shows them.
     pub links: Vec<crate::links::Link>,
     /// Keys of links untracked here, so they aren't tracked again when a
     /// tab or its branches show them.
     pub hidden_links: Vec<String>,
     /// The pane its links open in, once one has.
     pub link_pane: Option<usize>,
+    /// Its pinned tabs, in the sidebar's order: in the layout or in
+    /// `hidden`. Closing one (⌘W) hides it rather than closing it.
+    pub pinned: Vec<EntityId>,
+    /// Pinned tabs closed with ⌘W: out of the layout, still running.
+    pub hidden: Vec<Hidden>,
+    /// The ticket or merge request a pinned tab was pinned for, so it's
+    /// still known as that while its page shows something else (a sign-in
+    /// page, say).
+    pub pinned_for: std::collections::HashMap<EntityId, crate::links::Link>,
     /// The pane focused before this one, for `last-pane`, and the one
     /// `track_focus` last saw.
     prev_pane: Option<usize>,
     seen_pane: usize,
+}
+
+/// A pinned tab taken out of the layout. Its terminal, page or plugin
+/// keeps running; showing it puts it back in `pane` at `index`, or in
+/// another pane if that one has closed since.
+pub struct Hidden {
+    pub surface: Surface,
+    pub pane: usize,
+    pub index: usize,
 }
 
 pub type Status = abromux_core::status::Status<EntityId>;
@@ -481,6 +500,9 @@ impl Workspace {
             links: vec![],
             hidden_links: vec![],
             link_pane: None,
+            pinned: vec![],
+            hidden: vec![],
+            pinned_for: Default::default(),
             prev_pane: None,
             seen_pane: focused_pane,
         }
@@ -560,9 +582,54 @@ impl Workspace {
         self.focused().and_then(|p| p.active_surface())
     }
 
+    /// Tab `id` is in the layout (not hidden).
     pub fn contains(&self, id: EntityId) -> bool {
         self.panes()
             .any(|p| p.tabs.iter().any(|s| s.entity_id() == id))
+    }
+
+    /// Tab `id` is this workspace's, in the layout or hidden.
+    pub fn owns(&self, id: EntityId) -> bool {
+        self.contains(id) || self.hidden_index(id).is_some()
+    }
+
+    pub fn is_pinned(&self, id: EntityId) -> bool {
+        self.pinned.contains(&id)
+    }
+
+    /// Where hidden tab `id` is in `hidden`.
+    pub fn hidden_index(&self, id: EntityId) -> Option<usize> {
+        self.hidden.iter().position(|h| h.surface.entity_id() == id)
+    }
+
+    /// Every tab, hidden ones too: in the layout's order, then the hidden.
+    pub fn all_surfaces(&self) -> impl Iterator<Item = &Surface> {
+        self.surfaces()
+            .chain(self.hidden.iter().map(|h| &h.surface))
+    }
+
+    /// The pinned tabs, in order: each with whether it's hidden.
+    pub fn pinned_surfaces(&self) -> Vec<(Surface, bool)> {
+        self.pinned
+            .iter()
+            .filter_map(|&id| {
+                if let Some(h) = self.hidden.iter().find(|h| h.surface.entity_id() == id) {
+                    return Some((h.surface.clone(), true));
+                }
+                self.surfaces()
+                    .find(|s| s.entity_id() == id)
+                    .map(|s| (s.clone(), false))
+            })
+            .collect()
+    }
+
+    /// Pin tab `id` (in the layout or hidden); false if it already is.
+    pub fn pin(&mut self, id: EntityId) -> bool {
+        if self.pinned.contains(&id) {
+            return false;
+        }
+        self.pinned.push(id);
+        true
     }
 
     /// Pane, index and pane tab count of tab `id`.

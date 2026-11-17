@@ -292,8 +292,26 @@ pub const METHODS: &[Method] = &[
     m(
         "surface.close",
         "close-surface",
-        "Close a tab (ending its program).",
+        "Close a tab (ending its program). A pinned one is hidden instead, still running.",
+        "@surface;unpin?:boolean Unpin and close a pinned one for good",
+    ),
+    m(
+        "tab.pin",
+        "tab pin",
+        "Pin a tab to its workspace: the sidebar lists it, and closing it hides it.",
         "@surface",
+    ),
+    m(
+        "tab.unpin",
+        "tab unpin",
+        "Unpin a tab; a hidden one closes.",
+        "@surface",
+    ),
+    m(
+        "tab.list",
+        "tab list",
+        "A workspace's pinned tabs, hidden ones too.",
+        "@workspace",
     ),
     m(
         "surface.focus",
@@ -771,25 +789,25 @@ pub const METHODS: &[Method] = &[
     m(
         "link.list",
         "link list",
-        "A workspace's tracked links: Jira tickets, merge requests, pages.",
+        "A workspace's sidebar list: its pinned tabs, then suggested links.",
         "@workspace",
     ),
     m(
         "link.add",
         "link add",
-        "Track a link in a workspace.",
+        "Open a link in a hidden pinned tab of a workspace, unless a tab shows it.",
         "@workspace;ref:string A URL, PAY-123 or group/project!iid",
     ),
     m(
         "link.remove",
         "link remove",
-        "Stop tracking a link.",
-        "@workspace;ref:string Its number, key or URL",
+        "Unpin a listed tab, or stop suggesting a link.",
+        "@workspace;ref:string Its number, key, URL or tab ref",
     ),
     m(
         "link.open",
         "link open",
-        "Show a tracked link: its tab, else a new one.",
+        "Show a listed link: its tab, else a new pinned one.",
         "@workspace;ref?:string Its number, key or URL;all?:boolean Every one;focus?:boolean Focus it",
     ),
     m(
