@@ -63,6 +63,9 @@ struct Entry {
     keywords: Vec<String>,
     keys: Option<SharedString>,
     target: Target,
+    /// Drawn left of the title: an icon's name, and its colour if not the
+    /// text's.
+    icon: Option<(&'static str, Option<u32>)>,
 }
 
 pub struct Palette {
@@ -191,6 +194,7 @@ fn mr_entries(cx: &App) -> Vec<Entry> {
                 subtitle: Some(sub.join(" · ").into()),
                 keys: None,
                 target: Target::Mr(m.key.clone()),
+                icon: Some(("gitlab", crate::links::Kind::Mr.color())),
             }
         })
         .collect()
@@ -460,6 +464,12 @@ impl AbroMux {
                 _ => s.title(cx),
             }
         };
+        // As the sidebar draws it: a ticket's or merge request's mark, else
+        // the tab's own (an agent's logo, a terminal, a page).
+        let icon_of = |s: &Surface, link: Option<&crate::links::Link>| match link {
+            Some(l) if l.kind != crate::links::Kind::Web => Some((l.kind.icon(), l.kind.color())),
+            _ => Some((s.icon(cx), None)),
+        };
         let mut out = vec![];
         let mut listed = vec![];
         for (i, it) in items.iter().enumerate() {
@@ -475,6 +485,7 @@ impl AbroMux {
                         keywords: link.iter().map(|l| l.key.clone()).collect(),
                         keys,
                         target: Target::Tab(s.entity_id()),
+                        icon: icon_of(s, link.as_ref()),
                     });
                 }
                 (None, Some(l)) => out.push(Entry {
@@ -483,6 +494,7 @@ impl AbroMux {
                     keywords: vec![l.key.clone()],
                     keys,
                     target: Target::Link(ws.id, l.clone()),
+                    icon: Some((l.kind.icon(), l.kind.color())),
                 }),
                 (None, None) => {}
             }
@@ -499,6 +511,7 @@ impl AbroMux {
                     keywords: link.iter().map(|l| l.key.clone()).collect(),
                     keys: None,
                     target: Target::Tab(s.entity_id()),
+                    icon: icon_of(s, link.as_ref()),
                 }
             })
             .collect();
@@ -559,6 +572,7 @@ impl AbroMux {
                     keywords,
                     keys,
                     target: Target::Action(action),
+                    icon: None,
                 }
             })
             .collect()
@@ -576,6 +590,7 @@ impl AbroMux {
                 keys: shortcut_digit(i, n)
                     .map(|d| crate::keymap::default_label(&format!("workspace{d}")).into()),
                 target: Target::Workspace(ws.id),
+                icon: Some(("folder", None)),
             })
             .collect()
     }
@@ -634,6 +649,11 @@ impl AbroMux {
                             p.selected = row;
                         }
                         this.confirm_palette(window, cx);
+                    }))
+                    .children(e.icon.map(|(name, color)| {
+                        icon(name)
+                            .size(px(14.))
+                            .text_color(color.map_or(rgb(pal().muted), rgb))
                     }))
                     .child(
                         div()
