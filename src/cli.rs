@@ -36,7 +36,7 @@ Commands:
   close-workspace --workspace <id|ref|index>
   rename-workspace [--workspace <id|ref|index>] <title>
   workspace-action [--workspace <ref>] <action> [<value>]    (rename, clear-name, set-description, clear-description,
-                                                             set-color, clear-color, move-up, move-down, move-top,
+                                                             set-color, clear-color, move-up, move-down, move-top, move-bottom,
                                                              close-others, close-above, close-below, mark-read)
   reorder-workspace [--workspace <ref>] (--index <n> | --before <ref> | --after <ref>) [--dry-run]
   reorder-workspaces --order <ref>,<ref>,... [--dry-run]     (unnamed ones follow in their order)
@@ -791,7 +791,7 @@ fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), Str
             ) && let Some(w) = r["workspace"].as_str()
             {
                 println!(
-                    "OK closing {w}; {} then deletes {} and notifies when done",
+                    "OK closing {w}; {} then deletes {} (a toast says if it can't)",
                     crate::channel::app_name(),
                     ws.display()
                 );

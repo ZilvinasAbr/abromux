@@ -556,6 +556,13 @@ pub struct NotificationSettings {
     /// The bell in the macOS menu bar, or the tray on Linux (off by default
     /// there).
     pub show_in_menu_bar: bool,
+    /// An agent (or a program, OSC 7501) waiting for you: a permission
+    /// prompt or a question.
+    pub needs_input: Alert,
+    /// An agent finishing its turn, or a program done.
+    pub done: Alert,
+    /// A program that failed (OSC 7501, OSC 9;4).
+    pub error: Alert,
 }
 
 impl Default for NotificationSettings {
@@ -564,6 +571,44 @@ impl Default for NotificationSettings {
             hooks: vec![],
             // The tray on Linux: off, as not every bar has one.
             show_in_menu_bar: abromux_platform::MACOS,
+            needs_input: Alert::Banner,
+            // An agent finishes every turn: worth a dot, not a banner each.
+            done: Alert::Unread,
+            error: Alert::Banner,
+        }
+    }
+}
+
+impl NotificationSettings {
+    pub fn alert(&self, kind: crate::notification::Kind) -> Alert {
+        use crate::notification::Kind;
+        match kind {
+            Kind::NeedsInput => self.needs_input,
+            Kind::Done => self.done,
+            Kind::Error => self.error,
+            Kind::Message | Kind::Bell => Alert::Banner,
+        }
+    }
+}
+
+/// How much a kind of notification asks for.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum Alert {
+    /// Unread, and a desktop banner while the app is in the background.
+    Banner,
+    /// Unread (the pane's ring, the dots, the sidebar line), no banner.
+    Unread,
+    /// Not even recorded.
+    Off,
+}
+
+impl Alert {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Alert::Banner => "banner",
+            Alert::Unread => "unread",
+            Alert::Off => "off",
         }
     }
 }
@@ -1259,6 +1304,20 @@ mod tests {
                 .contains("needs one of")
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn notification_kinds() {
+        use crate::notification::Kind;
+        let d = NotificationSettings::default();
+        assert_eq!(d.alert(Kind::NeedsInput), Alert::Banner);
+        assert_eq!(d.alert(Kind::Done), Alert::Unread);
+        assert_eq!(d.alert(Kind::Message), Alert::Banner);
+        let s = parse(r#"{"notifications": {"done": "off", "needsInput": "unread"}}"#).unwrap();
+        assert_eq!(s.notifications.alert(Kind::Done), Alert::Off);
+        assert_eq!(s.notifications.alert(Kind::NeedsInput), Alert::Unread);
+        assert_eq!(s.notifications.alert(Kind::Error), Alert::Banner);
+        assert!(parse(r#"{"notifications": {"done": "loud"}}"#).is_err());
     }
 
     #[test]

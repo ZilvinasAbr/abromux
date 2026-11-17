@@ -10,7 +10,9 @@ use crate::{
     AbroMux, BrowserView, DEFAULT_URL,
     agent::{Agent, AgentEvent, Kind},
     browser::normalize_url,
-    browser_auto, debug, ipc, one_line,
+    browser_auto, debug, ipc,
+    notification::Kind as NoteKind,
+    one_line,
     status::{self, RUNNING, WARNING},
     workspace::{
         Dir, LogLevel, Progress, Status, Surface, Workspace, git_branch, group_span, parse_color,
@@ -1434,7 +1436,14 @@ impl AbroMux {
                 if title.is_empty() && body.is_empty() {
                     bail!("notify needs --title or --body");
                 }
-                let id = self.add_notification(s.entity_id(), title, body, false, window, cx);
+                let id = self.add_notification(
+                    s.entity_id(),
+                    title,
+                    body,
+                    NoteKind::Message,
+                    window,
+                    cx,
+                );
                 json!({ "id": id, "surface": self.sref(&s) })
             }
             "notification.list" => {
@@ -2370,12 +2379,19 @@ impl AbroMux {
             AgentEvent::NeedsInput(message) => {
                 let message = message.unwrap_or_else(|| format!("{label} needs your attention"));
                 self.set_agent_status(surface, label, Some(("Needs input", WARNING)), cx);
-                self.add_notification(surface, title.into(), message, false, window, cx);
+                self.add_notification(
+                    surface,
+                    title.into(),
+                    message,
+                    NoteKind::NeedsInput,
+                    window,
+                    cx,
+                );
             }
             AgentEvent::Stopped(summary) => {
                 self.set_agent_status(surface, label, None, cx);
                 let body = summary.unwrap_or_else(|| "Finished".into());
-                self.add_notification(surface, title.into(), body, false, window, cx);
+                self.add_notification(surface, title.into(), body, NoteKind::Done, window, cx);
             }
             AgentEvent::Ended => self.set_agent_status(surface, label, None, cx),
         }
@@ -2911,8 +2927,16 @@ impl AbroMux {
                 let url = str_param(p, "url")
                     .map(normalize_url)
                     .unwrap_or_else(|| DEFAULT_URL.into());
+                let claimed = crate::plugins::claiming(&url, cx);
                 if bool_param(p, "builtIn", false) {
                     self.make_builtin_browser(&url, window, cx)
+                } else if let Some(Ok(s)) =
+                    claimed.map(|pl| self.make_plugin(pl.id, &json!({ "url": url }), window, cx))
+                {
+                    // A link a plugin shows itself (a GitLab merge request)
+                    // opens as its tab, as from a terminal or the built-in
+                    // browser: terminal-browser's new-tab links come here.
+                    s
                 } else if self.open_in_system_browser(&url, window, cx) {
                     anyhow::bail!(
                         "browser.engine is \"system\": {url} opened in the default browser, \
@@ -3113,6 +3137,7 @@ impl AbroMux {
             "move-up" => self.nudge_workspace(wi, false, cx),
             "move-down" => self.nudge_workspace(wi, true, cx),
             "move-top" => self.workspace_to_top(wi, cx),
+            "move-bottom" => self.workspace_to_bottom(wi, cx),
             "close-others" => self.close_others(wi, window, cx),
             "close-above" | "close-below" => {
                 let ids: Vec<usize> = match action {
@@ -3145,7 +3170,7 @@ impl AbroMux {
             "pin" | "unpin" => bail!("abromux has no {action:?} yet"),
             a => bail!(
                 "unknown action {a:?}; expected rename, clear-name, set-description, clear-description, \
-                 set-color, clear-color, move-up, move-down, move-top, close-others, close-above, \
+                 set-color, clear-color, move-up, move-down, move-top, move-bottom, close-others, close-above, \
                  close-below, mark-read or mark-unread"
             ),
         }

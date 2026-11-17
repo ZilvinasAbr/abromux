@@ -296,6 +296,30 @@ impl AbroMux {
         });
     }
 
+    /// To the end of its group, or of the list (above the cleanup group, which
+    /// stays last).
+    pub(crate) fn workspace_to_bottom(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(w) = self.workspaces.get(index) else {
+            return;
+        };
+        let group = w.group;
+        let cleanup = self
+            .groups
+            .iter()
+            .find(|g| g.cleanup)
+            .and_then(|g| group_span(&self.workspaces, g.id));
+        // An index into the list without it.
+        let to = match (group, cleanup) {
+            (Some(g), _) => group_span(&self.workspaces, g).map_or(index, |(_, end)| end - 1),
+            (None, Some((start, _))) if index < start => start - 1,
+            (None, Some((start, _))) => start,
+            (None, None) => self.workspaces.len() - 1,
+        };
+        self.rearrange(cx, |ws, groups| {
+            workspace::move_workspace(ws, groups, index, to, group)
+        });
+    }
+
     /// A new group holding workspace `index`, named after its folder.
     pub(crate) fn new_group(&mut self, index: usize, cx: &mut Context<Self>) -> Option<usize> {
         let w = self.workspaces.get(index)?;
@@ -726,6 +750,11 @@ impl AbroMux {
             PopupMenuItem::new("Move to Top")
                 .disabled(index == 0)
                 .on_click(act(|t, i, _, cx| t.workspace_to_top(i, cx))),
+        )
+        .item(
+            PopupMenuItem::new("Move to Bottom")
+                .disabled(index + 1 == n)
+                .on_click(act(|t, i, _, cx| t.workspace_to_bottom(i, cx))),
         )
         .separator()
         .when(has_folder, |m| {

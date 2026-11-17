@@ -832,10 +832,24 @@ impl AbroMux {
                 TerminalEvent::OpenLink(target) => this.open_link(id, target.clone(), window, cx),
                 TerminalEvent::Bell => {
                     this.emit_for("bell", id, serde_json::json!({}));
-                    this.add_notification(id, String::new(), String::new(), true, window, cx);
+                    this.add_notification(
+                        id,
+                        String::new(),
+                        String::new(),
+                        notification::Kind::Bell,
+                        window,
+                        cx,
+                    );
                 }
                 TerminalEvent::Notification { title, body } => {
-                    this.add_notification(id, title.clone(), body.clone(), false, window, cx);
+                    this.add_notification(
+                        id,
+                        title.clone(),
+                        body.clone(),
+                        notification::Kind::Message,
+                        window,
+                        cx,
+                    );
                 }
                 TerminalEvent::ProgramStatus(was) => {
                     this.program_status_changed(id, was.clone(), window, cx);
@@ -1583,8 +1597,8 @@ impl AbroMux {
 
     /// `abromux folder remove` from (maybe) one of workspace `id`'s own
     /// shells: once it has printed and hung up (`gone`), close the
-    /// workspace, then delete the folder off the main thread and say how it
-    /// went.
+    /// workspace, then delete the folder off the main thread (a toast only
+    /// if that fails).
     pub(crate) fn remove_folder_later(
         &mut self,
         id: usize,
@@ -1609,16 +1623,15 @@ impl AbroMux {
                 .background_executor()
                 .spawn(async move { folder::remove(&d, force) })
                 .await;
-            let _ = this.update_in(cx, |_, window, cx| {
-                let note = match result {
-                    Ok(done) => {
-                        Notification::success(done.join("\n")).title("Workspace folder removed")
-                    }
-                    Err(e) => Notification::error(format!("{}: {e}", dir.display()))
-                        .title("Couldn't remove the workspace folder"),
-                };
-                window.push_notification(note, cx);
-            });
+            // Only a failure is worth a toast: the workspace closing already
+            // says it went.
+            if let Err(e) = result {
+                let _ = this.update_in(cx, |_, window, cx| {
+                    let note = Notification::error(format!("{}: {e}", dir.display()))
+                        .title("Couldn't remove the workspace folder");
+                    window.push_notification(note, cx);
+                });
+            }
         })
         .detach();
     }
