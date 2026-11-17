@@ -135,6 +135,7 @@ impl AbroMux {
                 home: ws.home.as_ref().map(|h| h.to_string_lossy().into_owned()),
                 links: ws.links.clone(),
                 hidden_links: ws.hidden_links.clone(),
+                pinned: pin_states(ws, scrollback, &self.surface_refs, cx),
                 group: ws
                     .group
                     .and_then(|g| self.groups.iter().position(|x| x.id == g)),
@@ -355,6 +356,9 @@ impl AbroMux {
         // Held shells keep their surface numbers: leave those free.
         for ws in &states {
             self.next_surface = self.next_surface.max(ws.root.max_surface());
+            for p in &ws.pinned {
+                self.next_surface = self.next_surface.max(p.max_surface());
+            }
         }
         // Each comes back as the workspace it was, unless that number is
         // taken (a workspace open now, or another session's added to this one).
@@ -396,6 +400,39 @@ impl AbroMux {
             ws.home = home;
             ws.links = state.links;
             ws.hidden_links = state.hidden_links;
+            for pin in state.pinned {
+                if let Some((pane, tab)) = pin.at {
+                    let id = ws
+                        .panes()
+                        .nth(pane)
+                        .and_then(|p| p.tabs.get(tab))
+                        .map(|s| s.entity_id());
+                    if let Some(id) = id {
+                        ws.pin(id);
+                        if let Some(l) = pin.link {
+                            ws.pinned_for.insert(id, l);
+                        }
+                    }
+                } else if let Some(tab) = pin.hidden {
+                    let surface = self.build_tab(tab, id, window, cx);
+                    if let Surface::Browser(b) = &surface {
+                        b.update(cx, |b, cx| b.set_shown(false, cx));
+                    }
+                    let pane = pin
+                        .pane
+                        .and_then(|i| ws.panes().nth(i))
+                        .map_or(ws.focused_pane, |p| p.id);
+                    ws.pin(surface.entity_id());
+                    if let Some(l) = pin.link {
+                        ws.pinned_for.insert(surface.entity_id(), l);
+                    }
+                    ws.hidden.push(crate::workspace::Hidden {
+                        surface,
+                        pane,
+                        index: pin.index,
+                    });
+                }
+            }
             ws.group = state.group.and_then(|g| group_ids.get(g).copied());
             self.workspaces.push(ws);
             ids.push(Some(id));
@@ -555,6 +592,42 @@ impl AbroMux {
 }
 
 type Refs = std::collections::HashMap<gpui::EntityId, usize>;
+
+/// Workspace `ws`'s pinned tabs: where each is in the layout, or, for a
+/// hidden one, the tab itself.
+fn pin_states(
+    ws: &crate::workspace::Workspace,
+    scrollback: bool,
+    refs: &Refs,
+    cx: &App,
+) -> Vec<abromux_core::session::PinState> {
+    use abromux_core::session::PinState;
+    let panes: Vec<&crate::workspace::Pane> = ws.panes().collect();
+    ws.pinned
+        .iter()
+        .filter_map(|&id| {
+            if let Some(h) = ws.hidden.iter().find(|h| h.surface.entity_id() == id) {
+                return Some(PinState {
+                    at: None,
+                    hidden: Some(tab_state(&h.surface, scrollback, refs, cx)),
+                    pane: panes.iter().position(|p| p.id == h.pane),
+                    index: h.index.min(u32::MAX as usize),
+                    link: ws.pinned_for.get(&id).cloned(),
+                });
+            }
+            panes.iter().enumerate().find_map(|(pi, p)| {
+                let ti = p.tabs.iter().position(|s| s.entity_id() == id)?;
+                Some(PinState {
+                    at: Some((pi, ti)),
+                    hidden: None,
+                    pane: None,
+                    index: 0,
+                    link: ws.pinned_for.get(&id).cloned(),
+                })
+            })
+        })
+        .collect()
+}
 
 fn node_state(node: &Node, scrollback: bool, refs: &Refs, cx: &App) -> NodeState {
     match node {

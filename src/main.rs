@@ -24,6 +24,7 @@ mod menu;
 mod naming;
 mod notification;
 mod palette;
+mod pins;
 mod placement;
 mod plugins;
 mod quit;
@@ -88,6 +89,7 @@ actions!(
         SplitRight,
         SplitDown,
         CloseTab,
+        CloseAndUnpinTab,
         MoveTabToNewWorkspace,
         NextTab,
         PrevTab,
@@ -338,6 +340,9 @@ struct AbroMux {
     /// The pane area, for drops on its outer edges.
     main_bounds: Rc<Cell<Bounds<Pixels>>>,
     branches: RefCell<HashMap<String, (Instant, Option<String>)>>,
+    /// The Jira a ticket tab was last seen on (`links::sync_links`), for
+    /// bare keys when the config names none.
+    jira_seen: Option<String>,
     hints: Option<Hints>,
     /// Bumped on every modifier change so a stale delayed show does nothing.
     hint_gen: usize,
@@ -417,6 +422,7 @@ impl AbroMux {
             tab_drop: None,
             main_bounds: Default::default(),
             branches: Default::default(),
+            jira_seen: None,
             hints: None,
             hint_gen: 0,
             flash: None,
@@ -491,8 +497,11 @@ impl AbroMux {
                 let alive = this.update(cx, |this, cx| {
                     for (socket, page) in found {
                         let Some(tty) = page.tty() else { continue };
-                        let term = this.workspaces.iter().flat_map(|w| w.surfaces()).find_map(
-                            |s| match s {
+                        let term = this
+                            .workspaces
+                            .iter()
+                            .flat_map(|w| w.all_surfaces())
+                            .find_map(|s| match s {
                                 Surface::Terminal(t)
                                     if t.read(cx).app.is_none()
                                         && t.read(cx).tty_name().as_deref() == Some(tty) =>
@@ -500,8 +509,7 @@ impl AbroMux {
                                     Some(t.clone())
                                 }
                                 _ => None,
-                            },
-                        );
+                            });
                         if let Some(t) = term {
                             terminal_browser::adopt(&t, socket, page, cx);
                         }
@@ -688,12 +696,11 @@ impl AbroMux {
     /// Before quitting: terminals in abromux's holder leave their state for
     /// the next launch (`TerminalView::freeze`).
     fn freeze_held(&mut self, cx: &mut Context<Self>) {
+        // Hidden pinned tabs too: they come back hidden, still running.
         for ws in &self.workspaces {
-            for p in ws.panes() {
-                for s in &p.tabs {
-                    if let Surface::Terminal(t) = s {
-                        t.update(cx, |t, _| t.freeze());
-                    }
+            for s in ws.all_surfaces() {
+                if let Surface::Terminal(t) = s {
+                    t.update(cx, |t, _| t.freeze());
                 }
             }
         }
@@ -1308,12 +1315,35 @@ impl AbroMux {
     }
 
     fn close_surface(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
+        // A hidden pinned tab: out of the list, with nothing on screen to fix.
+        if let Some(wi) = self
+            .workspaces
+            .iter()
+            .position(|w| w.hidden_index(id).is_some())
+        {
+            self.forget_notifications(id);
+            self.forget_status(id);
+            self.surface_refs.remove(&id);
+            let ws = &mut self.workspaces[wi];
+            ws.pinned.retain(|p| *p != id);
+            ws.pinned_for.remove(&id);
+            let h = ws.hidden.remove(ws.hidden_index(id).unwrap());
+            match h.surface {
+                Surface::Terminal(t) => t.update(cx, |t, _| t.close()),
+                Surface::Browser(b) => b.update(cx, |b, cx| b.set_shown(false, cx)),
+                Surface::Plugin(_) => {}
+            }
+            cx.notify();
+            return;
+        }
         let Some(wi) = self.workspaces.iter().position(|w| w.contains(id)) else {
             return;
         };
         self.forget_notifications(id);
         self.forget_status(id);
         let ws = &mut self.workspaces[wi];
+        ws.pinned.retain(|p| *p != id);
+        ws.pinned_for.remove(&id);
         self.surface_refs.remove(&id);
         let pane_id = ws
             .panes()
@@ -1382,6 +1412,14 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A pinned tab is kept: it leaves the layout, still running.
+        if self
+            .workspaces
+            .iter()
+            .any(|w| w.is_pinned(id) && w.contains(id))
+        {
+            return self.hide_tab(id, window, cx);
+        }
         let claude = self.workspaces.iter().any(|ws| {
             ws.panes().any(|p| {
                 p.tabs
@@ -1425,7 +1463,8 @@ impl AbroMux {
         };
         let claude = ws
             .panes()
-            .any(|p| p.tabs.iter().any(|s| surface_has_claude(s, cx)));
+            .any(|p| p.tabs.iter().any(|s| surface_has_claude(s, cx)))
+            || ws.hidden.iter().any(|h| surface_has_claude(&h.surface, cx));
         if !claude {
             return self.close_workspace(index, window, cx);
         }
@@ -1659,15 +1698,14 @@ impl AbroMux {
         }
         let ws = self.workspaces.remove(index);
         // Hide any webviews before they drop so nothing lingers on screen.
-        for p in ws.panes() {
-            for s in &p.tabs {
-                self.surface_refs.remove(&s.entity_id());
-                self.forget_notifications(s.entity_id());
-                match s {
-                    Surface::Browser(b) => b.update(cx, |b, cx| b.set_shown(false, cx)),
-                    Surface::Terminal(t) => t.update(cx, |t, _| t.close()),
-                    Surface::Plugin(_) => {}
-                }
+        // Hidden pinned tabs go with it.
+        for s in ws.all_surfaces() {
+            self.surface_refs.remove(&s.entity_id());
+            self.forget_notifications(s.entity_id());
+            match s {
+                Surface::Browser(b) => b.update(cx, |b, cx| b.set_shown(false, cx)),
+                Surface::Terminal(t) => t.update(cx, |t, _| t.close()),
+                Surface::Plugin(_) => {}
             }
         }
         if self.workspaces.is_empty() {
@@ -1771,7 +1809,7 @@ impl AbroMux {
     pub(crate) fn find_tab(&self, id: EntityId) -> Option<Surface> {
         self.workspaces
             .iter()
-            .flat_map(|w| w.surfaces())
+            .flat_map(|w| w.all_surfaces())
             .find(|s| s.entity_id() == id)
             .cloned()
     }
@@ -3072,6 +3110,15 @@ impl Render for AbroMux {
                     }
                 }
             }))
+            .on_action(cx.listener(|this, _: &CloseAndUnpinTab, window, cx| {
+                if let Some(id) = this.ws().focused_surface().map(|s| s.entity_id()) {
+                    if this.ws().is_pinned(id) {
+                        this.request_close_and_unpin(id, window, cx)
+                    } else {
+                        this.request_close_surface(id, window, cx)
+                    }
+                }
+            }))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| this.cycle_tab(1, window, cx)))
             .on_action(cx.listener(|this, _: &PrevTab, window, cx| this.cycle_tab(-1, window, cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
@@ -3151,7 +3198,7 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &Link7, w, cx| this.show_link_at(6, w, cx)))
             .on_action(cx.listener(|this, _: &Link8, w, cx| this.show_link_at(7, w, cx)))
             .on_action(cx.listener(|this, _: &Link9, w, cx| this.show_link_at(8, w, cx)))
-            .on_action(cx.listener(|this, _: &TrackTab, w, cx| this.toggle_track_tab(w, cx)))
+            .on_action(cx.listener(|this, _: &TrackTab, w, cx| this.toggle_pin_tab(w, cx)))
             .on_action(cx.listener(|this, _: &OpenAllLinks, w, cx| {
                 let wi = this.active;
                 this.show_all_links(wi, w, cx);
@@ -3593,6 +3640,7 @@ fn run_app(cwd: Option<String>) {
             ),
             KeyBinding::new("enter", palette::Confirm, Some("CommandPalette > Input")),
             KeyBinding::new("escape", palette::Dismiss, Some("CommandPalette > Input")),
+            KeyBinding::new("tab", palette::ToggleScope, Some("CommandPalette > Input")),
             KeyBinding::new("down", browser::SuggestNext, Some("Omnibar > Input")),
             KeyBinding::new("ctrl-n", browser::SuggestNext, Some("Omnibar > Input")),
             KeyBinding::new("up", browser::SuggestPrev, Some("Omnibar > Input")),

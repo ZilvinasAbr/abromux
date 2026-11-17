@@ -918,16 +918,55 @@ impl AbroMux {
                 out
             }
             "surface.close" => {
-                let (_, _, s) = self.surface_target(p)?;
+                let (wi, _, s) = self.surface_target(p)?;
                 let r = self.sref(&s);
-                self.close_surface(s.entity_id(), window, cx);
-                json!({ "closed": r })
+                let id = s.entity_id();
+                let ws = &self.workspaces[wi];
+                // A pinned tab is kept, out of the layout, unless --unpin.
+                if ws.is_pinned(id) && !bool_param(p, "unpin", false) {
+                    if ws.contains(id) {
+                        self.hide_tab(id, window, cx);
+                    }
+                    json!({ "hidden": r })
+                } else {
+                    self.unpin_tab(id, window, cx);
+                    self.close_surface(id, window, cx);
+                    json!({ "closed": r })
+                }
             }
             "surface.focus" => {
-                let (wi, _, s) = self.surface_target(p)?;
-                self.focus_surface(s.entity_id(), cx);
-                self.select_workspace(wi, window, cx);
+                let (_, _, s) = self.surface_target(p)?;
+                self.reveal_tab(s.entity_id(), window, cx);
                 self.describe_surface(&s, true, cx)
+            }
+            "tab.pin" => {
+                let (_, _, s) = self.surface_target(p)?;
+                let pinned = self.pin_tab(s.entity_id(), cx);
+                json!({ "surface": self.sref(&s), "pinned": pinned })
+            }
+            "tab.unpin" => {
+                let (_, _, s) = self.surface_target(p)?;
+                let id = s.entity_id();
+                let r = self.sref(&s);
+                let closed = self.workspaces.iter().any(|w| w.hidden_index(id).is_some());
+                let unpinned = self.unpin_tab(id, window, cx);
+                json!({ "surface": r, "unpinned": unpinned, "closed": unpinned && closed })
+            }
+            "tab.list" => {
+                let wi = self.workspace_target(p)?;
+                let ws = &self.workspaces[wi];
+                let focused = ws.focused_surface().map(|s| s.entity_id());
+                let list: Vec<Value> = ws
+                    .pinned_surfaces()
+                    .into_iter()
+                    .map(|(s, hidden)| {
+                        let mut v = self.describe_surface(&s, Some(s.entity_id()) == focused, cx);
+                        v["pinned"] = json!(true);
+                        v["hidden"] = json!(hidden);
+                        v
+                    })
+                    .collect();
+                json!(list)
             }
             "surface.send_text" => {
                 let t = self.terminal_target(p)?;
@@ -1453,7 +1492,7 @@ impl AbroMux {
                     .iter()
                     .rev()
                     .map(|n| {
-                        let ws = self.workspaces.iter().position(|w| w.contains(n.surface));
+                        let ws = self.workspaces.iter().position(|w| w.owns(n.surface));
                         json!({
                             "id": n.id,
                             "title": n.title,
@@ -1735,23 +1774,26 @@ impl AbroMux {
             }
             "link.list" => {
                 let wi = self.workspace_target(p)?;
-                let tracked: Vec<String> = self.workspaces[wi]
-                    .links
-                    .iter()
-                    .map(|l| l.key.clone())
-                    .collect();
                 let list: Vec<Value> = self
-                    .shown_links(wi, cx)
+                    .items(wi, cx)
                     .into_iter()
                     .enumerate()
-                    .map(|(i, l)| {
-                        let tab = self
-                            .link_tab(wi, &l.key, cx)
-                            .and_then(|(_, id)| self.surface_refs.get(&id).copied())
-                            .map(|n| format!("surface:{n}"));
+                    .map(|(i, it)| {
+                        let tab = it.tab.as_ref().map(|(s, _)| self.sref(s));
+                        let title = it
+                            .link
+                            .as_ref()
+                            .and_then(|l| l.title.clone())
+                            .or_else(|| it.tab.as_ref().map(|(s, _)| s.title(cx)));
                         json!({
-                            "index": i + 1, "kind": l.kind.name(), "key": l.key, "url": l.url,
-                            "title": l.title, "tracked": tracked.contains(&l.key), "tab": tab,
+                            "index": i + 1,
+                            "kind": it.link.as_ref().map_or("tab", |l| l.kind.name()),
+                            "key": it.link.as_ref().map(|l| l.key.clone()),
+                            "url": it.link.as_ref().map(|l| l.url.clone()),
+                            "title": title,
+                            "pinned": it.tab.is_some(),
+                            "hidden": it.tab.as_ref().is_some_and(|(_, h)| *h),
+                            "tab": tab,
                         })
                     })
                     .collect();
@@ -1761,15 +1803,31 @@ impl AbroMux {
                 let wi = self.workspace_target(p)?;
                 let r = str_param(p, "ref").context("missing <url|PAY-123|group/project!iid>")?;
                 let link = self.parse_link(r, cx).map_err(anyhow::Error::msg)?;
-                let added = self.track_link(wi, link.clone(), cx);
-                json!({ "key": link.key, "kind": link.kind.name(), "url": link.url, "added": added })
+                let had = self.link_tab(wi, &link.key, cx);
+                let was_pinned = had.is_some_and(|id| self.workspaces[wi].is_pinned(id));
+                let id = self.show_link(wi, &link, false, true, window, cx);
+                let tab = id
+                    .and_then(|id| self.surface_refs.get(&id))
+                    .map(|n| format!("surface:{n}"));
+                json!({
+                    "key": link.key, "kind": link.kind.name(), "url": link.url,
+                    "added": !was_pinned, "tab": tab,
+                })
             }
             "link.remove" => {
                 let wi = self.workspace_target(p)?;
                 let r = str_param(p, "ref").context("missing <key|url|index>")?;
-                let key = self.find_link(wi, r, cx)?.key;
-                self.untrack_link(wi, &key, cx);
-                json!({ "key": key })
+                let it = self.find_item(wi, r, cx)?;
+                let key = it.link.as_ref().map(|l| l.key.clone());
+                let tab = it.tab.as_ref().map(|(s, _)| self.sref(s));
+                match (&it.tab, &it.link) {
+                    (Some((s, _)), _) => {
+                        self.unpin_tab(s.entity_id(), window, cx);
+                    }
+                    (None, Some(l)) => self.dismiss_link(wi, &l.key, cx),
+                    (None, None) => {}
+                }
+                json!({ "key": key, "tab": tab })
             }
             "link.open" => {
                 let wi = self.workspace_target(p)?;
@@ -1778,19 +1836,17 @@ impl AbroMux {
                     self.show_all_links(wi, window, cx)
                 } else {
                     let r = str_param(p, "ref").context("missing <key|url|index>, or --all")?;
-                    let link = match self.find_link(wi, r, cx) {
-                        Ok(l) => l,
+                    match self.find_item(wi, r, cx) {
+                        Ok(it) => self.open_item(wi, &it, focus, window, cx),
                         Err(e) if r.parse::<usize>().is_ok() => return Err(e),
-                        // Not tracked yet: track it, then show it.
+                        // Not listed yet: open it, pinned.
                         Err(_) => {
                             let l = self.parse_link(r, cx).map_err(anyhow::Error::msg)?;
-                            self.track_link(wi, l.clone(), cx);
-                            l
+                            self.show_link(wi, &l, focus, false, window, cx)
                         }
-                    };
-                    self.show_link(wi, &link, focus, window, cx)
-                        .into_iter()
-                        .collect()
+                    }
+                    .into_iter()
+                    .collect()
                 };
                 let refs: Vec<Value> = ids
                     .iter()
@@ -2575,23 +2631,30 @@ impl AbroMux {
     }
 
     /// `--workspace`, else the caller's workspace, else the selected one.
-    /// One of workspace `wi`'s links by its number in the list (from 1),
-    /// key, or any way of writing it (`link add` takes).
-    fn find_link(&self, wi: usize, r: &str, cx: &App) -> anyhow::Result<crate::links::Link> {
-        let links = self.shown_links(wi, cx);
+    /// One of workspace `wi`'s sidebar items by its number in the list
+    /// (from 1), a pinned tab's ref, a link's key, or any way of writing it
+    /// (`link add` takes).
+    fn find_item(&self, wi: usize, r: &str, cx: &App) -> anyhow::Result<crate::links::Item> {
+        let items = self.items(wi, cx);
         if let Ok(n) = r.parse::<usize>() {
             return n
                 .checked_sub(1)
-                .and_then(|i| links.get(i).cloned())
-                .with_context(|| format!("no link {n}: the workspace has {}", links.len()));
+                .and_then(|i| items.get(i).cloned())
+                .with_context(|| format!("no link {n}: the workspace has {}", items.len()));
+        }
+        if r.starts_with("surface:") {
+            return items
+                .into_iter()
+                .find(|it| it.tab.as_ref().is_some_and(|(s, _)| self.sref(s) == r))
+                .with_context(|| format!("{r} isn't pinned here"));
         }
         let key = self
             .parse_link(r, cx)
             .map(|l| l.key)
             .unwrap_or_else(|_| r.to_string());
-        links
+        items
             .into_iter()
-            .find(|l| l.key == key)
+            .find(|it| it.link.as_ref().is_some_and(|l| l.key == key))
             .with_context(|| format!("{r} isn't one of this workspace's links"))
     }
 
@@ -2608,7 +2671,12 @@ impl AbroMux {
         let found = within
             .map_or_else(|| (0..self.workspaces.len()).collect(), |w| vec![w])
             .into_iter()
-            .flat_map(|wi| self.workspaces[wi].surfaces().cloned().collect::<Vec<_>>())
+            .flat_map(|wi| {
+                self.workspaces[wi]
+                    .all_surfaces()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
             .filter_map(|t| {
                 let name = t.custom_title(cx)?;
                 name.eq_ignore_ascii_case(l).then(|| {
@@ -2670,9 +2738,17 @@ impl AbroMux {
                 .flat_map(|p| p.tabs.iter().map(move |t| (wi, p.id, t.clone())))
                 .collect::<Vec<_>>()
         };
+        // A hidden pinned tab, by its ref: with the pane it was in.
+        let hidden = |wi: usize| {
+            self.workspaces[wi]
+                .hidden
+                .iter()
+                .map(move |h| (wi, h.pane, h.surface.clone()))
+                .collect::<Vec<_>>()
+        };
         match parse_sel(s, "surface")? {
             Sel::Ref(n) => (0..self.workspaces.len())
-                .flat_map(all)
+                .flat_map(|wi| all(wi).into_iter().chain(hidden(wi)))
                 .find(|(_, _, t)| self.surface_refs.get(&t.entity_id()) == Some(&n)),
             Sel::Index(i) => all(within.unwrap_or(self.active)).into_iter().nth(i),
             // Names were turned into refs before the request ran

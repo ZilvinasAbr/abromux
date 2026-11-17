@@ -94,6 +94,8 @@ pub const ACTIONS: &[Act] = {
         "splitDown", Some("Split Down"), SplitDown, [(None, ["cmd-shift-d"])];
         "renameTab", Some("Rename Tab…"), RenameTab, [(None, ["cmd-r"])];
         "closeTab", Some("Close Tab"), CloseTab, [(None, ["cmd-w"])];
+        "closeAndUnpinTab", Some("Close and Unpin Tab"), CloseAndUnpinTab,
+            [(None, ["alt-cmd-w"])];
         "moveTabToNewWorkspace", Some("Move Tab to New Workspace"), MoveTabToNewWorkspace,
             [(None, [])];
         // ⌘⇧] arrives from macOS as cmd-} (shift folded into the key), so
@@ -118,7 +120,7 @@ pub const ACTIONS: &[Act] = {
         "toggleSidebar", Some("Toggle Sidebar"), ToggleSidebar, [(None, ["cmd-b"])];
         "toggleMergeRequests", Some("Toggle Merge Requests Panel"), ToggleMergeRequests,
             [(None, ["alt-cmd-b"])];
-        "trackTab", Some("Track or Untrack This Tab's Link"), TrackTab, [(None, ["alt-cmd-t"])];
+        "trackTab", Some("Pin or Unpin Tab"), TrackTab, [(None, ["alt-cmd-t"])];
         "openAllLinks", Some("Open All of This Workspace's Links"), OpenAllLinks, [(None, [])];
         "goToMergeRequest", Some("Go to Merge Request…"), GoToMergeRequest,
             [(None, ["cmd-shift-m"])];
@@ -235,6 +237,7 @@ pub const LINUX: &[(&str, Keys)] = &[
     ("splitDown", &[(None, &["ctrl-shift-e"])]),
     ("renameTab", &[(None, &["ctrl-shift-r"])]),
     ("closeTab", &[(None, &["ctrl-shift-w"])]),
+    ("closeAndUnpinTab", &[(None, &["ctrl-alt-shift-w"])]),
     ("nextTab", &[(None, &["ctrl-pagedown", "ctrl-tab"])]),
     ("previousTab", &[(None, &["ctrl-pageup", "ctrl-shift-tab"])]),
     ("focusLeft", &[(None, &["ctrl-alt-left"])]),

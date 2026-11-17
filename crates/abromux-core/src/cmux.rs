@@ -113,6 +113,7 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
         home: None,
         links: vec![],
         hidden_links: vec![],
+        pinned: vec![],
         focused: focused.unwrap_or(0),
         root,
     })

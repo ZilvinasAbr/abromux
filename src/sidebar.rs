@@ -1176,7 +1176,7 @@ impl AbroMux {
         // going from one link to another).
         let subtitle = ws
             .focused_surface()
-            .filter(|s| !(active && self.is_listed_link(i, s, cx)))
+            .filter(|s| !(active && self.is_listed_tab(i, s, cx)))
             .map(|s| s.title(cx))
             .unwrap_or_default();
         let cwd = ws.cwd(cx);

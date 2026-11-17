@@ -237,19 +237,23 @@ Everything is in `gitlab-cache/` under Application Support (`index.json` for the
 
 `abromux mr list [mine|recent|workspace]` prints the cache (`--json` for everything), `abromux mr open <url|group/project!iid>` opens one in the caller's workspace, and `abromux mr refresh [<ref>]` checks everything now, or loads one again.
 
-## Tracked links
+## Pinned tabs
 
-A workspace keeps a list of links: the Jira tickets, GitLab merge requests and pages its work is about. The selected workspace shows them in the sidebar, under its row: a ticket with its key (`PAY-1423`) and title, a merge request with just its title (no `Draft:` marker or ticket keys in front of it); the ones on screen are highlighted. A merge request stacked on another (its target branch is the other's source branch) is listed under it, indented. Hold ⌥⌘ to see their numbers, and ⌥⌘1…9 shows one.
+A workspace keeps the tabs its work is about pinned: its Jira tickets and GitLab merge requests, and any other tab (a page, a terminal running a server or an agent). The selected workspace lists them in the sidebar, under its row: a ticket with its key (`PAY-1423`) and title, a merge request with just its title (no `Draft:` marker or ticket keys in front of it), any other tab with its icon, title and its program's status; the ones on screen are highlighted. A merge request stacked on another (its target branch is the other's source branch) is listed under it, indented. Hold ⌥⌘ to see their numbers, and ⌥⌘1…9 shows one.
 
-Showing a link never makes a second tab of it: if a tab already shows that ticket or merge request (any page of it: `…/browse/PAY-1423`, a board with `selectedIssue=PAY-1423`, a merge request's `/diffs`), that tab comes forward. Otherwise it opens in the workspace's link pane, the pane its pages are in (a new one to the right if there's none), a merge request in a GitLab tab. ⌘-clicking a link in a terminal, or a page opening one in a new tab, goes to the existing tab the same way.
+Closing a pinned tab (⌘W, its ×, middle-click) hides it instead: it leaves the layout and keeps running, dimmed in the list. Showing it again (a click on its row, ⌥⌘1…9, ⌘P, or opening its link again) puts it back in the pane it was in, or the link pane if that one has closed. ⌥⌘W closes and unpins it, asking first if a command or an agent is still running in it. A hidden tab's notifications and status still show, and opening a notification puts its tab back. Closing the workspace closes its hidden tabs too.
+
+Showing a link never makes a second tab of it: if a tab already shows that ticket or merge request (any page of it: `…/browse/PAY-1423`, a board with `selectedIssue=PAY-1423`, a merge request's `/diffs`), hidden or not, that tab comes forward. Otherwise it opens, pinned, in the workspace's link pane, the pane its pages are in (a new one to the right if there's none), a merge request in a GitLab tab. ⌘-clicking a link in a terminal, or a page opening one in a new tab, goes to the existing tab the same way.
 
 What's listed:
-- Tickets and merge requests opened in the workspace's tabs are tracked on their own.
-- Its merge requests from its branches (the merge requests panel's "This workspace") are listed after the tracked ones.
-- ⌥⌘T tracks the focused tab's page, whatever it is; again untracks it. The × on a row untracks it too, and it isn't tracked again on its own.
-- From a terminal: `abromux link add <url|PAY-123|group/project!iid>`, `abromux link remove <n|key|url>`, `abromux link [list]`, `abromux link open <n|key|url>` (`--focus false` leaves focus where it is), and `abromux link open --all` for every one. Workspace folders' `AGENTS.md` asks agents to track what they work on this way.
+- Tabs showing a ticket or merge request are pinned on their own, one tab per ticket or merge request.
+- ⌥⌘T pins the focused tab, whatever it is; again unpins it. The × on a row unpins it (a hidden one closes, as with ⌥⌘W), and a ticket or merge request unpinned isn't pinned again on its own.
+- Under "Suggested": its merge requests from its branches (the merge requests panel's "This workspace") that no tab shows yet, and links tracked before tabs were pinned. A click opens one in a pinned tab; its × stops suggesting it.
+- From a terminal: `abromux tab pin|unpin [--surface <ref>]` and `abromux tab list`; `abromux link add <url|PAY-123|group/project!iid>` opens a link in a hidden pinned tab (unless a tab shows it already), `abromux link remove <n|key|url|surface>` unpins it, `abromux link [list]`, `abromux link open <n|key|url>` (`--focus false` leaves focus where it is), and `abromux link open --all` for every one. `abromux close-surface` hides a pinned tab; `--unpin` closes it for good. Workspace folders' `AGENTS.md` asks agents to pin what they work on this way.
 
-A bare key like `PAY-1423` needs to know its Jira: `"jira": { "host": "acme.atlassian.net" }` in the config file, else the one a ticket tracked before is on. `"sidebar": { "showLinks": false }` hides the list. The links are saved with the session.
+⌘P searches the selected workspace's tabs: the pinned ones first (hidden ones too), then its other tabs, then the suggested links. Tab widens the search to every workspace and every workspace's tabs; Tab again narrows it back.
+
+A bare key like `PAY-1423` needs to know its Jira: `"jira": { "host": "acme.atlassian.net" }` in the config file, else the one a ticket opened before is on. `"sidebar": { "showLinks": false }` hides the list. Pinned tabs, hidden ones with them, are saved with the session.
 
 ## Settings window
 
@@ -626,7 +630,7 @@ Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each
 | Flash focused pane | | ⌘⇧H |
 | Zoom focused pane to fill the workspace, or unzoom | | ⌘⇧↩ (focusing another pane unzooms) |
 | Command palette: every command that applies to the focused terminal or browser, with its shortcut | | ⌘⇧P, type to filter, ↑/↓ or ⌃N/⌃P, Enter runs, Esc closes |
-| Switch workspace by name | | ⌘P |
+| Search this workspace's tabs (Tab: every workspace) | | ⌘P |
 | Notifications list | bell icon in the titlebar | ⌘I (Esc closes) |
 | Jump to newest unread notification | click it in the list or the menu-bar bell | ⌘⇧U |
 | Mark the focused terminal unread, or read | | ⌥⌘U |

@@ -82,7 +82,7 @@ Split panes with tabs of terminals (libghostty) and browsers (native WebKit). Dr
 <td valign="top">
 
 ### 🎫 Tickets and MRs with the work
-Track a workspace's Jira tickets and merge requests with `abromux link add`. They show under the workspace and open with ⌥⌘1…9.
+Pin a workspace's Jira tickets, merge requests and any other tab. They show under the workspace and open with ⌥⌘1…9 or ⌘P; closing a pinned tab only hides it.
 
 </td>
 <td valign="top">
@@ -138,9 +138,9 @@ Most work starts from a ticket and ends in a merge request. AbroMux keeps both n
 
 Each workspace keeps the Jira tickets and merge requests it's about, listed under it in the sidebar with their titles. **⌥⌘1…9** opens one, reusing the tab that already shows it instead of opening a second.
 
-- Tickets and MRs you open in a workspace's tabs are tracked on their own.
+- Tickets and MRs you open in a workspace's tabs are pinned on their own.
 - The MRs of the branches checked out in a workspace show up there without you doing anything.
-- Agents track what they work on: `abromux link add PAY-1423`.
+- Agents pin what they work on: `abromux link add PAY-1423`, `abromux tab pin`.
 - ⌘-click a ticket or MR link in a terminal and it opens in the existing tab.
 
 ### 🦊 GitLab merge requests panel
@@ -214,13 +214,14 @@ Run `abromux --help` for every command.
 | ⌘D / ⌘⇧D | Split right / down |
 | ⌘T / ⌘⇧L | New terminal tab / new browser tab |
 | ⌘1…9 | Jump to a workspace |
-| ⌘P | Switch workspace by name |
+| ⌘P | Search this workspace's tabs (Tab: every workspace) |
 | ⌘⇧P | Command palette |
 | ⌘⇧U | Jump to the newest unread notification |
 | ⌘⇧↩ | Zoom the focused pane |
 | ⌥⌘B / ⇧⌘M | Merge requests panel / go to a merge request |
-| ⌥⌘1…9 | Open a workspace's tracked ticket or merge request |
-| ⌥⌘T | Track the focused page in this workspace |
+| ⌥⌘1…9 | Show a workspace's pinned tab |
+| ⌥⌘T | Pin or unpin the focused tab |
+| ⌥⌘W | Close and unpin the focused tab |
 
 ## Learn more
 

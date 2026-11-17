@@ -85,7 +85,8 @@ Commands:
   diff list                                                  (local diff reviews, newest first)
   diff threads <id> [--unresolved]                           (a review's comment threads)
   diff reply <id> <thread> [--resolve] [--as <name>] [<text>]   (answer in a thread; no text: stdin)
-  close-surface [--surface <ref>] [--workspace <ref>]
+  close-surface [--surface <ref>] [--workspace <ref>] [--unpin]   (a pinned tab is hidden, still running;
+                                                             --unpin closes it for good)
   focus-surface --surface <ref>
   rename-tab [--surface <ref>] [--workspace <ref>] [<title>]  (no title: back to the program's own)
   tab-action [--tab <ref>] [--workspace <ref>] <action> [<title>] [--url <url>] [--focus <true|false>]
@@ -143,11 +144,15 @@ Commands:
                                                              prints what code covers)
   focus-window [--window <ref>]                              (bring abromux to the front; there is one window)
   sidebar <toggle|show|hide>
-  link [list]                                                (this workspace's tracked links: Jira tickets, merge
-                                                             requests, pinned pages; in the sidebar, {key:link1}…9)
-  link add <url|PAY-123|group/project!iid>                   (track one here)
-  link remove <n|key|url>                                    (untrack it; it isn't tracked again on its own)
-  link open <n|key|url> | --all [--focus <true|false>]       (its tab, else a new one in the pane the links are in)
+  tab pin [--surface <ref>]                                  (pin a tab to its workspace: listed in the sidebar, under
+                                                             the workspace, and ⌘W hides it rather than closing it)
+  tab unpin [--surface <ref>]                                (a hidden one closes)
+  tab list [--workspace <ref>]                               (the workspace's pinned tabs, hidden ones too)
+  link [list]                                                (the sidebar's list: pinned tabs, then suggested links
+                                                             (merge requests from its branches); {key:link1}…9)
+  link add <url|PAY-123|group/project!iid>                   (open it in a pinned tab, hidden, unless a tab shows it)
+  link remove <n|key|url|surface>                            (unpin it, or stop suggesting it; not pinned again on its own)
+  link open <n|key|url> | --all [--focus <true|false>]       (show its tab, else open it in a new pinned one)
   mr list [mine|recent|workspace]                            (cached GitLab merge requests: the panel's, or one group)
   mr open <url|group/project!iid>                            (in a tab of this workspace, from the cache, then refetched)
   mr refresh [<url|group/project!iid>]                       (check now: everything, or refetch one)
@@ -225,6 +230,7 @@ const SWITCHES: &[&str] = &[
     "unresolved",
     "scrollback",
     "all",
+    "unpin",
     "help",
     "interactive",
     "compact",
@@ -1092,7 +1098,46 @@ fn dispatch(
                 format!("OK {} {}", s(&v["ref"]), s(&v["title"]))
             })
         }
-        "close-surface" => ("surface.close", |v| format!("OK {}", s(&v["closed"]))),
+        "close-surface" => ("surface.close", |v| match v["hidden"].as_str() {
+            Some(r) => format!("OK {r} hidden (pinned; --unpin closes it)"),
+            None => format!("OK {}", s(&v["closed"])),
+        }),
+        "tab" => {
+            let sub = if pos.is_empty() {
+                "list".to_string()
+            } else {
+                pos.remove(0)
+            };
+            match sub.as_str() {
+                "pin" => ("tab.pin", |v| {
+                    let state = if v["pinned"] == true {
+                        "pinned"
+                    } else {
+                        "already pinned"
+                    };
+                    format!("OK {} {state}", s(&v["surface"]))
+                }),
+                "unpin" => ("tab.unpin", |v| {
+                    let state = match (v["unpinned"] == true, v["closed"] == true) {
+                        (true, true) => "unpinned and closed (it was hidden)",
+                        (true, false) => "unpinned",
+                        _ => "wasn't pinned",
+                    };
+                    format!("OK {} {state}", s(&v["surface"]))
+                }),
+                "list" | "ls" => ("tab.list", |v| {
+                    lines(v, |t| {
+                        let hidden = if t["hidden"] == true {
+                            "  (hidden)"
+                        } else {
+                            ""
+                        };
+                        format!("{}{hidden}", surface_line(t))
+                    })
+                }),
+                s => return Err(format!("tab: unknown subcommand {s:?} (pin, unpin, list)")),
+            }
+        }
         "focus-surface" => ("surface.focus", |v| format!("OK {}", s(&v["ref"]))),
         "rename-tab" => {
             if !pos.is_empty() {
@@ -1343,10 +1388,10 @@ fn dispatch(
                         .as_str()
                         .map(|t| format!("  {t}"))
                         .unwrap_or_default();
-                    let from = if l["tracked"].as_bool() == Some(true) {
-                        ""
-                    } else {
-                        "  (branch)"
+                    let from = match (l["pinned"] == true, l["hidden"] == true) {
+                        (true, true) => "  (hidden)",
+                        (true, false) => "",
+                        _ => "  (suggested)",
                     };
                     let tab = l["tab"]
                         .as_str()
@@ -1356,7 +1401,7 @@ fn dispatch(
                         "{:>2}  {:<5} {}{title}{from}{tab}",
                         l["index"],
                         s(&l["kind"]),
-                        s(&l["key"])
+                        l["key"].as_str().unwrap_or_default()
                     )
                 })
             }),
@@ -1366,18 +1411,25 @@ fn dispatch(
                 }
                 ("link.add", |v| {
                     let state = if v["added"].as_bool() == Some(true) {
-                        "tracked"
+                        "pinned"
                     } else {
-                        "already tracked"
+                        "already pinned"
                     };
-                    format!("OK {} {} {state}", s(&v["kind"]), s(&v["key"]))
+                    let tab = v["tab"]
+                        .as_str()
+                        .map(|t| format!(" [{t}]"))
+                        .unwrap_or_default();
+                    format!("OK {} {} {state}{tab}", s(&v["kind"]), s(&v["key"]))
                 })
             }
             "remove" | "rm" | "untrack" => {
                 if !opts.contains_key("ref") {
                     return Err("link remove: missing <key|url|index>".into());
                 }
-                ("link.remove", |v| format!("OK untracked {}", s(&v["key"])))
+                ("link.remove", |v| {
+                    let what = v["key"].as_str().or(v["tab"].as_str()).unwrap_or_default();
+                    format!("OK removed {what}")
+                })
             }
             "open" | "show" => {
                 if !opts.contains_key("ref") && !opts.contains_key("all") {

@@ -318,7 +318,7 @@ impl AbroMux {
         if let Some(n) = self.surface_refs.get(&id) {
             fields["surface"] = json!(format!("surface:{n}"));
         }
-        if let Some(ws) = self.workspaces.iter().find(|w| w.contains(id)) {
+        if let Some(ws) = self.workspaces.iter().find(|w| w.owns(id)) {
             fields["workspace"] = json!(format!("workspace:{}", ws.id));
         }
         emit(event, fields);

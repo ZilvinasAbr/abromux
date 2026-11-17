@@ -103,6 +103,39 @@ pub struct WorkspaceState {
     pub links: Vec<crate::links::Link>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_links: Vec<String>,
+    /// Its pinned tabs, in the sidebar's order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pinned: Vec<PinState>,
+}
+
+/// A pinned tab: one in the layout, or a hidden one, saved whole.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PinState {
+    /// In the layout: its pane's index in tree order, and its index there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<(usize, usize)>,
+    /// Hidden: the tab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<TabState>,
+    /// Hidden: the pane it left (index in tree order), if that's still
+    /// open, and where in it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<usize>,
+    #[serde(default)]
+    pub index: usize,
+    /// The ticket or merge request it was pinned for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<crate::links::Link>,
+}
+
+impl PinState {
+    /// The surface number a hidden held terminal keeps.
+    pub fn max_surface(&self) -> usize {
+        match &self.hidden {
+            Some(TabState::Terminal { surface, .. }) => surface.unwrap_or(0),
+            _ => 0,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -287,6 +320,32 @@ mod tests {
                     title: Some("Refunds".into()),
                 }],
                 hidden_links: vec!["acme/api!3".into()],
+                pinned: vec![
+                    PinState {
+                        at: Some((0, 1)),
+                        hidden: None,
+                        pane: None,
+                        index: 0,
+                        link: None,
+                    },
+                    PinState {
+                        at: None,
+                        hidden: Some(TabState::Browser {
+                            url: "https://acme.atlassian.net/browse/PAY-1".into(),
+                            name: None,
+                            history: None,
+                            zoom: None,
+                        }),
+                        pane: Some(0),
+                        index: 2,
+                        link: Some(crate::links::Link {
+                            kind: crate::links::Kind::Jira,
+                            key: "PAY-1".into(),
+                            url: "https://acme.atlassian.net/browse/PAY-1".into(),
+                            title: Some("Fix login".into()),
+                        }),
+                    },
+                ],
                 focused: 1,
                 root: NodeState::Split {
                     vertical: false,

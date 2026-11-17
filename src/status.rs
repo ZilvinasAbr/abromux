@@ -93,7 +93,7 @@ impl AbroMux {
         state: Option<(&str, u32)>,
         cx: &mut Context<Self>,
     ) {
-        let Some(wi) = self.workspaces.iter().position(|w| w.contains(surface)) else {
+        let Some(wi) = self.workspaces.iter().position(|w| w.owns(surface)) else {
             return;
         };
         // "Claude 3": the surface number keeps two agents in one workspace apart.
@@ -154,7 +154,7 @@ impl AbroMux {
                 serde_json::json!({ "status": crate::events::program_status_json(now.as_ref()) }),
             );
         }
-        let Some(wi) = self.workspaces.iter().position(|w| w.contains(surface)) else {
+        let Some(wi) = self.workspaces.iter().position(|w| w.owns(surface)) else {
             return;
         };
         let n = self.surface_refs.get(&surface).copied().unwrap_or(0);
