@@ -1238,10 +1238,15 @@ impl AbroMux {
         let group: SharedString = format!("ws-{}", ws.id).into();
         let hint =
             shortcut_digit(i, self.workspaces.len()).filter(|_| self.hints == Some(Hints::Command));
+        // An agent's notification shows on its status pill instead
+        // (`render_ws_status`).
+        let on_pill = self.latest_unread(ws).is_some_and(|n| {
+            sb.show_custom_metadata && ws.status.iter().any(|s| s.owner == Some(n.surface))
+        });
         let latest = self
             .latest_unread(ws)
             .map(|n| n.text())
-            .filter(|_| details && sb.show_notification_message);
+            .filter(|_| details && sb.show_notification_message && !on_pill);
         // A notification, or a tab marked unread by hand.
         let dot = self.ws_unread(ws);
         let status = details

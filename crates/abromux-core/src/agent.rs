@@ -583,11 +583,20 @@ fn report(kind: Kind, payload: &Value, surface: &str, pid: Option<u32>) -> Optio
         "notification_type": payload["notification_type"],
         "pid": pid,
     });
-    // For `automation.workspaceAutoNaming`.
     if event == "UserPromptSubmit"
         && let Some(prompt) = payload["prompt"].as_str()
     {
-        params["prompt"] = json!(prompt.chars().take(PROMPT_CHARS).collect::<String>());
+        // Background tasks reporting back: not something to name from.
+        params["finished"] = json!(crate::pending::finished(prompt));
+        if !crate::pending::is_wakeup_prompt(prompt) {
+            // For `automation.workspaceAutoNaming`.
+            params["prompt"] = json!(prompt.chars().take(PROMPT_CHARS).collect::<String>());
+        }
+    }
+    if event == "PostToolUse"
+        && let Some(b) = crate::pending::background(&payload)
+    {
+        params["background"] = b;
     }
     if event == "Stop" {
         let summary = match payload["last_assistant_message"].as_str() {
@@ -1058,6 +1067,31 @@ mod tests {
         assert!(Agent::from_report(&json!({ "kind": "aider", "session_id": "abc" })).is_none());
         let c = Agent::from_report(&json!({ "kind": "codex", "session_id": "abc", "permission_mode": "bypassPermissions", "pid": 42 })).unwrap();
         assert_eq!((c.permission_mode, c.pid), (None, Some(42)));
+    }
+
+    #[test]
+    fn claude_reports_background_work() {
+        // Payloads as Claude Code sends them.
+        let bg = json!({ "hook_event_name": "PostToolUse", "session_id": "s", "tool_name": "Bash",
+            "tool_input": { "command": "sleep 20", "run_in_background": true },
+            "tool_response": { "stdout": "", "backgroundTaskId": "bvwsx1qxe" } });
+        let r = report(Kind::Claude, &bg, "surface:3", None).unwrap();
+        assert_eq!(r["background"], json!({ "started": "bvwsx1qxe" }));
+        let ls = json!({ "hook_event_name": "PostToolUse", "tool_name": "Bash",
+            "tool_input": { "command": "ls" }, "tool_response": { "stdout": "a" } });
+        assert!(report(Kind::Claude, &ls, "surface:3", None).unwrap()["background"].is_null());
+        // Waking up for a finished task: counted off, and not named from.
+        let woke = json!({ "hook_event_name": "UserPromptSubmit", "prompt":
+            "<task-notification>\n<task-id>bvwsx1qxe</task-id>\n<status>completed</status>\n</task-notification>" });
+        let r = report(Kind::Claude, &woke, "surface:3", None).unwrap();
+        assert_eq!(r["finished"], json!(["bvwsx1qxe"]));
+        assert!(r["prompt"].is_null());
+        let typed = json!({ "hook_event_name": "UserPromptSubmit", "prompt": "poll my PRs" });
+        let r = report(Kind::Claude, &typed, "surface:3", None).unwrap();
+        assert_eq!(
+            (r["prompt"].as_str(), r["finished"].clone()),
+            (Some("poll my PRs"), json!([]))
+        );
     }
 
     #[test]

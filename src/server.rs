@@ -13,7 +13,7 @@ use crate::{
     browser_auto, debug, ipc,
     notification::Kind as NoteKind,
     one_line,
-    status::{self, RUNNING, WARNING},
+    status::{self, RUNNING, SUCCESS, WARNING},
     workspace::{
         Dir, LogLevel, Progress, Status, Surface, Workspace, git_branch, group_span, parse_color,
     },
@@ -2413,6 +2413,13 @@ impl AbroMux {
         if let Some(prompt) = str_param(p, "prompt") {
             self.auto_name(surface, kind, prompt.to_string(), cx);
         }
+        let pending = self.agent_pending.entry(surface).or_default();
+        pending.note(p);
+        let mode = cx
+            .try_global::<crate::settings::Settings>()
+            .map(|s| s.notifications.agent_turn_complete)
+            .unwrap_or_default();
+        let stop = pending.on_stop(mode);
         let Some(event) = AgentEvent::of_report(p) else {
             return;
         };
@@ -2444,10 +2451,20 @@ impl AbroMux {
                     cx,
                 );
             }
+            // A turn that left work running which will wake the agent again
+            // (a background shell, a monitor, a scheduled wakeup) isn't the
+            // end: it stays "Running", and by default says nothing.
             AgentEvent::Stopped(summary) => {
-                self.set_agent_status(surface, label, None, cx);
-                let body = summary.unwrap_or_else(|| "Finished".into());
-                self.add_notification(surface, title.into(), body, NoteKind::Done, window, cx);
+                let state = if stop.done {
+                    ("Done", SUCCESS)
+                } else {
+                    ("Running", RUNNING)
+                };
+                self.set_agent_status(surface, label, Some(state), cx);
+                if stop.notify {
+                    let body = summary.unwrap_or_else(|| "Finished".into());
+                    self.add_notification(surface, title.into(), body, NoteKind::Done, window, cx);
+                }
             }
             AgentEvent::Ended => self.set_agent_status(surface, label, None, cx),
         }
