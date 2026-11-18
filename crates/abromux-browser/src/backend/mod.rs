@@ -1,6 +1,7 @@
 //! The page in a browser pane, behind one trait, so the pane doesn't care
-//! what shows it. macOS has `wkwebview` (WKWebView through wry); other
-//! systems have `none`, which says there's no built-in browser.
+//! what shows it. macOS has `wkwebview` (WKWebView through wry) and, in
+//! builds with the `chromium` feature, `chromium` (CEF); other systems have
+//! `none`, which says there's no built-in browser.
 
 use futures::channel::{mpsc, oneshot};
 use gpui::{AnyElement, App};
@@ -11,6 +12,32 @@ use std::{borrow::Cow, path::PathBuf};
 pub mod none;
 #[cfg(target_os = "macos")]
 pub mod wkwebview;
+#[cfg(all(target_os = "macos", feature = "chromium"))]
+pub mod chromium;
+
+/// What shows a built-in browser pane's page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Engine {
+    /// WebKit (WKWebView), the system's.
+    #[default]
+    WebKit,
+    /// Chromium, through CEF, in the app bundle.
+    Chromium,
+}
+
+/// Whether this build can show pages on `engine`; Err says why not.
+pub fn engine_available(engine: Engine) -> Result<(), String> {
+    match engine {
+        Engine::WebKit if cfg!(target_os = "macos") => Ok(()),
+        Engine::WebKit => Err("WebKit pages are macOS-only".into()),
+        Engine::Chromium => {
+            #[cfg(all(target_os = "macos", feature = "chromium"))]
+            return chromium::available();
+            #[cfg(not(all(target_os = "macos", feature = "chromium")))]
+            Err("this build has no Chromium (build with `--features chromium`)".into())
+        }
+    }
+}
 
 /// A script's JSON result, or why it didn't run.
 pub type Answer = Result<String, String>;
@@ -122,13 +149,25 @@ pub trait PageBackend {
     fn show_inspector(&self, console: bool);
 }
 
-/// A new page on this OS's backend. Its events go to `events`.
+/// A new page on `engine`, or WebKit if this build can't run it (or the
+/// page serves its own URL scheme, which only WebKit pages do). Its events
+/// go to `events`.
 pub fn new_page(
+    engine: Engine,
     options: PageOptions,
     events: mpsc::UnboundedSender<PageEvent>,
     window: &mut gpui::Window,
     cx: &mut App,
 ) -> Box<dyn PageBackend> {
+    #[cfg(all(target_os = "macos", feature = "chromium"))]
+    if engine == Engine::Chromium && options.protocol.is_none() {
+        // The options go to whichever page gets made, so try Chromium with
+        // them only if it can start.
+        if chromium::can_make(window) {
+            return Box::new(chromium::CefPage::new(options, events, window));
+        }
+    }
+    let _ = engine;
     #[cfg(target_os = "macos")]
     return Box::new(wkwebview::WkPage::new(options, events, window, cx));
     #[cfg(not(target_os = "macos"))]
@@ -136,6 +175,38 @@ pub fn new_page(
         let _ = (window, cx);
         Box::new(none::NoPage::new(options, events))
     }
+}
+
+/// A running download's bytes so far and total, by its URL.
+pub fn download_progress(url: &str) -> Option<(u64, Option<u64>)> {
+    #[cfg(all(target_os = "macos", feature = "chromium"))]
+    if let Some(p) = chromium::download_progress(url) {
+        return Some(p);
+    }
+    abromux_platform::browser_native::download_progress(url)
+}
+
+/// Cancel a running download, by its URL.
+pub fn download_cancel(url: &str) {
+    #[cfg(all(target_os = "macos", feature = "chromium"))]
+    if chromium::download_cancel(url) {
+        return;
+    }
+    abromux_platform::browser_native::download_cancel(url);
+}
+
+/// Forget a finished or canceled download.
+pub fn download_forget(url: &str) {
+    #[cfg(all(target_os = "macos", feature = "chromium"))]
+    chromium::download_forget(url);
+    abromux_platform::browser_native::download_forget(url);
+}
+
+/// Before the app quits: let the engines save what they must (Chromium's
+/// cookies).
+pub fn quit() {
+    #[cfg(all(target_os = "macos", feature = "chromium"))]
+    chromium::quit();
 }
 
 /// Yields after each left click in the app: pages are native views, so gpui

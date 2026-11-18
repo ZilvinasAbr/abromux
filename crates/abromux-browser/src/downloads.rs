@@ -3,7 +3,7 @@
 //! picks a free name in ~/Downloads); this keeps the list for the session,
 //! and follows each running one's progress.
 
-use abromux_platform::browser_native;
+use crate::backend;
 use gpui::{App, AppContext as _, Context, Entity, Timer};
 use serde_json::{Value, json};
 use std::{
@@ -149,7 +149,7 @@ impl Downloads {
 
     /// wry's completion: the newest running download from `url`.
     pub fn finished(&mut self, url: &str, ok: bool, cx: &mut Context<Self>) {
-        browser_native::download_forget(url);
+        backend::download_forget(url);
         let Some(d) = self
             .list
             .iter_mut()
@@ -190,8 +190,8 @@ impl Downloads {
         d.state = State::Canceled;
         d.finished = Some(SystemTime::now());
         let url = d.url.clone();
-        browser_native::download_cancel(&url);
-        browser_native::download_forget(&url);
+        backend::download_cancel(&url);
+        backend::download_forget(&url);
         let _ = std::fs::remove_file(&d.path);
         cx.notify();
         true
@@ -217,7 +217,7 @@ impl Downloads {
                 let more = this.update(cx, |this, cx| {
                     let mut changed = false;
                     for d in this.list.iter_mut().filter(|d| d.state == State::Running) {
-                        if let Some((written, total)) = browser_native::download_progress(&d.url)
+                        if let Some((written, total)) = backend::download_progress(&d.url)
                             && (written, total) != (d.written, d.total)
                         {
                             (d.written, d.total) = (written, total);

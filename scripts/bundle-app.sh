@@ -29,6 +29,12 @@
 # in. Without one the app is signed as before and WebAuthn is left to WebKit.
 # docs/guide.md ("Passkeys") has the steps.
 #
+# The built-in Chromium engine (browser.engine "chromium") is in the bundle
+# too: CEF's framework (~340 MB) in Contents/Frameworks, with the helper apps
+# Chromium runs its renderer, GPU and other processes as. The first build
+# downloads CEF (set CEF_PATH to keep one copy for every checkout) and needs
+# cmake and ninja. --no-chromium leaves it out; that app falls back to WebKit.
+#
 # The `abromux` CLI on PATH can point at the bundled binary:
 #   ln -sf /Applications/AbroMux.app/Contents/MacOS/abromux ~/.cargo/bin/abromux
 set -euo pipefail
@@ -38,10 +44,12 @@ dist=false
 nightly=false
 dest=/Applications
 flavor=
+chromium=true
 while (($#)); do
   case "$1" in
     --dist) dist=true ;;
     --nightly) nightly=true ;;
+    --no-chromium) chromium=false ;;
     --name) flavor="${2:-}"; shift ;;
     *) dest="$1" ;;
   esac
@@ -73,7 +81,12 @@ if $dist && [[ -z "$identity" ]]; then
   exit 1
 fi
 
-cargo build --release
+if $chromium; then
+  cargo build --release --features chromium
+  cargo build --release -p abromux-chromium-helper
+else
+  cargo build --release
+fi
 # The binary's own version (0.1.0 on a release tag, else 0.1.0+<sha>[-dirty]), and the commit count as the
 # build number macOS compares to tell newer from older.
 version="$(target/release/abromux version | cut -d' ' -f2)"
@@ -152,6 +165,48 @@ $extensions
 </plist>
 EOF
 
+if $chromium; then
+  # CEF's files, from $CEF_PATH or where cef-dll-sys's build put them.
+  cef_dir=
+  for d in ${CEF_PATH:+"$CEF_PATH"/*/cef_macos_* "$CEF_PATH"} target/release/build/cef-dll-sys-*/out/cef_macos_*; do
+    if [[ -d "$d/Chromium Embedded Framework.framework" ]]; then cef_dir="$d"; break; fi
+  done
+  if [[ -z "$cef_dir" ]]; then
+    echo "No Chromium Embedded Framework found (CEF_PATH or target/release/build)." >&2
+    exit 1
+  fi
+  mkdir -p "$app/Contents/Frameworks"
+  cp -R "$cef_dir/Chromium Embedded Framework.framework" "$app/Contents/Frameworks/"
+  # The helpers: one binary, as the five apps Chromium looks for beside the
+  # framework (crates/abromux-chromium-helper). Background apps: no Dock icon.
+  for suffix in "" " (GPU)" " (Renderer)" " (Plugin)" " (Alerts)"; do
+    helper="abromux Helper$suffix"
+    id_suffix="$(echo "$suffix" | tr -d ' ()' | tr '[:upper:]' '[:lower:]')"
+    happ="$app/Contents/Frameworks/$helper.app"
+    mkdir -p "$happ/Contents/MacOS"
+    cp target/release/abromux-chromium-helper "$happ/Contents/MacOS/$helper"
+    cat > "$happ/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>$name Helper$suffix</string>
+  <key>CFBundleDisplayName</key><string>$name Helper$suffix</string>
+  <key>CFBundleIdentifier</key><string>$bundle_id.helper${id_suffix:+.$id_suffix}</string>
+  <key>CFBundleExecutable</key><string>$helper</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleVersion</key><string>$build</string>
+  <key>CFBundleShortVersionString</key><string>$version</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSUIElement</key><string>1</string>
+  <key>LSEnvironment</key><dict><key>MallocNanoZone</key><string>0</string></dict>
+  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+</dict>
+</plist>
+PLIST
+  done
+fi
+
 entitlements=assets/app/abromux.entitlements
 profile_src="${ABROMUX_PROVISION_PROFILE:-assets/app/$bundle_id.provisionprofile}"
 if [[ -n "$identity" && -f "$profile_src" ]]; then
@@ -179,13 +234,43 @@ if [[ -n "$identity" && -f "$profile_src" ]]; then
   fi
 fi
 
+# Chromium's parts are signed first, inside out, as the app's signature
+# seals them. Under the hardened runtime the renderer and GPU helpers need
+# JIT for V8 and the plugin helper unsigned memory (as Chrome's helpers do).
+sign_nested() {
+  local frameworks="$app/Contents/Frameworks"
+  [[ -d "$frameworks/Chromium Embedded Framework.framework" ]] || return 0
+  local args=(--force --sign "$1")
+  [[ "$1" != - ]] && args+=(--options runtime --timestamp)
+  local lib happ keys k
+  for lib in "$frameworks/Chromium Embedded Framework.framework/Libraries/"*.dylib; do
+    codesign "${args[@]}" "$lib"
+  done
+  codesign "${args[@]}" "$frameworks/Chromium Embedded Framework.framework"
+  for happ in "$frameworks/abromux Helper"*.app; do
+    case "$happ" in
+      *"(Renderer).app"|*"(GPU).app") keys="com.apple.security.cs.allow-jit" ;;
+      *"(Plugin).app") keys="com.apple.security.cs.allow-unsigned-executable-memory com.apple.security.cs.disable-library-validation" ;;
+      *) keys= ;;
+    esac
+    {
+      echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>'
+      for k in $keys; do echo "<key>$k</key><true/>"; done
+      echo '</dict></plist>'
+    } > "$tmp/helper.entitlements"
+    codesign "${args[@]}" --entitlements "$tmp/helper.entitlements" "$happ"
+  done
+}
+
 if [[ -n "$identity" ]]; then
+  sign_nested "$identity"
   # Hardened runtime and a secure timestamp are what notarization requires.
   codesign --force --sign "$identity" --options runtime --timestamp \
     --entitlements "$entitlements" "$app"
   echo "Signed with $identity"
 else
   # Ad-hoc sign so Gatekeeper and TCC treat it as one stable app.
+  sign_nested -
   codesign --force --sign - "$app"
   echo "No Developer ID certificate; signed ad-hoc."
 fi

@@ -50,9 +50,17 @@ static id Parse(const char *json) {
 @property ABXFreeFn free;
 /// Each frame's latest WKFrameInfo, by the token its page script made.
 @property(strong) NSMutableDictionary<NSString *, WKFrameInfo *> *frames;
-@property(strong) ABXPassthroughView *hoverBox;
-@property(strong) NSTextField *hoverLabel;
 @end
+
+/// The link label at a page view's corner (any page view: WebKit's or
+/// Chromium's), kept on the view.
+@interface ABXHover : NSObject
+@property(strong) ABXPassthroughView *box;
+@property(strong) NSTextField *label;
+@end
+@implementation ABXHover
+@end
+static char kHoverKey;
 
 @implementation ABXPage
 
@@ -249,15 +257,17 @@ void abx_cookies_delete(void *webview, const char *json, void *ctx, ABXDoneFn do
 /// Show `url` at the page's bottom-left corner, as Safari does, or hide the
 /// label for NULL or "".
 void abx_hover(void *webview, const char *url) {
-    WKWebView *wv = (__bridge WKWebView *)webview;
-    ABXPage *page = Bridge(webview);
-    if (!page) return;
+    NSView *wv = (__bridge NSView *)webview;
+    if (!wv) return;
+    ABXHover *page = objc_getAssociatedObject(wv, &kHoverKey);
     NSString *text = url ? @(url) : @"";
     if (!text.length) {
-        page.hoverBox.hidden = YES;
+        page.box.hidden = YES;
         return;
     }
-    if (!page.hoverBox) {
+    if (!page) {
+        page = [ABXHover new];
+        objc_setAssociatedObject(wv, &kHoverKey, page, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         ABXPassthroughView *box = [ABXPassthroughView new];
         box.wantsLayer = YES;
         box.layer.backgroundColor = [NSColor colorWithWhite:0.13 alpha:0.94].CGColor;
@@ -270,22 +280,24 @@ void abx_hover(void *webview, const char *url) {
         label.lineBreakMode = NSLineBreakByTruncatingMiddle;
         label.maximumNumberOfLines = 1;
         [box addSubview:label];
-        page.hoverBox = box;
-        page.hoverLabel = label;
+        page.box = box;
+        page.label = label;
     }
-    if (page.hoverBox.superview != wv) [wv addSubview:page.hoverBox positioned:NSWindowAbove relativeTo:nil];
-    page.hoverLabel.stringValue = text;
-    NSSize fit = page.hoverLabel.fittingSize;
+    // Last, so it's above the page's own subviews (Chromium adds its own).
+    if (page.box.superview != wv || wv.subviews.lastObject != page.box)
+        [wv addSubview:page.box positioned:NSWindowAbove relativeTo:nil];
+    page.label.stringValue = text;
+    NSSize fit = page.label.fittingSize;
     NSRect b = wv.bounds;
     const CGFloat padX = 7, padY = 3, margin = 4;
     CGFloat maxW = MAX(160, b.size.width * 0.6) - 2 * padX;
     CGFloat w = MIN(ceil(fit.width), maxW), h = ceil(fit.height);
     CGFloat boxH = h + 2 * padY;
     CGFloat y = wv.isFlipped ? b.size.height - boxH - margin : margin;
-    page.hoverBox.frame = NSMakeRect(margin, y, w + 2 * padX, boxH);
-    page.hoverLabel.frame = NSMakeRect(padX, padY, w, h);
-    page.hoverBox.autoresizingMask = NSViewMaxXMargin | (wv.isFlipped ? NSViewMinYMargin : NSViewMaxYMargin);
-    page.hoverBox.hidden = NO;
+    page.box.frame = NSMakeRect(margin, y, w + 2 * padX, boxH);
+    page.label.frame = NSMakeRect(padX, padY, w, h);
+    page.box.autoresizingMask = NSViewMaxXMargin | (wv.isFlipped ? NSViewMinYMargin : NSViewMaxYMargin);
+    page.box.hidden = NO;
 }
 
 // ---- a bitmap of the page --------------------------------------------------
@@ -415,9 +427,18 @@ static NSView *GPUIView(NSView *v) {
     return nil;
 }
 
+static char kPageViewKey;
+
+/// Count `view` as a page, like a WKWebView: for the shortcuts below and
+/// `abx_in_page_view` (the chromium backend's pages).
+void abx_page_view_mark(void *view) {
+    objc_setAssociatedObject((__bridge NSView *)view, &kPageViewKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
 static BOOL InWebView(NSResponder *r) {
     for (NSView *v = [r isKindOfClass:NSView.class] ? (NSView *)r : nil; v; v = v.superview) {
         if ([v isKindOfClass:WKWebView.class]) return YES;
+        if (objc_getAssociatedObject(v, &kPageViewKey)) return YES;
     }
     return NO;
 }

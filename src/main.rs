@@ -685,6 +685,7 @@ impl AbroMux {
         cx.on_app_quit(|this, cx| {
             this.freeze_held(cx);
             session::save(&this.snapshot(true, cx));
+            abromux_browser::backend::quit();
             async {}
         })
         .detach();

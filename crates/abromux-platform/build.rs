@@ -10,6 +10,7 @@ fn main() {
     objc("browser_native", "abromux-browser-native");
     objc("cursor", "abromux-cursor");
     objc("webauthn", "abromux-webauthn");
+    objc("chromium", "abromux-chromium");
     for framework in [
         "AppKit",
         "AuthenticationServices",

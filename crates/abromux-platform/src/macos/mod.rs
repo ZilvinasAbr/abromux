@@ -5,6 +5,7 @@
 
 pub mod appearance;
 pub mod browser_native;
+pub mod chromium;
 pub mod cursor;
 pub(crate) mod defaults;
 pub mod dock;

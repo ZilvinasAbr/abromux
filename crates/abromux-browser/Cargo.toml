@@ -6,6 +6,12 @@ description = "Browser panes' pages, history, find, automation and downloads, ov
 license = "MIT"
 publish = false
 
+[features]
+# The `chromium` engine (src/backend/chromium.rs): Chromium through CEF. The
+# build downloads CEF (~350 MB, once per target folder; set CEF_PATH to share
+# one) and needs cmake and ninja.
+chromium = ["dep:cef", "dep:image", "dep:base64"]
+
 [dependencies]
 abromux-platform = { path = "../abromux-platform" }
 gpui = { version = "=0.2.2", default-features = false, features = ["runtime_shaders"] }
@@ -23,6 +29,12 @@ lb-wry = { version = "=0.53.3", features = ["devtools"] }
 # the WKWebView backend (src/backend/wkwebview.rs)
 objc = "0.2"
 block = "0.1"
+raw-window-handle = "0.6"
+# the chromium backend; same version as crates/abromux-chromium-helper
+cef = { version = "=156.6.0", default-features = false, features = ["sandbox"], optional = true }
+# its screenshots (PNG over the DevTools protocol) as page bitmaps
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+base64 = { version = "0.22", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gpui = { version = "=0.2.2", default-features = false, features = ["runtime_shaders", "wayland", "x11", "font-kit"] }

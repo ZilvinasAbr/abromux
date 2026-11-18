@@ -1,5 +1,5 @@
 //! A browser pane: address bar, toolbar and find bar over a page
-//! (`abromux_browser::backend`: WKWebView on macOS).
+//! (`abromux_browser::backend`: WKWebView on macOS, or Chromium).
 
 use crate::{
     browser_find,
@@ -274,7 +274,14 @@ impl BrowserView {
             (None, None)
         };
         let (page_tx, mut page_rx) = mpsc::unbounded::<PageEvent>();
+        // Markdown tabs serve their own scheme, which only WebKit pages do.
+        let engine = if is_markdown {
+            backend::Engine::WebKit
+        } else {
+            crate::settings::page_engine(cx)
+        };
         let page: Rc<dyn PageBackend> = backend::new_page(
+            engine,
             PageOptions {
                 url: url.to_string(),
                 blank_bg: pal().pane_bg,

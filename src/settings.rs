@@ -169,13 +169,14 @@ pub struct BrowserSettings {
     pub terminal_browser_panes: bool,
 }
 
-/// The built-in WebKit browser (macOS only), a terminal running
-/// `terminal-browser`, or the system's default browser (no tab: pages open
-/// there).
+/// The built-in WebKit browser (macOS only), the built-in Chromium one
+/// (macOS, in builds with it), a terminal running `terminal-browser`, or
+/// the system's default browser (no tab: pages open there).
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum BrowserEngine {
     BuiltIn,
+    Chromium,
     #[serde(alias = "terminal-browser")]
     TerminalBrowser,
     System,
@@ -908,6 +909,16 @@ pub fn default_engine() -> BrowserEngine {
     }
 }
 
+/// What shows built-in browser tabs' pages: Chromium if it's the engine,
+/// else WebKit (which also shows Markdown tabs, and `abromux browser open`
+/// pages whatever the engine).
+pub fn page_engine(cx: &gpui::App) -> abromux_browser::backend::Engine {
+    match browser_engine(cx) {
+        BrowserEngine::Chromium => abromux_browser::backend::Engine::Chromium,
+        _ => abromux_browser::backend::Engine::WebKit,
+    }
+}
+
 /// Whether browser tabs open as `terminal-browser`.
 pub fn terminal_browser(cx: &gpui::App) -> bool {
     browser_engine(cx) == BrowserEngine::TerminalBrowser
@@ -1047,6 +1058,12 @@ fn parse(text: &str) -> Result<Settings, serde_json::Error> {
     if !abromux_platform::MACOS && s.browser.engine == Some(BrowserEngine::BuiltIn) {
         return Err(serde::de::Error::custom(
             "browser.engine \"builtIn\" (the WebKit browser) is macOS-only; \
+             use \"terminalBrowser\" or \"system\" (the default browser)",
+        ));
+    }
+    if !abromux_platform::MACOS && s.browser.engine == Some(BrowserEngine::Chromium) {
+        return Err(serde::de::Error::custom(
+            "browser.engine \"chromium\" (the built-in Chromium browser) is macOS-only; \
              use \"terminalBrowser\" or \"system\" (the default browser)",
         ));
     }
@@ -1418,6 +1435,15 @@ mod tests {
         }
         let s = parse(r#"{"browser": {"engine": "system"}}"#).unwrap();
         assert_eq!(s.browser.engine, Some(BrowserEngine::System));
+        let chromium = parse(r#"{"browser": {"engine": "chromium"}}"#);
+        if abromux_platform::MACOS {
+            assert_eq!(
+                chromium.unwrap().browser.engine,
+                Some(BrowserEngine::Chromium)
+            );
+        } else {
+            assert!(chromium.unwrap_err().to_string().contains("macOS-only"));
+        }
         // The WebKit browser is macOS's; Linux says so.
         let builtin = parse(r#"{"browser": {"engine": "builtIn"}}"#);
         if abromux_platform::MACOS {

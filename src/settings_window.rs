@@ -727,6 +727,7 @@ fn placement(p: Placement) -> &'static str {
 fn engine(e: Option<BrowserEngine>) -> &'static str {
     match e.unwrap_or_else(crate::settings::default_engine) {
         BrowserEngine::BuiltIn => "builtIn",
+        BrowserEngine::Chromium => "chromium",
         BrowserEngine::TerminalBrowser => "terminalBrowser",
         BrowserEngine::System => "system",
     }
@@ -833,13 +834,17 @@ fn general_page() -> Page {
                 [
                     choice(
                         "Browser",
-                        "What new browser tabs open in. terminal-browser runs in a terminal \
-                         tab; the default browser opens pages outside abromux, with no \
-                         tab. `abromux browser open` stays built-in for automation (macOS).",
+                        "What new browser tabs open in. Built-in is WebKit, as in Safari; \
+                         Chromium is built in too, with Chrome's engine and its own sign-ins \
+                         (security keys and phones as passkeys work without Apple's \
+                         passkey entitlement). terminal-browser runs in a terminal tab; the \
+                         default browser opens pages outside abromux, with no tab. \
+                         `abromux browser open` stays built-in for automation (macOS).",
                         &["browser", "engine"],
                         if abromux_platform::MACOS {
                             &[
                                 ("builtIn", "Built-in"),
+                                ("chromium", "Chromium"),
                                 ("terminalBrowser", "terminal-browser"),
                                 ("system", "Default browser"),
                             ]
