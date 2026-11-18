@@ -83,6 +83,9 @@ pub enum Pty {
         /// Stops its reader (`freeze`).
         stop: Option<Stop>,
     },
+    /// Nothing runs: the program couldn't be started (`open` failed). The
+    /// view keeps one so it can show why instead of a shell.
+    Failed,
 }
 
 /// A program started or taken back, with what to show first when taken back
@@ -97,6 +100,19 @@ pub struct Opened {
     pub backlog: Vec<u8>,
 }
 
+impl Opened {
+    /// What a view holds when `open` failed: no program, nothing to show
+    /// but the error.
+    pub fn failed() -> Self {
+        Opened {
+            pty: Pty::Failed,
+            attached: false,
+            snapshot: None,
+            backlog: Vec::new(),
+        }
+    }
+}
+
 impl Pty {
     pub fn write(&mut self, bytes: &[u8]) {
         match self {
@@ -107,6 +123,7 @@ impl Pty {
             Pty::Held { file, .. } => {
                 let _ = file.write_all(bytes);
             }
+            Pty::Failed => {}
         }
     }
 
@@ -125,6 +142,7 @@ impl Pty {
                 // SAFETY: TIOCSWINSZ reads the winsize it's given.
                 unsafe { libc::ioctl(held.fd.as_raw_fd(), libc::TIOCSWINSZ, &ws) };
             }
+            Pty::Failed => {}
         }
     }
 
@@ -133,6 +151,7 @@ impl Pty {
         match self {
             Pty::Local { child, .. } => child.process_id(),
             Pty::Held { held, .. } => Some(held.pid),
+            Pty::Failed => None,
         }
     }
 
@@ -151,6 +170,7 @@ impl Pty {
                 None
             }
             Pty::Held { held, .. } => held.status(),
+            Pty::Failed => None,
         }
     }
 
@@ -165,6 +185,7 @@ impl Pty {
                 stop_reader(stop);
                 held.kill();
             }
+            Pty::Failed => {}
         }
     }
 
@@ -180,6 +201,7 @@ impl Pty {
                     std::path::PathBuf::from(s.to_string_lossy().into_owned())
                 })
             }
+            Pty::Failed => None,
         }
     }
 
@@ -187,13 +209,14 @@ impl Pty {
         match self {
             Pty::Local { master, .. } => master.as_raw_fd(),
             Pty::Held { held, .. } => Some(held.fd.as_raw_fd()),
+            Pty::Failed => None,
         }
     }
 
     /// The holder's id for it, to take it back next launch.
     pub fn held_id(&self) -> Option<&str> {
         match self {
-            Pty::Local { .. } => None,
+            Pty::Local { .. } | Pty::Failed => None,
             Pty::Held { held, .. } => Some(&held.id),
         }
     }
@@ -255,7 +278,7 @@ fn install_wake() {
 
 /// Start `argv` (the user's login shell) at `size`, or take back the
 /// holder's terminal `attach`. `vars` is what abromux sets on top of its own
-/// environment.
+/// environment. Fails only when not even a local shell could be started.
 pub fn open(
     cwd: &str,
     argv: &[String],
@@ -264,7 +287,7 @@ pub fn open(
     attach: Option<&str>,
     persistence: Persistence,
     feed: &Feed,
-) -> Opened {
+) -> anyhow::Result<Opened> {
     let opened = |pty| Opened {
         pty,
         attached: false,
@@ -279,12 +302,12 @@ pub fn open(
                 let _ = std::fs::remove_file(path);
                 let backlog = std::mem::take(&mut held.backlog);
                 if let Some(pty) = held_pty(held, feed) {
-                    return Opened {
+                    return Ok(Opened {
                         pty,
                         attached: true,
                         snapshot,
                         backlog,
-                    };
+                    });
                 }
             }
             Err(e) => eprintln!("abromux: held terminal {id}: {e}"),
@@ -302,13 +325,13 @@ pub fn open(
         match crate::hold::Held::spawn(argv, cwd, &env, size) {
             Ok(held) => {
                 if let Some(pty) = held_pty(held, feed) {
-                    return opened(pty);
+                    return Ok(opened(pty));
                 }
             }
             Err(e) => eprintln!("abromux: abromux hold: {e}; starting the shell here instead"),
         }
     }
-    opened(local(cwd, argv, vars, size, feed))
+    Ok(opened(local(cwd, argv, vars, size, feed)?))
 }
 
 fn local(
@@ -317,7 +340,8 @@ fn local(
     vars: &[(String, String)],
     (cols, rows): (u16, u16),
     feed: &Feed,
-) -> Pty {
+) -> anyhow::Result<Pty> {
+    use anyhow::Context as _;
     let pty = native_pty_system()
         .openpty(PtySize {
             rows,
@@ -325,18 +349,25 @@ fn local(
             pixel_width: 0,
             pixel_height: 0,
         })
-        .expect("openpty");
+        .context("couldn't open a pty")?;
+    // Before the shell starts, so failing here leaves nothing running.
+    let mut reader = pty
+        .master
+        .try_clone_reader()
+        .context("couldn't read the pty")?;
+    let writer = pty.master.take_writer().context("couldn't write the pty")?;
     let mut cmd = CommandBuilder::new(&argv[0]);
     cmd.args(&argv[1..]);
     for (k, v) in vars {
         cmd.env(k, v);
     }
     cmd.cwd(cwd);
-    let child = pty.slave.spawn_command(cmd).expect("spawn shell");
+    let child = pty
+        .slave
+        .spawn_command(cmd)
+        .with_context(|| format!("couldn't start {} in {cwd}", argv[0]))?;
     drop(pty.slave);
 
-    let mut reader = pty.master.try_clone_reader().expect("pty reader");
-    let writer = pty.master.take_writer().expect("pty writer");
     let mut feed = feed.clone();
     std::thread::spawn(move || {
         let mut buf = [0u8; 64 * 1024];
@@ -352,11 +383,11 @@ fn local(
         }
         feed.close();
     });
-    Pty::Local {
+    Ok(Pty::Local {
         writer,
         master: pty.master,
         child,
-    }
+    })
 }
 
 /// A held PTY, read on a thread that `freeze` can stop between reads.
@@ -407,4 +438,26 @@ fn held_pty(held: crate::hold::Held, feed: &Feed) -> Option<Pty> {
         stop: Some((stopped, reader)),
         held,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shell_that_isnt_there_is_an_error_not_a_panic() {
+        let (feed, _wake) = Feed::new();
+        let argv = ["/nonexistent/abromux-test-sh".to_string()];
+        let opened = open(
+            "/",
+            &argv,
+            &[],
+            (80, 24),
+            None,
+            Persistence::CmuxLike,
+            &feed,
+        );
+        let e = opened.err().expect("no shell that isn't there");
+        assert!(format!("{e:#}").contains("abromux-test-sh"), "{e:#}");
+    }
 }

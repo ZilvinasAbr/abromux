@@ -311,6 +311,10 @@ impl TerminalView {
         let cwd = cwd.unwrap_or_else(|| crate::paths::home().to_string_lossy().into_owned());
         let (opened, feed) =
             spawn_shell(&cwd, &env, command.as_deref(), (cols, rows), 0, attach, cx);
+        let (opened, failed) = match opened {
+            Ok(o) => (o, None),
+            Err(e) => (Opened::failed(), Some(e)),
+        };
         let focus = cx.focus_handle();
         let config = cx.try_global::<Config>().cloned().unwrap_or_default();
         cx.on_release(Self::free_images).detach();
@@ -328,6 +332,9 @@ impl TerminalView {
             .map(|t| configure(t, &config))
             .unwrap_or_else(|| new_term(cols, rows, &config));
         term.write(&opened.backlog);
+        if let Some(e) = failed {
+            term.write(&open_failed_text(&e));
+        }
         let _ = term.take_effects();
         Self {
             term,
@@ -455,9 +462,17 @@ impl TerminalView {
             None,
             cx,
         );
+        let (opened, failed) = match opened {
+            Ok(o) => (o, None),
+            Err(e) => (Opened::failed(), Some(e)),
+        };
         (self.pty, self.feed) = (opened.pty, feed);
         self.attached = false;
         self.term = new_term(self.grid.0, self.grid.1, &self.config);
+        if let Some(e) = failed {
+            self.term.write(&open_failed_text(&e));
+            let _ = self.term.take_effects();
+        }
         // Size the new PTY and terminal to the pane, cell pixels included.
         let (cols, rows) = std::mem::take(&mut self.grid);
         self.resize(cols, rows);
@@ -2545,7 +2560,8 @@ fn sprite_char(c: &ghostty::Cell) -> Option<char> {
 /// Start the user's login shell at `size` (running `command` if there is
 /// one), or take back `attach`, and drain its output into the view on the
 /// main thread. Output and the exit of a shell from an older `generation`
-/// (one `respawn` replaced) are dropped.
+/// (one `respawn` replaced) are dropped. When nothing could be started,
+/// the error, for the view to show in place of the shell.
 fn spawn_shell(
     cwd: &str,
     env: &[(String, String)],
@@ -2554,7 +2570,7 @@ fn spawn_shell(
     generation: usize,
     attach: Option<&str>,
     cx: &mut Context<TerminalView>,
-) -> (Opened, Feed) {
+) -> (anyhow::Result<Opened>, Feed) {
     let shell = abromux_core::paths::user_shell();
     let mut argv = vec![shell, "-l".into()];
     if let Some(c) = command {
@@ -2586,8 +2602,16 @@ fn spawn_shell(
     };
     let (feed, wake) = Feed::new();
     let opened = crate::pty::open(cwd, &argv, &vars, size, attach, persistence, &feed);
+    if let Err(e) = &opened {
+        eprintln!("abromux: terminal: {e:#}");
+    }
     drain(feed.clone(), wake, generation, cx);
     (opened, feed)
+}
+
+/// Why a terminal has no shell, in red, as its screen shows it.
+fn open_failed_text(e: &anyhow::Error) -> Vec<u8> {
+    format!("\x1b[31mabromux: {e:#}\x1b[0m\r\n").into_bytes()
 }
 
 /// Take the program's output on the main thread, all that's queued at once,
