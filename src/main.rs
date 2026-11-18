@@ -3567,6 +3567,9 @@ fn main() {
         }
         std::process::exit(0);
     }
+    // Started from a shell of another channel's app (the release starting
+    // a nightly, or running its CLI): that app's socket and surface aren't this one's.
+    ipc::forget_foreign_env();
     if !args.is_empty() {
         std::process::exit(cli::run(args));
     }
