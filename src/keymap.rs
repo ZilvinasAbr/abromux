@@ -73,7 +73,7 @@ pub const ACTIONS: &[Act] = {
         "renameWorkspace", Some("Rename Workspace…"), RenameWorkspace, [(None, ["cmd-shift-r"])];
         "editWorkspaceDescription", Some("Edit Workspace Description…"), EditDescription,
             [(None, ["alt-cmd-e"])];
-        "closeWorkspace", Some("Close Workspace"), CloseWorkspace, [(None, ["cmd-shift-w"])];
+        "closeWorkspace", Some("Close Workspace"), CloseWorkspace, [(None, [])];
         "moveWorkspaceUp", Some("Move Workspace Up"), MoveWorkspaceUp, [(None, [])];
         "moveWorkspaceDown", Some("Move Workspace Down"), MoveWorkspaceDown, [(None, [])];
         "newWorkspaceGroup", Some("New Group from Workspace"), NewGroup, [(None, [])];
@@ -95,7 +95,7 @@ pub const ACTIONS: &[Act] = {
         "renameTab", Some("Rename Tab…"), RenameTab, [(None, ["cmd-r"])];
         "closeTab", Some("Close Tab"), CloseTab, [(None, ["cmd-w"])];
         "closeAndUnpinTab", Some("Close and Unpin Tab"), CloseAndUnpinTab,
-            [(None, ["alt-cmd-w"])];
+            [(None, ["cmd-shift-w"])];
         "moveTabToNewWorkspace", Some("Move Tab to New Workspace"), MoveTabToNewWorkspace,
             [(None, [])];
         // ⌘⇧] arrives from macOS as cmd-} (shift folded into the key), so
@@ -227,7 +227,6 @@ pub const LINUX: &[(&str, Keys)] = &[
     ("cleanUpWorkspaceFolder", &[(None, &["ctrl-alt-x"])]),
     ("renameWorkspace", &[(None, &["ctrl-alt-r"])]),
     ("editWorkspaceDescription", &[(None, &["ctrl-alt-e"])]),
-    ("closeWorkspace", &[(None, &["ctrl-alt-w"])]),
     ("reopenPreviousSession", &[(None, &["ctrl-alt-o"])]),
     ("nextWorkspace", &[(None, &["ctrl-alt-pagedown", "ctrl-alt-]"])]),
     ("previousWorkspace", &[(None, &["ctrl-alt-pageup", "ctrl-alt-["])]),
@@ -237,7 +236,7 @@ pub const LINUX: &[(&str, Keys)] = &[
     ("splitDown", &[(None, &["ctrl-shift-e"])]),
     ("renameTab", &[(None, &["ctrl-shift-r"])]),
     ("closeTab", &[(None, &["ctrl-shift-w"])]),
-    ("closeAndUnpinTab", &[(None, &["ctrl-alt-shift-w"])]),
+    ("closeAndUnpinTab", &[(None, &["ctrl-alt-w"])]),
     ("nextTab", &[(None, &["ctrl-pagedown", "ctrl-tab"])]),
     ("previousTab", &[(None, &["ctrl-pageup", "ctrl-shift-tab"])]),
     ("focusLeft", &[(None, &["ctrl-alt-left"])]),
