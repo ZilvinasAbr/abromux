@@ -221,7 +221,7 @@ Run `abromux --help` for every command.
 | ⌥⌘B / ⇧⌘M | Merge requests panel / go to a merge request |
 | ⌥⌘1…9 | Show a workspace's pinned tab |
 | ⌥⌘T | Pin or unpin the focused tab |
-| ⌥⌘W | Close and unpin the focused tab |
+| ⇧⌘W | Close and unpin the focused tab |
 
 ## Learn more
 
