@@ -124,6 +124,8 @@ Programs can report their own state with the Program Status Protocol (OSC 7501):
 
 `notify` marks your terminal: it rings the pane, dots the tab and workspace, and shows a macOS banner if abromux is in the background. Use it once when a long task finishes or you need the user, not for every step. Coding agents with hooks (`abromux hooks install`: Claude Code, Codex, Gemini CLI, Droid, Cursor, OpenCode, Pi) already notify when they finish a turn or ask for permission, so don't duplicate that.
 
+Polling or watching something (PRs, a deploy, CI) with a background command, a monitor or a scheduled wakeup: a turn that ends while that work is still running doesn't notify, and the tab stays "Running". So say nothing for "no change yet", and run `abromux notify` only when a check finds something the user should act on.
+
 Clear status pills and progress you set once they no longer apply.
 
 ## Pin the tickets, merge requests and tabs you work on

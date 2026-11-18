@@ -919,6 +919,19 @@ fn general_page() -> Page {
                         |s| s.notifications.done.as_str(),
                     ),
                     choice(
+                        "Agent finished a turn",
+                        "Which of a coding agent's turns count as done. When idle skips a \
+                         turn that leaves a background command, monitor or scheduled wakeup \
+                         running, so polling stays quiet until the work is done.",
+                        &["notifications", "agentTurnComplete"],
+                        &[
+                            ("whenIdle", "When idle"),
+                            ("always", "Every turn"),
+                            ("never", "Never"),
+                        ],
+                        |s| s.notifications.agent_turn_complete.as_str(),
+                    ),
+                    choice(
                         "Failed",
                         "A program reports it failed.",
                         &["notifications", "error"],

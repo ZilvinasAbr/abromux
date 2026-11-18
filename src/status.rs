@@ -244,15 +244,40 @@ impl AbroMux {
                 Some(_) if agents == 1 => s.key.split(' ').next().unwrap_or_default().to_string(),
                 _ => s.key.clone(),
             };
+            // An agent's unread notification rides on its pill, one line,
+            // instead of a separate bell line under the workspace.
+            let detail = s
+                .owner
+                .filter(|_| sb.show_notification_message)
+                .and_then(|o| {
+                    self.notifications
+                        .iter()
+                        .rev()
+                        .find(|n| !n.read && n.surface == o)
+                        .map(|n| n.body.clone())
+                });
+            let state = s.color.map_or(sub, rgb);
+            // `set_agent_status`'s "Needs input".
+            let needs = s.owner.is_some() && s.color == Some(WARNING);
             div()
                 .flex()
-                .flex_none()
                 .items_center()
                 .gap(px(4.))
                 .px(px(6.))
                 .py(px(1.))
                 .rounded(px(4.))
-                .bg(if active { rgba(0x0000002e) } else { tint(0x0d) })
+                .map(|d| {
+                    if detail.is_some() {
+                        d.w_full().min_w_0()
+                    } else {
+                        d.flex_none()
+                    }
+                })
+                .bg(match (needs && detail.is_some(), active) {
+                    (true, false) => rgba(WARNING << 8 | 0x22),
+                    (_, true) => rgba(0x0000002e),
+                    _ => tint(0x0d),
+                })
                 .text_size(px(10.5 * z))
                 .map(|d| match s.icon.as_deref().filter(|i| ICONS.contains(i)) {
                     Some(i) => d.child(
@@ -280,9 +305,26 @@ impl AbroMux {
                         .flex_none()
                         .max_w(px(150.))
                         .truncate()
-                        .text_color(fg)
+                        .text_color(if detail.is_some() && !active {
+                            state
+                        } else {
+                            fg
+                        })
                         .child(s.value.clone()),
                 )
+                .children(detail.map(|t| {
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_color(if needs && !active { fg } else { sub })
+                        .child(format!(
+                            "· {}",
+                            t.split_whitespace().collect::<Vec<_>>().join(" ")
+                        ))
+                }))
         });
         let progress = progress.map(|p| {
             let pct = (p.value.clamp(0., 1.) * 100.).round();

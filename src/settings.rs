@@ -156,6 +156,7 @@ impl Default for GitlabSettings {
     }
 }
 
+pub use abromux_core::pending::TurnComplete;
 pub use abromux_core::settings::{NotificationHook, Persistence};
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -563,6 +564,9 @@ pub struct NotificationSettings {
     pub done: Alert,
     /// A program that failed (OSC 7501, OSC 9;4).
     pub error: Alert,
+    /// When a coding agent finishing a turn notifies
+    /// (`abromux_core::pending`).
+    pub agent_turn_complete: TurnComplete,
 }
 
 impl Default for NotificationSettings {
@@ -575,6 +579,7 @@ impl Default for NotificationSettings {
             // An agent finishes every turn: worth a dot, not a banner each.
             done: Alert::Unread,
             error: Alert::Banner,
+            agent_turn_complete: TurnComplete::WhenIdle,
         }
     }
 }
@@ -1379,6 +1384,21 @@ mod tests {
         assert!(reorder(r#""notifications""#).unwrap());
         assert!(reorder(r#""agentActivity""#).unwrap());
         assert!(reorder(r#""sometimes""#).is_err());
+        let turn = |v: &str| {
+            parse(&format!(
+                r#"{{"notifications": {{"agentTurnComplete": "{v}"}}}}"#
+            ))
+            .map(|s| s.notifications.agent_turn_complete)
+        };
+        assert_eq!(turn("whenIdle").unwrap(), TurnComplete::WhenIdle);
+        assert_eq!(turn("always").unwrap(), TurnComplete::Always);
+        assert_eq!(turn("never").unwrap(), TurnComplete::Never);
+        assert!(turn("sometimes").is_err());
+        assert_eq!(
+            NotificationSettings::default().agent_turn_complete,
+            TurnComplete::WhenIdle,
+            "as in cmux"
+        );
         let appearance = |v: &str| {
             parse(&format!(r#"{{"app": {{"appearance": "{v}"}}}}"#)).map(|s| s.app.appearance)
         };

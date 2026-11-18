@@ -360,6 +360,9 @@ struct AbroMux {
     /// Surfaces marked unread with no unread notification (⌥⌘U, ⌃⌘U,
     /// `mark-unread`), until you next look at them.
     manual_unread: HashSet<EntityId>,
+    /// Per agent terminal: work it left running past its turn
+    /// (`abromux_core::pending`), which keeps a `Stop` from notifying.
+    agent_pending: HashMap<EntityId, abromux_core::pending::Pending>,
     /// The surface you were looking at on the last render, so looking at
     /// one marks it read once, not on every frame.
     last_viewed: Option<EntityId>,
@@ -433,6 +436,7 @@ impl AbroMux {
             next_notification: 0,
             notifications_open: false,
             manual_unread: HashSet::new(),
+            agent_pending: HashMap::new(),
             last_viewed: None,
             badge: 0,
             menubar: None,
@@ -869,6 +873,7 @@ impl AbroMux {
                 TerminalEvent::Respawned => {
                     // Status pills described what ran in the old shell.
                     this.forget_status(id);
+                    this.agent_pending.remove(&id);
                     cx.notify();
                 }
             }
@@ -1342,6 +1347,7 @@ impl AbroMux {
         };
         self.forget_notifications(id);
         self.forget_status(id);
+        self.agent_pending.remove(&id);
         let ws = &mut self.workspaces[wi];
         ws.pinned.retain(|p| *p != id);
         ws.pinned_for.remove(&id);
