@@ -22,3 +22,7 @@ Only `crates/abromux-platform` and the browser backends (`crates/abromux-browser
 ## Performance
 
 Run `scripts/perf.py run` after changes that could affect speed or memory. It records each run with its commit and compares it with earlier runs. `scripts/perf.py run --headless` is the quick check that needs no window.
+
+## Reporting simple actions
+
+After a simple action (merge a PR, push, open a PR, etc.), reply with only the outcome and its full link, e.g. "Merged https://github.com/ZilvinasAbr/abromux/pull/89". No preamble about what you're about to do, no CI/check status, commit hashes or merge method, no side notes (branches kept, stale local checkouts). Add more only if something failed or needs a decision.
