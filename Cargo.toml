@@ -15,6 +15,10 @@ members = ["crates/*"]
 default = ["gitlab"]
 # Plugins (crates/): each adds a kind of tab, see src/plugins.rs
 gitlab = ["dep:abromux-gitlab"]
+# The `chromium` browser engine (macOS): CEF, plus the helper apps that
+# scripts/bundle-app.sh puts in the bundle. Off by default, as its build
+# downloads ~350 MB; the bundle scripts turn it on.
+chromium = ["abromux-browser/chromium"]
 
 [dependencies]
 abromux-plugin = { path = "crates/abromux-plugin" }

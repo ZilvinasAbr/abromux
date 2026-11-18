@@ -8,14 +8,17 @@
 #   scripts/nightly.sh ~/Applications  # or another folder
 #   scripts/nightly.sh --name zoom     # "AbroMux Nightly zoom.app" and `abromux-nightly-zoom`,
 #                                      # apart from the shared nightly too
+#   scripts/nightly.sh --no-chromium   # without the built-in Chromium engine
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 dest=/Applications
 flavor=
+extra=()
 while (($#)); do
   case "$1" in
     --name) flavor="${2:-}"; shift ;;
+    --no-chromium) extra+=(--no-chromium) ;;
     *) dest="$1" ;;
   esac
   shift
@@ -29,7 +32,7 @@ if [[ "$(uname -s)" == Linux ]]; then
   exec scripts/package-linux.sh --nightly ${flavor:+--name "$flavor"} --prefix "$dest"
 fi
 
-scripts/bundle-app.sh --nightly ${flavor:+--name "$flavor"} "$dest"
+scripts/bundle-app.sh --nightly ${flavor:+--name "$flavor"} ${extra[@]+"${extra[@]}"} "$dest"
 ln -sf "$dest/$app.app/Contents/MacOS/abromux" ~/.cargo/bin/abromux-nightly${flavor:+-$flavor}
 
 if pgrep -qf "$app.app/Contents/MacOS/abromux"; then

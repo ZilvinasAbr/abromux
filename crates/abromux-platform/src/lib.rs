@@ -12,8 +12,8 @@
 //! - [`prefs`]: small preferences, such as the "Don't ask again" boxes.
 //! - [`opener`]: files and URLs to their default apps; [`process`]: other
 //!   processes' working folders.
-//! - [`browser_native`], [`cursor`], [`webauthn`]: the browser pane's native
-//!   parts.
+//! - [`browser_native`], [`cursor`], [`webauthn`], [`chromium`]: the browser
+//!   pane's native parts.
 
 pub mod channel;
 
@@ -37,6 +37,9 @@ use macos as os;
 /// The WKWebView passkey bridge; Linux has no built-in browser.
 #[cfg(target_os = "macos")]
 pub use os::webauthn;
+/// The Chromium engine's AppKit parts; macOS only, like the engine.
+#[cfg(target_os = "macos")]
+pub use os::chromium;
 pub use os::{
     appearance, browser_native, cursor, dock, file_types, fonts, notify, opener, power, process,
     tray, window,

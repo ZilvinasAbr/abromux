@@ -39,6 +39,7 @@ unsafe extern "C" {
         done: DoneFn,
     );
     fn abx_hover(webview: *mut c_void, url: *const c_char);
+    fn abx_page_view_mark(view: *mut c_void);
     fn abx_snapshot(webview: *mut c_void, ctx: *mut c_void, done: ImageFn);
     fn abx_downloads_install();
     fn abx_page_shortcuts_install();
@@ -122,7 +123,14 @@ pub fn delete_cookies(wk: *mut Object, json: &str) -> oneshot::Receiver<Answer> 
     answer(|ctx| unsafe { abx_cookies_delete(wk as _, json.as_ptr(), ctx, on_done) })
 }
 
-/// Show the link under the pointer at the page's corner; "" hides it.
+/// Treat `view` (a page that isn't a WKWebView) as a page for the app's
+/// shortcuts, which go to the app first while a page has focus.
+pub fn mark_page_view(view: *mut Object) {
+    unsafe { abx_page_view_mark(view as _) };
+}
+
+/// Show the link under the pointer at the corner of the page view `wk`
+/// (any NSView); "" hides it.
 pub fn hover(wk: *mut Object, url: &str) {
     let url = cstr(url);
     unsafe { abx_hover(wk as _, url.as_ptr()) };

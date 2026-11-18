@@ -1,0 +1,15 @@
+[package]
+name = "abromux-chromium-helper"
+version = "0.1.0"
+edition = "2024"
+description = "The Chromium engine's child processes (renderer, GPU, network…), as the helper apps in AbroMux.app"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "abromux-chromium-helper"
+path = "src/main.rs"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Same version as abromux-browser's: the helper and the app load one framework.
+cef = { version = "=156.6.0", default-features = false, features = ["sandbox"] }

@@ -2,14 +2,15 @@
 # Fails if Rust code outside abromux-platform and the browser backends calls
 # the OS directly: `cfg(target_os`, `objc::` or `msg_send!`. Everything else
 # reaches the OS through abromux-platform (docs/linux-plan.md). patches/
-# holds third-party crates (patches/README.md), so it isn't checked.
+# holds third-party crates (patches/README.md), so it isn't checked, nor is
+# abromux-chromium-helper, which is the chromium backend's child process.
 #
 #   scripts/check-os-calls.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 if hits=$(git grep --untracked -nE 'cfg\(target_os|objc::|msg_send!' -- '*.rs' \
-  ':!crates/abromux-platform/' ':!crates/abromux-browser/src/backend/' ':!patches/'); then
+  ':!crates/abromux-platform/' ':!crates/abromux-browser/src/backend/' ':!crates/abromux-chromium-helper/' ':!patches/'); then
   echo "OS calls outside crates/abromux-platform and crates/abromux-browser/src/backend:" >&2
   echo "$hits" >&2
   exit 1
