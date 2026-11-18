@@ -8,12 +8,12 @@ use gpui::{AnyElement, App};
 use http::{Request, Response};
 use std::{borrow::Cow, path::PathBuf};
 
+#[cfg(all(target_os = "macos", feature = "chromium"))]
+pub mod chromium;
 #[cfg(not(target_os = "macos"))]
 pub mod none;
 #[cfg(target_os = "macos")]
 pub mod wkwebview;
-#[cfg(all(target_os = "macos", feature = "chromium"))]
-pub mod chromium;
 
 /// What shows a built-in browser pane's page.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

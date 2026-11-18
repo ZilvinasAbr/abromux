@@ -894,13 +894,20 @@ fn named_colors<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<(String, u32)>, D
 /// OS's default, the built-in browser on macOS, and on Linux (which has
 /// none) terminal-browser if it's installed, else the default browser.
 pub fn browser_engine(cx: &gpui::App) -> BrowserEngine {
+    // The Chromium edition is for Chromium tabs: `browser.engine` is
+    // AbroMux's (the config file is shared), so it doesn't apply here.
+    if chromium_edition_engine() {
+        return BrowserEngine::Chromium;
+    }
     let set = cx.try_global::<Settings>().and_then(|s| s.browser.engine);
     set.unwrap_or_else(default_engine)
 }
 
 /// This OS's browser engine when the config file names none.
 pub fn default_engine() -> BrowserEngine {
-    if abromux_platform::MACOS {
+    if chromium_edition_engine() {
+        BrowserEngine::Chromium
+    } else if abromux_platform::MACOS {
         BrowserEngine::BuiltIn
     } else if crate::terminal_browser::installed() {
         BrowserEngine::TerminalBrowser
@@ -917,6 +924,13 @@ pub fn page_engine(cx: &gpui::App) -> abromux_browser::backend::Engine {
         BrowserEngine::Chromium => abromux_browser::backend::Engine::Chromium,
         _ => abromux_browser::backend::Engine::WebKit,
     }
+}
+
+/// Whether this is the Chromium edition and its Chromium is there to use.
+pub fn chromium_edition_engine() -> bool {
+    abromux_platform::channel::chromium_edition()
+        && abromux_browser::backend::engine_available(abromux_browser::backend::Engine::Chromium)
+            .is_ok()
 }
 
 /// Whether browser tabs open as `terminal-browser`.

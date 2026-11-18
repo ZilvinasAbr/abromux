@@ -30,8 +30,11 @@ fn version(root: &Path) {
         build = git(&["rev-list", "--count", "HEAD"]).unwrap_or_default();
         let dirty =
             git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
-        let tag = format!("v{version}^{{commit}}");
-        let release = !dirty && git(&["rev-parse", "--short", &tag]).is_some_and(|t| t == sha);
+        // The release tag, or the Chromium edition's (`v<version>-chromium`).
+        let tagged = |tag: String| git(&["rev-parse", "--short", &tag]).is_some_and(|t| t == sha);
+        let release = !dirty
+            && (tagged(format!("v{version}^{{commit}}"))
+                || tagged(format!("v{version}-chromium^{{commit}}")));
         if !release {
             version += &format!("+{sha}");
         }

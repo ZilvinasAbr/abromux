@@ -4,6 +4,7 @@
 fn main() {
     // channel.rs reads it with option_env!.
     println!("cargo:rerun-if-env-changed=ABROMUX_CHANNEL");
+    println!("cargo:rerun-if-env-changed=ABROMUX_EDITION");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }

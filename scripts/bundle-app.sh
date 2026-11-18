@@ -8,6 +8,9 @@
 # --dist ships only a clean checkout of a release tag: bump `version` in
 # Cargo.toml, commit, `git tag v<version>`, then build.
 #   scripts/bundle-app.sh --nightly [dir] # "AbroMux Nightly.app" (scripts/nightly.sh)
+#   scripts/bundle-app.sh --chromium-edition [dir]  # "AbroMux Chromium.app" (dev.abromux.chromium)
+#   scripts/bundle-app.sh --chromium-edition --dist # notarized dist/AbroMux-Chromium-<version>.dmg,
+#                                           # from tag v<version>-chromium on the chromium branch
 #   scripts/bundle-app.sh --nightly --name zoom [dir]  # "AbroMux Nightly zoom.app"
 #   scripts/bundle-app.sh --nightly --dist  # notarized dist/AbroMux-Nightly-<version>.dmg,
 #                                           # from a committed tree, for a GitHub pre-release
@@ -45,11 +48,13 @@ nightly=false
 dest=/Applications
 flavor=
 chromium=true
+edition=false
 while (($#)); do
   case "$1" in
     --dist) dist=true ;;
     --nightly) nightly=true ;;
     --no-chromium) chromium=false ;;
+    --chromium-edition) edition=true ;;
     --name) flavor="${2:-}"; shift ;;
     *) dest="$1" ;;
   esac
@@ -63,7 +68,16 @@ if [[ -n "$flavor" ]] && { ! $nightly || [[ ! "$flavor" =~ ^[a-z0-9-]+$ ]]; }; t
   echo "--name needs --nightly and a name of a-z, 0-9 and -." >&2
   exit 1
 fi
-if $nightly; then
+if $edition && { $nightly || ! $chromium; }; then
+  echo "--chromium-edition is a release with Chromium: not with --nightly or --no-chromium." >&2
+  exit 1
+fi
+if $edition; then
+  # Its own app beside AbroMux: name, bundle id, support folder, releases.
+  name="AbroMux Chromium"
+  bundle_id=dev.abromux.chromium
+  icon=abromux
+elif $nightly; then
   name="AbroMux Nightly${flavor:+ $flavor}"
   bundle_id="dev.abromux.nightly${flavor:+.$flavor}"
   icon=abromux-nightly
@@ -96,7 +110,15 @@ if $dist && $nightly && [[ "$version" == *-dirty ]]; then
   exit 1
 fi
 if $dist && ! $nightly && [[ "$version" == *+* ]]; then
-  echo "Refusing to ship $version: --dist needs a clean checkout of tag v${version%%+*}." >&2
+  if $edition; then
+    echo "Refusing to ship $version: --dist needs a clean checkout of tag v${version%%+*}-chromium." >&2
+  else
+    echo "Refusing to ship $version: --dist needs a clean checkout of tag v${version%%+*}." >&2
+  fi
+  exit 1
+fi
+if $dist && $edition && [[ "$(git rev-parse HEAD)" != "$(git rev-parse "v$version-chromium^{commit}" 2>/dev/null)" ]]; then
+  echo "Refusing to ship: the Chromium edition ships from tag v$version-chromium." >&2
   exit 1
 fi
 

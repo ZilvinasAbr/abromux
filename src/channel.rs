@@ -4,6 +4,6 @@
 //! Support, never a hardcoded "AbroMux" or `abromux/` path.
 
 pub use abromux_platform::{
-    channel::{app_id, app_name, bundle_id, nightly},
+    channel::{app_id, app_name, bundle_id, chromium_edition, nightly},
     dirs::{runtime_dir, state_dir, support_dir, support_dir_named, workspaces_dir},
 };

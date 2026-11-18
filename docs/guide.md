@@ -319,6 +319,8 @@ The page is a CEF browser in "Alloy" style (Chrome style can't live in another a
 
 Passkeys are Chromium's own: security keys (USB, NFC) and a phone over Bluetooth work without Apple's web-browser entitlement. Alloy has none of Chrome's WebAuthn dialogs, so `chromium_webauthn.js` shows a card with Cancel while a request runs, enforces its timeout, and keeps autofill (conditional) requests from Chromium. Touch ID and iCloud Keychain passkeys aren't there.
 
+**AbroMux Chromium** is a separate release of this, built from the `chromium` branch with `scripts/bundle-app.sh --chromium-edition` and published as GitHub pre-releases tagged `v<version>-chromium` (`AbroMux-Chromium-<version>.dmg`). It's its own app beside AbroMux: bundle id `dev.abromux.chromium`, support folder `abromux-chromium`, workspace folders in `~/.abromux/ws-chromium`, and updates only from those pre-releases (AbroMux's own check skips pre-releases, so it never offers them). Its browser tabs are always Chromium: it shares the config file with AbroMux, so `browser.engine` there is AbroMux's, and its Settings show the engine without changing it (an older AbroMux would reject `"chromium"` in that file).
+
 Differences from WebKit tabs: `browser frame` reaches same-site iframes only (cross-site ones are other DevTools targets); a restored tab gets its page back but not its back/forward list; scripted popups (`window.open` with features, as sign-ins use) open as Chromium windows; ⌥⌘I and ⌥⌘C both open DevTools in a window of their own.
 
 #### Without the built-in browser (Linux)

@@ -832,30 +832,45 @@ fn general_page() -> Page {
             group(
                 "Browser",
                 [
-                    choice(
-                        "Browser",
-                        "What new browser tabs open in. Built-in is WebKit, as in Safari; \
+                    if crate::settings::chromium_edition_engine() {
+                        info_row(
+                            "Browser",
+                            "AbroMux Chromium's browser tabs are always Chromium. This \
+                             setting belongs to AbroMux, which shares the config file, so \
+                             it isn't changed here.",
+                            |_, _| {
+                                div()
+                                    .text_size(px(12.))
+                                    .child("Chromium")
+                                    .into_any_element()
+                            },
+                        )
+                    } else {
+                        choice(
+                            "Browser",
+                            "What new browser tabs open in. Built-in is WebKit, as in Safari; \
                          Chromium is built in too, with Chrome's engine and its own sign-ins \
                          (security keys and phones as passkeys work without Apple's \
                          passkey entitlement). terminal-browser runs in a terminal tab; the \
                          default browser opens pages outside abromux, with no tab. \
                          `abromux browser open` stays built-in for automation (macOS).",
-                        &["browser", "engine"],
-                        if abromux_platform::MACOS {
-                            &[
-                                ("builtIn", "Built-in"),
-                                ("chromium", "Chromium"),
-                                ("terminalBrowser", "terminal-browser"),
-                                ("system", "Default browser"),
-                            ]
-                        } else {
-                            &[
-                                ("terminalBrowser", "terminal-browser"),
-                                ("system", "Default browser"),
-                            ]
-                        },
-                        |s| engine(s.browser.engine),
-                    ),
+                            &["browser", "engine"],
+                            if abromux_platform::MACOS {
+                                &[
+                                    ("builtIn", "Built-in"),
+                                    ("chromium", "Chromium"),
+                                    ("terminalBrowser", "terminal-browser"),
+                                    ("system", "Default browser"),
+                                ]
+                            } else {
+                                &[
+                                    ("terminalBrowser", "terminal-browser"),
+                                    ("system", "Default browser"),
+                                ]
+                            },
+                            |s| engine(s.browser.engine),
+                        )
+                    },
                     switch(
                         "terminal-browser new tabs as panes",
                         "Links that would open a terminal-browser tab open a split beside \

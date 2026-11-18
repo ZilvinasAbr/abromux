@@ -11,7 +11,17 @@ use std::path::PathBuf;
 /// (`~/.local/share/abromux`) on Linux; or `abromux-nightly`, or
 /// `abromux-nightly-<name>`.
 pub fn support_dir() -> PathBuf {
-    support_dir_of(flavor())
+    base().join(own_dir_name())
+}
+
+/// This app's folder name: its channel's, or `abromux-chromium` for the
+/// Chromium edition.
+fn own_dir_name() -> String {
+    if flavor().is_none() && crate::channel::chromium_edition() {
+        "abromux-chromium".into()
+    } else {
+        dir_name(flavor())
+    }
 }
 
 /// The support folder of another channel, by name: `stable`, `nightly` or
@@ -33,6 +43,7 @@ pub fn support_dir_named(channel: &str) -> Option<PathBuf> {
 /// agents trip on those.
 pub fn workspaces_dir() -> PathBuf {
     let dir = match flavor() {
+        None if crate::channel::chromium_edition() => "ws-chromium".into(),
         None => "ws".into(),
         Some("") => "ws-nightly".into(),
         Some(name) => format!("ws-nightly-{name}"),
@@ -61,7 +72,7 @@ pub fn runtime_dir() -> PathBuf {
     if cfg!(target_os = "linux")
         && let Some(dir) = xdg("XDG_RUNTIME_DIR")
     {
-        return dir.join(dir_name(flavor()));
+        return dir.join(own_dir_name());
     }
     support_dir()
 }
@@ -72,7 +83,7 @@ pub fn runtime_dir() -> PathBuf {
 pub fn state_dir() -> PathBuf {
     if cfg!(target_os = "linux") {
         let base = xdg("XDG_STATE_HOME").unwrap_or_else(|| home().join(".local/state"));
-        return base.join(dir_name(flavor()));
+        return base.join(own_dir_name());
     }
     support_dir()
 }

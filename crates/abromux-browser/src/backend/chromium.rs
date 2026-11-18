@@ -25,8 +25,8 @@ use abromux_platform::{browser_native, chromium as native, dirs};
 use cef::{ImplBrowser as _, ImplBrowserHost as _, ImplFrame as _, *};
 use futures::channel::{mpsc, oneshot};
 use gpui::{
-    AnyElement, App as GpuiApp, Bounds, Element, ElementId, GlobalElementId, Hitbox, IntoElement, LayoutId,
-    MouseDownEvent, Pixels as Px, Style, Window,
+    AnyElement, App as GpuiApp, Bounds, Element, ElementId, GlobalElementId, Hitbox, IntoElement,
+    LayoutId, MouseDownEvent, Pixels as Px, Style, Window,
 };
 use serde_json::{Value, json};
 use std::{
@@ -126,7 +126,11 @@ fn start_now() -> Result<(), String> {
         log_file: s(&root.join("chromium.log")),
         log_severity: LogSeverity::WARNING,
         keychain_service_name: CefString::from(
-            format!("{} Chromium Safe Storage", abromux_platform::channel::app_name()).as_str(),
+            format!(
+                "{} Chromium Safe Storage",
+                abromux_platform::channel::app_name()
+            )
+            .as_str(),
         ),
         ..Default::default()
     };
@@ -969,7 +973,8 @@ impl CefPage {
                     if i == last
                         && let Some(me) = me.upgrade()
                         && let Some(url) = me.first_url.borrow_mut().take()
-                        && let Some(frame) = me.browser.borrow().as_ref().and_then(|b| b.main_frame())
+                        && let Some(frame) =
+                            me.browser.borrow().as_ref().and_then(|b| b.main_frame())
                     {
                         frame.load_url(Some(&CefString::from(url.as_str())));
                     }
@@ -1132,7 +1137,10 @@ impl PageBackend for CefPage {
             return false;
         };
         let index = v["index"].as_u64().unwrap_or(0) as usize;
-        let Some(url) = v["entries"][index]["url"].as_str().filter(|u| !u.is_empty()) else {
+        let Some(url) = v["entries"][index]["url"]
+            .as_str()
+            .filter(|u| !u.is_empty())
+        else {
             return false;
         };
         if self.inner.first_url.borrow().is_some() {
@@ -1196,10 +1204,11 @@ impl PageBackend for CefPage {
             Err(e) => return answered(Err(e)),
         };
         let n = cookies.len();
-        self.inner
-            .answer("Network.setCookies", json!({ "cookies": cookies }), move |_| {
-                Ok(n.to_string())
-            })
+        self.inner.answer(
+            "Network.setCookies",
+            json!({ "cookies": cookies }),
+            move |_| Ok(n.to_string()),
+        )
     }
 
     fn delete_cookies(&self, json: &str) -> oneshot::Receiver<Answer> {
@@ -1253,7 +1262,10 @@ fn answered(answer: Answer) -> oneshot::Receiver<Answer> {
 /// A cookie as the pane's JSON: {name, value, domain, path, expires,
 /// httpOnly, secure, sameSite}, like WebKit's.
 fn cookie_json(c: &Value) -> Value {
-    let expires = c["expires"].as_f64().filter(|e| *e > 0.).map_or(-1., f64::floor);
+    let expires = c["expires"]
+        .as_f64()
+        .filter(|e| *e > 0.)
+        .map_or(-1., f64::floor);
     json!({
         "name": c["name"],
         "value": c["value"],
@@ -1287,7 +1299,11 @@ fn cookie_params(json: &str) -> Result<Vec<Value>, String> {
             if let Some(e) = c["expires"].as_f64().filter(|e| *e > 0.) {
                 p["expires"] = json!(e);
             }
-            match c["sameSite"].as_str().map(str::to_ascii_lowercase).as_deref() {
+            match c["sameSite"]
+                .as_str()
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
                 Some("strict") => p["sameSite"] = json!("Strict"),
                 Some("lax") => p["sameSite"] = json!("Lax"),
                 Some("none") => p["sameSite"] = json!("None"),
@@ -1449,7 +1465,8 @@ mod tests {
         }));
         assert_eq!(c["expires"], json!(1700000000.0));
         assert_eq!(c["sameSite"], "Lax");
-        let session = cookie_json(&json!({ "name": "s", "value": "", "domain": "x", "expires": -1 }));
+        let session =
+            cookie_json(&json!({ "name": "s", "value": "", "domain": "x", "expires": -1 }));
         assert_eq!(session["expires"], json!(-1.0));
         assert_eq!(session["sameSite"], "None");
 

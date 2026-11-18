@@ -439,11 +439,34 @@ async fn run_install(
 
 // ---- the feed -------------------------------------------------------------
 
+/// The latest release, or for the Chromium edition, recent releases to
+/// pick its own from (they're pre-releases, which `latest` skips).
 fn feed_url() -> String {
     std::env::var("ABROMUX_UPDATE_FEED").unwrap_or_else(|_| {
         let repo = REPO.trim_start_matches("https://github.com/");
-        format!("https://api.github.com/repos/{repo}/releases/latest")
+        if channel::chromium_edition() {
+            format!("https://api.github.com/repos/{repo}/releases?per_page=30")
+        } else {
+            format!("https://api.github.com/repos/{repo}/releases/latest")
+        }
     })
+}
+
+/// The Chromium edition's tag suffix: `v0.35.0-chromium`.
+const CHROMIUM_TAG: &str = "-chromium";
+
+/// From a list of releases (newest first), the newest of the Chromium
+/// edition's, as its own JSON; None if there's none.
+fn chromium_release(json: &str) -> Option<String> {
+    let list: Vec<serde_json::Value> = serde_json::from_str(json).ok()?;
+    list.into_iter()
+        .filter(|r| r["draft"] != true)
+        .find(|r| {
+            r["tag_name"]
+                .as_str()
+                .is_some_and(|t| t.ends_with(CHROMIUM_TAG))
+        })
+        .map(|r| r.to_string())
 }
 
 fn user_agent() -> String {
@@ -468,7 +491,17 @@ fn fetch() -> Result<Release, Failure> {
     if !out.status.success() {
         return Err(curl_failure(out.status.code().unwrap_or(-1), false));
     }
-    parse_release(&String::from_utf8_lossy(&out.stdout))
+    let body = String::from_utf8_lossy(&out.stdout);
+    if channel::chromium_edition() && body.trim_start().starts_with('[') {
+        let release = chromium_release(&body).ok_or_else(|| {
+            failure(
+                "No Update Found",
+                "There's no AbroMux Chromium release yet.",
+            )
+        })?;
+        return parse_release(&release);
+    }
+    parse_release(&body)
 }
 
 /// The end of the name of the download that installs a release here:
@@ -1322,6 +1355,21 @@ mod tests {
     use super::*;
     // `gpui::*` brings its own `test` attribute.
     use core::prelude::v1::test;
+
+    #[test]
+    fn chromium_edition_picks_its_own_release() {
+        let list = r#"[
+            {"tag_name":"v0.36.0","draft":false},
+            {"tag_name":"v0.36.0-chromium","draft":true},
+            {"tag_name":"v0.35.0-chromium","draft":false,"html_url":"u","assets":[]},
+            {"tag_name":"v0.34.0-chromium","draft":false}
+        ]"#;
+        let r: serde_json::Value = serde_json::from_str(&chromium_release(list).unwrap()).unwrap();
+        assert_eq!(r["tag_name"], "v0.35.0-chromium");
+        assert!(chromium_release(r#"[{"tag_name":"v0.36.0"}]"#).is_none());
+        assert!(newer("0.36.0-chromium", "0.35.0"));
+        assert!(!newer("0.35.0-chromium", "0.35.0"));
+    }
 
     #[test]
     fn versions() {

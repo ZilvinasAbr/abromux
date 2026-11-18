@@ -4,10 +4,26 @@
 //! runs side by side with the signed release. `--name foo` makes a named
 //! nightly, "AbroMux Nightly foo.app" (`dev.abromux.nightly.foo`), that runs
 //! beside both. Anything else is stable.
+//!
+//! Apart from the channel, a release can be the Chromium edition
+//! (`bundle-app.sh --chromium-edition`): "AbroMux Chromium.app", bundle id
+//! `dev.abromux.chromium`, with its own support folder and its own releases
+//! (`v<version>-chromium`), whose browser tabs are Chromium by default.
 
 use std::sync::OnceLock;
 
 pub const NIGHTLY_ID: &str = "dev.abromux.nightly";
+pub const CHROMIUM_ID: &str = "dev.abromux.chromium";
+
+/// Whether this is the Chromium edition: from the bundle id, else from
+/// `ABROMUX_EDITION=chromium` when this was built.
+pub fn chromium_edition() -> bool {
+    static EDITION: OnceLock<bool> = OnceLock::new();
+    *EDITION.get_or_init(|| match bundle_id() {
+        Some(id) => id == CHROMIUM_ID,
+        None => option_env!("ABROMUX_EDITION") == Some("chromium"),
+    })
+}
 
 /// None for stable, Some("") for the nightly, Some(name) for a named one:
 /// from the app bundle's Info.plist, else from `ABROMUX_CHANNEL` when this
@@ -81,6 +97,7 @@ pub fn nightly() -> bool {
 /// `dev.abromux.app`, `dev.abromux.nightly` or `dev.abromux.nightly.<name>`.
 pub fn app_id() -> String {
     match flavor() {
+        None if chromium_edition() => CHROMIUM_ID.into(),
         None => "dev.abromux.app".into(),
         Some("") => NIGHTLY_ID.into(),
         Some(name) => format!("{NIGHTLY_ID}.{name}"),
@@ -90,6 +107,7 @@ pub fn app_id() -> String {
 pub fn app_name() -> &'static str {
     static NAME: OnceLock<String> = OnceLock::new();
     NAME.get_or_init(|| match flavor() {
+        None if chromium_edition() => "AbroMux Chromium".into(),
         None => "AbroMux".into(),
         Some("") => "AbroMux Nightly".into(),
         Some(name) => format!("AbroMux Nightly {name}"),
