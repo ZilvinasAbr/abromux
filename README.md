@@ -214,7 +214,7 @@ Run `abromux --help` for every command.
 | ⌘D / ⌘⇧D | Split right / down |
 | ⌘T / ⌘⇧L | New terminal tab / new browser tab |
 | ⌘1…9 | Jump to a workspace |
-| ⌘P | Switch workspace by name |
+| ⌘P | Switch workspace or tab by name (⇥ moves between the two columns) |
 | ⌘⇧P | Command palette |
 | ⌘⇧U | Jump to the newest unread notification |
 | ⌘⇧↩ | Zoom the focused pane |
