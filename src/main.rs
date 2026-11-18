@@ -3570,6 +3570,9 @@ fn main() {
         }
         std::process::exit(0);
     }
+    // Started from a shell of another channel's app (the release starting
+    // a nightly, or running its CLI): that app's socket and surface aren't this one's.
+    ipc::forget_foreign_env();
     if !args.is_empty() {
         std::process::exit(cli::run(args));
     }
@@ -3643,7 +3646,12 @@ fn run_app(cwd: Option<String>) {
             ),
             KeyBinding::new("enter", palette::Confirm, Some("CommandPalette > Input")),
             KeyBinding::new("escape", palette::Dismiss, Some("CommandPalette > Input")),
-            KeyBinding::new("tab", palette::ToggleScope, Some("CommandPalette > Input")),
+            KeyBinding::new("tab", palette::SwitchColumn, Some("CommandPalette > Input")),
+            KeyBinding::new(
+                "shift-tab",
+                palette::SwitchColumn,
+                Some("CommandPalette > Input"),
+            ),
             KeyBinding::new("down", browser::SuggestNext, Some("Omnibar > Input")),
             KeyBinding::new("ctrl-n", browser::SuggestNext, Some("Omnibar > Input")),
             KeyBinding::new("up", browser::SuggestPrev, Some("Omnibar > Input")),

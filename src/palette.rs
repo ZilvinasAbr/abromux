@@ -1,8 +1,9 @@
 //! The command palette (⌘⇧P) and the switcher (⌘P), as in cmux.
 //!
-//! ⌘P lists the selected workspace's tabs, pinned ones first (hidden ones
-//! too), then its suggested links. Tab widens it to every workspace and
-//! their tabs; Tab again narrows it back.
+//! ⌘P has two columns: every workspace on the left, the selected
+//! workspace's tabs on the right (pinned ones first, hidden ones too, then
+//! its other tabs and its suggested links). What's typed filters both;
+//! Tab (or ⇧Tab) moves between them, ↑ ↓ pick within one, Enter goes there.
 //!
 //! Commands are the app's actions with a title. Only the ones that apply to
 //! what had focus when the palette opened are listed (terminal commands for
@@ -24,12 +25,14 @@ use std::path::Path;
 
 actions!(
     palette,
-    [SelectNext, SelectPrev, Confirm, Dismiss, ToggleScope]
+    [SelectNext, SelectPrev, Confirm, Dismiss, SwitchColumn]
 );
 
 /// Key context of the palette, for its bindings in main.rs.
 pub const CONTEXT: &str = "CommandPalette";
 const WIDTH: f32 = 560.;
+/// ⌘P's width, for its two columns.
+const SWITCHER_WIDTH: f32 = 900.;
 const MAX_ROWS_HEIGHT: f32 = 360.;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -66,6 +69,16 @@ struct Entry {
     /// Drawn left of the title: an icon's name, and its colour if not the
     /// text's.
     icon: Option<(&'static str, Option<u32>)>,
+    /// The workspace or tab you're on now.
+    current: bool,
+}
+
+/// ⌘P's tabs column: its own rows, matches and selection.
+struct Column {
+    entries: Vec<Entry>,
+    matches: Vec<(usize, Vec<usize>)>,
+    selected: usize,
+    scroll: ScrollHandle,
 }
 
 pub struct Palette {
@@ -81,9 +94,11 @@ pub struct Palette {
     scroll: ScrollHandle,
     /// NewFolder: the made-up name an empty input stands for.
     suggested: String,
-    /// Workspaces (⌘P): every workspace and tab, not just this workspace's
-    /// tabs (Tab switches).
-    pub wide: bool,
+    /// Workspaces (⌘P): the selected workspace's tabs, beside the
+    /// workspaces.
+    tabs: Option<Column>,
+    /// Workspaces: the tabs column has the selection (Tab switches).
+    on_tabs: bool,
 }
 
 /// A palette command: its title, subtitle, extra search words and action.
@@ -195,6 +210,7 @@ fn mr_entries(cx: &App) -> Vec<Entry> {
                 keys: None,
                 target: Target::Mr(m.key.clone()),
                 icon: Some(("gitlab", crate::links::Kind::Mr.color())),
+                current: false,
             }
         })
         .collect()
@@ -227,14 +243,14 @@ impl AbroMux {
         self.notifications_open = false;
         let entries = match mode {
             Mode::Commands => self.command_entries(window, cx),
-            Mode::Workspaces => self.switcher_entries(false, cx),
+            Mode::Workspaces => self.workspace_entries(cx),
             Mode::NewFolder | Mode::OpenLink(_) => vec![],
             Mode::MergeRequests => mr_entries(cx),
         };
         let suggested = crate::folder::random_name();
         let placeholder = match mode {
             Mode::Commands => "Type a command".to_string(),
-            Mode::Workspaces => SCOPE_NARROW.to_string(),
+            Mode::Workspaces => "Search workspaces and tabs".to_string(),
             Mode::NewFolder => suggested.clone(),
             Mode::OpenLink(_) => "Paste a link".to_string(),
             Mode::MergeRequests => "Search merge requests, or paste a link".to_string(),
@@ -287,6 +303,12 @@ impl AbroMux {
         } else {
             input.update(cx, |i, cx| i.focus(window, cx));
         }
+        let tabs = (mode == Mode::Workspaces).then(|| Column {
+            entries: self.tab_entries(self.active, cx),
+            matches: vec![],
+            selected: 0,
+            scroll: ScrollHandle::new(),
+        });
         let mut palette = Palette {
             mode,
             input,
@@ -296,7 +318,8 @@ impl AbroMux {
             prev_focus,
             scroll: ScrollHandle::new(),
             suggested,
-            wide: false,
+            tabs,
+            on_tabs: false,
         };
         palette.filter("");
         self.palette = Some(palette);
@@ -341,6 +364,23 @@ impl AbroMux {
             }
             self.restore_focus(p.prev_focus, window, cx);
             return self.open_plugin_link(id, &url, window, cx);
+        }
+        // ⌘P with the tabs column selected: its row is the one chosen.
+        if p.on_tabs
+            && let Some(mut col) = p.tabs.take()
+        {
+            match col.matches.get(col.selected) {
+                Some(&(ix, _)) => {
+                    p.entries = vec![col.entries.swap_remove(ix)];
+                    p.matches = vec![(0, vec![])];
+                    p.selected = 0;
+                }
+                None => {
+                    p.tabs = Some(col);
+                    self.palette = Some(p);
+                    return;
+                }
+            }
         }
         let Some(&(ix, _)) = p.matches.get(p.selected) else {
             let typed = p.input.read(cx).value().to_string();
@@ -393,52 +433,10 @@ impl AbroMux {
         }
     }
 
-    /// Tab in ⌘P: this workspace's tabs, or every workspace and tab.
-    fn toggle_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(wide) = self
-            .palette
-            .as_ref()
-            .filter(|p| p.mode == Mode::Workspaces)
-            .map(|p| !p.wide)
-        else {
-            return;
-        };
-        let entries = self.switcher_entries(wide, cx);
-        let Some(p) = &mut self.palette else { return };
-        p.wide = wide;
-        p.entries = entries;
-        let query = p.input.read(cx).value().to_string();
-        p.input.update(cx, |i, cx| {
-            i.set_placeholder(if wide { SCOPE_WIDE } else { SCOPE_NARROW }, window, cx)
-        });
-        p.filter(&query);
-        cx.notify();
-    }
-
-    /// ⌘P's rows. Narrow: the selected workspace's pinned tabs (with their
-    /// ⌥⌘N), its other tabs, then its suggested links. Wide: every
-    /// workspace, then every workspace's tabs, each named with its
-    /// workspace.
-    fn switcher_entries(&self, wide: bool, cx: &App) -> Vec<Entry> {
-        let mut out = vec![];
-        if wide {
-            out.extend(self.workspace_entries(cx));
-        }
-        let wis: Vec<usize> = if wide {
-            (0..self.workspaces.len()).collect()
-        } else {
-            vec![self.active]
-        };
-        for wi in wis {
-            out.extend(self.tab_entries(wi, wide, cx));
-        }
-        out
-    }
-
     /// Workspace `wi`'s tabs and suggestions as ⌘P rows.
-    fn tab_entries(&self, wi: usize, wide: bool, cx: &App) -> Vec<Entry> {
+    fn tab_entries(&self, wi: usize, cx: &App) -> Vec<Entry> {
         let ws = &self.workspaces[wi];
-        let ws_name = ws.name(cx);
+        let focused = ws.focused_surface().map(|s| s.entity_id());
         let items = self.items(wi, cx);
         let detail = |s: &Surface| -> Option<String> {
             match s {
@@ -448,10 +446,6 @@ impl AbroMux {
             }
         };
         let subtitle = |parts: Vec<String>| -> Option<SharedString> {
-            let mut parts = parts;
-            if wide {
-                parts.insert(0, ws_name.clone());
-            }
             let parts: Vec<String> = parts.into_iter().filter(|p| !p.is_empty()).collect();
             (!parts.is_empty()).then(|| parts.join("  ·  ").into())
         };
@@ -473,7 +467,7 @@ impl AbroMux {
         let mut out = vec![];
         let mut listed = vec![];
         for (i, it) in items.iter().enumerate() {
-            let keys = (i < crate::links::DIGITS && !wide)
+            let keys = (i < crate::links::DIGITS)
                 .then(|| crate::keymap::default_label(&format!("link{}", i + 1)).into());
             match (&it.tab, &it.link) {
                 (Some((s, hidden)), link) => {
@@ -486,6 +480,7 @@ impl AbroMux {
                         keys,
                         target: Target::Tab(s.entity_id()),
                         icon: icon_of(s, link.as_ref()),
+                        current: Some(s.entity_id()) == focused,
                     });
                 }
                 (None, Some(l)) => out.push(Entry {
@@ -495,6 +490,7 @@ impl AbroMux {
                     keys,
                     target: Target::Link(ws.id, l.clone()),
                     icon: Some((l.kind.icon(), l.kind.color())),
+                    current: false,
                 }),
                 (None, None) => {}
             }
@@ -512,6 +508,7 @@ impl AbroMux {
                     keys: None,
                     target: Target::Tab(s.entity_id()),
                     icon: icon_of(s, link.as_ref()),
+                    current: Some(s.entity_id()) == focused,
                 }
             })
             .collect();
@@ -573,6 +570,7 @@ impl AbroMux {
                     keys,
                     target: Target::Action(action),
                     icon: None,
+                    current: false,
                 }
             })
             .collect()
@@ -591,6 +589,7 @@ impl AbroMux {
                     .map(|d| crate::keymap::default_label(&format!("workspace{d}")).into()),
                 target: Target::Workspace(ws.id),
                 icon: Some(("folder", None)),
+                current: i == self.active,
             })
             .collect()
     }
@@ -607,33 +606,57 @@ impl AbroMux {
                 cx.listener(|this, _: &Confirm, window, cx| this.confirm_palette(window, cx)),
             )
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.close_palette(window, cx)))
-            .on_action(
-                cx.listener(|this, _: &ToggleScope, window, cx| this.toggle_scope(window, cx)),
-            )
+            .on_action(cx.listener(|this, _: &SwitchColumn, _, cx| this.switch_column(cx)))
     }
 
     fn move_selection(&mut self, by: isize, cx: &mut Context<Self>) {
         let Some(p) = &mut self.palette else { return };
-        let n = p.matches.len() as isize;
+        let (matches, selected, scroll) = match (&mut p.tabs, p.on_tabs) {
+            (Some(c), true) => (&c.matches, &mut c.selected, &c.scroll),
+            _ => (&p.matches, &mut p.selected, &p.scroll),
+        };
+        let n = matches.len() as isize;
         if n == 0 {
             return;
         }
-        p.selected = (p.selected as isize + by).rem_euclid(n) as usize;
-        p.scroll.scroll_to_item(p.selected);
+        *selected = (*selected as isize + by).rem_euclid(n) as usize;
+        scroll.scroll_to_item(*selected);
         cx.notify();
     }
 
-    pub(crate) fn render_palette(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let p = self.palette.as_ref()?;
-        let rows: Vec<AnyElement> = p
-            .matches
+    /// Tab in ⌘P: the other column takes the selection.
+    fn switch_column(&mut self, cx: &mut Context<Self>) {
+        if let Some(p) = &mut self.palette
+            && p.tabs.is_some()
+        {
+            p.on_tabs = !p.on_tabs;
+            cx.notify();
+        }
+    }
+
+    /// One column's rows. `active`: this column has the selection, so its
+    /// selected row is lit (the other's only faintly).
+    fn palette_rows(
+        entries: &[Entry],
+        matches: &[(usize, Vec<usize>)],
+        selected: usize,
+        active: bool,
+        tabs: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        matches
             .iter()
             .enumerate()
             .map(|(row, (ix, positions))| {
-                let e = &p.entries[*ix];
-                let selected = row == p.selected;
+                let e = &entries[*ix];
+                let lit = row == selected && active;
+                let id: ElementId = if tabs {
+                    ("palette-tab-row", row).into()
+                } else {
+                    ("palette-row", row).into()
+                };
                 div()
-                    .id(("palette-row", row))
+                    .id(id)
                     .mx(px(6.))
                     .px(px(10.))
                     .py(px(6.))
@@ -642,11 +665,16 @@ impl AbroMux {
                     .items_center()
                     .gap(px(10.))
                     .cursor_pointer()
-                    .when(selected, |d| d.bg(tint(0x1a)))
-                    .when(!selected, |d| d.hover(|s| s.bg(rgba(pal().hover))))
+                    .when(lit, |d| d.bg(tint(0x1a)))
+                    .when(row == selected && !active, |d| d.bg(tint(0x0a)))
+                    .when(!lit, |d| d.hover(|s| s.bg(rgba(pal().hover))))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if let Some(p) = &mut this.palette {
-                            p.selected = row;
+                            p.on_tabs = tabs;
+                            match (&mut p.tabs, tabs) {
+                                (Some(c), true) => c.selected = row,
+                                _ => p.selected = row,
+                            }
                         }
                         this.confirm_palette(window, cx);
                     }))
@@ -665,7 +693,10 @@ impl AbroMux {
                             .child(
                                 div()
                                     .flex_none()
+                                    .max_w(px(260.))
+                                    .truncate()
                                     .text_size(px(13.))
+                                    .when(e.current, |d| d.font_weight(FontWeight::SEMIBOLD))
                                     .child(highlighted(&e.title, positions)),
                             )
                             .children(e.subtitle.clone().map(|s| {
@@ -677,6 +708,15 @@ impl AbroMux {
                                     .child(s)
                             })),
                     )
+                    .when(e.current, |d| {
+                        d.child(
+                            div()
+                                .flex_none()
+                                .size(px(6.))
+                                .rounded_full()
+                                .bg(rgb(pal().accent)),
+                        )
+                    })
                     .children(e.keys.clone().map(|k| {
                         div()
                             .flex_none()
@@ -686,11 +726,65 @@ impl AbroMux {
                     }))
                     .into_any_element()
             })
-            .collect();
+            .collect()
+    }
+
+    /// A scrolling list of rows, with a heading when it's one of ⌘P's
+    /// columns (lit when it has the selection).
+    fn palette_column(
+        id: &'static str,
+        heading: Option<(&'static str, bool)>,
+        scroll: &ScrollHandle,
+        rows: Vec<AnyElement>,
+        empty: SharedString,
+    ) -> Div {
+        div()
+            .flex()
+            .flex_col()
+            .children(heading.map(|(h, lit)| {
+                div()
+                    .px(px(16.))
+                    .pt(px(8.))
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(if lit {
+                        rgb(pal().text)
+                    } else {
+                        rgb(pal().muted)
+                    })
+                    .child(h)
+            }))
+            .child(
+                div()
+                    .id(id)
+                    .max_h(px(MAX_ROWS_HEIGHT))
+                    .py(px(6.))
+                    .overflow_y_scroll()
+                    .track_scroll(scroll)
+                    .when(rows.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .px(px(16.))
+                                .py(px(8.))
+                                .text_size(px(12.5))
+                                .text_color(rgb(pal().muted))
+                                .child(empty),
+                        )
+                    })
+                    .children(rows),
+            )
+    }
+
+    pub(crate) fn render_palette(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let p = self.palette.as_ref()?;
+        let rows = Self::palette_rows(&p.entries, &p.matches, p.selected, !p.on_tabs, false, cx);
+        let tab_rows = p
+            .tabs
+            .as_ref()
+            .map(|c| Self::palette_rows(&c.entries, &c.matches, c.selected, p.on_tabs, true, cx));
         let empty: SharedString = match p.mode {
             Mode::Commands => "No commands match your search.".into(),
-            Mode::Workspaces if p.wide => "No workspaces or tabs match your search.".into(),
-            Mode::Workspaces => "No tabs here match. Tab searches every workspace.".into(),
+            Mode::Workspaces => "No workspaces match your search.".into(),
             Mode::MergeRequests => {
                 if crate::gitlab::model::MrKey::parse(&p.input.read(cx).value()).is_some() {
                     "Enter to open this merge request".into()
@@ -758,7 +852,8 @@ impl AbroMux {
                             div()
                                 .id("palette")
                                 .key_context(CONTEXT)
-                                .w(px(WIDTH))
+                                .w(px(if p.tabs.is_some() { SWITCHER_WIDTH } else { WIDTH }))
+                                .max_w(relative(0.94))
                                 .flex()
                                 .flex_col()
                                 .rounded(px(10.))
@@ -789,25 +884,57 @@ impl AbroMux {
                                                 .py_0(),
                                         ),
                                 )
-                                .child(
-                                    div()
-                                        .id("palette-rows")
-                                        .max_h(px(MAX_ROWS_HEIGHT))
-                                        .py(px(6.))
-                                        .overflow_y_scroll()
-                                        .track_scroll(&p.scroll)
-                                        .when(rows.is_empty(), |d| {
-                                            d.child(
-                                                div()
-                                                    .px(px(16.))
-                                                    .py(px(8.))
-                                                    .text_size(px(12.5))
-                                                    .text_color(rgb(pal().muted))
-                                                    .child(empty),
+                                .child(match tab_rows {
+                                    None => Self::palette_column(
+                                        "palette-rows",
+                                        None,
+                                        &p.scroll,
+                                        rows,
+                                        empty,
+                                    )
+                                    .into_any_element(),
+                                    Some(tab_rows) => div()
+                                        .flex()
+                                        .child(
+                                            Self::palette_column(
+                                                "palette-rows",
+                                                Some(("Workspaces", !p.on_tabs)),
+                                                &p.scroll,
+                                                rows,
+                                                empty,
                                             )
-                                        })
-                                        .children(rows),
-                                ),
+                                            .flex_1()
+                                            .min_w_0()
+                                            .border_r_1()
+                                            .border_color(rgb(pal().border)),
+                                        )
+                                        .children(p.tabs.as_ref().map(|c| {
+                                            Self::palette_column(
+                                                "palette-tab-rows",
+                                                Some(("Tabs in this workspace", p.on_tabs)),
+                                                &c.scroll,
+                                                tab_rows,
+                                                "No tabs here match your search.".into(),
+                                            )
+                                            .flex_1()
+                                            .min_w_0()
+                                        }))
+                                        .into_any_element(),
+                                })
+                                .when(p.tabs.is_some(), |d| {
+                                    d.child(
+                                        div()
+                                            .px(px(14.))
+                                            .py(px(6.))
+                                            .border_t_1()
+                                            .border_color(rgb(pal().border))
+                                            .text_size(px(11.))
+                                            .text_color(rgb(pal().muted))
+                                            .child(
+                                                "⇥ switch column  ·  ↑↓ select  ·  ↵ go  ·  esc close",
+                                            ),
+                                    )
+                                }),
                         ),
                 )
                 .into_any_element(),
@@ -817,8 +944,26 @@ impl AbroMux {
 
 impl Palette {
     fn filter(&mut self, query: &str) {
-        let mut scored: Vec<(i32, usize, Vec<usize>)> = self
-            .entries
+        self.matches = rank(&self.entries, query);
+        self.selected = 0;
+        self.scroll.scroll_to_item(0);
+        if let Some(c) = &mut self.tabs {
+            c.matches = rank(&c.entries, query);
+            c.selected = 0;
+            c.scroll.scroll_to_item(0);
+        }
+        // Typing that leaves only tabs: go to the tabs.
+        if self.matches.is_empty() && self.tabs.as_ref().is_some_and(|c| !c.matches.is_empty()) {
+            self.on_tabs = true;
+        }
+    }
+}
+
+/// `entries` that match `query`, best first, with the matched character
+/// positions of each title.
+fn rank(entries: &[Entry], query: &str) -> Vec<(usize, Vec<usize>)> {
+    {
+        let mut scored: Vec<(i32, usize, Vec<usize>)> = entries
             .iter()
             .enumerate()
             .filter_map(|(i, e)| match fuzzy_match(query, &e.title) {
@@ -834,14 +979,9 @@ impl Palette {
             .collect();
         // Best score first; ties keep palette order.
         scored.sort_by_key(|(score, i, _)| (-score, *i));
-        self.matches = scored.into_iter().map(|(_, i, pos)| (i, pos)).collect();
-        self.selected = 0;
-        self.scroll.scroll_to_item(0);
+        scored.into_iter().map(|(_, i, pos)| (i, pos)).collect()
     }
 }
-
-const SCOPE_NARROW: &str = "Search this workspace's tabs  ·  Tab: every workspace";
-const SCOPE_WIDE: &str = "Search every workspace and tab  ·  Tab: just this workspace";
 
 /// A suggested link's row title: its key and title.
 fn title_of_link(l: &crate::links::Link) -> String {
