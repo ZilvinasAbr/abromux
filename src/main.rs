@@ -6,6 +6,7 @@ mod browser;
 mod channel;
 mod cli;
 mod config;
+mod crash;
 mod csd;
 mod debug;
 mod editor;
@@ -3549,6 +3550,8 @@ fn hint_pill(text: String) -> Div {
 }
 
 fn main() {
+    // First, so any panic after it says what and where (crash.rs).
+    crash::install();
     // Before anything can reach the holder or read a terminal.
     hold::set_dir(channel::runtime_dir());
     pty::on_output(abromux_platform::power::output);
