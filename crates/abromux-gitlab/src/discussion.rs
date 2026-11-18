@@ -547,7 +547,8 @@ impl GitLabView {
                 }
                 Part::Suggestion(s) => out.child(self.suggestion(s, path, cx)),
                 Part::Code(lang, code) => {
-                    let key = SharedString::from(format!("copy-code-{}-{}", id.0, id.1 * 64 + i));
+                    // Not `id * 64 + i`: a local note's id is a hash, which overflows.
+                    let key = SharedString::from(format!("copy-code-{}-{}-{i}", id.0, id.1));
                     out.child(self.code_block(&lang, &code, key, cx))
                 }
             };
