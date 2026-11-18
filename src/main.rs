@@ -3643,7 +3643,12 @@ fn run_app(cwd: Option<String>) {
             ),
             KeyBinding::new("enter", palette::Confirm, Some("CommandPalette > Input")),
             KeyBinding::new("escape", palette::Dismiss, Some("CommandPalette > Input")),
-            KeyBinding::new("tab", palette::ToggleScope, Some("CommandPalette > Input")),
+            KeyBinding::new("tab", palette::SwitchColumn, Some("CommandPalette > Input")),
+            KeyBinding::new(
+                "shift-tab",
+                palette::SwitchColumn,
+                Some("CommandPalette > Input"),
+            ),
             KeyBinding::new("down", browser::SuggestNext, Some("Omnibar > Input")),
             KeyBinding::new("ctrl-n", browser::SuggestNext, Some("Omnibar > Input")),
             KeyBinding::new("up", browser::SuggestPrev, Some("Omnibar > Input")),
