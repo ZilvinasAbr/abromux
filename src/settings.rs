@@ -92,12 +92,25 @@ pub struct ClaudeSettings {
     /// and transcripts), as `CLAUDE_CONFIG_DIR`. None: what the login shell
     /// sets, else `~/.claude`.
     pub config_dir: Option<String>,
+    /// The permission mode a Claude tab starts in when none is asked for
+    /// (`ask`, `accept-edits`, `plan`, `auto`, `dont-ask`). None: auto.
+    pub default_mode: Option<String>,
 }
 
 /// The config folder Claude tabs use, if the config file names one.
 pub fn claude_config_dir(cx: &gpui::App) -> Option<PathBuf> {
     let dir = cx.try_global::<Settings>()?.claude.config_dir.as_deref()?.trim();
     (!dir.is_empty()).then(|| abromux_core::paths::expand_tilde(dir))
+}
+
+/// The permission mode a new Claude tab starts in: the config file's
+/// `defaultMode`, else auto. Never bypass: that one you pick per tab.
+pub fn claude_default_mode(cx: &gpui::App) -> &'static str {
+    cx.try_global::<Settings>()
+        .and_then(|s| s.claude.default_mode.as_deref())
+        .and_then(crate::claude_chat::mode_name)
+        .filter(|m| *m != "bypassPermissions")
+        .unwrap_or("auto")
 }
 
 /// Jira, for tracked links (`crate::links`).

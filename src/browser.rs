@@ -496,7 +496,10 @@ impl BrowserView {
             Self::follow_markdown(cx);
         }
         let (chat, chat_lines) = match chat_at {
-            Some((cwd, start)) => {
+            Some((cwd, mut start)) => {
+                if start.mode.is_none() {
+                    start.mode = Some(crate::settings::claude_default_mode(cx).into());
+                }
                 let lines = Self::follow_chat(&cwd, start.session.as_deref(), cx);
                 let chat =
                     Chat::new(cwd, start).with_config_dir(crate::settings::claude_config_dir(cx));
