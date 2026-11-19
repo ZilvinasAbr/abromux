@@ -41,6 +41,9 @@ pub struct PageOptions {
     pub protocol: Option<(&'static str, Protocol)>,
     /// Asked about each navigation; None lets them all happen.
     pub navigation: Option<Navigation>,
+    /// Files dropped on the page come as [`PageEvent::FilesDropped`]
+    /// instead of reaching the page.
+    pub file_drops: bool,
 }
 
 /// What a page reports, in the order it happens.
@@ -63,6 +66,8 @@ pub enum PageEvent {
         url: String,
         ok: bool,
     },
+    /// Files dropped on the page (with [`PageOptions::file_drops`]).
+    FilesDropped(Vec<PathBuf>),
 }
 
 /// One page. Everything runs on the main thread.

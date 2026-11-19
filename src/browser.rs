@@ -4,6 +4,7 @@
 use crate::{
     browser_find,
     browser_history::{self, Entry},
+    claude_chat::{self, Chat},
     downloads::{self, Downloads},
     find_bar::{FindBar, Step},
     markdown,
@@ -86,10 +87,16 @@ pub enum BrowserEvent {
         url: String,
         focus: bool,
     },
+    /// A Claude tab's state or something to notify about.
+    Chat(claude_chat::Notice),
 }
 
 enum WebMsg {
     Title(String),
+    /// A Claude tab's page asking something (`window.ipc.postMessage`).
+    ChatIpc(String),
+    /// Files dropped on a Claude tab.
+    ChatDrop(Vec<PathBuf>),
     /// A page load started, or `finished`.
     Url {
         url: String,
@@ -236,6 +243,10 @@ pub struct BrowserView {
     pub markdown: bool,
     /// The file it last looked at and when that changed.
     md_seen: Option<(PathBuf, Option<SystemTime>)>,
+    /// A Claude tab (src/claude_chat.rs): the page is its chat, and this
+    /// runs `claude` for it.
+    pub chat: Option<Chat>,
+    chat_lines: Option<mpsc::UnboundedSender<(u64, claude_chat::Line)>>,
 }
 
 impl EventEmitter<BrowserEvent> for BrowserView {}
@@ -250,6 +261,7 @@ impl BrowserView {
     pub fn new(url: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (tx, mut rx) = mpsc::unbounded::<WebMsg>();
         let is_markdown = markdown::is_markdown_url(url);
+        let chat_at = claude_chat::parse(url);
         let tx_nav = tx.clone();
         // Only Markdown tabs can load the scheme, and they load nothing else:
         // web links open as browser tabs beside them.
@@ -270,9 +282,23 @@ impl BrowserView {
                 false
             });
             (Some((markdown::SCHEME, serve)), Some(decide))
+        } else if chat_at.is_some() {
+            // A Claude tab stays on its page; links in it open as tabs.
+            let serve: backend::Protocol = Box::new(claude_chat::respond);
+            let decide: backend::Navigation = Box::new(move |url: String| {
+                if claude_chat::is_chat_url(&url) || url.starts_with("about:") {
+                    return true;
+                }
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    let _ = tx_nav.unbounded_send(WebMsg::OpenTab { url, focus: true });
+                }
+                false
+            });
+            (Some((claude_chat::SCHEME, serve)), Some(decide))
         } else {
             (None, None)
         };
+        let is_chat = chat_at.is_some();
         let (page_tx, mut page_rx) = mpsc::unbounded::<PageEvent>();
         let page: Rc<dyn PageBackend> = backend::new_page(
             PageOptions {
@@ -283,6 +309,9 @@ impl BrowserView {
                 webauthn_script: WEBAUTHN_SCRIPT,
                 protocol,
                 navigation,
+                // A Claude tab takes dropped files itself (WebKit won't tell
+                // a page where a dropped file is).
+                file_drops: is_chat,
             },
             page_tx,
             window,
@@ -299,6 +328,8 @@ impl BrowserView {
                         WebMsg::DownloadStarted { url, path }
                     }
                     PageEvent::DownloadDone { url, ok } => WebMsg::DownloadDone { url, ok },
+                    PageEvent::Ipc(body) if is_chat => WebMsg::ChatIpc(body),
+                    PageEvent::FilesDropped(paths) => WebMsg::ChatDrop(paths),
                     PageEvent::Ipc(body) => match open_tab_request(&body) {
                         Some(msg) => msg,
                         None => continue,
@@ -369,12 +400,28 @@ impl BrowserView {
             while let Some(msg) = rx.next().await {
                 let ok = this.update_in(cx, |this, window, cx| {
                     match msg {
+                        WebMsg::ChatIpc(body) => {
+                            this.chat_ipc(&body, cx);
+                            return;
+                        }
+                        WebMsg::ChatDrop(paths) => {
+                            if let Some(chat) = &mut this.chat {
+                                chat.dropped(&paths);
+                                this.flush_chat(cx);
+                            }
+                            return;
+                        }
                         WebMsg::Title(t) => {
-                            if !this.markdown {
+                            if !this.markdown && this.chat.is_none() {
                                 browser_history::retitle(&this.url, &t);
                             }
                             this.load_title = Some(t.clone());
                             this.title = t;
+                        }
+                        // A Claude tab's URL is its folder and session, kept here.
+                        WebMsg::Url { .. } if this.chat.is_some() => {
+                            this.watch_loading(cx);
+                            return;
                         }
                         WebMsg::Url { url: u, finished } => {
                             let u = if u.starts_with("about:blank") {
@@ -448,6 +495,18 @@ impl BrowserView {
         if is_markdown {
             Self::follow_markdown(cx);
         }
+        let (chat, chat_lines) = match chat_at {
+            Some((cwd, mut start)) => {
+                if start.mode.is_none() {
+                    start.mode = Some(crate::settings::claude_default_mode(cx).into());
+                }
+                let lines = Self::follow_chat(&cwd, start.session.as_deref(), cx);
+                let chat =
+                    Chat::new(cwd, start).with_config_dir(crate::settings::claude_config_dir(cx));
+                (Some(chat), Some(lines))
+            }
+            None => (None, None),
+        };
 
         Self {
             page,
@@ -479,6 +538,121 @@ impl BrowserView {
             downloads_closed_at: None,
             markdown: is_markdown,
             md_seen: None,
+            chat,
+            chat_lines,
+        }
+    }
+
+    /// A Claude tab's plumbing: the transcript of a resumed session, read
+    /// off the main thread, and the lines its `claude` prints.
+    fn follow_chat(
+        cwd: &std::path::Path,
+        session: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> mpsc::UnboundedSender<(u64, claude_chat::Line)> {
+        if let Some(session) = session {
+            Self::load_chat_history(cwd, session, cx);
+        }
+        let (tx, mut rx) = mpsc::unbounded::<(u64, claude_chat::Line)>();
+        cx.spawn(async move |this, cx| {
+            while let Some(first) = rx.next().await {
+                // Everything already waiting goes to the page in one batch.
+                let mut batch = vec![first];
+                while let Ok(more) = rx.try_recv() {
+                    batch.push(more);
+                    if batch.len() >= 256 {
+                        break;
+                    }
+                }
+                let alive = this.update(cx, |this, cx| {
+                    let Some(chat) = &mut this.chat else { return };
+                    let mut notices = vec![];
+                    let mut moved = false;
+                    for (generation, line) in batch {
+                        moved |= chat.line(generation, line, &mut notices);
+                    }
+                    if moved {
+                        this.url = chat.url();
+                    }
+                    this.flush_chat(cx);
+                    for n in notices {
+                        cx.emit(BrowserEvent::Chat(n));
+                    }
+                    cx.emit(BrowserEvent::TitleChanged);
+                });
+                if alive.is_err() {
+                    return;
+                }
+            }
+        })
+        .detach();
+        tx
+    }
+
+    /// Show conversation `session`'s transcript, read off the main thread.
+    fn load_chat_history(cwd: &std::path::Path, session: &str, cx: &mut Context<Self>) {
+        let (cwd, session) = (cwd.to_path_buf(), session.to_string());
+        let config = crate::settings::claude_config_dir(cx);
+        cx.spawn(async move |this, cx| {
+            let want = session.clone();
+            let events = cx
+                .background_executor()
+                .spawn(async move { Chat::load_history(&cwd, config.as_deref(), &session) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                // Unless the tab moved on to another conversation meanwhile.
+                if let Some(chat) = &mut this.chat
+                    && chat.session.as_deref() == Some(want.as_str())
+                {
+                    chat.set_history(events);
+                    this.flush_chat(cx);
+                    cx.emit(BrowserEvent::TitleChanged);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Send `text` in this Claude tab, as if typed (`abromux claude --prompt`).
+    pub fn chat_send(&mut self, text: &str, cx: &mut Context<Self>) {
+        let body = serde_json::json!({"chat": "send", "text": text, "images": []}).to_string();
+        self.chat_ipc(&body, cx);
+    }
+
+    /// A message from a Claude tab's page.
+    fn chat_ipc(&mut self, body: &str, cx: &mut Context<Self>) {
+        let Ok(msg) = serde_json::from_str::<Value>(body) else {
+            return;
+        };
+        let (Some(chat), Some(lines)) = (&mut self.chat, &self.chat_lines) else {
+            return;
+        };
+        let mut notices = vec![];
+        let action = chat.page_message(&msg, lines, &mut notices);
+        match action {
+            Some(claude_chat::PageAction::UrlChanged) => self.url = chat.url(),
+            Some(claude_chat::PageAction::Resume) => {
+                self.url = chat.url();
+                if let Some(session) = chat.session.clone() {
+                    let cwd = chat.cwd.clone();
+                    Self::load_chat_history(&cwd, &session, cx);
+                }
+            }
+            Some(claude_chat::PageAction::OpenUrl(url)) => {
+                cx.emit(BrowserEvent::OpenTab { url, focus: true })
+            }
+            None => {}
+        }
+        self.flush_chat(cx);
+        for n in notices {
+            cx.emit(BrowserEvent::Chat(n));
+        }
+        cx.emit(BrowserEvent::TitleChanged);
+    }
+
+    fn flush_chat(&mut self, cx: &App) {
+        if let Some(js) = self.chat.as_mut().and_then(Chat::take_script) {
+            self.page.run(&js, cx);
         }
     }
 
@@ -564,8 +738,8 @@ impl BrowserView {
     }
 
     pub fn focus_address(this: &Entity<Self>, window: &mut Window, cx: &mut App) {
-        // A Markdown tab has no address bar.
-        if this.read(cx).markdown {
+        // Markdown and Claude tabs have no address bar.
+        if this.read(cx).markdown || this.read(cx).chat.is_some() {
             this.read(cx).page.focus(cx);
             this.update(cx, |this, cx| this.page_focused(window, cx));
             return;
@@ -881,6 +1055,9 @@ impl BrowserView {
 
     /// The page's back/forward list, as text for the session file.
     pub fn history_state(&self, _cx: &App) -> Option<String> {
+        if self.chat.is_some() {
+            return None;
+        }
         self.page.history_state()
     }
 
@@ -1543,22 +1720,25 @@ impl Render for BrowserView {
             .flex()
             .flex_col()
             .bg(rgb(pal().pane_bg))
-            .child(
-                div()
-                    .h(px(34.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .border_b_1()
-                    .border_color(rgb(pal().border))
-                    .child(self.render_nav(Nav::Back, cx))
-                    .child(self.render_nav(Nav::Forward, cx))
-                    .child(self.render_nav(Nav::Reload, cx))
-                    .child(address)
-                    .children(downloads_button),
-            )
+            // A Claude tab is all page: no toolbar.
+            .when(self.chat.is_none(), |d| {
+                d.child(
+                    div()
+                        .h(px(34.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .border_b_1()
+                        .border_color(rgb(pal().border))
+                        .child(self.render_nav(Nav::Back, cx))
+                        .child(self.render_nav(Nav::Forward, cx))
+                        .child(self.render_nav(Nav::Reload, cx))
+                        .child(address)
+                        .children(downloads_button),
+                )
+            })
             .children(find_bar)
             .child(
                 div()

@@ -35,6 +35,7 @@ impl Surface {
                 _ => "terminal",
             },
             Surface::Browser(b) if b.read(cx).markdown => "markdown",
+            Surface::Browser(b) if b.read(cx).chat.is_some() => "claude",
             Surface::Browser(_) => "globe",
             Surface::Plugin(p) => p.icon(cx),
         }
@@ -42,7 +43,15 @@ impl Surface {
 
     /// Claude Code is working in it; its logo turns.
     pub fn claude_running(&self, cx: &App) -> bool {
-        matches!(self, Surface::Terminal(t) if t.read(cx).claude_running())
+        match self {
+            Surface::Terminal(t) => t.read(cx).claude_running(),
+            Surface::Browser(b) => b
+                .read(cx)
+                .chat
+                .as_ref()
+                .is_some_and(|c| c.state == crate::claude_chat::State::Running),
+            Surface::Plugin(_) => false,
+        }
     }
 
     pub fn title(&self, cx: &App) -> String {
@@ -63,6 +72,9 @@ impl Surface {
             }
             Surface::Browser(b) => {
                 let b = b.read(cx);
+                if let Some(chat) = &b.chat {
+                    return chat.topic.clone().unwrap_or_else(|| "Claude".into());
+                }
                 if !b.title.is_empty() {
                     b.title.clone()
                 } else if let Some(name) = crate::markdown::title_of(&b.url) {
@@ -125,7 +137,12 @@ impl Surface {
     pub fn cwd(&self, cx: &App) -> Option<String> {
         match self {
             Surface::Terminal(t) => Some(t.read(cx).cwd.clone()),
-            Surface::Browser(_) | Surface::Plugin(_) => None,
+            Surface::Browser(b) => b
+                .read(cx)
+                .chat
+                .as_ref()
+                .map(|c| c.cwd.to_string_lossy().into_owned()),
+            Surface::Plugin(_) => None,
         }
     }
 

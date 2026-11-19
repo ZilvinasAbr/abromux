@@ -78,6 +78,20 @@ impl WkPage {
             Some(decide) => raw.with_navigation_handler(decide),
             None => raw,
         };
+        let raw = if o.file_drops {
+            let tx_drop = events.clone();
+            raw.with_drag_drop_handler(move |ev| match ev {
+                // True keeps WebKit out of it: no page drop for files.
+                wry::DragDropEvent::Enter { paths, .. } => !paths.is_empty(),
+                wry::DragDropEvent::Drop { paths, .. } if !paths.is_empty() => {
+                    let _ = tx_drop.unbounded_send(PageEvent::FilesDropped(paths));
+                    true
+                }
+                _ => false,
+            })
+        } else {
+            raw
+        };
         let raw = raw.build_as_child(window).expect("create webview");
         let wk = {
             let wk = raw.webview();

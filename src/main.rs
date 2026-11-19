@@ -4,6 +4,7 @@ mod api;
 mod bench;
 mod browser;
 mod channel;
+mod claude_chat;
 mod cli;
 mod config;
 mod crash;
@@ -87,6 +88,7 @@ actions!(
         PrevWorkspace,
         NewTerminal,
         NewBrowser,
+        NewClaudeChat,
         SplitRight,
         SplitDown,
         CloseTab,
@@ -886,6 +888,10 @@ impl AbroMux {
     /// set to `terminalBrowser`, a terminal running `terminal-browser`
     /// (the built-in one, with a warning, if it isn't installed).
     fn make_browser(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> Surface {
+        // Claude tabs are the built-in browser's page, whatever the engine.
+        if claude_chat::is_chat_url(url) {
+            return self.make_builtin_browser(url, window, cx);
+        }
         // Markdown tabs' scheme is the built-in browser's; without one
         // (Linux), the page as a file for the engine there is.
         let exported;
@@ -938,7 +944,11 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if url.is_empty() || url == "about:blank" || !settings::system_browser(cx) {
+        if url.is_empty()
+            || url == "about:blank"
+            || claude_chat::is_chat_url(url)
+            || !settings::system_browser(cx)
+        {
             return false;
         }
         let target = if markdown::is_markdown_url(url) {
@@ -1187,9 +1197,61 @@ impl AbroMux {
             BrowserEvent::OpenTab { url, focus } => {
                 this.open_tab_beside(b.entity_id(), url, *focus, window, cx)
             }
+            BrowserEvent::Chat(n) => this.chat_notice(b.entity_id(), n, window, cx),
         })
         .detach();
         Surface::Browser(browser)
+    }
+
+    /// A Claude tab's state as its sidebar pill, and its notifications, as
+    /// a terminal's agent hooks would report them.
+    fn chat_notice(
+        &mut self,
+        surface: EntityId,
+        notice: &claude_chat::Notice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use claude_chat::{Notice, State};
+        let kind = agent::Kind::Claude;
+        let (label, title) = (kind.label(), kind.title());
+        match notice {
+            Notice::State(state) => {
+                let pill = match state {
+                    State::Running => Some(("Running", status::RUNNING)),
+                    State::Waiting => Some(("Needs input", status::WARNING)),
+                    State::Done => Some(("Done", status::SUCCESS)),
+                    State::Idle => None,
+                };
+                self.set_agent_status(surface, label, pill, cx);
+            }
+            Notice::NeedsInput(message) => {
+                self.add_notification(
+                    surface,
+                    title.into(),
+                    message.clone(),
+                    notification::Kind::NeedsInput,
+                    window,
+                    cx,
+                );
+            }
+            Notice::Finished(summary) => {
+                let mode = cx
+                    .try_global::<settings::Settings>()
+                    .map(|s| s.notifications.agent_turn_complete)
+                    .unwrap_or_default();
+                if mode != abromux_core::pending::TurnComplete::Never {
+                    self.add_notification(
+                        surface,
+                        title.into(),
+                        summary.clone(),
+                        notification::Kind::Done,
+                        window,
+                        cx,
+                    );
+                }
+            }
+        }
     }
 
     /// ⌘-click on a terminal link: web URLs open in a browser to the right
@@ -3095,6 +3157,15 @@ impl Render for AbroMux {
             }))
             .on_action(cx.listener(|this, _: &NewBrowser, window, cx| {
                 let s = this.make_browser(DEFAULT_URL, window, cx);
+                this.add_tab(s, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NewClaudeChat, window, cx| {
+                let cwd = this
+                    .focused_cwd(cx)
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(paths::home);
+                let url = claude_chat::url_for(&cwd, &claude_chat::Start::default());
+                let s = this.make_browser(&url, window, cx);
                 this.add_tab(s, window, cx)
             }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
