@@ -3,6 +3,7 @@
 //! is mostly stubs for now (see docs/linux-plan.md).
 //!
 //! - [`channel`] and [`dirs`]: stable or nightly, and where files go.
+//! - [`fd_limit`]: how many files the process may have open.
 //! - [`notify`]: banners and the dock badge; [`tray`]: the menu-bar bell.
 //! - [`power`]: keeping the app awake while terminals print (App Nap).
 //! - [`fonts`]: the default terminal and UI fonts.
@@ -22,6 +23,7 @@ pub mod channel;
 pub const MACOS: bool = cfg!(target_os = "macos");
 
 pub mod dirs;
+pub mod fd_limit;
 pub mod prefs;
 pub mod primary;
 

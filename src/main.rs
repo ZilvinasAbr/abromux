@@ -3558,6 +3558,9 @@ fn hint_pill(text: String) -> Div {
 fn main() {
     // First, so any panic after it says what and where (crash.rs).
     crash::install();
+    // macOS gives an app 256 open files, and each terminal takes a few
+    // (abromux_platform::fd_limit). Before the holder starts, so it has it too.
+    abromux_platform::fd_limit::raise();
     // Before anything can reach the holder or read a terminal.
     hold::set_dir(channel::runtime_dir());
     pty::on_output(abromux_platform::power::output);
