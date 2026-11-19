@@ -80,6 +80,7 @@ dependencies = [
  "futures",
  "gpui",
  "ksni",
+ "libc",
  "notify-rust",
  "objc",
  "raw-window-handle",
