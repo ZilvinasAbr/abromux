@@ -3558,6 +3558,9 @@ fn hint_pill(text: String) -> Div {
 fn main() {
     // First, so any panic after it says what and where (crash.rs).
     crash::install();
+    // Before any pty: a Finder-launched app may only have 256 files open,
+    // a few dozen tabs' worth (abromux_platform::files). The holder too.
+    abromux_platform::files::raise_open_files_limit();
     // Before anything can reach the holder or read a terminal.
     hold::set_dir(channel::runtime_dir());
     pty::on_output(abromux_platform::power::output);

@@ -9,6 +9,7 @@
 //! - [`appearance`], [`dock`], [`window`]: light or dark, the app icon,
 //!   titlebar drags and the debug snapshots' synthetic input.
 //! - [`primary`]: the primary selection (middle-click paste) on Linux.
+//! - [`files`]: the open-files limit, raised at launch so tabs don't run out.
 //! - [`prefs`]: small preferences, such as the "Don't ask again" boxes.
 //! - [`opener`]: files and URLs to their default apps; [`process`]: other
 //!   processes' working folders.
@@ -22,6 +23,7 @@ pub mod channel;
 pub const MACOS: bool = cfg!(target_os = "macos");
 
 pub mod dirs;
+pub mod files;
 pub mod prefs;
 pub mod primary;
 
