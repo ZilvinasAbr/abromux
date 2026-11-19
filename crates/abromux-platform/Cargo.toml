@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 abromux-core = { path = "../abromux-core" }
 futures = "0.3"
+libc = "0.2"
 # the primary selection (primary.rs), which gpui has on Linux only
 gpui = { version = "=0.2.2", default-features = false, features = ["runtime_shaders"] }
 raw-window-handle = "0.6"
