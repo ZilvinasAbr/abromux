@@ -422,20 +422,55 @@ static BOOL InWebView(NSResponder *r) {
     return NO;
 }
 
+/// A key from the function-key block (arrows, F1…, Home, Page Up…).
+static BOOL IsFunctionKey(NSEvent *e) {
+    NSString *c = e.charactersIgnoringModifiers;
+    if (c.length != 1) return NO;
+    unichar ch = [c characterAtIndex:0];
+    return ch >= NSUpArrowFunctionKey && ch <= NSModeSwitchFunctionKey;
+}
+
 /// While a page has keyboard focus, WebKit takes every key, ⌘ ones too, and
 /// the app never sees them. So (once) watch key presses with ⌘ or ⌃ and
 /// offer them to gpui's view first: one the app handles (⌘T, ⌘W, ⌘=, ⌘⇧P…)
 /// stops there, anything else (⌘C, a site's own shortcuts) goes on to the page.
+/// Function keys (arrows, Home…) go to the page only: see below.
 void abx_page_shortcuts_install(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
+      // A function key the page leaves alone (Home in a text field, say)
+      // comes back up the responder chain to gpui's view, and its input
+      // context then has WebKit type the key's raw code. The page had its
+      // turn: drop it there.
+      Class gpui = NSClassFromString(@"GPUIView");
+      Method keyDown = gpui ? class_getInstanceMethod(gpui, @selector(keyDown:)) : NULL;
+      if (keyDown) {
+          void (*orig)(id, SEL, NSEvent *) = (void *)method_getImplementation(keyDown);
+          method_setImplementation(keyDown, imp_implementationWithBlock(^(id me, NSEvent *e) {
+            NSEventModifierFlags m = e.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+            if (IsFunctionKey(e) && !(m & (NSEventModifierFlagCommand | NSEventModifierFlagControl)) &&
+                InWebView(e.window.firstResponder))
+                return;
+            orig(me, @selector(keyDown:), e);
+          }));
+      }
       [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
                                             handler:^NSEvent *(NSEvent *e) {
                                               NSEventModifierFlags m =
                                                   e.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
-                                              if (!(m & (NSEventModifierFlagCommand | NSEventModifierFlagControl)))
-                                                  return e;
                                               NSWindow *w = e.window;
+                                              if (!(m & (NSEventModifierFlagCommand | NSEventModifierFlagControl))) {
+                                                  // Arrows, Home/End, Page Up/Down, F-keys: AppKit offers these to
+                                                  // the views as key equivalents first, and gpui's view then runs
+                                                  // them through its own text input context. That leaves WebKit
+                                                  // typing the key's raw code (U+001C…) instead of moving the
+                                                  // caret. Hand them straight to the page.
+                                                  if (IsFunctionKey(e) && w && InWebView(w.firstResponder)) {
+                                                      [w.firstResponder keyDown:e];
+                                                      return nil;
+                                                  }
+                                                  return e;
+                                              }
                                               if (!w || !InWebView(w.firstResponder)) return e;
                                               NSView *g = GPUIView(w.contentView);
                                               if (!g) return e;

@@ -531,7 +531,8 @@ impl AbroMux {
             // terminal-browser can't take the built-in browser's history.
             TabState::Browser { url, name, .. }
                 if crate::settings::terminal_browser(cx)
-                    && !crate::markdown::is_markdown_url(&url) =>
+                    && !crate::markdown::is_markdown_url(&url)
+                    && !crate::claude_chat::is_chat_url(&url) =>
             {
                 (self.make_browser(&url, window, cx), name)
             }

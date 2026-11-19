@@ -7,11 +7,11 @@ use crate::{
     About, CloseTab, CloseWorkspace, CommandPalette, EditDescription, FlashPane, FocusAddressBar,
     FocusDown, FocusLeft, FocusRight, FocusUp, GroupByFolder, ImportCmuxSession, JumpToUnread,
     LastPane, MarkOldestUnreadAndJumpNext, MoveWorkspaceDown, MoveWorkspaceUp, NewBrowser,
-    NewFolderWorkspace, NewGroup, NewTerminal, NewWorkspace, NextTab, NextWorkspace, OpenConfig,
-    OpenSettings, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab, RenameWorkspace,
-    ReopenSession, SplitDown, SplitRight, ToggleGroup, ToggleNotifications, ToggleSidebar,
-    ToggleUnread, ToggleWorkspaceUnread, ToggleZoom, Ungroup, WorkspaceSwitcher, browser, channel,
-    terminal,
+    NewClaudeChat, NewFolderWorkspace, NewGroup, NewTerminal, NewWorkspace, NextTab, NextWorkspace,
+    OpenConfig, OpenSettings, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab,
+    RenameWorkspace, ReopenSession, SplitDown, SplitRight, ToggleGroup, ToggleNotifications,
+    ToggleSidebar, ToggleUnread, ToggleWorkspaceUnread, ToggleZoom, Ungroup, WorkspaceSwitcher,
+    browser, channel, terminal,
 };
 use gpui::*;
 
@@ -128,6 +128,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action("New Workspace Folder", NewFolderWorkspace),
                 MenuItem::action("New Terminal Tab", NewTerminal),
                 MenuItem::action("New Browser Tab", NewBrowser),
+                MenuItem::action("New Claude Tab", NewClaudeChat),
                 MenuItem::separator(),
                 MenuItem::action("Split Right", SplitRight),
                 MenuItem::action("Split Down", SplitDown),

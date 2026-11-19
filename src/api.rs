@@ -60,11 +60,17 @@ fn expand(alias: &str) -> Option<&'static str> {
     })
 }
 
-const NEW_TAB: &str = "type?:string terminal (default), browser, markdown, or a plugin's tab type such as gitlab;\
+const NEW_TAB: &str = "type?:string terminal (default), browser, markdown, claude, or a plugin's tab type such as gitlab;\
     url?:string For a browser;\
     path?:string For a markdown tab: the absolute path of the file;\
     command?:string For a terminal: typed into its shell, then Return;\
-    cwd?:string For a terminal: where its shell starts;\
+    cwd?:string For a terminal or Claude tab: where it runs;\
+    session?:string For a Claude tab: the conversation to resume;\
+    continue?:boolean For a Claude tab: resume the folder's latest conversation;\
+    model?:string For a Claude tab: opus, sonnet, haiku, fable, default, or a full model name;\
+    effort?:string For a Claude tab: low, medium, high, xhigh or max;\
+    mode?:string For a Claude tab: ask, accept-edits, plan, auto, dont-ask or bypass;\
+    prompt?:string For a Claude tab: sent as the first message;\
     label?:string Name the tab, to target it by that name later;\
     focus?:boolean Focus it (default true)";
 

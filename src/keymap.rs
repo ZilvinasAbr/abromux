@@ -90,6 +90,7 @@ pub const ACTIONS: &[Act] = {
         "previousWorkspace", Some("Previous Workspace"), PrevWorkspace, [(None, ["ctrl-cmd-["])];
         "newTerminal", Some("New Terminal Tab"), NewTerminal, [(None, ["cmd-t"])];
         "newBrowser", Some("New Browser Tab"), NewBrowser, [(None, ["cmd-shift-l"])];
+        "newClaudeChat", Some("New Claude Tab"), NewClaudeChat, [(None, ["cmd-shift-t"])];
         "splitRight", Some("Split Right"), SplitRight, [(None, ["cmd-d"])];
         "splitDown", Some("Split Down"), SplitDown, [(None, ["cmd-shift-d"])];
         "renameTab", Some("Rename Tab…"), RenameTab, [(None, ["cmd-r"])];
@@ -232,6 +233,7 @@ pub const LINUX: &[(&str, Keys)] = &[
     ("previousWorkspace", &[(None, &["ctrl-alt-pageup", "ctrl-alt-["])]),
     ("newTerminal", &[(None, &["ctrl-shift-t"])]),
     ("newBrowser", &[(None, &["ctrl-alt-l"])]),
+    ("newClaudeChat", &[(None, &["ctrl-alt-y"])]),
     ("splitRight", &[(None, &["ctrl-shift-o"])]),
     ("splitDown", &[(None, &["ctrl-shift-e"])]),
     ("renameTab", &[(None, &["ctrl-shift-r"])]),

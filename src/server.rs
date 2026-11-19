@@ -3059,6 +3059,55 @@ impl AbroMux {
                 }
                 self.make_browser(&url, window, cx)
             }
+            "claude" => {
+                let cwd = str_param(p, "cwd")
+                    .map(String::from)
+                    .or_else(|| self.workspaces[wi].cwd(cx))
+                    .map(PathBuf::from)
+                    .unwrap_or_else(abromux_core::paths::home);
+                anyhow::ensure!(
+                    cwd.is_absolute(),
+                    "the cwd must be absolute: {}",
+                    cwd.display()
+                );
+                use crate::claude_chat::{self as chat, Start};
+                let mut start = Start {
+                    session: str_param(p, "session").or(str_param(p, "resume")).map(String::from),
+                    ..Default::default()
+                };
+                if let Some(m) = str_param(p, "model") {
+                    anyhow::ensure!(chat::is_model_name(m), "not a model name: {m:?}");
+                    start.model = Some(m.into());
+                }
+                if let Some(e) = str_param(p, "effort") {
+                    let e = chat::effort_name(e).with_context(|| {
+                        format!("unknown effort {e:?} (low, medium, high, xhigh, max)")
+                    })?;
+                    start.effort = Some(e.into());
+                }
+                if let Some(m) = str_param(p, "mode") {
+                    let m = chat::mode_name(m).with_context(|| {
+                        format!("unknown mode {m:?} (ask, accept-edits, plan, auto, dont-ask, bypass)")
+                    })?;
+                    start.mode = Some(m.into());
+                }
+                if start.session.is_none() && bool_param(p, "continue", false) {
+                    let config = crate::settings::claude_config_dir(cx);
+                    start.session = chat::Chat::latest_session(&cwd, config.as_deref());
+                    anyhow::ensure!(
+                        start.session.is_some(),
+                        "no earlier conversation in {}",
+                        cwd.display()
+                    );
+                }
+                let s = self.make_browser(&chat::url_for(&cwd, &start), window, cx);
+                if let (Some(text), Surface::Browser(b)) = (str_param(p, "prompt"), &s)
+                    && !text.trim().is_empty()
+                {
+                    b.update(cx, |b, cx| b.chat_send(text, cx));
+                }
+                s
+            }
             t if crate::plugins::find(t).is_some() => {
                 // GitLab turned off: its tab still shows local diffs.
                 let local = str_param(p, "host").is_some_and(abromux_gitlab::local::is_local);
@@ -3069,7 +3118,7 @@ impl AbroMux {
                 self.make_plugin(t, p, window, cx)?
             }
             t => {
-                let mut kinds = vec!["terminal", "browser", "markdown"];
+                let mut kinds = vec!["terminal", "browser", "markdown", "claude"];
                 kinds.extend(crate::plugins::all().iter().map(|p| p.id));
                 bail!("unknown surface type {t:?} ({})", kinds.join(", "))
             }

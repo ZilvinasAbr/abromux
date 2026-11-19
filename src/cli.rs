@@ -174,6 +174,14 @@ Commands:
 
   markdown [open] <file>... [--direction <dir>] [--focus <true|false>]
                                                              (a Markdown tab split next to the caller; follows edits)
+  claude [<dir> [<prompt>...]] [options]                    (Claude Code as a chat tab, in <dir> or here; a prompt is sent first)
+      --model <name>                                         opus, sonnet, haiku, fable, default, opus[1m], or a full model name
+      --effort <level>                                       low, medium, high, xhigh or max
+      --mode <mode>                                          ask, accept-edits, plan, auto, dont-ask or bypass
+      --prompt <text>                                        the first message (or put it after the folder)
+      --resume <id> | --continue                             pick up a conversation, or the folder's latest one
+      --split <left|right|up|down>                           a new pane beside the caller instead of a tab in its pane
+      --pane <ref> | --workspace <ref> | --no-focus          where it goes; don't focus it
 
   browser [--surface <ref>] <subcommand> ...
   browser open [url] [--direction <dir>] [--focus <true|false>]   (browser split next to the caller)
@@ -220,6 +228,7 @@ Commands:
 
 /// Flags that take no value.
 const SWITCHES: &[&str] = &[
+    "continue",
     "json",
     "wait",
     "quiet",
@@ -1470,6 +1479,7 @@ fn dispatch(
         "edit" => return edit(pos, opts),
         "default-app" => return default_app(pos),
         "markdown" | "md" => return markdown(pos, opts),
+        "claude" | "claude-tab" => return claude(pos, opts),
         "browser" => return browser(pos, opts, as_json),
         "rpc" if matches!(pos.first().map(String::as_str), Some("list" | "describe")) => {
             return rpc_docs(&pos, &opts, as_json);
@@ -2405,6 +2415,67 @@ fn markdown(mut pos: Vec<String>, opts: Map<String, Value>) -> Result<(), String
                 .unwrap_or(&v["ref"]))
         );
     }
+    Ok(())
+}
+
+/// `abromux claude [<dir> [<prompt>...]] [options]`: Claude Code as a chat
+/// tab in `dir` (default: the current directory): a new tab in the caller's
+/// pane, or with `--split` a pane beside it. The model, effort and mode are
+/// checked here so a typo fails before a tab opens.
+fn claude(mut pos: Vec<String>, mut opts: Map<String, Value>) -> Result<(), String> {
+    use crate::claude_chat::{effort_name, is_model_name, mode_name};
+    let dir = if pos.is_empty() { ".".to_string() } else { pos.remove(0) };
+    let dir = absolute(&dir);
+    if !Path::new(&dir).is_dir() {
+        return Err(format!("claude: no such folder: {dir}"));
+    }
+    let take = |opts: &mut Map<String, Value>, k: &str| {
+        opts.remove(k).and_then(|v| v.as_str().map(String::from))
+    };
+    let mut p = Map::new();
+    p.insert("type".into(), json!("claude"));
+    p.insert("cwd".into(), json!(dir));
+    if let Some(m) = take(&mut opts, "model") {
+        if !is_model_name(&m) {
+            return Err(format!("claude: not a model name: {m:?}"));
+        }
+        p.insert("model".into(), json!(m));
+    }
+    if let Some(e) = take(&mut opts, "effort") {
+        let e = effort_name(&e)
+            .ok_or_else(|| format!("claude: unknown effort {e:?} (low, medium, high, xhigh, max)"))?;
+        p.insert("effort".into(), json!(e));
+    }
+    if let Some(m) = take(&mut opts, "mode").or_else(|| take(&mut opts, "permission_mode")) {
+        let m = mode_name(&m).ok_or_else(|| {
+            format!("claude: unknown mode {m:?} (ask, accept-edits, plan, auto, dont-ask, bypass)")
+        })?;
+        p.insert("mode".into(), json!(m));
+    }
+    if let Some(id) = take(&mut opts, "resume").or_else(|| take(&mut opts, "session")) {
+        p.insert("session".into(), json!(id));
+    }
+    if opts.remove("continue").is_some() {
+        p.insert("continue".into(), json!(true));
+    }
+    let prompt = take(&mut opts, "prompt").or_else(|| (!pos.is_empty()).then(|| pos.join(" ")));
+    if let Some(text) = prompt {
+        p.insert("prompt".into(), json!(text));
+    }
+    let split = take(&mut opts, "split");
+    // What's left: where it goes and whether it's focused.
+    for (k, v) in opts {
+        p.insert(k, v);
+    }
+    let v = match split {
+        Some(dir) => {
+            p.insert("direction".into(), json!(dir));
+            call("surface.split", p)?
+        }
+        None => call("surface.create", p)?,
+    };
+    let r = v.get("surface").and_then(|s| s.get("ref")).unwrap_or(&v["ref"]);
+    println!("OK {}", s(r));
     Ok(())
 }
 

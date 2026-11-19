@@ -237,6 +237,35 @@ Everything is in `gitlab-cache/` under Application Support (`index.json` for the
 
 `abromux mr list [mine|recent|workspace]` prints the cache (`--json` for everything), `abromux mr open <url|group/project!iid>` opens one in the caller's workspace, and `abromux mr refresh [<ref>]` checks everything now, or loads one again.
 
+## Claude tabs
+
+A Claude tab runs Claude Code as a chat page instead of a terminal: replies render as Markdown, tool calls fold into one-line cards (edits as diffs, commands with their output, todos as a checklist), and permission prompts, questions and plans are cards you answer in place.
+
+- **File ▸ New Claude Tab** (⇧⌘T; Ctrl+Alt+Y on Linux) opens one in the focused tab's folder.
+- From a terminal, `abromux claude [<dir> [<prompt>...]]` opens one as a tab in that pane (`--split right` for a pane beside it instead). It takes the model, effort and permission mode to start with, and a first message:
+
+  ```sh
+  abromux claude                                   # here
+  abromux claude ~/code/app fix the flaky test     # there, and send that
+  abromux claude --model opus --effort high --mode plan
+  abromux claude --continue                        # this folder's latest conversation
+  abromux claude --resume <session-id> --split right
+  ```
+
+  `--model` takes `opus`, `sonnet`, `haiku`, `fable`, `default`, `opus[1m]` or a full model name; `--effort` low, medium, high, xhigh or max; `--mode` ask, accept-edits, plan, auto, dont-ask or bypass. A typo fails before a tab opens. The same options work as `surface.create` parameters (`"type": "claude"`).
+- It runs `claude -p` with stream-json in and out through your login shell (`$SHELL -lc`), so it finds `claude` on the same PATH a terminal would. The process starts when you focus the composer or send, and stops when the tab closes.
+- ↩ sends, ⇧↩ adds a line, Esc stops Claude. With a prompt waiting and the composer empty, ↩ allows and Esc denies; sending a message instead declines the prompt and tells Claude what to do. Paste or drop images to attach them; drop any other file (from Finder, say) to mention it as `@path`. `/` lists slash commands and `@` your folder's files.
+- **Permission mode** (the button under the composer, or ⇧Tab to cycle the first four): Ask permissions, Accept edits, Plan mode, Auto mode (Claude checks each action and runs the safe ones; for models that have it), Don't ask (only what's already allowed runs) and Bypass permissions (everything runs; for sandboxes).
+- **Model and effort**: the model button picks the model and its effort level (Low to Max, as the model offers). The ring beside it shows how full the context is.
+- Code in replies, diffs and files read back is colored by language (highlight.js); a ```` ```diff ```` block shows as added and removed lines.
+- Subagents show their steps inside their card, and each turn that edits files ends with what it changed (+/−); click a file to jump to its edit.
+- **Rewind**: hover one of your messages and click ↺ to go back to before it. Your message returns to the composer to edit, and Claude forgets what came after (the conversation forks). If Claude changed files since, you can restore them too.
+- **Past conversations** (the clock button) lists this folder's earlier conversations to pick one up again. The pencil button starts a new one.
+- Its sidebar pill and notifications work like a terminal agent's: Running, Needs input, Done.
+- The session id, model, effort and mode are in the tab's URL, so a restored tab shows the conversation from Claude Code's transcript, picks it up with `--resume` when you write again, and keeps its settings (bypass mode excepted: a restored tab asks again).
+- `"claude": { "configDir": "~/.claude-work" }` in the config file picks the Claude Code config folder (and so the account) Claude tabs use, as `CLAUDE_CONFIG_DIR` would.
+- It's the built-in browser's page, so it needs macOS for now.
+
 ## Pinned tabs
 
 A workspace keeps the tabs its work is about pinned: its Jira tickets and GitLab merge requests, and any other tab (a page, a terminal running a server or an agent). The selected workspace lists them in the sidebar, under its row: a ticket with its key (`PAY-1423`) and title, a merge request with just its title (no `Draft:` marker or ticket keys in front of it), any other tab with its icon, title and its program's status; the ones on screen are highlighted. A merge request stacked on another (its target branch is the other's source branch) is listed under it, indented. Hold ⌥⌘ to see their numbers, and ⌥⌘1…9 shows one.

@@ -79,9 +79,26 @@ pub struct Settings {
     pub notifications: NotificationSettings,
     pub gitlab: GitlabSettings,
     pub jira: JiraSettings,
+    pub claude: ClaudeSettings,
 }
 
 impl Global for Settings {}
+
+/// Claude tabs (`crate::claude_chat`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct ClaudeSettings {
+    /// The Claude Code config folder Claude tabs use (its account, settings
+    /// and transcripts), as `CLAUDE_CONFIG_DIR`. None: what the login shell
+    /// sets, else `~/.claude`.
+    pub config_dir: Option<String>,
+}
+
+/// The config folder Claude tabs use, if the config file names one.
+pub fn claude_config_dir(cx: &gpui::App) -> Option<PathBuf> {
+    let dir = cx.try_global::<Settings>()?.claude.config_dir.as_deref()?.trim();
+    (!dir.is_empty()).then(|| abromux_core::paths::expand_tilde(dir))
+}
 
 /// Jira, for tracked links (`crate::links`).
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
