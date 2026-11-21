@@ -456,10 +456,17 @@ impl GitLabView {
             .comment
             .update(cx, |b, cx| b.set_value("", window, cx));
         let back = body.clone();
+        let thread = self.more.start_thread;
         self.write(
             Write::Comment,
             Some(Patch::Comment { body: body.clone() }),
-            move |c, p, iid| c.comment(p, iid, &body).map(|_| ()),
+            move |c, p, iid| {
+                if thread {
+                    c.start_thread(p, iid, &body).map(|_| ())
+                } else {
+                    c.comment(p, iid, &body).map(|_| ())
+                }
+            },
             move |v, window, cx| put_back(&v.boxes.comment, &back, window, cx),
             window,
             cx,
@@ -1449,7 +1456,12 @@ impl GitLabView {
     pub(crate) fn comment_form(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let empty = self.boxes.comment.read(cx).value().trim().is_empty();
         // It shows at once (optimistic.rs): nothing to wait for.
-        let (label, enabled) = ("Comment", !empty);
+        let label = if self.more.start_thread && !self.is_local() {
+            "Start thread"
+        } else {
+            "Comment"
+        };
+        let enabled = !empty;
         div()
             .flex()
             .gap_3()
@@ -1504,7 +1516,8 @@ impl GitLabView {
                                 d.on_click(
                                     cx.listener(|v, _, window, cx| v.post_comment(window, cx)),
                                 )
-                            })),
+                            }))
+                            .children(self.comment_kind_menu(cx)),
                     ),
             )
     }

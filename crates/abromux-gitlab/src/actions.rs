@@ -55,6 +55,10 @@ pub struct More {
     pub edit_target: Entity<InputState>,
     pub edit_remove: bool,
     pub edit_squash: bool,
+    /// The comment box's button: "Start thread" instead of "Comment", and
+    /// its dropdown open.
+    pub start_thread: bool,
+    pub comment_menu: bool,
     /// "Show whitespace changes" turned off.
     pub hide_whitespace: bool,
     /// Boxes showing their Preview instead of the text.
@@ -90,6 +94,8 @@ impl More {
             picked: None,
             previewing: Default::default(),
             hide_whitespace: false,
+            start_thread: false,
+            comment_menu: false,
             edit_target: cx.new(|cx| InputState::new(window, cx).placeholder("Target branch")),
             edit_remove: false,
             edit_squash: false,
@@ -1715,6 +1721,101 @@ pub fn hide_whitespace(r: &mut Review) {
             }
         }
         f.threads.sort_by_key(|(h, l, _)| (*h, *l));
+    }
+}
+
+impl GitLabView {
+    /// GitLab's dropdown by the comment button: Comment, or Start thread.
+    pub(crate) fn comment_kind_menu(&self, cx: &mut Context<Self>) -> Option<Div> {
+        if self.is_local() {
+            return None;
+        }
+        let open = self.more.comment_menu;
+        let thread = self.more.start_thread;
+        let option =
+            |id: &'static str, on: bool, title: &'static str, about: &'static str, pick: bool| {
+                div()
+                    .id(id)
+                    .flex()
+                    .gap_2()
+                    .px_3()
+                    .py_2()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(c(RAISED)))
+                    .child(
+                        div()
+                            .w(px(16.))
+                            .flex_none()
+                            .when(on, |d| d.child(icon("check-circle", 14., c(FOCUS)))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(c(TEXT))
+                                    .child(title),
+                            )
+                            .child(div().text_size(px(12.)).text_color(c(MUTED)).child(about)),
+                    )
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        v.more.start_thread = pick;
+                        v.more.comment_menu = false;
+                        cx.notify();
+                    }))
+            };
+        let menu = open.then(|| {
+            deferred(
+                div()
+                    .id("gl-comment-kind-menu")
+                    .absolute()
+                    .bottom(px(36.))
+                    .right_0()
+                    .w(px(320.))
+                    .py_1()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(c(BORDER))
+                    .bg(c(CARD))
+                    .shadow_lg()
+                    .occlude()
+                    .on_mouse_down_out(cx.listener(|v, _, _, cx| {
+                        v.more.comment_menu = false;
+                        cx.notify();
+                    }))
+                    .child(option(
+                        "gl-kind-comment",
+                        !thread,
+                        "Comment",
+                        "Add a general comment to this merge request.",
+                        false,
+                    ))
+                    .child(option(
+                        "gl-kind-thread",
+                        thread,
+                        "Start thread",
+                        "Discuss a specific suggestion or question that needs to be resolved.",
+                        true,
+                    )),
+            )
+            .with_priority(2)
+        });
+        Some(
+            div()
+                .relative()
+                .child(
+                    crate::edit::primary("gl-comment-kind", "", true)
+                        .px_2()
+                        .child(app_icon("chevron-down", 14., on_fill()))
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.more.comment_menu = !v.more.comment_menu;
+                            cx.notify();
+                        })),
+                )
+                .children(menu),
+        )
     }
 }
 

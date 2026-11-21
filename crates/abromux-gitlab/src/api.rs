@@ -623,6 +623,16 @@ impl Client {
         )
     }
 
+    /// A thread on the merge request (the comment box's "Start thread"):
+    /// one that can be resolved, unlike a comment.
+    pub fn start_thread(&self, project: u64, iid: u64, body: &str) -> anyhow::Result<Discussion> {
+        self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/discussions"),
+            serde_json::json!({ "body": body }),
+        )
+    }
+
     /// A reply in thread `discussion`.
     pub fn reply(
         &self,

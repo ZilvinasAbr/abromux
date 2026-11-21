@@ -2028,6 +2028,9 @@ impl Tab for GitLabView {
             }
             // Writing, as the buttons do: fill the box, then press it.
             "comment" => {
+                if let Some(t) = args.get("thread").and_then(Value::as_bool) {
+                    self.more.start_thread = t;
+                }
                 let body = str_arg("body").context("missing body")?.to_string();
                 self.boxes
                     .comment
