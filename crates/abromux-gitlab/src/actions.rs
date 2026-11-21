@@ -43,6 +43,10 @@ pub struct More {
     pub branch: Entity<InputState>,
     /// What the last revert or cherry-pick did, to say so.
     pub picked: Option<String>,
+    /// "Your review": the panel open, its verdict, and the summary.
+    pub review_panel: bool,
+    pub verdict: Verdict,
+    pub summary: Entity<InputState>,
     /// The merge request (global id) the fields are of.
     of: Option<u64>,
 }
@@ -68,6 +72,9 @@ impl More {
             pick: None,
             branch: cx.new(|cx| InputState::new(window, cx).placeholder("Branch")),
             picked: None,
+            review_panel: false,
+            verdict: Verdict::Comment,
+            summary: field(3, "Add optional summary content…", window, cx),
             of: None,
         }
     }
@@ -86,8 +93,9 @@ impl More {
         Some(b.read(cx).value().to_string()).filter(|m| !m.trim().is_empty())
     }
 
-    pub fn fields(&self) -> [&Entity<InputState>; 4] {
+    pub fn fields(&self) -> [&Entity<InputState>; 5] {
         [
+            &self.summary,
             &self.merge_msg,
             &self.squash_msg,
             &self.suggestion_msg,
@@ -796,5 +804,509 @@ impl GitLabView {
                         .map(|m| div().text_size(px(12.)).text_color(c(GREEN)).child(m)),
                 ),
         )
+    }
+}
+
+/// Pending comments' stand-in note ids: GitLab's draft id above this, below
+/// the optimistic ones (`optimistic::is_pending_note`).
+const DRAFT_BASE: u64 = 1 << 50;
+
+/// The draft a stand-in note is, if it is one (and GitLab has it).
+pub fn draft_of(note: u64) -> Option<u64> {
+    (DRAFT_BASE..DRAFT_BASE * 4)
+        .contains(&note)
+        .then(|| note - DRAFT_BASE)
+}
+
+/// A note of your review not yet submitted.
+pub fn is_draft(n: &crate::types::Note) -> bool {
+    n.kind.as_deref() == Some("DraftNote")
+}
+
+/// Your review's pending comments shown where they'll go, as GitLab shows
+/// them (with "Pending"): on their line, under the thread they reply to, or
+/// in the activity. Stand-in threads are `optimistic-draft-…`, so nothing
+/// but editing and deleting is offered on them.
+pub fn place_drafts(r: &mut Review, me: &crate::types::User) {
+    use crate::types::{Discussion, Note};
+    let drafts = r.drafts.clone();
+    for d in drafts {
+        let note = Note {
+            id: DRAFT_BASE + d.id,
+            kind: Some("DraftNote".into()),
+            body: d.note.clone(),
+            author: me.clone(),
+            created_at: crate::time::iso(crate::time::now()),
+            position: d.position.clone(),
+            ..Default::default()
+        };
+        let thread = |n: Note| Discussion {
+            id: format!("optimistic-draft-{}", d.id),
+            individual_note: n.position.is_none(),
+            notes: vec![n],
+        };
+        if let Some(t) = d.discussion_id.as_deref() {
+            let on_files = r.files.iter_mut().flat_map(|f| {
+                f.threads
+                    .iter_mut()
+                    .map(|(_, _, d)| d)
+                    .chain(f.outdated.iter_mut())
+            });
+            let found = r
+                .general
+                .iter_mut()
+                .chain(r.outdated.iter_mut())
+                .chain(on_files)
+                .find(|x| x.id == t);
+            if let Some(x) = found {
+                x.notes.push(note);
+                continue;
+            }
+            r.general.push(thread(note));
+            continue;
+        }
+        let placed = d
+            .position
+            .as_ref()
+            .filter(|p| p.position_type != "file")
+            .and_then(|p| {
+                let f = r.files.iter_mut().find(|f| f.holds(p))?;
+                let (h, l) = f.find(p)?;
+                Some((f, h, l))
+            });
+        match placed {
+            Some((f, h, l)) => {
+                let at = f
+                    .threads
+                    .partition_point(|(fh, fl, _)| (*fh, *fl) <= (h, l));
+                f.threads.insert(at, (h, l, thread(note)));
+            }
+            None => r.general.push(thread(note)),
+        }
+    }
+}
+
+/// What submitting your review says, as GitLab's "Review approval".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Verdict {
+    #[default]
+    Comment,
+    Approve,
+    RequestChanges,
+}
+
+impl GitLabView {
+    /// Change a pending comment (from its own Edit, `save_note`).
+    pub(crate) fn save_draft(
+        &mut self,
+        id: u64,
+        body: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let note = DRAFT_BASE + id;
+        let back = body.clone();
+        self.write(
+            Write::EditNote,
+            Some(Patch::EditDraft {
+                id,
+                body: Some(body.clone()),
+            }),
+            move |c, p, iid| c.edit_draft(p, iid, id, &body),
+            move |v, window, cx| {
+                v.editing_note = Some(note);
+                v.boxes
+                    .note
+                    .update(cx, |b, cx| b.set_value(back, window, cx));
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Take a pending comment out of your review.
+    pub(crate) fn delete_draft(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.write(
+            Write::DeleteNote,
+            Some(Patch::EditDraft { id, body: None }),
+            move |c, p, iid| c.delete_draft(p, iid, id),
+            |_, _, _| {},
+            window,
+            cx,
+        );
+    }
+
+    /// Submit your review as GitLab's "Your review" does: its pending
+    /// comments, the summary as a comment, and the verdict (an approval,
+    /// or "requested changes").
+    pub(crate) fn submit_review_as(
+        &mut self,
+        verdict: Verdict,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let summary = self.more.summary.read(cx).value().trim().to_string();
+        self.more
+            .summary
+            .update(cx, |b, cx| b.set_value("", window, cx));
+        self.more.review_panel = false;
+        let state = match verdict {
+            Verdict::RequestChanges => Some("requested_changes".to_string()),
+            Verdict::Comment => Some("reviewed".to_string()),
+            Verdict::Approve => None,
+        };
+        let (s, st, back) = (summary.clone(), state.clone(), summary.clone());
+        self.write(
+            Write::SubmitReview,
+            Some(Patch::Submit {
+                summary: summary.clone(),
+                state: state.clone(),
+            }),
+            move |c, p, iid| {
+                let pending: Vec<String> =
+                    c.draft_notes(p, iid)?.into_iter().map(|d| d.note).collect();
+                c.publish_review(
+                    p,
+                    iid,
+                    Some(&s).filter(|s| !s.is_empty()).map(|s| s.as_str()),
+                    st.as_deref(),
+                )?;
+                // GitLab publishes in the background: wait (a little) until
+                // the comments are threads, so the refresh after shows them.
+                for _ in 0..10 {
+                    let shown = c.discussions(p, iid)?;
+                    let bodies: Vec<&str> = shown
+                        .iter()
+                        .flat_map(|d| &d.notes)
+                        .map(|n| n.body.as_str())
+                        .collect();
+                    if pending.iter().all(|b| bodies.contains(&b.as_str())) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                Ok(())
+            },
+            move |v, window, cx| {
+                v.more
+                    .summary
+                    .update(cx, |b, cx| b.set_value(back, window, cx));
+            },
+            window,
+            cx,
+        );
+        if verdict == Verdict::Approve {
+            self.set_approved(true, window, cx);
+        }
+    }
+
+    /// GitLab's "Your review" button, in the tab bar: its pending comments
+    /// counted, and a click opens the submit panel.
+    pub(crate) fn your_review_button(&self, r: &Review, cx: &mut Context<Self>) -> Option<Div> {
+        let n = r.drafts.len();
+        if self.me.is_none() || (self.is_local() && n == 0) || r.mr.state != "opened" && n == 0 {
+            return None;
+        }
+        let (label, _) =
+            crate::edit::busy_label(self.busy, Write::SubmitReview, "Your review", "Submitting…");
+        let button = if n > 0 {
+            crate::edit::primary("gl-your-review", label, true).child(count_badge(n))
+        } else {
+            crate::edit::secondary("gl-your-review", label)
+        };
+        Some(
+            div()
+                .relative()
+                .child(button.gap_2().on_click(cx.listener(|v, _, window, cx| {
+                    v.more.review_panel = !v.more.review_panel;
+                    if v.more.review_panel {
+                        v.more.summary.update(cx, |b, cx| b.focus(window, cx));
+                    }
+                    cx.notify();
+                })))
+                .children(self.more.review_panel.then(|| self.review_panel(r, cx))),
+        )
+    }
+
+    /// The panel: Review approval (Comment, Approve, Request changes), the
+    /// summary, Submit review and Continue review, then the pending
+    /// comments, each with where it goes and a way to take it out.
+    fn review_panel(&self, r: &Review, cx: &mut Context<Self>) -> impl IntoElement {
+        let me = self.me.as_ref().map_or(0, |m| m.id);
+        let approved = r.approvals.approved_by.iter().any(|a| a.user.id == me);
+        let can_approve = r.approvals.user_can_approve && !approved;
+        let pick = self.more.verdict;
+        let option = |v: Verdict, title: &'static str, about: &'static str, live: bool| {
+            let on = pick == v;
+            div()
+                .id(SharedString::from(format!("gl-verdict-{v:?}")))
+                .flex()
+                .gap_2()
+                .when(live, |d| d.cursor_pointer())
+                .when(!live, |d| d.opacity(0.5))
+                .child(
+                    div()
+                        .mt(px(3.))
+                        .size(px(14.))
+                        .flex_none()
+                        .rounded_full()
+                        .border_1()
+                        .border_color(c(if on { FOCUS } else { BORDER }))
+                        .when(on, |d| d.border_4()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(div().text_color(c(TEXT)).child(title))
+                        .child(div().text_size(px(12.)).text_color(c(MUTED)).child(about)),
+                )
+                .when(live, |d| {
+                    d.on_click(cx.listener(move |view, _, _, cx| {
+                        view.more.verdict = v;
+                        cx.notify();
+                    }))
+                })
+        };
+        let busy = self.busy == Some(Write::SubmitReview);
+        let pending = r.drafts.iter().map(|d| {
+            let id = d.id;
+            let place = match (&d.position, &d.discussion_id) {
+                (_, Some(_)) => "Reply".to_string(),
+                (Some(p), _) => format!(
+                    "{}:{}",
+                    p.new_path
+                        .as_deref()
+                        .or(p.old_path.as_deref())
+                        .unwrap_or(""),
+                    p.new_line
+                        .or(p.old_line)
+                        .map(|l| l.to_string())
+                        .unwrap_or_default()
+                ),
+                _ => "Comment".to_string(),
+            };
+            let pending = crate::optimistic::is_pending_note(id);
+            div()
+                .flex()
+                .items_start()
+                .gap_2()
+                .py_1()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(c(MUTED))
+                                .truncate()
+                                .child(place),
+                        )
+                        .child(
+                            div()
+                                .text_color(c(TEXT))
+                                .truncate()
+                                .child(d.note.lines().next().unwrap_or_default().to_string()),
+                        ),
+                )
+                .when(!pending, |el| {
+                    el.child(
+                        crate::edit::icon_button(
+                            SharedString::from(format!("gl-draft-delete-{id}")),
+                            icon("remove", 14., c(MUTED)),
+                            "Delete comment",
+                        )
+                        .on_click(
+                            cx.listener(move |v, _, window, cx| v.delete_draft(id, window, cx)),
+                        ),
+                    )
+                })
+        });
+        let n = r.drafts.len();
+        deferred(
+            div()
+                .id("gl-review-panel")
+                .absolute()
+                .top(px(38.))
+                .right_0()
+                .w(px(420.))
+                .p_4()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(c(BORDER))
+                .bg(c(CARD))
+                .shadow_lg()
+                .occlude()
+                .text_size(px(14.))
+                .on_mouse_down_out(cx.listener(|v, _, _, cx| {
+                    v.more.review_panel = false;
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(c(HEADING))
+                        .child("Review approval"),
+                )
+                .child(option(
+                    Verdict::Comment,
+                    "Comment",
+                    "Submit general feedback without explicit approval.",
+                    true,
+                ))
+                .child(option(
+                    Verdict::Approve,
+                    "Approve",
+                    "Submit feedback and approve these changes.",
+                    can_approve && !self.is_local(),
+                ))
+                .child(option(
+                    Verdict::RequestChanges,
+                    "Request changes",
+                    "Submit feedback that should be addressed before merging.",
+                    !self.is_local(),
+                ))
+                .child(Input::new(&self.more.summary))
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(
+                            crate::edit::primary(
+                                "gl-submit-review",
+                                if busy {
+                                    "Submitting…"
+                                } else {
+                                    "Submit review"
+                                },
+                                !busy,
+                            )
+                            .when(!busy, |d| {
+                                d.on_click(cx.listener(move |v, _, window, cx| {
+                                    let verdict = v.more.verdict;
+                                    v.submit_review_as(verdict, window, cx)
+                                }))
+                            }),
+                        )
+                        .child(
+                            crate::edit::secondary("gl-continue-review", "Continue review")
+                                .on_click(cx.listener(|v, _, _, cx| {
+                                    v.more.review_panel = false;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .child(div().h(px(1.)).bg(c(RAISED)))
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(c(HEADING))
+                        .child(match n {
+                            0 => "No pending comments".to_string(),
+                            1 => "1 pending comment".to_string(),
+                            n => format!("{n} pending comments"),
+                        }),
+                )
+                .children(pending),
+        )
+        .with_priority(2)
+    }
+
+    /// "Start a review" (or "Add to review" once one is under way) beside
+    /// a reply's or the overview comment's button: the text goes into
+    /// your review instead of out at once. `overview`: the comment box.
+    pub(crate) fn to_review_button(
+        &self,
+        id: SharedString,
+        enabled: bool,
+        overview: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<Stateful<Div>> {
+        let r = self.review.ready()?;
+        if self.me.is_none() || self.is_local() || r.mr.state != "opened" {
+            return None;
+        }
+        let label = if r.drafts.is_empty() {
+            "Start a review"
+        } else {
+            "Add to review"
+        };
+        Some(crate::edit::secondary(id, label).when(enabled, |d| {
+            d.on_click(cx.listener(move |v, _, window, cx| {
+                if overview {
+                    v.comment_to_review(window, cx)
+                } else {
+                    v.reply_to_review(window, cx)
+                }
+            }))
+        }))
+    }
+
+    /// The overview's comment, into your review.
+    pub(crate) fn comment_to_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let body = self.boxes.comment.read(cx).value().trim().to_string();
+        if body.is_empty() {
+            return;
+        }
+        self.boxes
+            .comment
+            .update(cx, |b, cx| b.set_value("", window, cx));
+        let back = body.clone();
+        self.write(
+            Write::LineDraft,
+            Some(Patch::Draft {
+                body: body.clone(),
+                position: None,
+                discussion: None,
+            }),
+            move |c, p, iid| c.draft_comment(p, iid, &body, None, false).map(|_| ()),
+            move |v, window, cx| {
+                v.boxes
+                    .comment
+                    .update(cx, |b, cx| b.set_value(back, window, cx))
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// The open reply, into your review.
+    pub(crate) fn reply_to_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.replying.clone() else {
+            return;
+        };
+        let body = self.boxes.reply.read(cx).value().trim().to_string();
+        if body.is_empty() {
+            return;
+        }
+        self.boxes
+            .reply
+            .update(cx, |b, cx| b.set_value("", window, cx));
+        self.replying = None;
+        let (thread, back) = (id.clone(), body.clone());
+        self.write(
+            Write::LineDraft,
+            Some(Patch::Draft {
+                body: body.clone(),
+                position: None,
+                discussion: Some(id.clone()),
+            }),
+            move |c, p, iid| c.draft_comment(p, iid, &body, Some(&id), false).map(|_| ()),
+            move |v, window, cx| {
+                v.replying = Some(thread);
+                v.boxes
+                    .reply
+                    .update(cx, |b, cx| b.set_value(back, window, cx));
+            },
+            window,
+            cx,
+        );
+        self.rebuild_rows(cx);
     }
 }

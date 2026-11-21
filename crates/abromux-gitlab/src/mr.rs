@@ -498,7 +498,7 @@ impl GitLabView {
                                 .items_center()
                                 .gap_2()
                                 .children(self.thread_nav(r, unresolved, cx))
-                                .children(self.review_button(r, cx)),
+                                .children(self.your_review_button(r, cx)),
                         ),
                 );
         }
@@ -584,7 +584,7 @@ impl GitLabView {
                             .items_center()
                             .gap_2()
                             .children(self.thread_nav(r, unresolved, cx))
-                            .children(self.review_button(r, cx)),
+                            .children(self.your_review_button(r, cx)),
                     ),
             )
     }

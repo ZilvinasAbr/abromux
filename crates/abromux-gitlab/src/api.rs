@@ -693,6 +693,31 @@ impl Client {
         ))
     }
 
+    /// Submit your review as "Your review" does: every pending comment,
+    /// with `note` as a summary comment and `state` the reviewer's state
+    /// (`requested_changes` or `reviewed`).
+    pub fn publish_review(
+        &self,
+        project: u64,
+        iid: u64,
+        note: Option<&str>,
+        state: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let mut body = serde_json::json!({});
+        if let Some(n) = note {
+            body["note"] = n.into();
+        }
+        if let Some(s) = state {
+            body["reviewer_state"] = s.into();
+        }
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/draft_notes/bulk_publish"),
+            body,
+        )?;
+        Ok(())
+    }
+
     /// Submit your review: every pending comment at once.
     pub fn publish_drafts(&self, project: u64, iid: u64) -> anyhow::Result<()> {
         let _: serde_json::Value = self.write(
@@ -761,19 +786,21 @@ impl Client {
         loop {
             match self.write::<serde_json::Value>("PUT", &path, body.clone()) {
                 Ok(_) => return Ok(()),
+                // And while it moves the threads onto the new diff, "this
+                // line was changed in a more recent version", even for
+                // lines that weren't.
                 Err(e)
-                    if tries < 5
+                    if tries < 8
                         && ApiError::status_of(&e) == Some(400)
-                        && format!("{e:#}").contains("has been changed") =>
+                        && (format!("{e:#}").contains("has been changed")
+                            || format!("{e:#}").contains("more recent version")) =>
                 {
                     tries += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(800));
+                    std::thread::sleep(std::time::Duration::from_millis(1000));
                 }
                 Err(e) => {
                     return Err(match ApiError::status_of(&e) {
-                        Some(400 | 422) => e.context(
-                            "GitLab can't apply it: its lines changed since, or the merge request isn't open",
-                        ),
+                        Some(400 | 422) => e.context("GitLab can't apply it"),
                         _ => e,
                     });
                 }

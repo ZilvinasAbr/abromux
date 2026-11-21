@@ -370,6 +370,9 @@ pub struct Approver {
 pub struct Approvals {
     pub approved: bool,
     pub approved_by: Vec<Approver>,
+    /// You may approve it (not yet, not your own when that's barred).
+    pub user_can_approve: bool,
+    pub user_has_approved: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]

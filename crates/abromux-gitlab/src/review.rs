@@ -138,7 +138,7 @@ impl File {
         }
     }
 
-    fn holds(&self, p: &Position) -> bool {
+    pub(crate) fn holds(&self, p: &Position) -> bool {
         p.new_path.as_deref() == Some(&self.meta.new_path)
             || p.old_path.as_deref() == Some(&self.meta.old_path)
     }

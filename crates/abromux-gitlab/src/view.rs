@@ -2029,7 +2029,44 @@ impl Tab for GitLabView {
                 let resolved = args.get("resolved").and_then(Value::as_bool) != Some(false);
                 self.set_resolved(&id, resolved, window, cx);
             }
-            "submit_review" => self.submit_review(window, cx),
+            // `{"verdict": "comment" | "approve" | "request_changes", "summary": "…"}`;
+            // without either, as before: just the pending comments.
+            "submit_review" => match (str_arg("verdict"), str_arg("summary")) {
+                (None, None) => self.submit_review(window, cx),
+                (v, summary) => {
+                    use crate::actions::Verdict;
+                    let verdict = match v.unwrap_or("comment") {
+                        "approve" => Verdict::Approve,
+                        "request_changes" => Verdict::RequestChanges,
+                        _ => Verdict::Comment,
+                    };
+                    let summary = summary.unwrap_or("").to_string();
+                    self.more
+                        .summary
+                        .update(cx, |b, cx| b.set_value(summary, window, cx));
+                    self.submit_review_as(verdict, window, cx);
+                }
+            },
+            "review_panel" => {
+                self.more.review_panel = args.get("on").and_then(Value::as_bool).unwrap_or(true)
+            }
+            "reply_to_review" => {
+                let id = str_arg("thread").context("missing thread")?.to_string();
+                self.open_reply(&id, window, cx);
+                let body = str_arg("body").unwrap_or("").to_string();
+                self.boxes
+                    .reply
+                    .update(cx, |b, cx| b.set_value(body, window, cx));
+                self.reply_to_review(window, cx);
+            }
+            "comment_to_review" => {
+                let body = str_arg("body").unwrap_or("").to_string();
+                self.boxes
+                    .comment
+                    .update(cx, |b, cx| b.set_value(body, window, cx));
+                self.comment_to_review(window, cx);
+            }
+            "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);
                 self.set_approved(approve, window, cx);

@@ -64,9 +64,23 @@ pub enum Patch {
         new: Option<u32>,
         body: String,
     },
-    /// A comment into your review (GitLab's "Pending").
+    /// A comment into your review (GitLab's "Pending"): on a line at
+    /// `position`, a reply in thread `discussion`, or on the merge request.
     Draft {
         body: String,
+        position: Option<Position>,
+        discussion: Option<String>,
+    },
+    /// A pending comment changed, or (`body` None) taken out.
+    EditDraft {
+        id: u64,
+        body: Option<String>,
+    },
+    /// The review submitted: its comments go (GitLab's threads replace
+    /// them), with the summary as a comment and the reviewer's state.
+    Submit {
+        summary: String,
+        state: Option<String>,
     },
     /// The merge request's fields as PUT (assignee_ids, reviewer_ids,
     /// labels, remove_labels, milestone_id, title); `people`: who the ids
@@ -218,11 +232,35 @@ impl Patch {
                     .partition_point(|(fh, fl, _)| (*fh, *fl) <= (h, l));
                 f.threads.insert(at, (h, l, d));
             }
-            Patch::Draft { body } => {
+            Patch::EditDraft { id, body } => match body {
+                Some(b) => {
+                    if let Some(d) = r.drafts.iter_mut().find(|d| d.id == *id) {
+                        d.note = b.clone();
+                    }
+                }
+                None => r.drafts.retain(|d| d.id != *id),
+            },
+            Patch::Submit { summary, state } => {
+                r.drafts.clear();
+                if !summary.trim().is_empty() {
+                    Patch::Comment {
+                        body: summary.clone(),
+                    }
+                    .apply(r, me, n);
+                }
+                if let Some(s) = state {
+                    r.review_states.insert(me.id, s.clone());
+                }
+            }
+            Patch::Draft {
+                body,
+                position,
+                discussion,
+            } => {
                 if !r.drafts.iter().any(|d| d.note.trim() == body.trim()) {
                     r.drafts.push(DraftNote {
-                        position: None,
-                        discussion_id: None,
+                        position: position.clone(),
+                        discussion_id: discussion.clone(),
                         resolve_discussion: false,
                         id: NOTE_BASE + n,
                         note: body.clone(),

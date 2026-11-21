@@ -323,6 +323,12 @@ impl GitLabView {
                 for s in on {
                     s.patch.apply(&mut r, me, s.n);
                 }
+                crate::actions::place_drafts(&mut r, me);
+                Rc::new(r)
+            }
+            (Some(me), true) if !base.drafts.is_empty() => {
+                let mut r = (*base).clone();
+                crate::actions::place_drafts(&mut r, me);
                 Rc::new(r)
             }
             _ => base,
@@ -694,7 +700,20 @@ impl GitLabView {
         self.commenting = None;
         let back = body.clone();
         let patch = if draft {
-            Patch::Draft { body: body.clone() }
+            Patch::Draft {
+                body: body.clone(),
+                position: Some(crate::types::Position {
+                    base_sha: refs.base_sha.clone(),
+                    start_sha: refs.start_sha.clone(),
+                    head_sha: refs.head_sha.clone(),
+                    old_path: Some(old_path.clone()),
+                    new_path: Some(new_path.clone()),
+                    position_type: "text".into(),
+                    old_line: old,
+                    new_line: new,
+                }),
+                discussion: None,
+            }
         } else {
             Patch::LineComment {
                 file: fi,
@@ -763,30 +782,6 @@ impl GitLabView {
             window,
             cx,
         );
-    }
-
-    /// GitLab's header button while a review is pending: how many comments
-    /// it holds, a click submits them.
-    pub(crate) fn review_button(
-        &self,
-        r: &crate::review::Review,
-        cx: &mut Context<Self>,
-    ) -> Option<Stateful<Div>> {
-        let n = r.drafts.len();
-        (n > 0 && self.me.is_some()).then(|| {
-            let (label, live) = busy_label(
-                self.busy,
-                Write::SubmitReview,
-                "Submit review",
-                "Submitting…",
-            );
-            primary("gl-submit-review", label, live)
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(count_badge(n))
-                .on_click(cx.listener(|v, _, window, cx| v.submit_review(window, cx)))
-        })
     }
 
     /// Merge now, or with `auto` once the checks pass, with the widget's
@@ -959,6 +954,10 @@ impl GitLabView {
             return;
         }
         self.close_edit_note(cx);
+        if let Some(d) = crate::actions::draft_of(note) {
+            self.save_draft(d, body, window, cx);
+            return;
+        }
         let back = body.clone();
         self.write(
             Write::EditNote,
@@ -996,6 +995,10 @@ impl GitLabView {
             return;
         }
         self.deleting_note = None;
+        if let Some(d) = crate::actions::draft_of(note) {
+            self.delete_draft(d, window, cx);
+            return;
+        }
         self.write(
             Write::DeleteNote,
             Some(Patch::DeleteNote { note }),
@@ -1227,10 +1230,11 @@ impl GitLabView {
         cx: &mut Context<Self>,
     ) -> Option<Div> {
         let mine = self.me.as_ref().is_some_and(|me| me.id == n.author.id);
+        let draft = crate::actions::is_draft(n);
         if !mine
             || n.system
             || is_pending_note(n.id)
-            || self.is_local()
+            || (self.is_local() && !draft)
             || self.review.ready().is_some_and(|r| r.mr.state == "locked")
         {
             return None;
@@ -1403,6 +1407,12 @@ impl GitLabView {
                                     .text_color(c(MUTED))
                                     .child("Markdown is supported."),
                             )
+                            .children(self.to_review_button(
+                                "gl-comment-review".into(),
+                                enabled,
+                                true,
+                                cx,
+                            ))
                             .child(primary("gl-comment", label, enabled).when(enabled, |d| {
                                 d.on_click(
                                     cx.listener(|v, _, window, cx| v.post_comment(window, cx)),
@@ -1421,6 +1431,10 @@ impl GitLabView {
         resolved: bool,
         cx: &mut Context<Self>,
     ) -> Div {
+        // A comment of your review: nothing to reply to until it's submitted.
+        if id.starts_with("optimistic-draft-") {
+            return div();
+        }
         // Made here, not yet GitLab's: nothing to reply to or resolve yet.
         if is_pending_thread(id) {
             return div()
@@ -1535,6 +1549,12 @@ impl GitLabView {
                             }),
                         )
                     })
+                    .children(self.to_review_button(
+                        SharedString::from(format!("send-review-{id}")),
+                        enabled,
+                        false,
+                        cx,
+                    ))
                     .child(div().flex_1())
                     .child(
                         secondary(SharedString::from(format!("cancel-{id}")), "Cancel")

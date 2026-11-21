@@ -197,4 +197,63 @@ fn suggestions_todos_notifications_lock_and_drafts() {
     assert_eq!(drafts[0].note, "pending, changed");
     c.delete_draft(p, iid, d.id).unwrap();
     assert!(c.draft_notes(p, iid).unwrap().is_empty());
+
+    // A review: a reply into a thread and a general comment held, then
+    // submitted with a summary, requesting changes.
+    let r = load_review(&c, p, iid).unwrap();
+    let thread = r
+        .files
+        .iter()
+        .flat_map(|f| f.threads.iter().map(|(_, _, d)| d).chain(f.outdated.iter()))
+        .chain(r.outdated.iter())
+        .next()
+        .unwrap()
+        .id
+        .clone();
+    let me = c.current_user().unwrap();
+    c.update(p, iid, serde_json::json!({ "reviewer_ids": [me.id] }))
+        .unwrap();
+    c.draft_comment(p, iid, "held reply", Some(&thread), false)
+        .unwrap();
+    c.draft_comment(p, iid, "held comment", None, false)
+        .unwrap();
+    let held = c.draft_notes(p, iid).unwrap();
+    assert_eq!(held.len(), 2);
+    assert!(
+        held.iter()
+            .any(|d| d.discussion_id.as_deref() == Some(thread.as_str()))
+    );
+    c.publish_review(p, iid, Some("The summary"), Some("requested_changes"))
+        .unwrap();
+    let state = c
+        .reviewers(p, iid)
+        .unwrap()
+        .into_iter()
+        .find(|x| x.user.id == me.id)
+        .map(|x| x.state);
+    assert_eq!(state.as_deref(), Some("requested_changes"));
+    let mut published = false;
+    for _ in 0..10 {
+        let d = c.discussions(p, iid).unwrap();
+        let bodies: Vec<&str> = d
+            .iter()
+            .flat_map(|d| &d.notes)
+            .map(|n| n.body.as_str())
+            .collect();
+        if ["held reply", "held comment", "The summary"]
+            .iter()
+            .all(|b| bodies.contains(b))
+        {
+            let t = d.iter().find(|x| x.id == thread).unwrap();
+            assert!(
+                t.notes.iter().any(|n| n.body == "held reply"),
+                "the reply in its thread"
+            );
+            published = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    assert!(published, "the review's comments and summary");
+    assert!(c.draft_notes(p, iid).unwrap().is_empty());
 }

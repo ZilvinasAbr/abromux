@@ -360,6 +360,10 @@ impl GitLabView {
                     gpui_component::tooltip::Tooltip::new(tip).build(window, cx)
                 })
         };
+        // A pending comment of your review has no page to link to yet.
+        if d.id.starts_with("optimistic-draft-") {
+            return div();
+        }
         // Made here and not yet GitLab's: nothing to do to it yet.
         let writes = self.me.is_some() && !crate::optimistic::is_pending_thread(&d.id);
         let resolved = d.resolved();
@@ -439,8 +443,10 @@ impl GitLabView {
         // GitLab's "Add reaction" first among a note's buttons; a local diff
         // has no reactions.
         let pending = crate::optimistic::is_pending_note(n.id);
+        let draft = crate::actions::is_draft(n);
         let react = (self.me.is_some()
             && !pending
+            && !draft
             && !self.is_local()
             && !n.system
             && self.review.ready().is_some_and(|r| r.mr.state != "locked"))
@@ -455,6 +461,22 @@ impl GitLabView {
             (a, None) => a,
             (None, Some(o)) => Some(o.ml_1()),
             (Some(a), Some(o)) => Some(a.child(o)),
+        };
+        // A comment of your review not yet submitted: GitLab's "Pending".
+        let actions = if draft {
+            let tag = badge("Pending", ca(0xc17d1033), c(ORANGE));
+            Some(match actions {
+                Some(a) => div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .ml_1()
+                    .child(tag)
+                    .child(a.ml_0()),
+                None => div().flex().items_center().ml_1().child(tag),
+            })
+        } else {
+            actions
         };
         let editing = self.editing_note == Some(n.id);
         let body = if editing {

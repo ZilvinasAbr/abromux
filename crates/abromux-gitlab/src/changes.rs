@@ -1996,7 +1996,11 @@ impl GitLabView {
                     .when_some(
                         d.position()
                             .map(|p| (fi, p.old_line, p.new_line))
-                            .filter(|k| self.me.is_some() && self.commenting != Some(*k)),
+                            .filter(|k| {
+                                self.me.is_some()
+                                    && self.commenting != Some(*k)
+                                    && !d.id.starts_with("optimistic-draft-")
+                            }),
                         |el, key| {
                             el.child(
                                 div()
