@@ -350,7 +350,10 @@ pub(crate) fn commit_author(r: &Review, cm: &crate::types::Commit) -> User {
 /// A title without its draft marker, as "Mark as ready" leaves it.
 /// A title change's old and new titles, each as pieces with whether
 /// GitLab marked them added, removed (or neither), from its HTML body.
-fn title_change(body: &str) -> Option<(Vec<(String, Option<bool>)>, Vec<(String, Option<bool>)>)> {
+/// Text pieces, each marked added (Some(true)), removed, or neither.
+type Marked = Vec<(String, Option<bool>)>;
+
+fn title_change(body: &str) -> Option<(Marked, Marked)> {
     let b = body
         .trim()
         .trim_start_matches("<p>")
