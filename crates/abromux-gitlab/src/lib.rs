@@ -29,6 +29,7 @@ mod mention;
 mod mr;
 mod optimistic;
 mod projects;
+mod reports;
 pub mod review;
 mod search;
 mod select;
@@ -199,6 +200,8 @@ pub enum Section {
     Changes,
     Commits,
     Pipelines,
+    /// The head pipeline's test and Code Quality reports.
+    Reports,
 }
 
 impl Section {
@@ -216,6 +219,7 @@ impl Section {
             Some("diffs") => Section::Changes,
             Some("commits") => Section::Commits,
             Some("pipelines") => Section::Pipelines,
+            Some("reports") => Section::Reports,
             _ => Section::Overview,
         }
     }
@@ -477,6 +481,29 @@ fn load_rest(
         .map(|rv| (rv.user.id, rv.state))
         .collect();
     r.pipelines = c.pipelines(project, iid).unwrap_or_default();
+    // The head pipeline's reports, once it has finished (GitLab's widgets).
+    if let Some(p) =
+        r.mr.head_pipeline
+            .as_ref()
+            .filter(|p| !crate::edit::pipeline_active(&p.status))
+    {
+        let full =
+            r.mr.references
+                .full
+                .split('!')
+                .next()
+                .unwrap_or_default()
+                .to_string();
+        let (tests, quality) = std::thread::scope(|s| {
+            let q = s.spawn(|| c.code_quality(&full, iid).ok().flatten());
+            let t = c
+                .test_report(project, p.id)
+                .ok()
+                .filter(|t| t.total_count > 0);
+            (t, q.join().ok().flatten())
+        });
+        r.reports = types::Reports { tests, quality };
+    }
     if let Some(sha) =
         r.mr.merge_commit_sha
             .clone()

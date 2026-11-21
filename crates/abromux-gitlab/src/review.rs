@@ -55,6 +55,8 @@ pub struct Review {
     pub closes: Vec<Issue>,
     /// Your review's pending comments.
     pub drafts: Vec<DraftNote>,
+    /// The head pipeline's test and Code Quality reports.
+    pub reports: crate::types::Reports,
     /// Your pending to-dos on it, by id (the header's to-do button).
     pub todos: Vec<u64>,
     /// Several assignees, several reviewers (GitLab's paid tiers), or one.
@@ -227,6 +229,7 @@ impl Review {
             closes: vec![],
             drafts: vec![],
             todos: vec![],
+            reports: Default::default(),
             multiple: (true, true),
             stack: vec![],
         }

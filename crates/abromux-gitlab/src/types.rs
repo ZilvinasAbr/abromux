@@ -687,3 +687,77 @@ pub struct Todo {
 pub struct TodoTarget {
     pub iid: u64,
 }
+
+/// A pipeline's test report (`/pipelines/:id/test_report`): GitLab's
+/// "Test summary".
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TestReport {
+    pub total_time: f64,
+    pub total_count: u32,
+    pub success_count: u32,
+    pub failed_count: u32,
+    pub skipped_count: u32,
+    pub error_count: u32,
+    pub test_suites: Vec<TestSuite>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TestSuite {
+    pub name: String,
+    pub total_time: f64,
+    pub total_count: u32,
+    pub success_count: u32,
+    pub failed_count: u32,
+    pub skipped_count: u32,
+    pub error_count: u32,
+    pub suite_error: Option<String>,
+    pub test_cases: Vec<TestCase>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TestCase {
+    /// success, failed, skipped, error
+    pub status: String,
+    pub name: String,
+    pub classname: String,
+    pub execution_time: f64,
+    pub file: Option<String>,
+    pub system_output: Option<String>,
+    pub stack_trace: Option<String>,
+}
+
+/// One Code Quality finding of the merge request's head against its base.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Finding {
+    pub description: String,
+    /// BLOCKER, CRITICAL, MAJOR, MINOR, INFO
+    pub severity: String,
+    pub file_path: String,
+    pub line: Option<u32>,
+}
+
+/// The merge request's Code Quality comparison: what it adds and fixes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Quality {
+    pub new: Vec<Finding>,
+    pub resolved: Vec<Finding>,
+}
+
+/// The head pipeline's reports, as GitLab's report widgets and Reports
+/// tab show them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Reports {
+    pub tests: Option<TestReport>,
+    pub quality: Option<Quality>,
+}
+
+impl Reports {
+    /// How many reports there are, for the Reports tab's count.
+    pub fn count(&self) -> usize {
+        self.tests.iter().filter(|t| t.total_count > 0).count() + self.quality.iter().count()
+    }
+}

@@ -199,6 +199,8 @@ pub struct GitLabView {
     pub(crate) boxes: crate::edit::Boxes,
     /// actions.rs: suggestions' batch, the Code menu, merge messages, revert.
     pub(crate) more: crate::actions::More,
+    /// reports.rs: the report widgets opened, the report picked.
+    pub(crate) reports: crate::reports::ReportsState,
     /// create.rs: "New merge request".
     pub(crate) new_mr: crate::create::NewMr,
     pub(crate) busy: Option<crate::edit::Write>,
@@ -321,6 +323,7 @@ impl GitLabView {
         let mut v = Self {
             boxes,
             more,
+            reports: Default::default(),
             new_mr,
             busy: None,
             writes: Default::default(),
@@ -1440,6 +1443,7 @@ impl GitLabView {
                 Section::Overview => r.mr.web_url.clone(),
                 Section::Commits => format!("{}/commits", r.mr.web_url),
                 Section::Pipelines => format!("{}/pipelines", r.mr.web_url),
+                Section::Reports => format!("{}/reports", r.mr.web_url),
                 Section::Changes => format!("{}/diffs", r.mr.web_url),
             },
             _ => format!("{}/dashboard/merge_requests", self.host()),
@@ -1542,7 +1546,7 @@ impl GitLabView {
             .clone())
     }
 
-    fn file_index(&self, path: &str) -> anyhow::Result<usize> {
+    pub(crate) fn file_index(&self, path: &str) -> anyhow::Result<usize> {
         let r = self.shown().context("no merge request loaded")?;
         r.files
             .iter()
@@ -2209,6 +2213,23 @@ impl Tab for GitLabView {
                     .map(std::path::PathBuf::from)
                     .collect();
                 self.upload_files(b, paths, window, cx);
+            }
+            // The report widgets and the Reports tab: `{"pick": "tests", "quality_open": true, "tests_open": true}`.
+            "reports" => {
+                if let Some(p) = str_arg("pick") {
+                    self.reports.pick = if p == "tests" {
+                        crate::reports::Pick::Tests
+                    } else {
+                        crate::reports::Pick::Quality
+                    };
+                }
+                if let Some(o) = args.get("quality_open").and_then(Value::as_bool) {
+                    self.reports.quality_open = o;
+                }
+                if let Some(o) = args.get("tests_open").and_then(Value::as_bool) {
+                    self.reports.tests_open = o;
+                }
+                self.rebuild_rows(cx);
             }
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
@@ -3118,6 +3139,7 @@ impl GitLabView {
             Section::Changes => self.changes_page(&r, cx),
             Section::Commits => self.commits_page(&r, cx),
             Section::Pipelines => self.pipelines_page(&r, cx),
+            Section::Reports => self.reports_page(&r, cx),
         };
         div()
             .size_full()

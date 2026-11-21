@@ -412,6 +412,7 @@ impl GitLabView {
             ),
             (Section::Commits, "Commits", r.commits.len()),
             (Section::Pipelines, "Pipelines", r.pipelines.len()),
+            (Section::Reports, "Reports", r.reports.count()),
             // What the Changes tab shows: a commit or a version's files, as GitLab counts them.
             (
                 Section::Changes,
@@ -422,7 +423,7 @@ impl GitLabView {
         // A local diff has no pipelines.
         let sections = sections
             .into_iter()
-            .filter(|(s, ..)| !(local && *s == Section::Pipelines));
+            .filter(|(s, ..)| !(local && matches!(*s, Section::Pipelines | Section::Reports)));
         let tabs = sections.map(|(s, label, n)| {
             let on = self.loc.section == s;
             div()
@@ -446,7 +447,7 @@ impl GitLabView {
         let top = match self.loc.section {
             Section::Changes => Some(self.diff_list.logical_scroll_top()),
             Section::Overview => Some(self.overview_list.logical_scroll_top()),
-            Section::Commits | Section::Pipelines => None,
+            Section::Commits | Section::Pipelines | Section::Reports => None,
         };
         if top.is_some_and(|t| t.item_ix > 0 || t.offset_in_item > px(0.)) {
             return div()
@@ -1220,7 +1221,14 @@ impl GitLabView {
             "merged" | "closed" => self.outcome(r, mono).children(self.pick_buttons(r, cx)),
             _ => merge,
         };
-        div().flex().flex_col().gap_3().child(approval).child(merge)
+        let reports = self.report_widgets(r, cx);
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(approval)
+            .children(reports)
+            .child(merge)
     }
 
     /// The widget of a merge request that's done: who merged or closed it,
