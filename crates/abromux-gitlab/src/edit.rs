@@ -828,6 +828,7 @@ impl GitLabView {
     /// ticks. It waits for GitLab ("Merging…"): a merge can be refused.
     pub(crate) fn merge(&mut self, auto: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(r) = self.review.ready() else { return };
+        let trains = r.premium.trains_enabled;
         let opts = crate::api::MergeOptions {
             squash: self.merge_squash(r),
             remove_source_branch: self.merge_remove(r),
@@ -839,7 +840,13 @@ impl GitLabView {
         self.write(
             Write::Merge,
             None,
-            move |c, p, iid| c.merge(p, iid, &opts).map(|_| ()),
+            move |c, p, iid| {
+                if trains {
+                    c.add_to_train(p, iid, opts.auto, opts.sha.as_deref(), opts.squash)
+                } else {
+                    c.merge(p, iid, &opts).map(|_| ())
+                }
+            },
             |_, _, _| {},
             window,
             cx,
@@ -1127,6 +1134,7 @@ impl GitLabView {
         let menu = self.mr_menu.then(|| {
             let draft = m.draft;
             let locked = m.discussion_locked.unwrap_or(false);
+            let web = m.web_url.clone();
             let open = m.state == "opened";
             let reference = m.references.full.clone();
             let items = div()
@@ -1178,6 +1186,18 @@ impl GitLabView {
                         )
                         .on_click(
                             cx.listener(move |v, _, window, cx| v.set_locked(!locked, window, cx)),
+                        ),
+                    )
+                })
+                // GitLab has no API for abuse reports: its own form, on its page.
+                .when(!web.is_empty(), |d| {
+                    d.child(
+                        item("gl-mr-report-abuse", "Report abuse".into(), false).on_click(
+                            cx.listener(move |v, _, window, cx| {
+                                v.mr_menu = false;
+                                abromux_plugin::open_url(&web, window, cx);
+                                cx.notify();
+                            }),
                         ),
                     )
                 })

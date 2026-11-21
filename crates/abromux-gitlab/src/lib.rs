@@ -28,6 +28,7 @@ pub mod local;
 mod mention;
 mod mr;
 mod optimistic;
+mod premium;
 mod projects;
 mod reports;
 pub mod review;
@@ -379,6 +380,10 @@ pub fn load_review(c: &api::Client, project: u64, iid: u64) -> anyhow::Result<re
             first_page(&mrp("/resource_label_events")),
             first_page(&mrp("/resource_milestone_events")),
             api::todos_path(project),
+            // A paid GitLab's: 404 on a free one, in the same round trip.
+            mrp("/approval_state"),
+            mrp("/blocks"),
+            api::project_path(project),
         ]);
         (
             multiple.join().ok().and_then(Result::ok),
@@ -481,6 +486,24 @@ fn load_rest(
         .map(|rv| (rv.user.id, rv.state))
         .collect();
     r.pipelines = c.pipelines(project, iid).unwrap_or_default();
+    // A paid GitLab's approval rules, merge train and dependencies: all
+    // answer 404 on a free one, and stay empty.
+    r.premium = std::thread::scope(|s| {
+        let rules = s.spawn(|| c.approval_state(project, iid).ok().flatten());
+        let blocks = s.spawn(|| c.blocks(project, iid).unwrap_or_default());
+        let trains = c.merge_trains_enabled(project).unwrap_or(false);
+        let train = if trains {
+            c.train_entry(project, iid).ok().flatten()
+        } else {
+            None
+        };
+        types::Premium {
+            rules: rules.join().ok().flatten(),
+            trains_enabled: trains,
+            train,
+            blocks: blocks.join().unwrap_or_default(),
+        }
+    });
     // The head pipeline's reports, once it has finished (GitLab's widgets).
     if let Some(p) =
         r.mr.head_pipeline

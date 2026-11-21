@@ -1049,7 +1049,11 @@ impl GitLabView {
                 let (label, live) = crate::edit::busy_label(
                     self.busy,
                     crate::edit::Write::Merge,
-                    if auto { "Set to auto-merge" } else { "Merge" },
+                    match (auto, r.premium.trains_enabled) {
+                        (true, _) => "Set to auto-merge",
+                        (false, true) => "Add to merge train",
+                        (false, false) => "Merge",
+                    },
                     if auto { "Setting…" } else { "Merging…" },
                 );
                 div()
@@ -1087,7 +1091,8 @@ impl GitLabView {
                     .child(self.merge_message_editor(r, squash, cx))
             });
         // Set to auto-merge: who did, and GitLab's Cancel auto-merge.
-        let auto_line = (auto_set && r.mr.state == "opened").then(|| {
+        let train = self.train_status(r, cx);
+        let auto_line = (auto_set && r.mr.state == "opened" && train.is_none()).then(|| {
             let who =
                 r.mr.merge_user
                     .as_ref()
@@ -1129,6 +1134,7 @@ impl GitLabView {
             .rounded(px(12.))
             .bg(c(RAISED))
             .text_color(c(TEXT))
+            .children(train)
             .children(auto_line)
             .when(!auto_set, |d| {
                 d.child(
@@ -1222,12 +1228,22 @@ impl GitLabView {
             _ => merge,
         };
         let reports = self.report_widgets(r, cx);
+        let deps = self.dependencies(r, cx);
+        // Premium's approval rules under the approval line.
+        let approval = div()
+            .flex()
+            .flex_col()
+            .rounded(px(12.))
+            .bg(c(RAISED))
+            .child(approval)
+            .children(self.approval_rules(r));
         div()
             .flex()
             .flex_col()
             .gap_3()
             .child(approval)
             .children(reports)
+            .children(deps)
             .child(merge)
     }
 

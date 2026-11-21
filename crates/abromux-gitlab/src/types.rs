@@ -766,3 +766,59 @@ impl Reports {
         self.tests.iter().filter(|t| t.total_count > 0).count() + self.quality.iter().count()
     }
 }
+
+/// Premium's approval rules (`/merge_requests/:iid/approval_state`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ApprovalState {
+    pub approval_rules_overwritten: bool,
+    pub rules: Vec<ApprovalRule>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ApprovalRule {
+    pub id: u64,
+    pub name: String,
+    /// regular, code_owner, report_approver, any_approver
+    pub rule_type: String,
+    pub approvals_required: u32,
+    #[serde(deserialize_with = "null_as_empty")]
+    pub eligible_approvers: Vec<User>,
+    #[serde(deserialize_with = "null_as_empty")]
+    pub approved_by: Vec<User>,
+    pub approved: bool,
+}
+
+/// Premium's merge train entry of a merge request
+/// (`/merge_trains/merge_requests/:iid`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TrainEntry {
+    pub id: u64,
+    /// idle, fresh, stale (on the train); merging, merged, skip_merged
+    pub status: String,
+    pub user: Option<User>,
+    pub pipeline: Option<Pipeline>,
+    pub target_branch: String,
+    pub created_at: String,
+}
+
+/// Premium's merge request dependency (`/merge_requests/:iid/blocks`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Block {
+    pub id: u64,
+    /// None when you can't see it.
+    pub blocking_merge_request: Option<MergeRequest>,
+}
+
+/// What a paid GitLab adds to the merge request, where the server has it
+/// (a free GitLab answers 404, and these stay empty).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Premium {
+    pub rules: Option<ApprovalState>,
+    pub trains_enabled: bool,
+    pub train: Option<TrainEntry>,
+    pub blocks: Vec<Block>,
+}

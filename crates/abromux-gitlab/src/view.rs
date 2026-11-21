@@ -2254,6 +2254,18 @@ impl Tab for GitLabView {
                     self.send_line_comment(draft, window, cx);
                 }
             }
+            "dependency" => {
+                if let Some(t) = str_arg("add") {
+                    let t = t.to_string();
+                    self.more
+                        .dependency
+                        .update(cx, |b, cx| b.set_value(t, window, cx));
+                    self.add_dependency(window, cx);
+                }
+                if let Some(id) = num_arg("remove") {
+                    self.remove_dependency(id, window, cx);
+                }
+            }
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);

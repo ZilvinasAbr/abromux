@@ -66,6 +66,8 @@ pub struct More {
     /// and badges.
     pub image_bounds:
         std::rc::Rc<std::cell::RefCell<std::collections::HashMap<usize, Bounds<Pixels>>>>,
+    /// The "Add dependency" field (Premium).
+    pub dependency: Entity<InputState>,
     /// "Show whitespace changes" turned off.
     pub hide_whitespace: bool,
     /// Boxes showing their Preview instead of the text.
@@ -101,6 +103,7 @@ impl More {
             picked: None,
             previewing: Default::default(),
             hide_whitespace: false,
+            dependency: crate::premium::dependency_field(window, cx),
             image_point: None,
             image_bounds: Default::default(),
             start_thread: false,
@@ -135,8 +138,9 @@ impl More {
         Some(b.read(cx).value().to_string()).filter(|m| !m.trim().is_empty())
     }
 
-    pub fn fields(&self) -> [&Entity<InputState>; 8] {
+    pub fn fields(&self) -> [&Entity<InputState>; 9] {
         [
+            &self.dependency,
             &self.edit_target,
             &self.time_spent,
             &self.time_summary,

@@ -1100,6 +1100,78 @@ impl Client {
         }))
     }
 
+    /// Premium's approval rules; None on a GitLab without them (404).
+    pub fn approval_state(&self, project: u64, iid: u64) -> anyhow::Result<Option<ApprovalState>> {
+        absent_on_404(self.get(&format!(
+            "projects/{project}/merge_requests/{iid}/approval_state"
+        )))
+    }
+
+    /// Whether the project runs merge trains (a paid GitLab's setting).
+    pub fn merge_trains_enabled(&self, project: u64) -> anyhow::Result<bool> {
+        let p: serde_json::Value = self.get(&project_path(project))?;
+        Ok(p["merge_trains_enabled"].as_bool().unwrap_or(false))
+    }
+
+    /// The merge request's place on its merge train, if it's on one.
+    pub fn train_entry(&self, project: u64, iid: u64) -> anyhow::Result<Option<TrainEntry>> {
+        absent_on_404(self.get(&format!(
+            "projects/{project}/merge_trains/merge_requests/{iid}"
+        )))
+    }
+
+    /// Put it on the merge train ("Add to merge train"; with `auto`, once
+    /// its checks pass), at head `sha`.
+    pub fn add_to_train(
+        &self,
+        project: u64,
+        iid: u64,
+        auto: bool,
+        sha: Option<&str>,
+        squash: bool,
+    ) -> anyhow::Result<()> {
+        let mut body = serde_json::json!({ "auto_merge": auto, "squash": squash });
+        if let Some(s) = sha {
+            body["sha"] = s.into();
+        }
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_trains/merge_requests/{iid}"),
+            body,
+        )?;
+        Ok(())
+    }
+
+    /// The merge requests this one depends on (Premium); empty without.
+    pub fn blocks(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Block>> {
+        Ok(
+            absent_on_404(self.get(&format!("projects/{project}/merge_requests/{iid}/blocks")))?
+                .unwrap_or_default(),
+        )
+    }
+
+    /// Make it depend on `!blocking` of the same project.
+    pub fn add_block(&self, project: u64, iid: u64, blocking: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!(
+                "projects/{project}/merge_requests/{iid}/blocks?blocking_merge_request_iid={blocking}"
+            ),
+            serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
+    /// Drop dependency `block`.
+    pub fn remove_block(&self, project: u64, iid: u64, block: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "DELETE",
+            &format!("projects/{project}/merge_requests/{iid}/blocks/{block}"),
+            serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
     /// Delete the merge request (owners and admins only).
     pub fn delete_mr(&self, project: u64, iid: u64) -> anyhow::Result<()> {
         let _: serde_json::Value = self.write(
@@ -1820,6 +1892,15 @@ pub struct LinePoint {
 pub struct LineRange {
     pub start: LinePoint,
     pub end: LinePoint,
+}
+
+/// A paid GitLab's endpoint, on a free one: a 404 means "not here".
+fn absent_on_404<T>(got: anyhow::Result<T>) -> anyhow::Result<Option<T>> {
+    match got {
+        Ok(v) => Ok(Some(v)),
+        Err(e) if ApiError::status_of(&e) == Some(404) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// GitLab's code for a diff line: `sha1(path)_old_new`.
