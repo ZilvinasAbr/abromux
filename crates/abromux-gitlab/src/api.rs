@@ -992,6 +992,39 @@ impl Client {
         Ok(())
     }
 
+    /// Open a merge request as GitLab's "New merge request" form does.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_mr_with(
+        &self,
+        project: u64,
+        source: &str,
+        target: &str,
+        title: &str,
+        description: &str,
+        remove_source_branch: bool,
+        squash: bool,
+    ) -> anyhow::Result<MergeRequest> {
+        self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests"),
+            serde_json::json!({
+                "source_branch": source,
+                "target_branch": target,
+                "title": title,
+                "description": description,
+                "remove_source_branch": remove_source_branch,
+                "squash": squash,
+            }),
+        )
+        .map_err(|e| match ApiError::status_of(&e) {
+            Some(409) => e.context("there's already an open merge request for this source branch"),
+            Some(404 | 422) => {
+                e.context("GitLab didn't take it: check both branches exist and differ")
+            }
+            _ => e,
+        })
+    }
+
     /// Delete the merge request (owners and admins only).
     pub fn delete_mr(&self, project: u64, iid: u64) -> anyhow::Result<()> {
         let _: serde_json::Value = self.write(

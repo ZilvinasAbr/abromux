@@ -151,6 +151,7 @@ impl GitLabView {
         self.more
             .fields()
             .iter()
+            .chain(self.new_mr.fields().iter())
             .any(|b| b.read(cx).focus_handle(cx).is_focused(window))
     }
 

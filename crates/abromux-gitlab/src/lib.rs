@@ -16,6 +16,7 @@ mod avatars;
 pub mod cache;
 mod changes;
 mod compose;
+mod create;
 pub mod diff;
 mod discussion;
 mod edit;

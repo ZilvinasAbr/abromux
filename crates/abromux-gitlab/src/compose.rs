@@ -19,6 +19,8 @@ pub enum MdBox {
     Line,
     Note,
     Description,
+    /// A new merge request's description.
+    NewMr,
 }
 
 impl MdBox {
@@ -132,6 +134,7 @@ impl GitLabView {
             MdBox::Line => self.boxes.line.clone(),
             MdBox::Note => self.boxes.note.clone(),
             MdBox::Description => self.boxes.description.clone(),
+            MdBox::NewMr => self.new_mr.description.clone(),
         }
     }
 

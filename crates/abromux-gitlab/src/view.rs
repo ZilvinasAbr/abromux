@@ -199,6 +199,8 @@ pub struct GitLabView {
     pub(crate) boxes: crate::edit::Boxes,
     /// actions.rs: suggestions' batch, the Code menu, merge messages, revert.
     pub(crate) more: crate::actions::More,
+    /// create.rs: "New merge request".
+    pub(crate) new_mr: crate::create::NewMr,
     pub(crate) busy: Option<crate::edit::Write>,
     pub(crate) writes: crate::edit::Writes,
     /// The Overview's "Add reaction" picker is open.
@@ -264,6 +266,11 @@ impl GitLabView {
             .detach();
         let boxes = crate::edit::Boxes::new(window, cx);
         let more = crate::actions::More::new(window, cx);
+        let new_mr = crate::create::NewMr::new(window, cx);
+        for b in [new_mr.source.clone(), new_mr.target.clone()] {
+            cx.subscribe(&b, |_, _, _: &InputEvent, cx| cx.notify())
+                .detach();
+        }
         use crate::mention::Field;
         for (b, field) in [
             (&boxes.comment, Field::Comment),
@@ -314,6 +321,7 @@ impl GitLabView {
         let mut v = Self {
             boxes,
             more,
+            new_mr,
             busy: None,
             writes: Default::default(),
             emoji_picker: None,
@@ -2128,6 +2136,29 @@ impl Tab for GitLabView {
                     .unwrap_or(false);
                 self.save_time(estimate, window, cx);
             }
+            // `{"source": "b", "target": "main", "title": "…", "create": true}`
+            "new_mr" => {
+                if self.new_mr.project.is_none() {
+                    self.open_new_mr(window, cx);
+                }
+                for (k, e) in [
+                    ("source", self.new_mr.source.clone()),
+                    ("target", self.new_mr.target.clone()),
+                    ("title", self.new_mr.title.clone()),
+                    ("description", self.new_mr.description.clone()),
+                ] {
+                    if let Some(t) = str_arg(k) {
+                        let t = t.to_string();
+                        e.update(cx, |b, cx| b.set_value(t, window, cx));
+                    }
+                }
+                if let Some(d) = args.get("draft").and_then(Value::as_bool) {
+                    self.new_mr.draft = d;
+                }
+                if args.get("create").and_then(Value::as_bool) == Some(true) {
+                    self.create_mr(window, cx);
+                }
+            }
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);
@@ -2577,7 +2608,7 @@ impl GitLabView {
         )
     }
 
-    fn list_page(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn list_page(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let mono = self.mono(cx);
         let scopes = [
             (ListScope::ToReview, "Reviews"),
@@ -2959,10 +2990,11 @@ impl GitLabView {
                                 .cleanable(true),
                         ),
                     )
-                    .when(!projects, |d| d.child(self.sort_control(cx))),
+                    .when(!projects, |d| d.child(self.sort_control(cx)))
+                    .children(self.new_mr_button(cx)),
             )
             // GitLab's filter tokens, a click puts one in the search.
-            .when(!projects, |d| {
+            .when(!projects && self.new_mr.project.is_none(), |d| {
                 d.child(
                     div()
                         .px_4()
@@ -3015,7 +3047,10 @@ impl GitLabView {
                     .px_4()
                     .overflow_y_scroll()
                     .children(status)
-                    .children(rows.unwrap_or_default()),
+                    .children(match self.new_mr_form(window, cx) {
+                        Some(f) => vec![f.into_any_element()],
+                        None => rows.unwrap_or_default(),
+                    }),
             )
             .into_any_element()
     }
@@ -3055,7 +3090,7 @@ impl Render for GitLabView {
         } else if self.in_mr() {
             self.mr_page(window, cx)
         } else {
-            self.list_page(cx)
+            self.list_page(window, cx)
         };
         // Measure the tab; a change of width redraws it with the right layout.
         let width = self.width.clone();
