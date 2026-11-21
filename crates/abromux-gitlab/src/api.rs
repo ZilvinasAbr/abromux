@@ -678,6 +678,10 @@ impl Client {
         if let Some(n) = new_line {
             position["new_line"] = n.into();
         }
+        // On no line: GitLab's "Comment on this file".
+        if old_line.is_none() && new_line.is_none() {
+            position["position_type"] = "file".into();
+        }
         let path = format!("projects/{project}/merge_requests/{iid}/draft_notes");
         self.write(
             "POST",
@@ -755,6 +759,10 @@ impl Client {
         }
         if let Some(n) = new_line {
             position["new_line"] = n.into();
+        }
+        // On no line: GitLab's "Comment on this file".
+        if old_line.is_none() && new_line.is_none() {
+            position["position_type"] = "file".into();
         }
         let path = format!("projects/{project}/merge_requests/{iid}/discussions");
         self.write(

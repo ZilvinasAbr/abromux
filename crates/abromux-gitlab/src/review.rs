@@ -164,6 +164,10 @@ impl File {
     }
 }
 
+/// The hunk index of a thread on a whole file (GitLab's "Comment on this
+/// file"): drawn under the file's header, on no line.
+pub const FILE_THREAD: usize = usize::MAX;
+
 impl Review {
     pub fn build(
         mr: MergeRequest,
@@ -190,6 +194,7 @@ impl Review {
                 continue;
             };
             match files.iter_mut().find(|f| f.holds(&pos)) {
+                Some(f) if pos.position_type == "file" => f.threads.push((FILE_THREAD, 0, d)),
                 Some(f) => match f.find(&pos) {
                     Some((h, l)) => f.threads.push((h, l, d)),
                     None => f.outdated.push(d),

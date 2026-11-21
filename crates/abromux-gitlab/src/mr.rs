@@ -1952,7 +1952,9 @@ impl GitLabView {
                         )
                     }),
             );
-            if let Some((f, h, l)) = at {
+            if let Some((f, h, l)) =
+                at.filter(|(f, h, l)| f.body().hunks().get(*h).is_some_and(|x| *l < x.lines.len()))
+            {
                 // Up to 16 lines of the hunk, ending at the thread's line.
                 let lines = &f.body().hunks()[h].lines;
                 let start = (l + 1).saturating_sub(16);

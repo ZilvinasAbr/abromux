@@ -888,15 +888,15 @@ pub fn place_drafts(r: &mut Review, me: &crate::types::User) {
             r.general.push(thread(note));
             continue;
         }
-        let placed = d
-            .position
-            .as_ref()
-            .filter(|p| p.position_type != "file")
-            .and_then(|p| {
-                let f = r.files.iter_mut().find(|f| f.holds(p))?;
-                let (h, l) = f.find(p)?;
-                Some((f, h, l))
-            });
+        let placed = d.position.as_ref().and_then(|p| {
+            let f = r.files.iter_mut().find(|f| f.holds(p))?;
+            let (h, l) = if p.position_type == "file" {
+                (crate::review::FILE_THREAD, 0)
+            } else {
+                f.find(p)?
+            };
+            Some((f, h, l))
+        });
         match placed {
             Some((f, h, l)) => {
                 let at = f
@@ -1683,6 +1683,10 @@ pub fn hide_whitespace(r: &mut Review) {
                 f.outdated.push(d);
                 continue;
             };
+            if p.position_type == "file" {
+                f.threads.push((crate::review::FILE_THREAD, 0, d));
+                continue;
+            }
             let at = f.find(&p).or_else(|| {
                 // A removed or added line that's unchanged now.
                 f.body().hunks().iter().enumerate().find_map(|(hi, h)| {

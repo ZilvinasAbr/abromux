@@ -220,12 +220,22 @@ impl Patch {
                     head_sha: refs.head_sha,
                     old_path: Some(f.meta.old_path.clone()),
                     new_path: Some(f.meta.new_path.clone()),
-                    position_type: "text".into(),
+                    position_type: if old.is_none() && new.is_none() {
+                        "file"
+                    } else {
+                        "text"
+                    }
+                    .into(),
                     old_line: *old,
                     new_line: *new,
                     line_range: None,
                 };
-                let Some((h, l)) = f.find(&pos) else { return };
+                let found = if pos.position_type == "file" {
+                    Some((crate::review::FILE_THREAD, 0))
+                } else {
+                    f.find(&pos)
+                };
+                let Some((h, l)) = found else { return };
                 let mut first = note(body, Some("DiffNote"), true);
                 first.position = Some(pos);
                 let d = Discussion {

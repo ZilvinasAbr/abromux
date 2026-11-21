@@ -2163,6 +2163,19 @@ impl Tab for GitLabView {
                 let show = args.get("show").and_then(Value::as_bool).unwrap_or(true);
                 self.set_whitespace(!show, cx);
             }
+            // GitLab's "Comment on this file": `{"path": "a.rs", "body": "…", "review": false}`
+            "file_comment" => {
+                let fi = self.file_index(str_arg("path").context("missing path")?)?;
+                self.open_line_comment((fi, None, None), window, cx);
+                if let Some(body) = str_arg("body") {
+                    let body = body.to_string();
+                    self.boxes
+                        .line
+                        .update(cx, |b, cx| b.set_value(body, window, cx));
+                    let draft = args.get("review").and_then(Value::as_bool) == Some(true);
+                    self.send_line_comment(draft, window, cx);
+                }
+            }
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);

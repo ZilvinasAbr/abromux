@@ -722,7 +722,12 @@ impl GitLabView {
                     head_sha: refs.head_sha.clone(),
                     old_path: Some(old_path.clone()),
                     new_path: Some(new_path.clone()),
-                    position_type: "text".into(),
+                    position_type: if old.is_none() && new.is_none() {
+                        "file"
+                    } else {
+                        "text"
+                    }
+                    .into(),
                     old_line: old,
                     new_line: new,
                     line_range: None,

@@ -188,6 +188,17 @@ pub fn rows(r: &Review, s: &Shape) -> Vec<Row> {
     for (fi, f) in r.files.iter().enumerate() {
         out.push(Row::File(fi));
         if !(s.folded)(f) {
+            // Threads on the whole file, and the one being written.
+            for (ti, (h, _, _)) in f.threads.iter().enumerate() {
+                if *h == crate::review::FILE_THREAD
+                    && (s.open)(&f.threads[ti].2.id) | !f.threads[ti].2.resolved()
+                {
+                    out.push(Row::Thread(fi, ti));
+                }
+            }
+            if s.draft == Some((fi, None, None)) {
+                out.push(Row::Draft(fi));
+            }
             match f.body() {
                 Body::Text(hunks) => {
                     // Unchanged lines can only come from the new file's text.
@@ -225,7 +236,9 @@ pub fn rows(r: &Review, s: &Shape) -> Vec<Row> {
                         // The new-thread form goes after its line's threads.
                         let draft_on = |li: usize| {
                             let l = &h.lines[li];
-                            s.draft == Some((fi, l.old, l.new))
+                            // A file comment (no line) is drawn under the header.
+                            (l.old.is_some() || l.new.is_some())
+                                && s.draft == Some((fi, l.old, l.new))
                         };
                         if s.parallel {
                             for (l, r) in crate::diff::pairs(&h.lines) {
@@ -2276,6 +2289,26 @@ impl GitLabView {
                         .child(f.threads.len().to_string()),
                 )
             })
+            // GitLab's "Comment on this file", on the latest version.
+            .when(
+                self.me.is_some()
+                    && self.loc.iid.is_some()
+                    && self.compare == crate::Compare::default(),
+                |d| {
+                    d.child(
+                        crate::edit::icon_button(
+                            SharedString::from(format!("file-comment-{fi}")),
+                            icon("comment-lines", 15., c(TEXT)),
+                            "Comment on this file",
+                        )
+                        .ml_1()
+                        .on_click(cx.listener(move |v, _, window, cx| {
+                            cx.stop_propagation();
+                            v.open_line_comment((fi, None, None), window, cx)
+                        })),
+                    )
+                },
+            )
             // GitLab's "View file @ <sha>", from the header's menu.
             .when_some(self.blob_url(f), |d, (url, short)| {
                 let tip: SharedString = format!("View file @ {short}").into();
