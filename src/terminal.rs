@@ -599,6 +599,11 @@ impl TerminalView {
         }
     }
 
+    /// The shell's pid, while it runs.
+    pub fn shell_pid(&self) -> Option<u32> {
+        self.pty.pid()
+    }
+
     /// A Claude Code session is open here, working or not.
     pub fn has_claude(&self) -> bool {
         self.agent

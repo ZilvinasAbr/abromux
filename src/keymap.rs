@@ -91,6 +91,8 @@ pub const ACTIONS: &[Act] = {
         "newTerminal", Some("New Terminal Tab"), NewTerminal, [(None, ["cmd-t"])];
         "newBrowser", Some("New Browser Tab"), NewBrowser, [(None, ["cmd-shift-l"])];
         "newClaudeChat", Some("New Claude Tab"), NewClaudeChat, [(None, ["cmd-shift-t"])];
+        "toggleClaudeView", Some("Switch Claude Code: Terminal ↔ Claude Tab"), ToggleClaudeView,
+            [(None, ["alt-cmd-y"])];
         "splitRight", Some("Split Right"), SplitRight, [(None, ["cmd-d"])];
         "splitDown", Some("Split Down"), SplitDown, [(None, ["cmd-shift-d"])];
         "renameTab", Some("Rename Tab…"), RenameTab, [(None, ["cmd-r"])];
@@ -234,6 +236,7 @@ pub const LINUX: &[(&str, Keys)] = &[
     ("newTerminal", &[(None, &["ctrl-shift-t"])]),
     ("newBrowser", &[(None, &["ctrl-alt-l"])]),
     ("newClaudeChat", &[(None, &["ctrl-alt-y"])]),
+    ("toggleClaudeView", &[(None, &["ctrl-alt-shift-y"])]),
     ("splitRight", &[(None, &["ctrl-shift-o"])]),
     ("splitDown", &[(None, &["ctrl-shift-e"])]),
     ("renameTab", &[(None, &["ctrl-shift-r"])]),

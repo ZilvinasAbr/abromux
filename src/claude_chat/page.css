@@ -26,6 +26,7 @@
   --hover: rgba(0, 0, 0, 0.045);
   --accent: #d97757;
   --accent-text: #b85a3b;
+  --pick: #5a6fd8;
   --code: rgba(0, 0, 0, 0.05);
   --code-block: #f6f6f4;
   --add: rgba(46, 160, 67, 0.12);
@@ -69,6 +70,7 @@
   --hover: rgba(255, 255, 255, 0.055);
   --accent: #d97757;
   --accent-text: #e5906f;
+  --pick: #8b9cf4;
   --code: rgba(255, 255, 255, 0.075);
   --code-block: #1f1f1f;
   --add: rgba(63, 185, 80, 0.13);
@@ -545,10 +547,9 @@ textarea::placeholder { color: var(--faint); white-space: nowrap; overflow: hidd
   white-space: nowrap;
   flex: none;
 }
+.chip[hidden] { display: none; }
 .chip:hover { background: var(--hover); }
 .chip .sub { color: var(--muted); }
-.chip.icon { width: 28px; padding: 0; justify-content: center; color: var(--muted); }
-.chip.icon:hover { color: var(--text); }
 .chip .chev { transform: rotate(90deg); opacity: 0.6; }
 .chip[data-mode="acceptEdits"] { color: var(--accent-text); }
 .chip[data-mode="plan"] { color: #5b9bd5; }
@@ -688,6 +689,34 @@ textarea::placeholder { color: var(--faint); white-space: nowrap; overflow: hidd
 .menu-pill:hover { background: var(--hover); }
 .menu-pill.on { background: var(--text); color: var(--bg); border-color: transparent; }
 .menu-row.danger > span:first-child { color: var(--danger); }
+
+/* The model menu: models (numbered, the current one ticked), then effort
+   and more models a level down. */
+.model-menu { min-width: 280px; max-height: 420px; padding: 6px; border-radius: 14px; }
+.mm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 15px;
+  text-align: left;
+  color: var(--text);
+}
+.mm-row:hover { background: var(--hover); }
+.mm-name { display: flex; flex-direction: column; min-width: 0; }
+.mm-name small { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mm-tall { padding-top: 7px; padding-bottom: 7px; }
+.mm-right { display: flex; align-items: center; gap: 8px; flex: none; color: var(--muted); }
+.mm-right .chev { width: 12px; height: 12px; opacity: 0.8; }
+.mm-key { font-size: 14px; font-variant-numeric: tabular-nums; min-width: 16px; text-align: center; }
+.mm-check { width: 16px; height: 16px; color: var(--pick); }
+.mm-head .mm-name { flex-direction: row; align-items: center; gap: 4px; color: var(--muted); font-size: 14px; }
+.mm-back { width: 12px; height: 12px; }
+.model-menu .menu-sep { margin: 5px 10px; }
 .menu.sessions { width: min(440px, calc(100vw - 32px)); }
 .menu.sessions .menu-row > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .chip .sub { margin-left: 2px; }
@@ -709,6 +738,6 @@ textarea::placeholder { color: var(--faint); white-space: nowrap; overflow: hidd
   .bar-right { min-width: 0; overflow: hidden; }
 }
 @media (max-width: 300px) {
-  #model, #history, .ctx span { display: none; }
+  #model, .ctx span { display: none; }
   .empty h1 { font-size: 20px; }
 }
