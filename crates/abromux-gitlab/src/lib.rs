@@ -928,6 +928,7 @@ mod tests {
             section: Section::Commits,
             parallel: true,
             viewed: vec!["src/a.rs".into()],
+            per_page: Some(20),
         };
         let v = serde_json::to_value(&loc).unwrap();
         assert_eq!(serde_json::from_value::<Location>(v).unwrap(), loc);
