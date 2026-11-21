@@ -38,6 +38,12 @@ pub fn is_markdown(path: &Path) -> bool {
     })
 }
 
+/// Images, which open in the viewer as they are (from Finder or
+/// `abromux open`), not in the editor.
+pub fn is_image(path: &Path) -> bool {
+    mime(path).is_some_and(|m| m.starts_with("image/"))
+}
+
 pub fn is_markdown_url(url: &str) -> bool {
     url.starts_with(SCHEME) && url[SCHEME.len()..].starts_with(':')
 }
@@ -57,6 +63,15 @@ pub fn url_for(path: &Path) -> String {
         }
     }
     out
+}
+
+/// The URL a tab opens a file at: `url_for`, but an image gets
+/// `?view`, which serves a page showing it on the viewer's background
+/// rather than WebKit's white image page. Plain `url_for` stays the image
+/// itself, for Markdown files that embed it.
+pub fn view_url_for(path: &Path) -> String {
+    let url = url_for(path);
+    if is_image(path) { url + "?view" } else { url }
 }
 
 /// The file a tab URL shows (its path, without query or fragment).
@@ -106,6 +121,9 @@ pub fn respond(req: &Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
             "text/html; charset=utf-8",
             page("Bad address", &message("That isn't a file's address.")).into(),
         ),
+        Some(p) if req.uri().query() == Some("view") && is_image(&p) => {
+            (200, "text/html; charset=utf-8", image_page(&p).into())
+        }
         Some(p) => serve(&p),
     };
     Response::builder()
@@ -451,6 +469,29 @@ fn page(title: &str, body: &str) -> String {
     )
 }
 
+/// A page showing image `path`, centred, no wider than the pane, on the
+/// viewer's background (black in dark mode).
+fn image_page(path: &Path) -> String {
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"{CSP}\">\
+         <meta name=\"color-scheme\" content=\"light dark\">\
+         <title>{}</title><style>{IMAGE_STYLE}</style></head>\
+         <body><img src=\"{}\" alt=\"{}\"></body></html>",
+        esc(&file_name(path)),
+        esc(&url_for(path)),
+        esc(&file_name(path)),
+    )
+}
+
+const IMAGE_STYLE: &str = r#"
+:root { color-scheme: dark; --bg: #000; }
+@media (prefers-color-scheme: light) { :root { color-scheme: light; --bg: #faf9f5; } }
+html, body { margin: 0; min-height: 100%; background: var(--bg); }
+body { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+img { display: block; max-width: 100%; height: auto; }
+"#;
+
 /// GitHub's Markdown look, in the app's colours. The web view follows the
 /// app's appearance (`crate::theme`), so `prefers-color-scheme` picks.
 const STYLE: &str = r#"
@@ -495,6 +536,31 @@ details > summary { cursor: pointer; }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shows_an_image_on_a_page_only_when_viewed() {
+        let png = Path::new("/tmp/a b.png");
+        assert_eq!(
+            view_url_for(png),
+            "abromux-md://localhost/tmp/a%20b.png?view"
+        );
+        assert_eq!(
+            view_url_for(Path::new("/tmp/x.md")),
+            "abromux-md://localhost/tmp/x.md"
+        );
+        let req = |u: &str| Request::builder().uri(u).body(Vec::new()).unwrap();
+        let page = respond(&req("abromux-md://localhost/tmp/a%20b.png?view"));
+        assert!(
+            page.headers()["Content-Type"]
+                .to_str()
+                .unwrap()
+                .starts_with("text/html")
+        );
+        let html = String::from_utf8_lossy(page.body());
+        assert!(html.contains("<img src=\"abromux-md://localhost/tmp/a%20b.png\""));
+        assert!(html.contains("--bg: #000"));
+        assert_eq!(path_of(&view_url_for(png)).as_deref(), Some(png));
+    }
 
     #[test]
     fn exports_a_page_for_other_browsers() {

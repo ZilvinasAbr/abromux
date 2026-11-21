@@ -3049,7 +3049,7 @@ impl AbroMux {
                     path.display()
                 );
                 anyhow::ensure!(path.exists(), "no such file: {}", path.display());
-                let url = crate::markdown::url_for(path);
+                let url = crate::markdown::view_url_for(path);
                 if self.open_in_system_browser(&url, window, cx) {
                     anyhow::bail!(
                         "browser.engine is \"system\": {} opened in the default browser, \
