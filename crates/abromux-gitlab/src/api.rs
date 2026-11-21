@@ -650,9 +650,19 @@ impl Client {
             .as_bytes(),
         )?;
         let v: serde_json::Value = decode(&r.body, &url)?;
-        let errs = v["data"]["createDiscussion"]["errors"].as_array().cloned().unwrap_or_default();
-        if let Some(e) = v["errors"].as_array().and_then(|e| e.first()).or(errs.first()) {
-            anyhow::bail!("GitLab didn't take the internal thread: {}", e["message"].as_str().unwrap_or(&e.to_string()));
+        let errs = v["data"]["createDiscussion"]["errors"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if let Some(e) = v["errors"]
+            .as_array()
+            .and_then(|e| e.first())
+            .or(errs.first())
+        {
+            anyhow::bail!(
+                "GitLab didn't take the internal thread: {}",
+                e["message"].as_str().unwrap_or(&e.to_string())
+            );
         }
         Ok(())
     }
@@ -1213,6 +1223,92 @@ impl Client {
             "DELETE",
             &format!("projects/{project}/merge_requests/{iid}/blocks/{block}"),
             serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
+    /// Whether GitLab Duo's actions are there: an Enterprise GitLab
+    /// (`/metadata`) whose GraphQL schema has `aiAction`'s input.
+    pub fn duo_available(&self) -> anyhow::Result<bool> {
+        let m: serde_json::Value = self.get("metadata")?;
+        if m["enterprise"].as_bool() != Some(true) {
+            return Ok(false);
+        }
+        let v = self.graphql(
+            "{ __type(name: \"AiActionInput\") { name } }",
+            serde_json::json!({}),
+        )?;
+        Ok(v["data"]["__type"]["name"] == "AiActionInput")
+    }
+
+    /// A GraphQL request; GitLab's errors become ours.
+    pub fn graphql(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        let url = format!("{}/api/graphql", self.host);
+        let r = self.transport.send(
+            "POST",
+            &url,
+            &self.token,
+            serde_json::json!({ "query": query, "variables": variables })
+                .to_string()
+                .as_bytes(),
+        )?;
+        let v: serde_json::Value = decode(&r.body, &url)?;
+        if let Some(e) = v["errors"].as_array().and_then(|e| e.first()) {
+            anyhow::bail!(
+                "GitLab: {}",
+                e["message"].as_str().unwrap_or("GraphQL error")
+            );
+        }
+        Ok(v)
+    }
+
+    /// Ask GitLab Duo (`aiAction`, with `input` its action, e.g.
+    /// `{"summarizeReview": {"resourceId": …}}`) and wait for its answer
+    /// (`aiMessages`), as GitLab's page does.
+    pub fn ask_duo(&self, input: serde_json::Value) -> anyhow::Result<String> {
+        let v = self.graphql(
+            "mutation($input: AiActionInput!) { aiAction(input: $input) { requestId errors } }",
+            serde_json::json!({ "input": input }),
+        )?;
+        let a = &v["data"]["aiAction"];
+        if let Some(e) = a["errors"].as_array().and_then(|e| e.first()) {
+            anyhow::bail!("GitLab Duo: {}", e.as_str().unwrap_or("refused"));
+        }
+        let id = a["requestId"]
+            .as_str()
+            .context("GitLab Duo gave no request id")?
+            .to_string();
+        for _ in 0..120 {
+            let m = self.graphql(
+                "query($ids: [ID!]) { aiMessages(requestIds: $ids, roles: [ASSISTANT]) { nodes { content errors chunkId } } }",
+                serde_json::json!({ "ids": [id] }),
+            )?;
+            let nodes = m["data"]["aiMessages"]["nodes"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            // The whole answer, not a streamed chunk.
+            if let Some(n) = nodes.iter().find(|n| n["chunkId"].is_null()) {
+                if let Some(e) = n["errors"].as_array().and_then(|e| e.first()) {
+                    anyhow::bail!("GitLab Duo: {}", e.as_str().unwrap_or("failed"));
+                }
+                return Ok(n["content"].as_str().unwrap_or_default().to_string());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        anyhow::bail!("GitLab Duo didn't answer in a minute")
+    }
+
+    /// Ask GitLab Duo to review it (`/assign_reviewer @GitLabDuo`).
+    pub fn request_duo_review(&self, project: u64, iid: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/notes"),
+            serde_json::json!({ "body": "/assign_reviewer @GitLabDuo" }),
         )?;
         Ok(())
     }

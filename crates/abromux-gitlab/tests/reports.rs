@@ -61,4 +61,5 @@ fn loads_test_and_code_quality_reports() {
     assert_eq!(q.new[0].file_path, "src/limiter.rs");
     // A free GitLab: no approval rules, trains or dependencies.
     assert!(r.premium.rules.is_none() && !r.premium.trains_enabled && r.premium.blocks.is_empty());
+    assert!(!r.premium.duo, "no GitLab Duo on a free GitLab");
 }

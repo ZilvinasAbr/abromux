@@ -1513,6 +1513,7 @@ impl GitLabView {
                 .gap_4()
                 .children(self.write_alert(cx))
                 .when(self.editing_mr, |d| d.child(self.mr_edit_form(window, cx)))
+                .children(self.duo_chat(window, cx))
                 .when(!self.editing_mr, |d| {
                     d.children(self.description(&r, window, cx))
                 })

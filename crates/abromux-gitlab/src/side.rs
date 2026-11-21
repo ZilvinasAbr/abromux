@@ -380,6 +380,7 @@ impl GitLabView {
                     cx,
                 )
                 .when(r.mr.reviewers.is_empty(), |d| d.child(none()))
+                .children(self.duo_review_link(r, cx))
                 .children(r.mr.reviewers.iter().map(|u| {
                     // GitLab's own word on it, else what the approvals say.
                     let state = r.review_states.get(&u.id).map(String::as_str).unwrap_or(

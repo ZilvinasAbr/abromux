@@ -183,6 +183,13 @@ impl GitLabView {
             window,
             cx,
         );
+        let duo_describe = self.duo_button(
+            "gl-duo-describe",
+            "Summarize code changes with GitLab Duo",
+            "describe",
+            GitLabView::duo_describe_new_mr,
+            cx,
+        );
 
         let field = |label: &'static str, input: AnyElement| {
             div()
@@ -346,6 +353,7 @@ impl GitLabView {
                                 .child(description),
                         ),
                 )
+                .children(duo_describe)
                 .child(tick("gl-new-draft", n.draft, "Mark as draft", |n| {
                     n.draft = !n.draft
                 }))

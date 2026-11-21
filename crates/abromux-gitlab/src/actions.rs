@@ -186,6 +186,7 @@ impl GitLabView {
             .iter()
             .chain(self.new_mr.fields().iter())
             .any(|b| b.read(cx).focus_handle(cx).is_focused(window))
+            || self.duo.ask.read(cx).focus_handle(cx).is_focused(window)
     }
 
     /// The fields belong to the merge request on screen: another one
@@ -645,6 +646,13 @@ impl GitLabView {
             .flex_col()
             .gap_2()
             .w_full()
+            .children(self.duo_button(
+                "gl-duo-commit",
+                "Generate commit message",
+                "commit",
+                GitLabView::duo_commit_message,
+                cx,
+            ))
             .child(
                 crate::edit::checkbox("gl-merge-edit-message", on, "Edit commit message").on_click(
                     cx.listener(move |v, _, _, cx| {
@@ -1089,6 +1097,13 @@ impl GitLabView {
         let approved = r.approvals.approved_by.iter().any(|a| a.user.id == me);
         let can_approve = r.approvals.user_can_approve && !approved;
         let pick = self.more.verdict;
+        let duo_summarize = self.duo_button(
+            "gl-duo-summarize",
+            "Summarize my review with GitLab Duo",
+            "summarize",
+            GitLabView::duo_summarize_review,
+            cx,
+        );
         let option = |v: Verdict, title: &'static str, about: &'static str, live: bool| {
             let on = pick == v;
             div()
@@ -1226,6 +1241,7 @@ impl GitLabView {
                     !self.is_local(),
                 ))
                 .child(Input::new(&self.more.summary))
+                .children(duo_summarize)
                 .child(
                     div()
                         .flex()

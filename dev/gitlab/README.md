@@ -108,7 +108,7 @@ it shows: `state`, `open {url | iid}`, `section {name}`, `file {path}`,
 `file_comment {path, body, review}`, `rerequest {username}`, `time {duration, summary, estimate}`, `whitespace {show}`,
 `task {n, done}`, `new_mr {source, target, title, description, draft, create}`,
 `reports {pick, quality_open, tests_open}`, `image_comment {path, x, y, body, review}`,
-`dependency {add | remove}` (Premium), and `edit_mr` also takes `target`, `squash` and `remove_source_branch`. Real input goes through `debug.input`
+`dependency {add | remove}` (Premium), `duo {action: review|summarize|commit|describe|ask, text}` (Duo), `comment` also takes `internal`, and `edit_mr` also takes `target`, `squash` and `remove_source_branch`. Real input goes through `debug.input`
 (`key:n`, `ui:down,X,Y;ui:up,X,Y`, `ui:scroll,X,Y,DY`).
 
 The loop in one command, tests + build + a screenshot in `target/shots/`:

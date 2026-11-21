@@ -199,6 +199,9 @@ pub struct GitLabView {
     pub(crate) boxes: crate::edit::Boxes,
     /// actions.rs: suggestions' batch, the Code menu, merge messages, revert.
     pub(crate) more: crate::actions::More,
+    /// duo.rs: what GitLab Duo is doing, and whether this host has Duo.
+    pub(crate) duo: crate::duo::DuoState,
+    pub(crate) duo_seen: bool,
     /// reports.rs: the report widgets opened, the report picked.
     pub(crate) reports: crate::reports::ReportsState,
     /// create.rs: "New merge request".
@@ -269,6 +272,7 @@ impl GitLabView {
         let boxes = crate::edit::Boxes::new(window, cx);
         let more = crate::actions::More::new(window, cx);
         let new_mr = crate::create::NewMr::new(window, cx);
+        let duo = crate::duo::DuoState::new(window, cx);
         for b in [new_mr.source.clone(), new_mr.target.clone()] {
             cx.subscribe(&b, |_, _, _: &InputEvent, cx| cx.notify())
                 .detach();
@@ -323,6 +327,8 @@ impl GitLabView {
         let mut v = Self {
             boxes,
             more,
+            duo,
+            duo_seen: false,
             reports: Default::default(),
             new_mr,
             busy: None,
@@ -1633,6 +1639,14 @@ impl Tab for GitLabView {
                     "line": self.boxes.line.read(cx).value().to_string(),
                     "previewing": self.more.previewing.iter().map(|b| format!("{b:?}")).collect::<Vec<_>>(),
                 }),
+                "duo": r.map(|r| json!({
+                    "available": r.premium.duo,
+                    "busy": self.duo.busy,
+                    "error": self.duo.error,
+                    "answers": self.duo.answers.iter().map(|(q, a)| json!({ "q": q, "a": a })).collect::<Vec<_>>(),
+                    "summary": self.more.summary.read(cx).value().to_string(),
+                    "merge_message": self.more.merge_msg.read(cx).value().to_string(),
+                })),
                 "actions": r.map(|r| json!({
                     "todo": !r.todos.is_empty(),
                     "subscribed": r.mr.subscribed,
@@ -2269,6 +2283,22 @@ impl Tab for GitLabView {
                     self.remove_dependency(id, window, cx);
                 }
             }
+            // GitLab Duo: `{"action": "review" | "summarize" | "commit" | "describe" | "ask", "text": "…"}`.
+            "duo" => match str_arg("action").unwrap_or("") {
+                "review" => self.request_duo_review(window, cx),
+                "summarize" => self.duo_summarize_review(window, cx),
+                "commit" => self.duo_commit_message(window, cx),
+                "describe" => self.duo_describe_new_mr(window, cx),
+                "ask" => {
+                    self.duo.chat_open = true;
+                    if let Some(t) = str_arg("text") {
+                        let t = t.to_string();
+                        self.duo.ask.update(cx, |b, cx| b.set_value(t, window, cx));
+                        self.duo_ask(window, cx);
+                    }
+                }
+                _ => bail!("action is review, summarize, commit, describe or ask"),
+            },
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);
@@ -3195,6 +3225,7 @@ impl Render for GitLabView {
         self.sel_drawn.borrow_mut().clear();
         if let Some(r) = self.review.ready().cloned() {
             self.more_for(&r, window, cx);
+            self.duo_seen |= r.premium.duo;
         }
         let page = if self.sign_in.is_some() {
             self.sign_in_page(cx)

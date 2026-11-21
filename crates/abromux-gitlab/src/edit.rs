@@ -1176,6 +1176,17 @@ impl GitLabView {
                         ),
                     )
                 })
+                .when(self.duo_here(), |d| {
+                    d.child(item("gl-mr-duo", "Ask GitLab Duo".into(), false).on_click(
+                        cx.listener(|v, _, window, cx| {
+                            v.mr_menu = false;
+                            v.duo.chat_open = true;
+                            v.duo.ask.update(cx, |b, cx| b.focus(window, cx));
+                            v.set_section(crate::Section::Overview, cx);
+                            cx.notify();
+                        }),
+                    ))
+                })
                 .when(writes, |d| {
                     d.child(
                         item(
@@ -1499,14 +1510,18 @@ impl GitLabView {
         let enabled = !empty;
         let internal = self.more.internal;
         let internal_box = (!self.is_local()).then(|| {
-            checkbox("gl-comment-internal", internal, "Make this an internal note")
-                .text_size(px(14.))
-                .on_click(cx.listener(move |v, _, _, cx| {
-                    v.more.internal = !internal;
-                    cx.notify();
-                }))
+            checkbox(
+                "gl-comment-internal",
+                internal,
+                "Make this an internal note",
+            )
+            .text_size(px(14.))
+            .on_click(cx.listener(move |v, _, _, cx| {
+                v.more.internal = !internal;
+                cx.notify();
+            }))
         });
-        let form =         div()
+        let form = div()
             .flex()
             .gap_3()
             .child(match self.me.as_ref() {

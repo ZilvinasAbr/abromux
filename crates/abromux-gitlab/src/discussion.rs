@@ -466,7 +466,13 @@ impl GitLabView {
         let actions = if n.internal {
             let tag = badge("Internal note", fixed(0xe9731f), on_fill()).flex_none();
             Some(match actions {
-                Some(a) => div().flex().items_center().gap_1().ml_1().child(tag).child(a.ml_0()),
+                Some(a) => div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .ml_1()
+                    .child(tag)
+                    .child(a.ml_0()),
                 None => div().flex().items_center().ml_1().child(tag),
             })
         } else {

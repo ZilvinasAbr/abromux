@@ -19,6 +19,7 @@ mod compose;
 mod create;
 pub mod diff;
 mod discussion;
+mod duo;
 mod edit;
 mod emoji;
 mod filter;
@@ -384,6 +385,7 @@ pub fn load_review(c: &api::Client, project: u64, iid: u64) -> anyhow::Result<re
             mrp("/approval_state"),
             mrp("/blocks"),
             api::project_path(project),
+            "metadata".to_string(),
         ]);
         (
             multiple.join().ok().and_then(Result::ok),
@@ -491,6 +493,7 @@ fn load_rest(
     r.premium = std::thread::scope(|s| {
         let rules = s.spawn(|| c.approval_state(project, iid).ok().flatten());
         let blocks = s.spawn(|| c.blocks(project, iid).unwrap_or_default());
+        let duo = s.spawn(|| c.duo_available().unwrap_or(false));
         let trains = c.merge_trains_enabled(project).unwrap_or(false);
         let train = if trains {
             c.train_entry(project, iid).ok().flatten()
@@ -502,6 +505,7 @@ fn load_rest(
             trains_enabled: trains,
             train,
             blocks: blocks.join().unwrap_or_default(),
+            duo: duo.join().unwrap_or(false),
         }
     });
     // The head pipeline's reports, once it has finished (GitLab's widgets).

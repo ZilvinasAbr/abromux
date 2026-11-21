@@ -823,4 +823,7 @@ pub struct Premium {
     pub trains_enabled: bool,
     pub train: Option<TrainEntry>,
     pub blocks: Vec<Block>,
+    /// GitLab Duo answers here: an Enterprise GitLab whose GraphQL has
+    /// `aiAction` (Duo's actions show only then).
+    pub duo: bool,
 }
