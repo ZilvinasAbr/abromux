@@ -51,6 +51,10 @@ pub struct More {
     pub time_open: bool,
     pub time_spent: Entity<InputState>,
     pub time_summary: Entity<InputState>,
+    /// Editing the merge request: its target branch, and the merge options.
+    pub edit_target: Entity<InputState>,
+    pub edit_remove: bool,
+    pub edit_squash: bool,
     /// "Show whitespace changes" turned off.
     pub hide_whitespace: bool,
     /// Boxes showing their Preview instead of the text.
@@ -86,6 +90,9 @@ impl More {
             picked: None,
             previewing: Default::default(),
             hide_whitespace: false,
+            edit_target: cx.new(|cx| InputState::new(window, cx).placeholder("Target branch")),
+            edit_remove: false,
+            edit_squash: false,
             time_open: false,
             time_spent: cx.new(|cx| InputState::new(window, cx).placeholder("Time, e.g. 1h 30m")),
             time_summary: cx
@@ -113,8 +120,9 @@ impl More {
         Some(b.read(cx).value().to_string()).filter(|m| !m.trim().is_empty())
     }
 
-    pub fn fields(&self) -> [&Entity<InputState>; 7] {
+    pub fn fields(&self) -> [&Entity<InputState>; 8] {
         [
+            &self.edit_target,
             &self.time_spent,
             &self.time_summary,
             &self.summary,

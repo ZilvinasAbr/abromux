@@ -897,6 +897,12 @@ impl GitLabView {
         self.boxes.description.update(cx, |b, cx| {
             b.set_value(r.mr.description.clone().unwrap_or_default(), window, cx)
         });
+        self.more.edit_target.update(cx, |b, cx| {
+            b.set_value(r.mr.target_branch.clone(), window, cx)
+        });
+        self.more.edit_remove =
+            r.mr.force_remove_source_branch || r.mr.should_remove_source_branch.unwrap_or(false);
+        self.more.edit_squash = r.mr.squash;
         self.set_section(crate::Section::Overview, cx);
         self.overview_list.scroll_to(gpui::ListOffset::default());
         self.boxes.title.update(cx, |b, cx| b.focus(window, cx));
@@ -920,7 +926,21 @@ impl GitLabView {
             return;
         }
         self.close_edit_mr(cx);
-        let fields = serde_json::json!({ "title": title, "description": description });
+        let mut fields = serde_json::json!({
+            "title": title,
+            "description": description,
+            "remove_source_branch": self.more.edit_remove,
+            "squash": self.more.edit_squash,
+        });
+        let target = self.more.edit_target.read(cx).value().trim().to_string();
+        if !target.is_empty()
+            && self
+                .review
+                .ready()
+                .is_some_and(|r| r.mr.target_branch != target)
+        {
+            fields["target_branch"] = target.into();
+        }
         self.write(
             Write::EditMr,
             Some(Patch::Fields {
@@ -1240,6 +1260,25 @@ impl GitLabView {
                 cx,
             )))
             .child(div().text_size(px(12.)).text_color(c(MUTED)).child("Markdown is supported."))
+            .child(heading("Target branch").mt_2())
+            .child(field(div()).child(Input::new(&self.more.edit_target).appearance(false)))
+            .child(heading("Merge options").mt_2())
+            .child({
+                let on = self.more.edit_remove;
+                checkbox("gl-edit-remove", on, "Delete source branch when merge request is accepted.")
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        v.more.edit_remove = !on;
+                        cx.notify();
+                    }))
+            })
+            .child({
+                let on = self.more.edit_squash;
+                checkbox("gl-edit-squash", on, "Squash commits when merge request is accepted.")
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        v.more.edit_squash = !on;
+                        cx.notify();
+                    }))
+            })
             .child(
                 div()
                     .flex()

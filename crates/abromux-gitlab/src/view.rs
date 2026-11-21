@@ -1796,6 +1796,18 @@ impl Tab for GitLabView {
                         .description
                         .update(cx, |b, cx| b.set_value(d.to_string(), window, cx));
                 }
+                if let Some(t) = str_arg("target") {
+                    let t = t.to_string();
+                    self.more
+                        .edit_target
+                        .update(cx, |b, cx| b.set_value(t, window, cx));
+                }
+                if let Some(on) = args.get("squash").and_then(Value::as_bool) {
+                    self.more.edit_squash = on;
+                }
+                if let Some(on) = args.get("remove_source_branch").and_then(Value::as_bool) {
+                    self.more.edit_remove = on;
+                }
                 if args.get("save").and_then(Value::as_bool).unwrap_or(true) {
                     self.save_mr(window, cx);
                 }

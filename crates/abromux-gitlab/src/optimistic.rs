@@ -453,6 +453,15 @@ fn apply_fields(r: &mut Review, fields: &Value, people: &[User], me: &User) {
     if let Some(d) = fields.get("description").and_then(Value::as_str) {
         r.mr.description = Some(d.to_string());
     }
+    if let Some(t) = fields.get("target_branch").and_then(Value::as_str) {
+        r.mr.target_branch = t.to_string();
+    }
+    if let Some(on) = fields.get("squash").and_then(Value::as_bool) {
+        r.mr.squash = on;
+    }
+    if let Some(on) = fields.get("remove_source_branch").and_then(Value::as_bool) {
+        r.mr.force_remove_source_branch = on;
+    }
 }
 
 #[cfg(test)]
