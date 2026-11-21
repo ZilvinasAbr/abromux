@@ -68,7 +68,7 @@ pub enum Patch {
     /// `position`, a reply in thread `discussion`, or on the merge request.
     Draft {
         body: String,
-        position: Option<Position>,
+        position: Option<Box<Position>>,
         discussion: Option<String>,
     },
     /// A pending comment changed, or (`body` None) taken out.
@@ -276,7 +276,7 @@ impl Patch {
             } => {
                 if !r.drafts.iter().any(|d| d.note.trim() == body.trim()) {
                     r.drafts.push(DraftNote {
-                        position: position.clone(),
+                        position: position.as_deref().cloned(),
                         discussion_id: discussion.clone(),
                         resolve_discussion: false,
                         id: NOTE_BASE + n,

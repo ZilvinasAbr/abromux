@@ -731,7 +731,7 @@ impl GitLabView {
         let patch = if draft {
             Patch::Draft {
                 body: body.clone(),
-                position: Some(crate::types::Position {
+                position: Some(Box::new(crate::types::Position {
                     base_sha: refs.base_sha.clone(),
                     start_sha: refs.start_sha.clone(),
                     head_sha: refs.head_sha.clone(),
@@ -747,7 +747,7 @@ impl GitLabView {
                     new_line: new,
                     line_range: None,
                     ..Default::default()
-                }),
+                })),
                 discussion: None,
             }
         } else {
