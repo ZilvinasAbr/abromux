@@ -2101,6 +2101,33 @@ impl Tab for GitLabView {
                     self.md_apply(b, md, window, cx);
                 }
             }
+            "rerequest" => {
+                let name = str_arg("username").context("missing username")?;
+                let r = self.review.ready().context("no merge request loaded")?;
+                let u =
+                    r.mr.reviewers
+                        .iter()
+                        .find(|u| u.username == name)
+                        .cloned()
+                        .context("not a reviewer")?;
+                self.rerequest(&u, window, cx);
+            }
+            // `{"duration": "1h 30m", "summary": "…", "estimate": false}`
+            "time" => {
+                let d = str_arg("duration").context("missing duration")?.to_string();
+                let sum = str_arg("summary").unwrap_or("").to_string();
+                self.more
+                    .time_spent
+                    .update(cx, |b, cx| b.set_value(d, window, cx));
+                self.more
+                    .time_summary
+                    .update(cx, |b, cx| b.set_value(sum, window, cx));
+                let estimate = args
+                    .get("estimate")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                self.save_time(estimate, window, cx);
+            }
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);

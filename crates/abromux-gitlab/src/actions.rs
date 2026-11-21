@@ -47,6 +47,10 @@ pub struct More {
     pub range_from: Option<crate::edit::LineKey>,
     /// The "Commenting on lines" start picker is open.
     pub range_menu: bool,
+    /// Time tracking's form open, and its fields (duration, summary).
+    pub time_open: bool,
+    pub time_spent: Entity<InputState>,
+    pub time_summary: Entity<InputState>,
     /// Boxes showing their Preview instead of the text.
     pub previewing: std::collections::HashSet<crate::compose::MdBox>,
     /// "Your review": the panel open, its verdict, and the summary.
@@ -79,6 +83,10 @@ impl More {
             branch: cx.new(|cx| InputState::new(window, cx).placeholder("Branch")),
             picked: None,
             previewing: Default::default(),
+            time_open: false,
+            time_spent: cx.new(|cx| InputState::new(window, cx).placeholder("Time, e.g. 1h 30m")),
+            time_summary: cx
+                .new(|cx| InputState::new(window, cx).placeholder("Summary (optional)")),
             range_from: None,
             range_menu: false,
             review_panel: false,
@@ -102,8 +110,10 @@ impl More {
         Some(b.read(cx).value().to_string()).filter(|m| !m.trim().is_empty())
     }
 
-    pub fn fields(&self) -> [&Entity<InputState>; 5] {
+    pub fn fields(&self) -> [&Entity<InputState>; 7] {
         [
+            &self.time_spent,
+            &self.time_summary,
             &self.summary,
             &self.merge_msg,
             &self.squash_msg,
@@ -1529,6 +1539,130 @@ impl GitLabView {
             (Some(s), Some(e), Some(k)) => (s.1.min(e.1)..=s.1.max(e.1)).contains(&k.1),
             _ => false,
         }
+    }
+}
+
+impl GitLabView {
+    /// Ask reviewer `u` for another review.
+    pub(crate) fn rerequest(
+        &mut self,
+        u: &crate::types::User,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (id, name) = (u.id, u.username.clone());
+        self.write(
+            Write::Sidebar,
+            Some(Patch::ReviewState {
+                user: id,
+                state: "unreviewed".into(),
+            }),
+            move |c, p, iid| c.rerequest_review(p, iid, &name),
+            |_, _, _| {},
+            window,
+            cx,
+        );
+    }
+
+    /// GitLab's ↻ by a reviewer who has reviewed.
+    pub(crate) fn rerequest_button(
+        &self,
+        u: &crate::types::User,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let u = u.clone();
+        crate::edit::icon_button(
+            SharedString::from(format!("gl-rerequest-{}", u.id)),
+            icon("retry", 14., c(MUTED)),
+            "Re-request review",
+        )
+        .size(px(22.))
+        .on_click(cx.listener(move |v, _, window, cx| v.rerequest(&u, window, cx)))
+    }
+
+    /// Time tracking's +: log time, or set the estimate.
+    pub(crate) fn time_plus(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        (self.me.is_some() && !self.is_local()).then(|| {
+            crate::edit::icon_button("gl-time-add", icon("plus", 15., c(TEXT)), "Add time entry")
+                .size(px(24.))
+                .on_click(cx.listener(|v, _, window, cx| {
+                    v.more.time_open = !v.more.time_open;
+                    if v.more.time_open {
+                        v.more.time_spent.update(cx, |b, cx| b.focus(window, cx));
+                    }
+                    cx.notify();
+                }))
+                .into_any_element()
+        })
+    }
+
+    /// Log the time typed (`estimate`: set it as the estimate instead).
+    pub(crate) fn save_time(
+        &mut self,
+        estimate: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let d = self.more.time_spent.read(cx).value().trim().to_string();
+        if d.is_empty() {
+            return;
+        }
+        let summary = self.more.time_summary.read(cx).value().trim().to_string();
+        for b in [self.more.time_spent.clone(), self.more.time_summary.clone()] {
+            b.update(cx, |b, cx| b.set_value("", window, cx));
+        }
+        self.more.time_open = false;
+        self.write(
+            Write::Sidebar,
+            None,
+            move |c, p, iid| {
+                if estimate {
+                    c.set_estimate(p, iid, &d)
+                } else {
+                    c.add_spent_time(p, iid, &d, &summary)
+                }
+            },
+            |_, _, _| {},
+            window,
+            cx,
+        );
+    }
+
+    pub(crate) fn time_form(&self, cx: &mut Context<Self>) -> Option<Div> {
+        self.more.time_open.then(|| {
+            let field = |b: &Entity<InputState>| {
+                div()
+                    .p_1()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(c(BORDER))
+                    .bg(c(BG))
+                    .child(Input::new(b).appearance(false))
+            };
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .pt_2()
+                .child(field(&self.more.time_spent))
+                .child(field(&self.more.time_summary))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(
+                            crate::edit::primary("gl-time-save", "Add time", true).on_click(
+                                cx.listener(|v, _, window, cx| v.save_time(false, window, cx)),
+                            ),
+                        )
+                        .child(
+                            crate::edit::secondary("gl-time-estimate", "Set estimate").on_click(
+                                cx.listener(|v, _, window, cx| v.save_time(true, window, cx)),
+                            ),
+                        ),
+                )
+        })
     }
 }
 

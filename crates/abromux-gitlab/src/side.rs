@@ -246,7 +246,7 @@ impl GitLabView {
         let editable = self.me.is_some();
         let none = || div().text_color(c(MUTED)).child("None");
         // A reviewer: their review's state as GitLab's icon, with its words.
-        let person = |u: &User, review: Option<&str>| {
+        let person = |u: &User, review: Option<&str>, cx: &mut Context<Self>| {
             let state = review.map(|s| match s {
                 "approved" => ("check-circle", c(GREEN), "Reviewer approved changes"),
                 "requested_changes" => {
@@ -263,6 +263,10 @@ impl GitLabView {
                 .text_color(c(TEXT))
                 .child(self.avatars.of(u, 24.))
                 .child(div().flex_1().child(u.name.clone()))
+                .when(
+                    editable && review.is_some_and(|s| s != "unreviewed" && s != "review_started"),
+                    |d| d.child(self.rerequest_button(u, cx)),
+                )
                 .when_some(state, |d, (name, color, tip)| {
                     d.child(
                         div()
@@ -362,7 +366,7 @@ impl GitLabView {
                     Some(a) => d.child(a),
                     None => d.child(none()),
                 })
-                .children(r.mr.assignees.iter().map(|u| person(u, None))),
+                .children(r.mr.assignees.iter().map(|u| person(u, None, cx))),
             )
             .child(
                 self.block(
@@ -385,7 +389,7 @@ impl GitLabView {
                             "unreviewed"
                         },
                     );
-                    person(u, Some(state))
+                    person(u, Some(state), cx)
                 })),
             )
             .child(
@@ -431,8 +435,9 @@ impl GitLabView {
                     })),
             )
             .child(
-                self.block("Time tracking", None, r, cx)
-                    .child(time_tracking(&r.mr.time_stats)),
+                self.block_with("Time tracking", None, self.time_plus(cx), r, cx)
+                    .child(time_tracking(&r.mr.time_stats))
+                    .children(self.time_form(cx)),
             )
             .child(
                 self.block(
@@ -463,6 +468,18 @@ impl GitLabView {
         r: &Review,
         cx: &mut Context<Self>,
     ) -> Div {
+        self.block_with(title, menu, None, r, cx)
+    }
+
+    /// A block with `extra` at its head's right (GitLab's + on Time tracking).
+    pub(crate) fn block_with(
+        &self,
+        title: &str,
+        menu: Option<SideMenu>,
+        extra: Option<AnyElement>,
+        r: &Review,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let head = div()
             .relative()
             .flex()
@@ -475,6 +492,7 @@ impl GitLabView {
                     .text_color(c(TEXT))
                     .child(title.to_string()),
             )
+            .children(extra)
             .children(menu.map(|m| {
                 let open = self.side_menu == Some(m);
                 div()

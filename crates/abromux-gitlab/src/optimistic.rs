@@ -114,6 +114,11 @@ pub enum Patch {
     Subscribed {
         on: bool,
     },
+    /// A reviewer's review state (asked again: `unreviewed`).
+    ReviewState {
+        user: u64,
+        state: String,
+    },
 }
 
 impl Patch {
@@ -312,6 +317,9 @@ impl Patch {
                 }
             }
             Patch::Subscribed { on } => r.mr.subscribed = Some(*on),
+            Patch::ReviewState { user, state } => {
+                r.review_states.insert(*user, state.clone());
+            }
         }
     }
 }

@@ -951,6 +951,47 @@ impl Client {
         )
     }
 
+    /// Ask `username` to review it again (GitLab's ↻ by a reviewer):
+    /// GitLab's `/request_review` quick action, which writes no comment.
+    pub fn rerequest_review(&self, project: u64, iid: u64, username: &str) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/notes"),
+            serde_json::json!({ "body": format!("/request_review @{username}") }),
+        )?;
+        Ok(())
+    }
+
+    /// Log time spent (`1h 30m`), with what it was for.
+    pub fn add_spent_time(
+        &self,
+        project: u64,
+        iid: u64,
+        duration: &str,
+        summary: &str,
+    ) -> anyhow::Result<()> {
+        let mut body = serde_json::json!({ "duration": duration });
+        if !summary.trim().is_empty() {
+            body["summary"] = summary.into();
+        }
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/add_spent_time"),
+            body,
+        )?;
+        Ok(())
+    }
+
+    /// Set the estimate (`3d`).
+    pub fn set_estimate(&self, project: u64, iid: u64, duration: &str) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/time_estimate"),
+            serde_json::json!({ "duration": duration }),
+        )?;
+        Ok(())
+    }
+
     /// Delete the merge request (owners and admins only).
     pub fn delete_mr(&self, project: u64, iid: u64) -> anyhow::Result<()> {
         let _: serde_json::Value = self.write(
