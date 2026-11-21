@@ -461,7 +461,12 @@ impl GitLabView {
         let mr = self.review.ready().map_or(0, |r| r.mr.id);
         self.write(
             Write::Comment,
-            Some(Patch::Comment {
+            // Only quick actions: GitLab runs them and writes no comment.
+            (!body
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .all(|l| l.trim_start().starts_with('/')))
+            .then(|| Patch::Comment {
                 body: body.clone(),
                 internal,
             }),

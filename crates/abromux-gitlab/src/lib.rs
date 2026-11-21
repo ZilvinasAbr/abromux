@@ -15,6 +15,7 @@ pub mod auth;
 mod avatars;
 pub mod cache;
 mod changes;
+mod checks;
 mod compose;
 mod create;
 pub mod diff;
@@ -36,6 +37,7 @@ pub mod review;
 mod search;
 mod select;
 mod side;
+mod slash;
 mod style;
 mod tasks;
 pub mod time;
@@ -488,9 +490,19 @@ fn load_rest(
         .map(|rv| (rv.user.id, rv.state))
         .collect();
     r.pipelines = c.pipelines(project, iid).unwrap_or_default();
+    // GitLab's merge checks, for the merge widget's list.
+    let full_path =
+        r.mr.references
+            .full
+            .split('!')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+    let mut checks = vec![];
     // A paid GitLab's approval rules, merge train and dependencies: all
     // answer 404 on a free one, and stay empty.
     r.premium = std::thread::scope(|s| {
+        let got_checks = s.spawn(|| c.merge_checks(&full_path, iid).unwrap_or_default());
         let rules = s.spawn(|| c.approval_state(project, iid).ok().flatten());
         let blocks = s.spawn(|| c.blocks(project, iid).unwrap_or_default());
         let duo = s.spawn(|| c.duo_available().unwrap_or(false));
@@ -505,9 +517,13 @@ fn load_rest(
             trains_enabled: trains,
             train,
             blocks: blocks.join().unwrap_or_default(),
-            duo: duo.join().unwrap_or(false),
+            duo: {
+                checks = got_checks.join().unwrap_or_default();
+                duo.join().unwrap_or(false)
+            },
         }
     });
+    r.checks = checks;
     // The head pipeline's reports, once it has finished (GitLab's widgets).
     if let Some(p) =
         r.mr.head_pipeline

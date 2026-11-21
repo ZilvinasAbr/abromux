@@ -50,6 +50,10 @@ pub enum Md {
     Tasks,
     Table,
     Suggestion,
+    /// A heading of this level (GitLab's "Text style"); 0: normal text.
+    Heading(u8),
+    /// "Add a quick action": a `/` starting a line.
+    Quick,
 }
 
 impl Md {
@@ -66,6 +70,11 @@ impl Md {
             "tasks" => Md::Tasks,
             "table" => Md::Table,
             "suggestion" => Md::Suggestion,
+            "quick" => Md::Quick,
+            "h1" => Md::Heading(1),
+            "h2" => Md::Heading(2),
+            "h3" => Md::Heading(3),
+            "h4" => Md::Heading(4),
             _ => return None,
         })
     }
@@ -117,6 +126,15 @@ pub fn apply(md: Md, sel: &str, at_line_start: bool) -> String {
         }
         // Filled in by the caller, which knows the lines.
         Md::Suggestion => sel.to_string(),
+        Md::Heading(0) => sel.trim_start_matches('#').trim_start().to_string(),
+        Md::Heading(n) => lines(&|_| format!("{} ", "#".repeat(n as usize))),
+        Md::Quick => {
+            if at_line_start {
+                "/".into()
+            } else {
+                "\n/".into()
+            }
+        }
     }
 }
 
@@ -235,6 +253,206 @@ impl GitLabView {
         .detach();
     }
 
+    /// GitLab's "Text style": normal text or a heading, for the line.
+    fn style_menu(&self, b: MdBox, cx: &mut Context<Self>) -> Div {
+        let open = self.more.style_open == Some(b);
+        let item = |label: &'static str, md: Md| {
+            div()
+                .id(SharedString::from(format!("md-style-{b:?}-{label}")))
+                .px_3()
+                .py_1()
+                .cursor_pointer()
+                .hover(|s| s.bg(c(RAISED)))
+                .text_color(c(TEXT))
+                .child(label)
+                .on_click(cx.listener(move |v, _, window, cx| {
+                    v.more.style_open = None;
+                    v.md_apply(b, md, window, cx);
+                }))
+        };
+        div()
+            .relative()
+            .child(
+                div()
+                    .id(SharedString::from(format!("md-style-{b:?}")))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .h(px(28.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .text_size(px(13.))
+                    .text_color(c(MUTED))
+                    .hover(|s| s.bg(ca(0x89888d66)))
+                    .child("Text style")
+                    .child(app_icon("chevron-down", 12., c(MUTED)))
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        v.more.style_open = if v.more.style_open == Some(b) {
+                            None
+                        } else {
+                            Some(b)
+                        };
+                        cx.notify();
+                    })),
+            )
+            .when(open, |d| {
+                d.child(
+                    deferred(
+                        div()
+                            .id(SharedString::from(format!("md-style-menu-{b:?}")))
+                            .absolute()
+                            .top(px(30.))
+                            .left_0()
+                            .w(px(160.))
+                            .py_1()
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(c(BORDER))
+                            .bg(c(CARD))
+                            .shadow_lg()
+                            .occlude()
+                            .on_mouse_down_out(cx.listener(|v, _, _, cx| {
+                                v.more.style_open = None;
+                                cx.notify();
+                            }))
+                            .child(item("Normal text", Md::Heading(0)))
+                            .child(item("Heading 1", Md::Heading(1)))
+                            .child(item("Heading 2", Md::Heading(2)))
+                            .child(item("Heading 3", Md::Heading(3)))
+                            .child(item("Heading 4", Md::Heading(4))),
+                    )
+                    .with_priority(2),
+                )
+            })
+    }
+
+    /// "Insert comment template": your saved replies, one inserted on a click.
+    fn templates_menu(&self, b: MdBox, cx: &mut Context<Self>) -> Div {
+        let open = self.more.templates_open == Some(b);
+        let list = self.more.templates.clone();
+        div()
+            .relative()
+            .child(
+                crate::edit::icon_button(
+                    SharedString::from(format!("md-templates-{b:?}")),
+                    icon("comment-lines", 15., c(MUTED)),
+                    "Insert comment template",
+                )
+                .on_click(cx.listener(move |v, _, window, cx| v.toggle_templates(b, window, cx))),
+            )
+            .when(open, |d| {
+                let rows: Vec<AnyElement> = match &list {
+                    None => vec![
+                        div()
+                            .px_3()
+                            .py_1()
+                            .text_color(c(MUTED))
+                            .child("Loading…")
+                            .into_any_element(),
+                    ],
+                    Some(l) if l.is_empty() => vec![
+                        div()
+                            .px_3()
+                            .py_1()
+                            .text_color(c(MUTED))
+                            .child("No comment templates. Make them in your GitLab preferences.")
+                            .into_any_element(),
+                    ],
+                    Some(l) => l
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (name, text))| {
+                            let text = text.clone();
+                            div()
+                                .id(SharedString::from(format!("md-template-{b:?}-{i}")))
+                                .flex()
+                                .flex_col()
+                                .px_3()
+                                .py_1()
+                                .cursor_pointer()
+                                .hover(|s| s.bg(c(RAISED)))
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(c(TEXT))
+                                        .child(name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(c(MUTED))
+                                        .truncate()
+                                        .child(text.lines().next().unwrap_or("").to_string()),
+                                )
+                                .on_click(cx.listener(move |v, _, window, cx| {
+                                    v.more.templates_open = None;
+                                    let e = v.md_entity(b);
+                                    let t = text.clone();
+                                    e.update(cx, |s, cx| {
+                                        s.replace(t, window, cx);
+                                        s.focus(window, cx);
+                                    });
+                                    cx.notify();
+                                }))
+                                .into_any_element()
+                        })
+                        .collect(),
+                };
+                d.child(
+                    deferred(
+                        div()
+                            .id(SharedString::from(format!("md-templates-menu-{b:?}")))
+                            .absolute()
+                            .top(px(30.))
+                            .right_0()
+                            .w(px(300.))
+                            .py_1()
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(c(BORDER))
+                            .bg(c(CARD))
+                            .shadow_lg()
+                            .occlude()
+                            .on_mouse_down_out(cx.listener(|v, _, _, cx| {
+                                v.more.templates_open = None;
+                                cx.notify();
+                            }))
+                            .children(rows),
+                    )
+                    .with_priority(2),
+                )
+            })
+    }
+
+    /// Open (fetching once) or close box `b`'s template menu.
+    pub(crate) fn toggle_templates(
+        &mut self,
+        b: MdBox,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.more.templates_open == Some(b) {
+            self.more.templates_open = None;
+            cx.notify();
+            return;
+        }
+        self.more.templates_open = Some(b);
+        if self.more.templates.is_none()
+            && let Some(c) = self.client.clone()
+        {
+            cx.spawn_in(window, async move |this, cx| {
+                let got = cx.background_spawn(async move { c.saved_replies() }).await;
+                let _ = this.update(cx, |v, cx| {
+                    v.more.templates = Some(got.unwrap_or_default());
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
     /// The text of the line a new thread is being written on, and how many
     /// lines that is.
     fn commented_text(&self, _cx: &App) -> Option<(String, usize)> {
@@ -275,6 +493,8 @@ impl GitLabView {
                 .hover(|s| s.bg(ca(0x89888d33)))
                 .child(label)
         };
+        let style = self.style_menu(b, cx);
+        let templates = (!self.is_local()).then(|| self.templates_menu(b, cx));
         let tool = |md: Md, name: &'static str, tip: &'static str| {
             crate::edit::icon_button(
                 SharedString::from(format!("md-{b:?}-{md:?}")),
@@ -292,6 +512,7 @@ impl GitLabView {
             .when(suggest, |d| {
                 d.child(tool(Md::Suggestion, "suggest", "Insert suggestion"))
             })
+            .child(style)
             .child(tool(Md::Bold, "bold", "Add bold text (⌘B)"))
             .child(tool(Md::Italic, "italic", "Add italic text (⌘I)"))
             .child(tool(Md::Strike, "strikethrough", "Add strikethrough text"))
@@ -302,6 +523,10 @@ impl GitLabView {
             .child(tool(Md::Numbers, "list-ordered", "Add a numbered list"))
             .child(tool(Md::Tasks, "md-tasks", "Add a checklist"))
             .child(tool(Md::Table, "table", "Add a table"))
+            .when(!self.is_local(), |d| {
+                d.child(tool(Md::Quick, "at-sign", "Add a quick action"))
+            })
+            .children(templates)
             .when(!self.is_local(), |d| {
                 d.child(
                     crate::edit::icon_button(

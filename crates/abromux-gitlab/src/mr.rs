@@ -348,6 +348,65 @@ pub(crate) fn commit_author(r: &Review, cm: &crate::types::Commit) -> User {
 }
 
 /// A title without its draft marker, as "Mark as ready" leaves it.
+/// A title change's old and new titles, each as pieces with whether
+/// GitLab marked them added, removed (or neither), from its HTML body.
+fn title_change(body: &str) -> Option<(Vec<(String, Option<bool>)>, Vec<(String, Option<bool>)>)> {
+    let b = body
+        .trim()
+        .trim_start_matches("<p>")
+        .trim_end_matches("</p>");
+    let rest = b.strip_prefix("changed title from ")?;
+    let code = |s: &str| -> Option<(String, usize)> {
+        let s2 = s.strip_prefix("<code class=\"idiff\">")?;
+        let end = s2.find("</code>")?;
+        Some((
+            s2[..end].to_string(),
+            "<code class=\"idiff\">".len() + end + "</code>".len(),
+        ))
+    };
+    let (old, used) = code(rest)?;
+    let rest = rest[used..].strip_prefix(" to ")?;
+    let (new, _) = code(rest)?;
+    let unescape = |t: &str| {
+        t.replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&")
+    };
+    let pieces = |html: &str| {
+        let mut out = vec![];
+        let mut s = html;
+        while !s.is_empty() {
+            if let Some(i) = s.find("<span") {
+                if i > 0 {
+                    out.push((unescape(&s[..i]), None));
+                }
+                let open_end = s[i..].find('>').map(|j| i + j + 1).unwrap_or(s.len());
+                let tag = &s[i..open_end];
+                let added = if tag.contains("addition") {
+                    Some(true)
+                } else if tag.contains("deletion") {
+                    Some(false)
+                } else {
+                    None
+                };
+                let close = s[open_end..]
+                    .find("</span>")
+                    .map(|j| open_end + j)
+                    .unwrap_or(s.len());
+                out.push((unescape(&s[open_end..close]), added));
+                s = &s[(close + "</span>".len()).min(s.len())..];
+            } else {
+                out.push((unescape(s), None));
+                break;
+            }
+        }
+        out
+    };
+    Some((pieces(&old), pieces(&new)))
+}
+
 #[cfg(test)]
 fn ready_title(title: &str) -> String {
     crate::edit::draft_title(title, false)
@@ -1128,6 +1187,8 @@ impl GitLabView {
                     )
                 })
         });
+        let checks_toggle = self.checks_toggle(r, cx);
+        let checks_list = self.merge_checks_list(r);
         let merge = div()
             .flex()
             .flex_col()
@@ -1156,9 +1217,12 @@ impl GitLabView {
                             }
                             MergeState::Checking => "Checking if merge request can be merged…",
                             MergeState::Blocked(_) => "Merge blocked: 1 check failed",
-                        })),
+                        }))
+                        .child(div().flex_1())
+                        .children(checks_toggle),
                 )
             })
+            .children(checks_list)
             .children(controls)
             // The failed check, with GitLab's fix for a draft.
             .when_some(
@@ -1609,9 +1673,31 @@ impl GitLabView {
 
     /// "Alice Author requested review from @bob 1 hour ago"
     fn system_note(&self, n: &Note, cx: &mut Context<Self>) -> Div {
+        // "changed title from <code class="idiff">…</code> to …": GitLab
+        // sends this one as HTML, its changed part marked; drawn as its page
+        // draws it.
         let me = self.me.as_ref().map(|u| u.username.as_str());
         let mut body = div().flex().flex_wrap().items_center().gap_1();
-        let text = n.body.lines().next().unwrap_or_default();
+        let mut text = n.body.lines().next().unwrap_or_default();
+        if let Some((old, new)) = title_change(&n.body) {
+            let part = |segs: Vec<(String, Option<bool>)>| {
+                div()
+                    .flex()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .children(segs.into_iter().map(|(t, added)| {
+                        div()
+                            .when(added == Some(true), |d| d.bg(ca(0x2da16055)))
+                            .when(added == Some(false), |d| d.bg(ca(0xdd2b0e55)))
+                            .child(t)
+                    }))
+            };
+            body = body
+                .child("changed title from")
+                .child(part(old))
+                .child("to")
+                .child(part(new));
+            text = "";
+        }
         for word in text.split(' ').filter(|w| !w.is_empty()) {
             let name = word.trim_end_matches([',', '.']);
             body = if name.starts_with('@') && name.len() > 1 {
@@ -2471,6 +2557,19 @@ impl GitLabView {
 #[cfg(test)]
 mod ready_tests {
     use super::ready_title;
+
+    #[test]
+    fn reads_title_changes() {
+        let (old, new) = super::title_change(r#"<p>changed title from <code class="idiff">Fix typo</code> to <code class="idiff">Fix typo<span class="idiff left right addition"> (edited)</span></code></p>"#).unwrap();
+        assert_eq!(old, vec![("Fix typo".to_string(), None)]);
+        assert_eq!(
+            new,
+            vec![
+                ("Fix typo".to_string(), None),
+                (" (edited)".to_string(), Some(true))
+            ]
+        );
+    }
 
     #[test]
     fn mark_as_ready_drops_the_draft_marker() {

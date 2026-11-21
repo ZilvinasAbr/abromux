@@ -57,6 +57,8 @@ pub struct Review {
     pub drafts: Vec<DraftNote>,
     /// Approval rules, merge trains and dependencies, on a paid GitLab.
     pub premium: crate::types::Premium,
+    /// GitLab's merge checks: (identifier, status), as its merge widget lists them.
+    pub checks: Vec<(String, String)>,
     /// The head pipeline's test and Code Quality reports.
     pub reports: crate::types::Reports,
     /// Your pending to-dos on it, by id (the header's to-do button).
@@ -234,6 +236,7 @@ impl Review {
             drafts: vec![],
             todos: vec![],
             reports: Default::default(),
+            checks: vec![],
             premium: Default::default(),
             multiple: (true, true),
             stack: vec![],

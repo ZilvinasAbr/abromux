@@ -1112,6 +1112,47 @@ impl Client {
         Ok(u.markdown)
     }
 
+    /// GitLab's merge checks (`mergeabilityChecks`, GraphQL only): each
+    /// check's identifier and status (SUCCESS, FAILED, WARNING, INACTIVE…).
+    pub fn merge_checks(&self, full_path: &str, iid: u64) -> anyhow::Result<Vec<(String, String)>> {
+        let v = self.graphql(
+            "query($p: ID!, $iid: String!) { project(fullPath: $p) { mergeRequest(iid: $iid) { mergeabilityChecks { identifier status } } } }",
+            serde_json::json!({ "p": full_path, "iid": iid.to_string() }),
+        )?;
+        Ok(v["data"]["project"]["mergeRequest"]["mergeabilityChecks"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|c| {
+                (
+                    c["identifier"].as_str().unwrap_or_default().to_string(),
+                    c["status"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect())
+    }
+
+    /// Your comment templates (GitLab's saved replies): name and text.
+    pub fn saved_replies(&self) -> anyhow::Result<Vec<(String, String)>> {
+        let v = self.graphql(
+            "{ currentUser { savedReplies(first: 100) { nodes { name content } } } }",
+            serde_json::json!({}),
+        )?;
+        Ok(v["data"]["currentUser"]["savedReplies"]["nodes"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|n| {
+                (
+                    n["name"].as_str().unwrap_or_default().to_string(),
+                    n["content"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect())
+    }
+
     /// Pipeline `id`'s test report.
     pub fn test_report(&self, project: u64, id: u64) -> anyhow::Result<TestReport> {
         self.get(&format!("projects/{project}/pipelines/{id}/test_report"))

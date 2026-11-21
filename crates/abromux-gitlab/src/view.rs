@@ -286,7 +286,10 @@ impl GitLabView {
             cx.subscribe(b, move |v, _, ev: &InputEvent, cx| {
                 match ev {
                     // `@name` being typed lists who it could be.
-                    InputEvent::Change => v.update_mention(field, cx),
+                    InputEvent::Change => {
+                        v.update_mention(field, cx);
+                        v.update_slash(field, cx);
+                    }
                     InputEvent::Blur if v.mention.as_ref().is_some_and(|m| m.field == field) => {
                         v.mention = None
                     }
@@ -1638,6 +1641,7 @@ impl Tab for GitLabView {
                     "comment": self.boxes.comment.read(cx).value().to_string(),
                     "line": self.boxes.line.read(cx).value().to_string(),
                     "previewing": self.more.previewing.iter().map(|b| format!("{b:?}")).collect::<Vec<_>>(),
+                    "quick_actions": self.more.slash.as_ref().map(|q| crate::slash::matches(&q.query).iter().map(|(c, ..)| format!("/{c}")).collect::<Vec<_>>()),
                 }),
                 "duo": r.map(|r| json!({
                     "available": r.premium.duo,

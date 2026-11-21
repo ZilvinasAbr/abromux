@@ -70,6 +70,15 @@ pub struct More {
         std::rc::Rc<std::cell::RefCell<std::collections::HashMap<usize, Bounds<Pixels>>>>,
     /// The "Add dependency" field (Premium).
     pub dependency: Entity<InputState>,
+    /// The quick actions list open under a box.
+    pub slash: Option<crate::slash::Slash>,
+    /// The comment templates (GitLab's saved replies, fetched once) and
+    /// the box whose template menu is open; the text style menu's box.
+    pub templates: Option<Vec<(String, String)>>,
+    pub templates_open: Option<crate::compose::MdBox>,
+    pub style_open: Option<crate::compose::MdBox>,
+    /// The merge widget's checks list is open.
+    pub checks_open: bool,
     /// "Show whitespace changes" turned off.
     pub hide_whitespace: bool,
     /// Boxes showing their Preview instead of the text.
@@ -105,6 +114,11 @@ impl More {
             picked: None,
             previewing: Default::default(),
             hide_whitespace: false,
+            checks_open: false,
+            slash: None,
+            templates: None,
+            templates_open: None,
+            style_open: None,
             dependency: crate::premium::dependency_field(window, cx),
             image_point: None,
             image_bounds: Default::default(),

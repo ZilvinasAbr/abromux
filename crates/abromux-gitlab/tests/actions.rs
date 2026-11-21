@@ -266,4 +266,29 @@ fn suggestions_todos_notifications_lock_and_drafts() {
     assert!(find("internal comment").notes[0].internal);
     let t = find("internal thread");
     assert!(t.notes[0].internal && t.notes[0].resolvable);
+
+    // Quick actions in a comment run, and leave no comment.
+    c.comment(p, iid, "/label ~docs\n/estimate 2h").unwrap();
+    let m = c.merge_request(p, iid).unwrap();
+    assert!(
+        m.labels.iter().any(|l| l.name == "docs"),
+        "labelled by /label"
+    );
+    assert_eq!(m.time_stats.time_estimate, 7200, "estimated by /estimate");
+    assert!(
+        !c.discussions(p, iid)
+            .unwrap()
+            .iter()
+            .flat_map(|d| &d.notes)
+            .any(|n| n.body.starts_with("/label"))
+    );
+    // Merge checks, as the merge widget lists them.
+    let checks = c.merge_checks("alice/review-fixtures", iid).unwrap();
+    assert!(
+        checks
+            .iter()
+            .any(|(id, st)| id == "NOT_OPEN" && st == "SUCCESS")
+    );
+    // Comment templates come back (none, or what the user made).
+    c.saved_replies().unwrap();
 }
