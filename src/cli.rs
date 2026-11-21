@@ -137,7 +137,8 @@ Commands:
                                                              command.finished, program.status, agent, notification, bell)
   wait-for [-S|--signal] <name> [--timeout <seconds>]        (wait until another script signals <name>; default 30s)
   completion <zsh|bash|fish>                                 (a shell completion script: eval \"$(abromux completion zsh)\")
-  open <path-or-url>...                                      (directories open workspaces, URLs open browser splits)
+  open <path-or-url>...                                      (directories open workspaces, Markdown files and images the viewer,
+                                                             URLs browser splits)
   edit <file>... [--surface <ref>] [--focus <true|false>]    (in a pane beside this terminal, in editor.program: nvim or tode)
   default-app <ext>... | code | list                         (make this AbroMux.app the default app for those file
                                                              extensions, or for common source and text files; list
@@ -2314,10 +2315,13 @@ fn open(pos: Vec<String>, opts: Map<String, Value>) -> Result<(), String> {
         let v = if Path::new(&target).is_dir() {
             o.insert("cwd".into(), json!(absolute(&target)));
             call("workspace.create", o)?
-        } else if Path::new(&target).is_file() && crate::markdown::is_markdown(Path::new(&target)) {
+        } else if Path::new(&target).is_file()
+            && (crate::markdown::is_markdown(Path::new(&target))
+                || crate::markdown::is_image(Path::new(&target)))
+        {
             o.insert(
                 "url".into(),
-                json!(crate::markdown::url_for(Path::new(&absolute(&target)))),
+                json!(crate::markdown::view_url_for(Path::new(&absolute(&target)))),
             );
             call("browser.open", o)?
         } else {
@@ -2405,7 +2409,7 @@ fn markdown(mut pos: Vec<String>, opts: Map<String, Value>) -> Result<(), String
         let mut o = opts.clone();
         o.insert(
             "url".into(),
-            json!(crate::markdown::url_for(Path::new(&path))),
+            json!(crate::markdown::view_url_for(Path::new(&path))),
         );
         let v = call("browser.open", o)?;
         println!(

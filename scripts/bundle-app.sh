@@ -147,6 +147,21 @@ cat > "$app/Contents/Info.plist" <<EOF
 $extensions
       </array>
     </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Image</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.png</string>
+        <string>public.jpeg</string>
+        <string>com.compuserve.gif</string>
+        <string>org.webmproject.webp</string>
+        <string>public.svg-image</string>
+        <string>com.microsoft.bmp</string>
+        <string>public.avif</string>
+      </array>
+    </dict>
   </array>
 </dict>
 </plist>
