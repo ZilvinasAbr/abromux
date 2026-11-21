@@ -199,6 +199,8 @@ pub struct GitLabView {
     pub(crate) boxes: crate::edit::Boxes,
     /// actions.rs: suggestions' batch, the Code menu, merge messages, revert.
     pub(crate) more: crate::actions::More,
+    /// bulk.rs: the list's Bulk edit and Actions.
+    pub(crate) bulk: crate::bulk::BulkState,
     /// jobs.rs: the Pipelines tab's jobs.
     pub(crate) jobs: crate::jobs::JobsState,
     /// duo.rs: what GitLab Duo is doing, and whether this host has Duo.
@@ -274,6 +276,7 @@ impl GitLabView {
         let boxes = crate::edit::Boxes::new(window, cx);
         let more = crate::actions::More::new(window, cx);
         let new_mr = crate::create::NewMr::new(window, cx);
+        let bulk = crate::bulk::BulkState::new(window, cx);
         let duo = crate::duo::DuoState::new(window, cx);
         for b in [new_mr.source.clone(), new_mr.target.clone()] {
             cx.subscribe(&b, |_, _, _: &InputEvent, cx| cx.notify())
@@ -332,6 +335,7 @@ impl GitLabView {
         let mut v = Self {
             boxes,
             more,
+            bulk,
             jobs: Default::default(),
             duo,
             duo_seen: false,
@@ -1332,7 +1336,7 @@ impl GitLabView {
         }
     }
 
-    fn refresh(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
         match (self.loc.project, self.loc.iid) {
             (Some(p), Some(iid)) => self.fetch_review(Target::Id(p, iid), true, cx),
             _ => self.load_list(cx),
@@ -2316,6 +2320,38 @@ impl Tab for GitLabView {
                     self.retry_job(p, j, window, cx);
                 }
             }
+            // Bulk edit: `{"pick": [[project, iid], …], "value": "docs", "do": "add_label"}`.
+            "bulk" => {
+                use crate::bulk::Bulk;
+                self.bulk.on = true;
+                if let Some(list) = args.get("pick").and_then(Value::as_array) {
+                    self.bulk.picked = list
+                        .iter()
+                        .filter_map(|x| Some((x.get(0)?.as_u64()?, x.get(1)?.as_u64()?)))
+                        .collect();
+                }
+                if let Some(t) = str_arg("value") {
+                    let t = t.to_string();
+                    self.bulk
+                        .value
+                        .update(cx, |b, cx| b.set_value(t, window, cx));
+                }
+                if let Some(what) = str_arg("do") {
+                    let w = match what {
+                        "close" => Bulk::Close,
+                        "reopen" => Bulk::Reopen,
+                        "add_label" => Bulk::AddLabel,
+                        "remove_label" => Bulk::RemoveLabel,
+                        "milestone" => Bulk::Milestone,
+                        "no_milestone" => Bulk::NoMilestone,
+                        "assign_me" => Bulk::AssignMe,
+                        "subscribe" => Bulk::Subscribe,
+                        "unsubscribe" => Bulk::Unsubscribe,
+                        _ => bail!("unknown bulk action"),
+                    };
+                    self.run_bulk(w, window, cx);
+                }
+            }
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);
@@ -2856,6 +2892,29 @@ impl GitLabView {
         };
         let now = time::now();
         let query = self.list_search.read(cx).value().trim().to_lowercase();
+        // Bulk edit and Actions work on the merge requests the filter leaves.
+        let filtered: Vec<MergeRequest> = self
+            .list
+            .ready()
+            .map(|mrs| {
+                mrs.iter()
+                    .filter(|m| crate::filter::matches(m, &query))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let project_url = self
+            .loc
+            .browse
+            .as_ref()
+            .map(|b| format!("{}/{}", self.host().trim_end_matches('/'), b.path));
+        let all: Vec<(u64, u64)> = filtered.iter().map(|m| (m.project_id, m.iid)).collect();
+        let tools = self.list_tools(project_url, filtered, cx);
+        let bulk_bar = if projects {
+            None
+        } else {
+            self.bulk_bar(all, cx)
+        };
         let empty = match self.loc.state {
             MrState::Opened => "No open merge requests here.",
             MrState::Merged => "No merged merge requests here.",
@@ -2901,6 +2960,8 @@ impl GitLabView {
                     .into_iter()
                     .map(|m| {
                         let (p, iid) = (m.project_id, m.iid);
+                        let bulk_on = self.bulk.on;
+                        let ticked = self.bulk.picked.contains(&(p, iid));
                         let tasks = m.task_completion_status.as_ref().filter(|t| t.count > 0);
                         // Assignees, then reviewers, as GitLab's row shows them.
                         let people: Vec<&User> = m.assignees.iter().chain(&m.reviewers).collect();
@@ -2915,7 +2976,24 @@ impl GitLabView {
                             .border_color(c(RAISED))
                             .cursor_pointer()
                             .hover(|s| s.bg(c(CARD)))
-                            .on_click(cx.listener(move |v, _, _, cx| v.open_mr(p, iid, cx)))
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                // Bulk edit: a click ticks it.
+                                if v.bulk.on {
+                                    if !v.bulk.picked.remove(&(p, iid)) {
+                                        v.bulk.picked.insert((p, iid));
+                                    }
+                                    cx.notify();
+                                } else {
+                                    v.open_mr(p, iid, cx)
+                                }
+                            }))
+                            .when(bulk_on, |d| {
+                                d.child(icon(
+                                    if ticked { "square-check" } else { "square" },
+                                    16.,
+                                    c(if ticked { FOCUS } else { MUTED }),
+                                ))
+                            })
                             .child(
                                 div()
                                     .flex_1()
@@ -3148,8 +3226,10 @@ impl GitLabView {
                         ),
                     )
                     .when(!projects, |d| d.child(self.sort_control(cx)))
+                    .when(!projects, |d| d.child(tools))
                     .children(self.new_mr_button(cx)),
             )
+            .children(bulk_bar)
             // GitLab's filter tokens, a click puts one in the search.
             .when(!projects && self.new_mr.project.is_none(), |d| {
                 d.child(

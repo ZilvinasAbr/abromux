@@ -13,6 +13,7 @@ mod actions;
 pub mod api;
 pub mod auth;
 mod avatars;
+mod bulk;
 pub mod cache;
 mod changes;
 mod checks;
