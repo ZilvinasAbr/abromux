@@ -15,6 +15,7 @@ pub mod auth;
 mod avatars;
 pub mod cache;
 mod changes;
+mod compose;
 pub mod diff;
 mod discussion;
 mod edit;

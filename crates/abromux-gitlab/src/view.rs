@@ -1616,6 +1616,11 @@ impl Tab for GitLabView {
                 "error": self.review.error().map(|e| &e.text),
                 "summary": r.map(|r| r.summary()),
                 // GitLab's "Stacked merge requests", bottom first, and its dropdown.
+                "boxes": json!({
+                    "comment": self.boxes.comment.read(cx).value().to_string(),
+                    "line": self.boxes.line.read(cx).value().to_string(),
+                    "previewing": self.more.previewing.iter().map(|b| format!("{b:?}")).collect::<Vec<_>>(),
+                }),
                 "actions": r.map(|r| json!({
                     "todo": !r.todos.is_empty(),
                     "subscribed": r.mr.subscribed,
@@ -2065,6 +2070,36 @@ impl Tab for GitLabView {
                     .comment
                     .update(cx, |b, cx| b.set_value(body, window, cx));
                 self.comment_to_review(window, cx);
+            }
+            // The editor: `{"box": "comment", "op": "bold"}`, `{"box": …, "preview": true}`.
+            "md" => {
+                let b = crate::compose::MdBox::parse(str_arg("box").unwrap_or("comment"))
+                    .context("box is comment, reply, line, note or description")?;
+                if let Some(on) = args.get("preview").and_then(Value::as_bool) {
+                    if on {
+                        self.more.previewing.insert(b);
+                    } else {
+                        self.more.previewing.remove(&b);
+                    }
+                }
+                if let Some(t) = str_arg("text") {
+                    let t = t.to_string();
+                    // The cursor at the end, as after typing it.
+                    let line = t.matches('\n').count() as u32;
+                    let col = t.rsplit('\n').next().unwrap_or("").chars().count() as u32;
+                    self.md_entity(b).update(cx, |s, cx| {
+                        s.set_value(t, window, cx);
+                        s.set_cursor_position(
+                            gpui_component::input::Position::new(line, col),
+                            window,
+                            cx,
+                        );
+                    });
+                }
+                if let Some(op) = str_arg("op") {
+                    let md = crate::compose::Md::parse(op).context("unknown op")?;
+                    self.md_apply(b, md, window, cx);
+                }
             }
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {

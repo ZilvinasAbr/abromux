@@ -440,6 +440,7 @@ impl GitLabView {
     /// Post the Overview's comment box: it shows in the activity at once,
     /// and comes back to the box if GitLab turns it down.
     pub(crate) fn post_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.more.previewing.remove(&crate::compose::MdBox::Comment);
         let body = self.boxes.comment.read(cx).value().trim().to_string();
         if body.is_empty() {
             return;
@@ -487,6 +488,7 @@ impl GitLabView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.more.previewing.remove(&crate::compose::MdBox::Reply);
         let Some(id) = self.replying.clone() else {
             return;
         };
@@ -680,6 +682,7 @@ impl GitLabView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.more.previewing.remove(&crate::compose::MdBox::Line);
         let Some((fi, old, new)) = self.commenting else {
             return;
         };
@@ -889,6 +892,9 @@ impl GitLabView {
     /// Save the edited title and description: they show at once, and the
     /// form comes back with them if GitLab turns them down.
     pub(crate) fn save_mr(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.more
+            .previewing
+            .remove(&crate::compose::MdBox::Description);
         let title = self.boxes.title.read(cx).value().trim().to_string();
         let description = self.boxes.description.read(cx).value().to_string();
         if title.is_empty() {
@@ -946,6 +952,7 @@ impl GitLabView {
     /// Save the comment being edited: the new text shows at once, and comes
     /// back to its field if GitLab turns it down.
     pub(crate) fn save_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.more.previewing.remove(&crate::compose::MdBox::Note);
         let Some(note) = self.editing_note else {
             return;
         };
@@ -1182,7 +1189,7 @@ impl GitLabView {
     }
 
     /// Editing the merge request: Title and Description, Save changes.
-    pub(crate) fn mr_edit_form(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn mr_edit_form(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let empty = self.boxes.title.read(cx).value().trim().is_empty();
         let (label, live) = busy_label(self.busy, Write::EditMr, "Save changes", "Saving…");
         let enabled = !empty && live;
@@ -1207,7 +1214,12 @@ impl GitLabView {
             .child(field(div()).child(Input::new(&self.boxes.title).appearance(false)))
             .child(div().text_size(px(12.)).text_color(c(MUTED)).child("Start the title with Draft: to prevent a merge request draft from merging before it's ready."))
             .child(heading("Description").mt_2())
-            .child(field(div()).child(Input::new(&self.boxes.description).appearance(false)))
+            .child(field(div()).child(self.md_editor(
+                crate::compose::MdBox::Description,
+                Input::new(&self.boxes.description).appearance(false).into_any_element(),
+                window,
+                cx,
+            )))
             .child(div().text_size(px(12.)).text_color(c(MUTED)).child("Markdown is supported."))
             .child(
                 div()
@@ -1270,7 +1282,7 @@ impl GitLabView {
     }
 
     /// The comment being edited: its field, Save changes and Cancel.
-    pub(crate) fn note_edit_form(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn note_edit_form(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let empty = self.boxes.note.read(cx).value().trim().is_empty();
         let (label, live) = busy_label(self.busy, Write::EditNote, "Save changes", "Saving…");
         let enabled = !empty && live;
@@ -1285,7 +1297,16 @@ impl GitLabView {
                     .border_1()
                     .border_color(c(0x1068bf))
                     .bg(c(BG))
-                    .child(Input::new(&self.boxes.note).appearance(false)),
+                    .child(
+                        self.md_editor(
+                            crate::compose::MdBox::Note,
+                            Input::new(&self.boxes.note)
+                                .appearance(false)
+                                .into_any_element(),
+                            window,
+                            cx,
+                        ),
+                    ),
             )
             .child(
                 div()
@@ -1367,7 +1388,7 @@ impl GitLabView {
     }
 
     /// GitLab's comment form at the end of the Overview.
-    pub(crate) fn comment_form(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn comment_form(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let empty = self.boxes.comment.read(cx).value().trim().is_empty();
         // It shows at once (optimistic.rs): nothing to wait for.
         let (label, enabled) = ("Comment", !empty);
@@ -1390,11 +1411,19 @@ impl GitLabView {
                     .border_1()
                     .border_color(c(BORDER))
                     .bg(c(CARD))
-                    .child(self.mention_input(
-                        crate::mention::Field::Comment,
-                        Input::new(&self.boxes.comment).appearance(false),
-                        cx,
-                    ))
+                    .child(
+                        self.md_editor(
+                            crate::compose::MdBox::Comment,
+                            self.mention_input(
+                                crate::mention::Field::Comment,
+                                Input::new(&self.boxes.comment).appearance(false),
+                                cx,
+                            )
+                            .into_any_element(),
+                            window,
+                            cx,
+                        ),
+                    )
                     .child(
                         div()
                             .flex()
@@ -1429,6 +1458,7 @@ impl GitLabView {
         id: &str,
         resolvable: bool,
         resolved: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         // A comment of your review: nothing to reply to until it's submitted.
@@ -1513,11 +1543,19 @@ impl GitLabView {
                     .border_1()
                     .border_color(c(0x1068bf))
                     .bg(c(BG))
-                    .child(self.mention_input(
-                        crate::mention::Field::Reply,
-                        Input::new(&self.boxes.reply).appearance(false),
-                        cx,
-                    )),
+                    .child(
+                        self.md_editor(
+                            crate::compose::MdBox::Reply,
+                            self.mention_input(
+                                crate::mention::Field::Reply,
+                                Input::new(&self.boxes.reply).appearance(false),
+                                cx,
+                            )
+                            .into_any_element(),
+                            window,
+                            cx,
+                        ),
+                    ),
             )
             .child(
                 div()
@@ -1564,7 +1602,7 @@ impl GitLabView {
     }
 
     /// The new-thread box under a line of the diff.
-    pub(crate) fn line_form(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn line_form(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let empty = self.boxes.line.read(cx).value().trim().is_empty();
         let send_label = "Add comment now";
         let enabled = !empty;
@@ -1584,11 +1622,19 @@ impl GitLabView {
                     .border_1()
                     .border_color(c(0x1068bf))
                     .bg(c(CARD))
-                    .child(self.mention_input(
-                        crate::mention::Field::Line,
-                        Input::new(&self.boxes.line).appearance(false),
-                        cx,
-                    )),
+                    .child(
+                        self.md_editor(
+                            crate::compose::MdBox::Line,
+                            self.mention_input(
+                                crate::mention::Field::Line,
+                                Input::new(&self.boxes.line).appearance(false),
+                                cx,
+                            )
+                            .into_any_element(),
+                            window,
+                            cx,
+                        ),
+                    ),
             )
             .child(
                 div()

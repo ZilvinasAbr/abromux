@@ -43,6 +43,8 @@ pub struct More {
     pub branch: Entity<InputState>,
     /// What the last revert or cherry-pick did, to say so.
     pub picked: Option<String>,
+    /// Boxes showing their Preview instead of the text.
+    pub previewing: std::collections::HashSet<crate::compose::MdBox>,
     /// "Your review": the panel open, its verdict, and the summary.
     pub review_panel: bool,
     pub verdict: Verdict,
@@ -72,6 +74,7 @@ impl More {
             pick: None,
             branch: cx.new(|cx| InputState::new(window, cx).placeholder("Branch")),
             picked: None,
+            previewing: Default::default(),
             review_panel: false,
             verdict: Verdict::Comment,
             summary: field(3, "Add optional summary content…", window, cx),

@@ -1990,7 +1990,7 @@ impl GitLabView {
                         d.border_l_1().border_r_1().border_color(c(BORDER))
                     })
                     .children(self.thread_notes(d, Some(&path), true, true, window, cx))
-                    .child(self.reply_bar(&d.id, d.resolvable(), d.resolved(), cx))
+                    .child(self.reply_bar(&d.id, d.resolvable(), d.resolved(), window, cx))
                     // GitLab's "Start another thread" on the same line, while
                     // none is being written there.
                     .when_some(
@@ -2077,7 +2077,7 @@ impl GitLabView {
             )
             .into_any_element(),
             Row::Draft(_) => {
-                let form = self.line_form(cx);
+                let form = self.line_form(window, cx);
                 if !self.loc.parallel {
                     return card(form).into_any_element();
                 }

@@ -480,7 +480,7 @@ impl GitLabView {
         };
         let editing = self.editing_note == Some(n.id);
         let body = if editing {
-            self.note_edit_form(cx)
+            self.note_edit_form(window, cx)
         } else {
             body
         };

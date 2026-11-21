@@ -1488,7 +1488,7 @@ impl GitLabView {
                 .flex_col()
                 .gap_4()
                 .children(self.write_alert(cx))
-                .when(self.editing_mr, |d| d.child(self.mr_edit_form(cx)))
+                .when(self.editing_mr, |d| d.child(self.mr_edit_form(window, cx)))
                 .when(!self.editing_mr, |d| {
                     d.children(self.description(&r, window, cx))
                 })
@@ -1518,7 +1518,7 @@ impl GitLabView {
             return pad(div())
                 .pt_2()
                 .pb_6()
-                .child(self.comment_form(cx))
+                .child(self.comment_form(window, cx))
                 .into_any_element();
         }
         let Some(e) = entries.get(ix - 1) else {
@@ -1566,7 +1566,13 @@ impl GitLabView {
                             .children(self.thread_notes(d, None, false, true, window, cx))
                             // A thread (not a lone comment) takes replies.
                             .when(!d.individual_note, |el| {
-                                el.child(self.reply_bar(&d.id, d.resolvable(), d.resolved(), cx))
+                                el.child(self.reply_bar(
+                                    &d.id,
+                                    d.resolvable(),
+                                    d.resolved(),
+                                    window,
+                                    cx,
+                                ))
                             }),
                     )
                     .into_any_element()
@@ -1973,7 +1979,7 @@ impl GitLabView {
                     .flex_col()
                     .children(self.thread_notes(d, Some(&path), true, false, window, cx))
                     .child(
-                        self.reply_bar(&d.id, d.resolvable(), d.resolved(), cx)
+                        self.reply_bar(&d.id, d.resolvable(), d.resolved(), window, cx)
                             .rounded_b(px(8.)),
                     ),
             );
