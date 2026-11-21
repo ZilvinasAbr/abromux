@@ -1080,13 +1080,24 @@ impl Client {
             "{{ project(fullPath: {full_path:?}) {{ mergeRequest(iid: \"{iid}\") {{ codequalityReportsComparer {{ status report {{ newErrors {{ description severity filePath line }} resolvedErrors {{ description severity filePath line }} }} }} }} }} }}"
         );
         let url = format!("{}/api/graphql", self.host);
-        let r = self.transport.send(
-            "POST",
-            &url,
-            &self.token,
-            serde_json::json!({ "query": q }).to_string().as_bytes(),
-        )?;
-        let v: serde_json::Value = decode(&r.body, &url)?;
+        // GitLab compares the reports when first asked: "PARSING" until
+        // then, as its page polls. A few tries, a moment apart.
+        let mut v = serde_json::Value::Null;
+        for _ in 0..8 {
+            let r = self.transport.send(
+                "POST",
+                &url,
+                &self.token,
+                serde_json::json!({ "query": q }).to_string().as_bytes(),
+            )?;
+            v = decode(&r.body, &url)?;
+            if v["data"]["project"]["mergeRequest"]["codequalityReportsComparer"]["status"]
+                != "PARSING"
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        }
         let c = &v["data"]["project"]["mergeRequest"]["codequalityReportsComparer"];
         if c["status"] != "PARSED" {
             return Ok(None);

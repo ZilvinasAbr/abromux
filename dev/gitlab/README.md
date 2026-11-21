@@ -35,6 +35,15 @@ python3 dev/gitlab/seed.py  # recreate the fixtures project from scratch
 - Every push runs a pipeline. There's no runner, so they stay pending and
   GitLab fails them as stuck after an hour: both states get shown.
 
+## Reports
+
+The fixtures' pipelines never run (no runner). For the Reports tab and the
+report widgets, `dev/gitlab/reports.sh` starts a GitLab Runner in Docker that
+only takes jobs tagged `reports` (the rest stay pending) and makes a merge
+request whose pipeline writes a JUnit report with one failure and a Code
+Quality report with two findings; `--down` removes both. `tests/reports.rs`
+checks the review loads them.
+
 ## Tests
 
 ```bash
@@ -98,7 +107,8 @@ it shows: `state`, `open {url | iid}`, `section {name}`, `file {path}`,
 `attach {box, paths}`, `line_comment {path, new|old, from_new|from_old, body, review}` (a range with `from_*`),
 `file_comment {path, body, review}`, `rerequest {username}`, `time {duration, summary, estimate}`, `whitespace {show}`,
 `task {n, done}`, `new_mr {source, target, title, description, draft, create}`,
-and `edit_mr` also takes `target`, `squash` and `remove_source_branch`. Real input goes through `debug.input`
+`reports {pick, quality_open, tests_open}`, `image_comment {path, x, y, body, review}`,
+`dependency {add | remove}` (Premium), and `edit_mr` also takes `target`, `squash` and `remove_source_branch`. Real input goes through `debug.input`
 (`key:n`, `ui:down,X,Y;ui:up,X,Y`, `ui:scroll,X,Y,DY`).
 
 The loop in one command, tests + build + a screenshot in `target/shots/`:
