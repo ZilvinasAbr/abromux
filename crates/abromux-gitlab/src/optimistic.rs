@@ -88,6 +88,18 @@ pub enum Patch {
     State {
         open: bool,
     },
+    /// Suggestions `ids` applied.
+    Suggestions {
+        ids: Vec<u64>,
+    },
+    /// A to-do added, or yours marked done.
+    Todo {
+        add: bool,
+    },
+    /// Notifications on or off.
+    Subscribed {
+        on: bool,
+    },
 }
 
 impl Patch {
@@ -209,6 +221,9 @@ impl Patch {
             Patch::Draft { body } => {
                 if !r.drafts.iter().any(|d| d.note.trim() == body.trim()) {
                     r.drafts.push(DraftNote {
+                        position: None,
+                        discussion_id: None,
+                        resolve_discussion: false,
                         id: NOTE_BASE + n,
                         note: body.clone(),
                     });
@@ -238,6 +253,26 @@ impl Patch {
                     r.mr.state = if *open { "opened" } else { "closed" }.to_string();
                 }
             }
+            Patch::Suggestions { ids } => {
+                for d in threads_mut(r) {
+                    for n in &mut d.notes {
+                        for s in n.suggestions.iter_mut().filter(|s| ids.contains(&s.id)) {
+                            s.applied = true;
+                            s.appliable = false;
+                        }
+                    }
+                }
+            }
+            Patch::Todo { add } => {
+                if *add {
+                    if r.todos.is_empty() {
+                        r.todos.push(NOTE_BASE + n);
+                    }
+                } else {
+                    r.todos.clear();
+                }
+            }
+            Patch::Subscribed { on } => r.mr.subscribed = Some(*on),
         }
     }
 }
@@ -310,6 +345,9 @@ fn apply_fields(r: &mut Review, fields: &Value, people: &[User], me: &User) {
             .map(|id| known.iter().find(|u| Some(u.id) == id.as_u64()).cloned())
             .collect()
     };
+    if let Some(on) = fields.get("discussion_locked").and_then(Value::as_bool) {
+        r.mr.discussion_locked = Some(on);
+    }
     if let Some(us) = fields.get("assignee_ids").and_then(users) {
         r.mr.assignees = us;
     }

@@ -55,6 +55,8 @@ pub struct Review {
     pub closes: Vec<Issue>,
     /// Your review's pending comments.
     pub drafts: Vec<DraftNote>,
+    /// Your pending to-dos on it, by id (the header's to-do button).
+    pub todos: Vec<u64>,
     /// Several assignees, several reviewers (GitLab's paid tiers), or one.
     pub multiple: (bool, bool),
     /// GitLab's "Stacked merge requests" this one is in, bottom first
@@ -219,6 +221,7 @@ impl Review {
             review_states: Default::default(),
             closes: vec![],
             drafts: vec![],
+            todos: vec![],
             multiple: (true, true),
             stack: vec![],
         }

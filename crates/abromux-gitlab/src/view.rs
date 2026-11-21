@@ -197,6 +197,8 @@ pub struct GitLabView {
     /// Writing (edit.rs): the text fields, a write under way, the last
     /// one's error, the thread being replied to, the line being commented on.
     pub(crate) boxes: crate::edit::Boxes,
+    /// actions.rs: suggestions' batch, the Code menu, merge messages, revert.
+    pub(crate) more: crate::actions::More,
     pub(crate) busy: Option<crate::edit::Write>,
     pub(crate) writes: crate::edit::Writes,
     /// The Overview's "Add reaction" picker is open.
@@ -261,6 +263,7 @@ impl GitLabView {
         cx.subscribe(&tree_search, |_, _, _: &InputEvent, cx| cx.notify())
             .detach();
         let boxes = crate::edit::Boxes::new(window, cx);
+        let more = crate::actions::More::new(window, cx);
         use crate::mention::Field;
         for (b, field) in [
             (&boxes.comment, Field::Comment),
@@ -310,6 +313,7 @@ impl GitLabView {
         .detach();
         let mut v = Self {
             boxes,
+            more,
             busy: None,
             writes: Default::default(),
             emoji_picker: None,
@@ -1167,7 +1171,7 @@ impl GitLabView {
             }
         }
         // Typing in a comment: the keys are the text's.
-        if self.boxes.typing(window, cx) {
+        if self.boxes.typing(window, cx) || self.more_typing(window, cx) {
             if k.key == "escape" && self.side_menu.is_some() {
                 self.close_side_menu(window, cx);
                 return;
@@ -1286,6 +1290,7 @@ impl GitLabView {
                 .as_ref()
                 .is_some_and(|(host, token)| focused(host) || focused(token))
             || self.boxes.typing(window, cx)
+            || self.more_typing(window, cx)
     }
 
     /// Draw GitLab tabs at `z` times GitLab's sizes (all of them: the zoom
@@ -1611,6 +1616,20 @@ impl Tab for GitLabView {
                 "error": self.review.error().map(|e| &e.text),
                 "summary": r.map(|r| r.summary()),
                 // GitLab's "Stacked merge requests", bottom first, and its dropdown.
+                "actions": r.map(|r| json!({
+                    "todo": !r.todos.is_empty(),
+                    "subscribed": r.mr.subscribed,
+                    "locked": r.mr.discussion_locked,
+                    "batch": self.more.batch,
+                    "code_menu": self.more.code_menu,
+                    "edit_message": self.more.edit_message,
+                    "picked": self.more.picked,
+                    "suggestions": r.files.iter()
+                        .flat_map(|f| f.threads.iter().map(|(_, _, d)| d))
+                        .flat_map(|d| d.notes.iter().flat_map(|n| n.suggestions.iter()))
+                        .map(|s| json!({ "id": s.id, "applied": s.applied, "appliable": s.appliable }))
+                        .collect::<Vec<_>>(),
+                })),
                 "stack": r.map(|r| r.stack.iter().map(|m| json!({ "iid": m.iid, "title": m.title, "files": m.files, "additions": m.additions, "deletions": m.deletions })).collect::<Vec<_>>()),
                 "stack_menu": self.stack_menu,
             },
@@ -1686,6 +1705,65 @@ impl Tab for GitLabView {
                 self.merge(auto, window, cx);
             }
             "cancel_auto_merge" => self.cancel_auto_merge(window, cx),
+            // actions.rs: what's beyond reviewing.
+            "apply_suggestion" => {
+                let id = num_arg("id").context("missing id")?;
+                if let Some(m) = str_arg("message") {
+                    let m = m.to_string();
+                    self.more
+                        .suggestion_msg
+                        .update(cx, |b, cx| b.set_value(m, window, cx));
+                }
+                self.apply_suggestions(vec![id], window, cx);
+            }
+            "batch_suggestion" => self.toggle_batch(num_arg("id").context("missing id")?, cx),
+            "apply_batch" => {
+                let ids = self.more.batch.clone();
+                self.apply_suggestions(ids, window, cx);
+            }
+            "todo" => self.toggle_todo(window, cx),
+            "subscribe" => self.set_subscribed(
+                args.get("on").and_then(Value::as_bool).unwrap_or(true),
+                window,
+                cx,
+            ),
+            "lock" => self.set_locked(
+                args.get("on").and_then(Value::as_bool).unwrap_or(true),
+                window,
+                cx,
+            ),
+            "code_menu" => {
+                self.more.code_menu = args.get("on").and_then(Value::as_bool).unwrap_or(true)
+            }
+            "merge_message" => {
+                self.more.edit_message = args.get("on").and_then(Value::as_bool).unwrap_or(true);
+                for (k, b) in [
+                    ("merge", self.more.merge_msg.clone()),
+                    ("squash", self.more.squash_msg.clone()),
+                ] {
+                    if let Some(t) = str_arg(k) {
+                        let t = t.to_string();
+                        b.update(cx, |b, cx| b.set_value(t, window, cx));
+                    }
+                }
+            }
+            // `{"cherry": bool, "branch": "main", "new_mr": bool, "go": bool}`
+            "pick" => {
+                let cherry = args.get("cherry").and_then(Value::as_bool).unwrap_or(false);
+                self.more.pick = Some(crate::actions::Pick {
+                    cherry,
+                    new_mr: args.get("new_mr").and_then(Value::as_bool).unwrap_or(true),
+                });
+                if let Some(b) = str_arg("branch") {
+                    let b = b.to_string();
+                    self.more
+                        .branch
+                        .update(cx, |x, cx| x.set_value(b, window, cx));
+                }
+                if args.get("go").and_then(Value::as_bool).unwrap_or(false) {
+                    self.run_pick(window, cx);
+                }
+            }
             "close" => self.set_open(false, window, cx),
             "reopen" => self.set_open(true, window, cx),
             "draft" => self.set_draft(
@@ -2813,6 +2891,9 @@ impl Render for GitLabView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The selectable lines this frame draws register themselves anew.
         self.sel_drawn.borrow_mut().clear();
+        if let Some(r) = self.review.ready().cloned() {
+            self.more_for(&r, window, cx);
+        }
         let page = if self.sign_in.is_some() {
             self.sign_in_page(cx)
         } else if self.in_mr() {

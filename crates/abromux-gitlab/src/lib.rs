@@ -9,6 +9,7 @@
 //! The tab's [`Location`] is what it saves, so it comes back after a
 //! restart on the same host, list or merge request.
 
+mod actions;
 pub mod api;
 pub mod auth;
 mod avatars;
@@ -62,7 +63,7 @@ macro_rules! icons {
     };
 }
 
-static ASSETS: [(&str, &[u8]); 36] = icons!(
+static ASSETS: [(&str, &[u8]); 64] = icons!(
     "layers",
     "file-diff",
     "arrow-right",
@@ -98,7 +99,35 @@ static ASSETS: [(&str, &[u8]); 36] = icons!(
     "square-dot",
     "square-check",
     "square",
-    "merge"
+    "merge",
+    "at-sign",
+    "bell",
+    "bell-off",
+    "bold",
+    "cherry-pick",
+    "clock",
+    "code",
+    "download",
+    "edit",
+    "eye",
+    "git-branch",
+    "italic",
+    "list-ordered",
+    "lock",
+    "md-link",
+    "md-list",
+    "md-tasks",
+    "paperclip",
+    "plus",
+    "quote",
+    "retry",
+    "revert",
+    "strikethrough",
+    "suggest",
+    "table",
+    "todo-add",
+    "todo-done",
+    "unlock"
 );
 
 /// The host a tab opens on when nothing says otherwise.
@@ -341,6 +370,7 @@ pub fn load_review(c: &api::Client, project: u64, iid: u64) -> anyhow::Result<re
             first_page(&mrp("/resource_state_events")),
             first_page(&mrp("/resource_label_events")),
             first_page(&mrp("/resource_milestone_events")),
+            api::todos_path(project),
         ]);
         (
             multiple.join().ok().and_then(Result::ok),
@@ -432,6 +462,10 @@ fn load_rest(
     r.awards = c.awards(project, iid).unwrap_or_default();
     r.closes = c.closes_issues(project, iid).unwrap_or_default();
     r.drafts = c.draft_notes(project, iid).unwrap_or_default();
+    r.todos = c
+        .todos(project, iid)
+        .map(|t| t.into_iter().map(|t| t.id).collect())
+        .unwrap_or_default();
     r.review_states = c
         .reviewers(project, iid)
         .unwrap_or_default()

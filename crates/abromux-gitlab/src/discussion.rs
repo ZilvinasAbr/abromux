@@ -674,16 +674,20 @@ impl GitLabView {
             .overflow_hidden()
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
                     .px_3()
                     .py_2()
                     .bg(c(RAISED))
-                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(c(TEXT))
-                    .child(if s.applied {
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(if s.applied {
                         "Suggestion applied"
                     } else {
                         "Suggested change"
-                    }),
+                    }))
+                    .children(self.suggestion_buttons(s, cx)),
             )
             .children({
                 let group = crate::select::Group::block(("suggestion", s.from_line, &s.to_content));

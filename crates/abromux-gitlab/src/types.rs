@@ -121,6 +121,13 @@ pub struct MergeRequest {
     pub sha: Option<String>,
     /// What the signed-in user may do; single-MR endpoint only.
     pub user: Option<MrPermissions>,
+    /// You get its notifications (the sidebar's toggle); single-MR endpoint only.
+    pub subscribed: Option<bool>,
+    /// Only project members may comment ("Lock discussion").
+    pub discussion_locked: Option<bool>,
+    /// The messages merging writes, when set on the merge request.
+    pub merge_commit_message: Option<String>,
+    pub squash_commit_message: Option<String>,
 }
 
 /// The single-MR endpoint's `user`: whether you may merge it.
@@ -136,6 +143,12 @@ pub struct MrPermissions {
 pub struct DraftNote {
     pub id: u64,
     pub note: String,
+    /// Where on the diff it goes; None for a comment on the merge request.
+    pub position: Option<Position>,
+    /// The thread it replies to.
+    pub discussion_id: Option<String>,
+    /// Resolve that thread when the review is submitted.
+    pub resolve_discussion: bool,
 }
 
 /// An issue the merge request closes when merged ("Closes #12").
@@ -252,12 +265,16 @@ pub struct FileDiff {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Position {
+    #[serde(deserialize_with = "null_as_default")]
     pub base_sha: String,
+    #[serde(deserialize_with = "null_as_default")]
     pub start_sha: String,
+    #[serde(deserialize_with = "null_as_default")]
     pub head_sha: String,
     pub old_path: Option<String>,
     pub new_path: Option<String>,
     /// text, image or file
+    #[serde(deserialize_with = "null_as_default")]
     pub position_type: String,
     pub old_line: Option<u32>,
     pub new_line: Option<u32>,
@@ -266,6 +283,7 @@ pub struct Position {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Suggestion {
+    pub id: u64,
     pub from_line: u32,
     pub to_line: u32,
     pub from_content: String,
@@ -625,4 +643,26 @@ mod stack_tests {
         all.sort();
         assert_eq!(all, [1, 2, 3]);
     }
+}
+
+/// A branch, for picking where a revert or cherry-pick goes.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Branch {
+    pub name: String,
+    pub default: bool,
+}
+
+/// One of your to-dos (`GET /todos`): what it's on.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Todo {
+    pub id: u64,
+    pub target: TodoTarget,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TodoTarget {
+    pub iid: u64,
 }

@@ -1083,6 +1083,7 @@ impl GitLabView {
                                 })),
                         )
                     })
+                    .child(self.merge_message_editor(r, squash, cx))
             });
         // Set to auto-merge: who did, and GitLab's Cancel auto-merge.
         let auto_line = (auto_set && r.mr.state == "opened").then(|| {
@@ -1216,7 +1217,7 @@ impl GitLabView {
                 )
             });
         let merge = match r.mr.state.as_str() {
-            "merged" | "closed" => self.outcome(r, mono),
+            "merged" | "closed" => self.outcome(r, mono).children(self.pick_buttons(r, cx)),
             _ => merge,
         };
         div().flex().flex_col().gap_3().child(approval).child(merge)

@@ -48,6 +48,12 @@ pub enum Write {
     EditNote,
     DeleteNote,
     Pipeline,
+    /// Applying suggestions.
+    Suggestion,
+    /// Adding a to-do, or marking it done.
+    Todo,
+    /// Reverting or cherry-picking the merge.
+    Pick,
 }
 
 /// A button's label and whether it's live, given what's being written:
@@ -792,6 +798,8 @@ impl GitLabView {
             remove_source_branch: self.merge_remove(r),
             auto,
             sha: r.mr.sha.clone(),
+            merge_commit_message: self.more.merge_message(r, false, cx),
+            squash_commit_message: self.more.merge_message(r, true, cx),
         };
         self.write(
             Write::Merge,
@@ -1051,6 +1059,7 @@ impl GitLabView {
         };
         let menu = self.mr_menu.then(|| {
             let draft = m.draft;
+            let locked = m.discussion_locked.unwrap_or(false);
             let open = m.state == "opened";
             let reference = m.references.full.clone();
             let items = div()
@@ -1088,6 +1097,23 @@ impl GitLabView {
                         ),
                     )
                 })
+                .when(writes, |d| {
+                    d.child(
+                        item(
+                            "gl-mr-lock",
+                            if locked {
+                                "Unlock discussion"
+                            } else {
+                                "Lock discussion"
+                            }
+                            .into(),
+                            false,
+                        )
+                        .on_click(
+                            cx.listener(move |v, _, window, cx| v.set_locked(!locked, window, cx)),
+                        ),
+                    )
+                })
                 .when(!reference.is_empty(), |d| {
                     d.child(
                         item("gl-mr-copy-ref", "Copy reference".into(), false).on_click(
@@ -1121,6 +1147,8 @@ impl GitLabView {
             )
             .with_priority(1)
         });
+        let code = self.code_button(r, cx);
+        let toggles = self.header_toggles(r, cx);
         Some(
             div()
                 .relative()
@@ -1128,12 +1156,14 @@ impl GitLabView {
                 .items_center()
                 .gap_2()
                 .flex_none()
+                .children(code)
                 .when(writes, |d| {
                     d.child(
                         secondary("gl-mr-edit", "Edit")
                             .on_click(cx.listener(|v, _, window, cx| v.open_edit_mr(window, cx))),
                     )
                 })
+                .children(toggles)
                 .child(
                     secondary("gl-mr-more", "")
                         .px_2()

@@ -739,6 +739,201 @@ impl Client {
         )
     }
 
+    /// Apply suggestions `ids` to the source branch in one commit, as
+    /// GitLab's "Apply suggestion" (one) and "Apply N suggestions" (a
+    /// batch) do; `message` is the commit's, GitLab's default when None.
+    pub fn apply_suggestions(&self, ids: &[u64], message: Option<&str>) -> anyhow::Result<()> {
+        let mut body = serde_json::json!({});
+        if let Some(m) = message.filter(|m| !m.trim().is_empty()) {
+            body["commit_message"] = m.into();
+        }
+        let path = match ids {
+            [one] => format!("suggestions/{one}/apply"),
+            _ => {
+                body["ids"] = ids.into();
+                "suggestions/batch_apply".to_string()
+            }
+        };
+        // Right after a commit (the last apply, a push) GitLab refuses with
+        // "A file has been changed" until it has the merge request's new
+        // diff: a moment later the same apply goes through.
+        let mut tries = 0;
+        loop {
+            match self.write::<serde_json::Value>("PUT", &path, body.clone()) {
+                Ok(_) => return Ok(()),
+                Err(e)
+                    if tries < 5
+                        && ApiError::status_of(&e) == Some(400)
+                        && format!("{e:#}").contains("has been changed") =>
+                {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(800));
+                }
+                Err(e) => {
+                    return Err(match ApiError::status_of(&e) {
+                        Some(400 | 422) => e.context(
+                            "GitLab can't apply it: its lines changed since, or the merge request isn't open",
+                        ),
+                        _ => e,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Get, or stop getting, its notifications (the sidebar's toggle).
+    pub fn subscribe(&self, project: u64, iid: u64, on: bool) -> anyhow::Result<()> {
+        let what = if on { "subscribe" } else { "unsubscribe" };
+        let path = format!("projects/{project}/merge_requests/{iid}/{what}");
+        match self.write::<serde_json::Value>("POST", &path, serde_json::json!({})) {
+            // 304: it already was.
+            Err(e) if ApiError::status_of(&e) == Some(304) => Ok(()),
+            r => r.map(|_| ()),
+        }
+    }
+
+    /// Add it to your to-do list ("Add a to-do item").
+    pub fn add_todo(&self, project: u64, iid: u64) -> anyhow::Result<()> {
+        let path = format!("projects/{project}/merge_requests/{iid}/todo");
+        match self.write::<serde_json::Value>("POST", &path, serde_json::json!({})) {
+            Err(e) if ApiError::status_of(&e) == Some(304) => Ok(()),
+            r => r.map(|_| ()),
+        }
+    }
+
+    /// Your pending to-dos on it: their ids (Mark as done takes them).
+    pub fn todos(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Todo>> {
+        let all: Vec<Todo> = self.get(&todos_path(project))?;
+        Ok(all.into_iter().filter(|t| t.target.iid == iid).collect())
+    }
+
+    /// Mark to-do `id` as done.
+    pub fn todo_done(&self, id: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("todos/{id}/mark_as_done"),
+            serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
+    /// Change a comment of your review before it's submitted.
+    pub fn edit_draft(&self, project: u64, iid: u64, id: u64, body: &str) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "PUT",
+            &format!("projects/{project}/merge_requests/{iid}/draft_notes/{id}"),
+            serde_json::json!({ "note": body }),
+        )?;
+        Ok(())
+    }
+
+    /// Take a comment out of your review.
+    pub fn delete_draft(&self, project: u64, iid: u64, id: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "DELETE",
+            &format!("projects/{project}/merge_requests/{iid}/draft_notes/{id}"),
+            serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
+    /// A comment held in your review (GitLab's "Add to review" on the
+    /// overview's box, or a reply's), with `discussion` the thread it
+    /// replies to and `resolve` whether submitting resolves it.
+    pub fn draft_comment(
+        &self,
+        project: u64,
+        iid: u64,
+        body: &str,
+        discussion: Option<&str>,
+        resolve: bool,
+    ) -> anyhow::Result<DraftNote> {
+        let mut b = serde_json::json!({ "note": body });
+        if let Some(d) = discussion {
+            b["in_reply_to_discussion_id"] = d.into();
+            b["resolve_discussion"] = resolve.into();
+        }
+        self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/draft_notes"),
+            b,
+        )
+    }
+
+    /// Revert (`cherry_pick` false) or cherry-pick commit `sha` onto
+    /// `branch`, as a merged merge request's Revert and Cherry-pick do.
+    /// GitLab commits it there; it answers with the new commit.
+    pub fn pick_commit(
+        &self,
+        project: u64,
+        sha: &str,
+        branch: &str,
+        cherry_pick: bool,
+    ) -> anyhow::Result<Commit> {
+        let what = if cherry_pick { "cherry_pick" } else { "revert" };
+        self.write(
+            "POST",
+            &format!("projects/{project}/repository/commits/{sha}/{what}"),
+            serde_json::json!({ "branch": branch }),
+        )
+        .map_err(|e| match ApiError::status_of(&e) {
+            Some(400 | 409 | 422) => e.context(format!(
+                "GitLab can't {} it onto {branch}: it may not apply cleanly, or is there already",
+                if cherry_pick { "cherry-pick" } else { "revert" }
+            )),
+            _ => e,
+        })
+    }
+
+    /// Branches matching `search`, for picking a target.
+    pub fn branches(&self, project: u64, search: &str) -> anyhow::Result<Vec<Branch>> {
+        self.get(&format!(
+            "projects/{project}/repository/branches?per_page=50&search={}",
+            query_value(search)
+        ))
+    }
+
+    /// Make branch `name` from `from`.
+    pub fn create_branch(&self, project: u64, name: &str, from: &str) -> anyhow::Result<Branch> {
+        self.write(
+            "POST",
+            &format!("projects/{project}/repository/branches"),
+            serde_json::json!({ "branch": name, "ref": from }),
+        )
+    }
+
+    /// Open a merge request from `source` into `target`.
+    pub fn create_mr(
+        &self,
+        project: u64,
+        source: &str,
+        target: &str,
+        title: &str,
+        description: &str,
+    ) -> anyhow::Result<MergeRequest> {
+        self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests"),
+            serde_json::json!({
+                "source_branch": source,
+                "target_branch": target,
+                "title": title,
+                "description": description,
+                "remove_source_branch": true,
+            }),
+        )
+    }
+
+    /// Delete the merge request (owners and admins only).
+    pub fn delete_mr(&self, project: u64, iid: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "DELETE",
+            &format!("projects/{project}/merge_requests/{iid}"),
+            serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
     /// Approve, or take back the approval.
     pub fn approve(&self, project: u64, iid: u64, approve: bool) -> anyhow::Result<()> {
         let what = if approve { "approve" } else { "unapprove" };
@@ -889,6 +1084,20 @@ impl Client {
         });
         if let Some(sha) = &opts.sha {
             body["sha"] = sha.clone().into();
+        }
+        if let Some(m) = opts
+            .merge_commit_message
+            .as_ref()
+            .filter(|m| !m.trim().is_empty())
+        {
+            body["merge_commit_message"] = m.clone().into();
+        }
+        if let Some(m) = opts
+            .squash_commit_message
+            .as_ref()
+            .filter(|m| !m.trim().is_empty())
+        {
+            body["squash_commit_message"] = m.clone().into();
         }
         if opts.auto {
             // `auto_merge` since GitLab 17; older ones know the other name.
@@ -1315,6 +1524,14 @@ pub struct MergeOptions {
     pub auto: bool,
     /// The head commit the merge is for.
     pub sha: Option<String>,
+    /// "Edit commit message": the merge commit's and the squashed one's.
+    pub merge_commit_message: Option<String>,
+    pub squash_commit_message: Option<String>,
+}
+
+/// Your pending to-dos on the project's merge requests.
+pub fn todos_path(project: u64) -> String {
+    format!("todos?project_id={project}&type=MergeRequest&state=pending&per_page=100")
 }
 
 /// The merge requests list in `scope` and `state` (all its pages: `get_all`).
