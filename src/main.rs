@@ -89,6 +89,7 @@ actions!(
         NewTerminal,
         NewBrowser,
         NewClaudeChat,
+        ToggleClaudeView,
         SplitRight,
         SplitDown,
         CloseTab,
@@ -1252,6 +1253,108 @@ impl AbroMux {
                 }
             }
         }
+    }
+
+    /// Switch the focused tab's Claude Code session between the terminal
+    /// UI and a Claude tab, in place: a terminal running `claude` becomes a
+    /// Claude tab on the same conversation, and a Claude tab a terminal
+    /// typing `claude --resume <id>` with its model, effort and mode. The
+    /// old tab closes, ending its process, so only one side writes to the
+    /// session; a pinned tab passes its pin on. Not while Claude is
+    /// mid-turn, which closing would cut off.
+    fn toggle_claude_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let warn = |title: &str, msg: &str, window: &mut Window, cx: &mut Context<Self>| {
+            let note = Notification::warning(msg.to_string()).title(title.to_string());
+            window.push_notification(note, cx);
+        };
+        let ws = self.ws();
+        let Some(surface) = ws.focused_surface().cloned() else {
+            return;
+        };
+        let id = surface.entity_id();
+        let ws_id = ws.id;
+        let Some((pane, _, _)) = ws.tab_position(id) else {
+            return;
+        };
+        let busy = "Claude is working. Switch once it has finished, or stop it first.";
+        let new = match &surface {
+            Surface::Terminal(t) => {
+                let t = t.read(cx);
+                // abromux's hooks say which session runs here; without them
+                // (not installed, or another channel's binary), Claude
+                // Code's own record of its process does.
+                let hooked = t
+                    .agent
+                    .as_ref()
+                    .filter(|a| a.kind == agent::Kind::Claude.as_str() && a.alive());
+                let (session, cwd, mode, working) = if let Some(a) = hooked {
+                    let cwd = if a.cwd.is_empty() { &t.cwd } else { &a.cwd };
+                    let cwd = std::path::PathBuf::from(cwd);
+                    (
+                        a.session_id.clone(),
+                        cwd,
+                        a.permission_mode.clone(),
+                        t.claude_running(),
+                    )
+                } else if let Some(r) = t.shell_pid().and_then(|pid| {
+                    claude_chat::running_under(pid, settings::claude_config_dir(cx).as_deref())
+                }) {
+                    (r.session, r.cwd, None, r.busy)
+                } else {
+                    return warn(
+                        "No Claude Code session here",
+                        "Start `claude` in this terminal first, or switch from a Claude tab.",
+                        window,
+                        cx,
+                    );
+                };
+                if working {
+                    return warn("Claude Code is busy", busy, window, cx);
+                }
+                let start = claude_chat::Start {
+                    session: Some(session),
+                    mode,
+                    ..Default::default()
+                };
+                let url = claude_chat::url_for(&cwd, &start);
+                self.make_browser(&url, window, cx)
+            }
+            Surface::Browser(b) if b.read(cx).chat.is_some() => {
+                let b = b.read(cx);
+                let chat = b.chat.as_ref().unwrap();
+                if chat.state == claude_chat::State::Running {
+                    return warn("Claude is busy", busy, window, cx);
+                }
+                let command = claude_chat::terminal_command(&chat.settings());
+                let mut opts = TerminalOpts::cwd(Some(chat.cwd.to_string_lossy().into_owned()));
+                if let Some(dir) = settings::claude_config_dir(cx) {
+                    opts.env.push((
+                        "CLAUDE_CONFIG_DIR".into(),
+                        dir.to_string_lossy().into_owned(),
+                    ));
+                }
+                let term = self.make_terminal(ws_id, opts, window, cx);
+                if let Surface::Terminal(t) = &term {
+                    t.update(cx, |t, _| t.send(format!("{command}\r").as_bytes()));
+                }
+                term
+            }
+            _ => {
+                return warn(
+                    "Not a Claude Code tab",
+                    "Switch from a terminal running Claude Code, or from a Claude tab.",
+                    window,
+                    cx,
+                );
+            }
+        };
+        let new_id = new.entity_id();
+        let wi = self.active;
+        for p in self.workspaces[wi].pinned.iter_mut().filter(|p| **p == id) {
+            *p = new_id;
+        }
+        self.add_tab_to(wi, pane, new, true, window, cx);
+        self.close_surface(id, window, cx);
     }
 
     /// ⌘-click on a terminal link: web URLs open in a browser to the right
@@ -3167,6 +3270,9 @@ impl Render for AbroMux {
                 let url = claude_chat::url_for(&cwd, &claude_chat::Start::default());
                 let s = this.make_browser(&url, window, cx);
                 this.add_tab(s, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ToggleClaudeView, window, cx| {
+                this.toggle_claude_view(window, cx)
             }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
                 this.split(Axis::Horizontal, false, window, cx)

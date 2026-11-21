@@ -9,9 +9,9 @@ use crate::{
     LastPane, MarkOldestUnreadAndJumpNext, MoveWorkspaceDown, MoveWorkspaceUp, NewBrowser,
     NewClaudeChat, NewFolderWorkspace, NewGroup, NewTerminal, NewWorkspace, NextTab, NextWorkspace,
     OpenConfig, OpenSettings, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab,
-    RenameWorkspace, ReopenSession, SplitDown, SplitRight, ToggleGroup, ToggleNotifications,
-    ToggleSidebar, ToggleUnread, ToggleWorkspaceUnread, ToggleZoom, Ungroup, WorkspaceSwitcher,
-    browser, channel, terminal,
+    RenameWorkspace, ReopenSession, SplitDown, SplitRight, ToggleClaudeView, ToggleGroup,
+    ToggleNotifications, ToggleSidebar, ToggleUnread, ToggleWorkspaceUnread, ToggleZoom, Ungroup,
+    WorkspaceSwitcher, browser, channel, terminal,
 };
 use gpui::*;
 
@@ -129,6 +129,10 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action("New Terminal Tab", NewTerminal),
                 MenuItem::action("New Browser Tab", NewBrowser),
                 MenuItem::action("New Claude Tab", NewClaudeChat),
+                MenuItem::action(
+                    "Switch Claude Code: Terminal ↔ Claude Tab",
+                    ToggleClaudeView,
+                ),
                 MenuItem::separator(),
                 MenuItem::action("Split Right", SplitRight),
                 MenuItem::action("Split Down", SplitDown),

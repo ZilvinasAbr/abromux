@@ -31,6 +31,8 @@
     { value: "bypassPermissions", name: "Bypass permissions", short: "Bypass", desc: "Run everything without asking. Only for sandboxes", danger: true },
   ];
   const EFFORT_NAMES = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
+  // Until Claude says which levels the model takes.
+  const ALL_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
   const FALLBACK_MODELS = [
     { value: "default", name: "Default", description: "Recommended model" },
     { value: "opus", name: "Opus", description: "For complex work" },
@@ -673,36 +675,6 @@
     }
   }
 
-  // ---- past conversations ------------------------------------------------
-
-  const historyBtn = $("history");
-  historyBtn.addEventListener("click", () => {
-    if (!menu.hidden) return closeMenu();
-    S.wantSessions = true;
-    post({ chat: "sessions" });
-  });
-  function ago(secs) {
-    const d = Date.now() / 1000 - secs;
-    if (d < 90) return "just now";
-    if (d < 3600) return `${Math.round(d / 60)}m ago`;
-    if (d < 86400) return `${Math.round(d / 3600)}h ago`;
-    if (d < 86400 * 30) return `${Math.round(d / 86400)}d ago`;
-    return new Date(secs * 1000).toLocaleDateString();
-  }
-  function onSessions(e) {
-    if (!S.wantSessions) return;
-    S.wantSessions = false;
-    const items = e.items || [];
-    const rows = items.length
-      ? items.map((x) => ({ value: x.id, name: x.title, desc: x.last ? `${ago(x.at)} · last: ${x.last}` : ago(x.at) }))
-      : [{ value: "", name: "No other conversations in this folder yet" }];
-    openMenu(historyBtn, [{
-      title: "Past conversations", rows, current: null,
-      pick: (id) => { if (id) post({ chat: "resume", session: id }); },
-    }]);
-    menu.classList.add("sessions");
-  }
-
   // ---- context ------------------------------------------------------------
 
   function drawContext() {
@@ -922,8 +894,17 @@
     // "Default (recommended)" says less than the model it stands for.
     const real = found && found.value === "default" && found.description && /^[\w .-]+\d/.exec(found.description.split(" · ")[0]);
     const name = real ? real[0].trim() : found ? found.name.replace(/\s*\(.*\)$/, "") : cur.replace(/^claude-/, "");
-    const effort = S.meta.effort ? `<span class="sub">${esc(EFFORT_NAMES[S.meta.effort] || S.meta.effort)}</span>` : "";
-    modelBtn.innerHTML = `${esc(name)}${effort}${chevron}`;
+    const effort = S.meta.effort && effortLevels().length
+      ? `<span class="sub">${esc(EFFORT_NAMES[S.meta.effort] || S.meta.effort)}</span>` : "";
+    modelBtn.innerHTML = `${esc(name)}${effort}`;
+  }
+
+  // The levels this model takes: Claude's list once it has started, every
+  // level before that, none for a model without effort.
+  function effortLevels() {
+    if (!S.models.length) return ALL_EFFORTS;
+    const m = currentModel();
+    return m ? m.efforts || [] : ALL_EFFORTS;
   }
 
   function setMode(mode) {
@@ -964,39 +945,106 @@
     menu.style.left = Math.max(8, Math.min(a.right - wrap.left - w, wrap.width - w - 8)) + "px";
     menu.style.bottom = (wrap.bottom - a.top + 6) + "px";
   }
-  function closeMenu() { menu.hidden = true; }
+  function closeMenu() { menu.hidden = true; S.modelMenu = null; }
   document.addEventListener("mousedown", (ev) => {
-    if (!menu.hidden && !menu.contains(ev.target) && !modeBtn.contains(ev.target) && !modelBtn.contains(ev.target) && !$("history").contains(ev.target)) closeMenu();
+    if (!menu.hidden && !menu.contains(ev.target) && !modeBtn.contains(ev.target) && !modelBtn.contains(ev.target)) closeMenu();
   });
 
   modeBtn.addEventListener("click", () => {
     if (!menu.hidden) return closeMenu();
     openMenu(modeBtn, [{ title: "Permissions", rows: availableModes(), current: S.meta.mode || "default", pick: setMode }]);
   });
+  // ---- model menu --------------------------------------------------------
+
+  // The models picked by name (Opus, Sonnet, …) up top, numbered; the
+  // effort and the rest (Default, older and dated models) a level down.
+  function modelLists() {
+    const all = S.models.length ? S.models : FALLBACK_MODELS;
+    const main = all.filter((m) => m.value !== "default" && !/^claude-/.test(m.value));
+    return { main, more: all.filter((m) => !main.includes(m)) };
+  }
+  // The row the current model is: the one named, or with none (or
+  // "default") chosen, the main model Default stands for.
+  function isCurrent(m) {
+    const cur = S.meta.model || "default";
+    if (m.value === cur) return true;
+    if (cur !== "default") return false;
+    const def = (S.models.length ? S.models : FALLBACK_MODELS).find((x) => x.value === "default");
+    return !!(def && def.resolved && m.resolved === def.resolved && m.value !== "default" && !/^claude-/.test(m.value));
+  }
+  function pickModel(v) {
+    closeMenu();
+    post({ chat: "model", model: v });
+    S.meta.model = v;
+    drawModel();
+    drawMode();
+  }
+  function pickEffort(v) {
+    closeMenu();
+    post({ chat: "effort", effort: v });
+    S.meta.effort = v;
+    drawModel();
+  }
+  const check = '<svg class="mm-check" viewBox="0 0 16 16"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const back = '<svg class="mm-back" viewBox="0 0 12 12"><path d="M7.5 2.5 4 6l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  function mmRow(label, right, onClick, title) {
+    const b = h("button", "mm-row", `<span class="mm-name">${label}</span><span class="mm-right">${right}</span>`);
+    if (title) b.title = title;
+    b.addEventListener("click", onClick);
+    menu.append(b);
+    return b;
+  }
+  function openModelMenu(view) {
+    S.modelMenu = view;
+    menu.innerHTML = "";
+    menu.className = "popover menu model-menu";
+    const { main, more } = modelLists();
+    if (view === "effort" || view === "more") {
+      mmRow(`${back}${view === "effort" ? "Effort" : "More models"}`, "", () => openModelMenu("main")).classList.add("mm-head");
+      menu.append(h("div", "menu-sep"));
+    }
+    if (view === "main") {
+      main.forEach((m, i) => mmRow(esc(m.name), isCurrent(m) ? check : `<span class="mm-key">${i + 1}</span>`, () => pickModel(m.value), m.description));
+      const levels = effortLevels();
+      if (levels.length) {
+        menu.append(h("div", "menu-sep"));
+        const cur = S.meta.effort ? EFFORT_NAMES[S.meta.effort] || S.meta.effort : "Default";
+        mmRow("Effort", `<span class="mm-value">${esc(cur)}</span>${chevron}`, () => openModelMenu("effort"));
+      }
+      if (more.length) {
+        menu.append(h("div", "menu-sep"));
+        mmRow("More models", chevron, () => openModelMenu("more"));
+      }
+    } else if (view === "effort") {
+      effortLevels().forEach((l) => mmRow(esc(EFFORT_NAMES[l] || l), S.meta.effort === l ? check : "", () => pickEffort(l)));
+    } else {
+      more.forEach((m) => {
+        const desc = m.description ? `<small>${esc(m.description)}</small>` : "";
+        mmRow(`${esc(m.name)}${desc}`, m.value === (S.meta.model || "default") ? check : "", () => pickModel(m.value)).classList.add("mm-tall");
+      });
+    }
+    menu.hidden = false;
+    const wrap = modelBtn.closest(".composer-wrap").getBoundingClientRect();
+    const a = modelBtn.getBoundingClientRect();
+    const w = Math.max(280, menu.offsetWidth);
+    menu.style.left = Math.max(8, Math.min(a.right - wrap.left - w, wrap.width - w - 8)) + "px";
+    menu.style.bottom = (wrap.bottom - a.top + 6) + "px";
+  }
   modelBtn.addEventListener("click", () => {
     if (!menu.hidden) return closeMenu();
     warm();
-    const list = (S.models.length ? S.models : FALLBACK_MODELS).map((m) => ({ ...m, name: m.name }));
-    const sections = [{
-      title: "Model", rows: list, current: S.meta.model || "default",
-      pick: (v) => { post({ chat: "model", model: v }); S.meta.model = v; drawModel(); drawMode(); },
-    }];
-    const m = currentModel();
-    const levels = (m && m.efforts) || [];
-    if (levels.length) {
-      sections.push({
-        title: "Effort", inline: true,
-        rows: levels.map((l) => ({ value: l, name: EFFORT_NAMES[l] || l })),
-        current: S.meta.effort,
-        pick: (v) => { post({ chat: "effort", effort: v }); S.meta.effort = v; drawModel(); },
-      });
-    }
-    openMenu(modelBtn, sections);
+    openModelMenu("main");
   });
-  $("new").addEventListener("click", () => {
-    post({ chat: "new" });
-    input.focus();
-  });
+  // 1–9 pick a main model while the menu shows them.
+  document.addEventListener("keydown", (ev) => {
+    if (menu.hidden || S.modelMenu !== "main" || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    const n = Number(ev.key);
+    const m = n >= 1 && modelLists().main[n - 1];
+    if (!m) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    pickModel(m.value);
+  }, true);
 
   // ---- slash commands ----------------------------------------------------
 
@@ -1013,11 +1061,15 @@
     if (!/^\/[\w:.-]*$/.test(v)) return [];
     const q = v.slice(1).toLowerCase();
     const seen = new Set();
-    const all = [...S.commands, ...BUILTIN].filter((c) => !seen.has(c.name) && seen.add(c.name));
+    // Everything Claude offers (built-ins, skills, plugins' and MCP
+    // commands), in a list that scrolls; those that start with what you
+    // typed first. `__`-names are Claude's own plumbing.
+    const all = [...S.commands, ...BUILTIN]
+      .filter((c) => !c.name.startsWith("__"))
+      .filter((c) => !seen.has(c.name) && seen.add(c.name));
     return all
       .filter((c) => c.name.toLowerCase().includes(q))
-      .sort((a, b) => (a.name.toLowerCase().startsWith(q) ? 0 : 1) - (b.name.toLowerCase().startsWith(q) ? 0 : 1))
-      .slice(0, 8);
+      .sort((a, b) => (a.name.toLowerCase().startsWith(q) ? 0 : 1) - (b.name.toLowerCase().startsWith(q) ? 0 : 1));
   }
 
   // The `@` word the caret is in, if any: [start, query].
@@ -1071,6 +1123,8 @@
     if (sel) sel.scrollIntoView({ block: "nearest" });
   }
   function drawSlash() {
+    // Claude's own list arrives once it runs; until then, the built-ins.
+    warm();
     S.popKind = "slash";
     drawPop();
   }
@@ -1264,7 +1318,6 @@
       case "sub_done": return onSub(e, true);
       case "usage": S.used = e.used; return drawContext();
       case "files": return onFiles(e);
-      case "sessions": return onSessions(e);
       case "rewind_preview": return onRewindPreview(e);
       case "attach":
         S.images.push({ mediaType: e.mediaType, data: e.data, url: `data:${e.mediaType};base64,${e.data}` });

@@ -157,6 +157,29 @@ pub fn parse(url: &str) -> Option<(PathBuf, Start)> {
     cwd.is_absolute().then_some((cwd, start))
 }
 
+/// What to type into a shell in the chat's folder to carry on with `start`
+/// in Claude Code's terminal UI. Only values that pass the same checks as
+/// the tab URL's get in, each single-quoted (zsh would glob `opus[1m]`).
+pub fn terminal_command(start: &Start) -> String {
+    let mut cmd = String::from("claude");
+    let mut arg = |flag: &str, v: &str| {
+        let _ = write!(cmd, " {flag} '{v}'");
+    };
+    if let Some(s) = start.session.as_deref().filter(|s| is_session_id(s)) {
+        arg("--resume", s);
+    }
+    if let Some(m) = start.model.as_deref().filter(|m| is_model_name(m)) {
+        arg("--model", m);
+    }
+    if let Some(e) = start.effort.as_deref().and_then(effort_name) {
+        arg("--effort", e);
+    }
+    if let Some(m) = start.mode.as_deref().and_then(mode_name) {
+        arg("--permission-mode", m);
+    }
+    cmd
+}
+
 /// Session ids are UUIDs; anything else isn't passed to `claude`.
 fn is_session_id(s: &str) -> bool {
     !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
@@ -339,6 +362,17 @@ impl Chat {
     pub fn with_config_dir(mut self, dir: Option<PathBuf>) -> Self {
         self.config_dir = dir;
         self
+    }
+
+    /// Its conversation and settings as they are now, bypass mode included,
+    /// to carry the session over to a terminal.
+    pub fn settings(&self) -> Start {
+        Start {
+            session: self.session.clone(),
+            model: self.model.clone(),
+            effort: self.effort.clone(),
+            mode: self.mode.clone(),
+        }
     }
 
     /// The tab's URL: its conversation and settings, but never bypass mode
@@ -1083,6 +1117,7 @@ impl Chat {
                                         "value": m["value"],
                                         "name": m["displayName"],
                                         "description": m["description"],
+                                        "resolved": m["resolvedModel"],
                                         "efforts": m["supportedEffortLevels"],
                                         "auto": m["supportsAutoMode"],
                                     })
@@ -1286,23 +1321,78 @@ fn resume_point(transcript: &str, uuid: &str) -> Option<String> {
 }
 
 /// The folders Claude Code keeps transcripts in for `cwd`.
+/// A Claude Code session running in a terminal, as Claude Code records it
+/// itself in `<config>/sessions/<pid>.json`.
+#[derive(Debug, PartialEq)]
+pub struct Running {
+    pub session: String,
+    pub cwd: PathBuf,
+    /// In the middle of a turn.
+    pub busy: bool,
+}
+
+/// The Claude Code session running under `shell` (a terminal's shell pid),
+/// without abromux's hooks: its `claude` process is found among the
+/// shell's descendants and its session read from the file Claude Code
+/// keeps for it, in the same config folders past conversations come from.
+pub fn running_under(shell: u32, config: Option<&Path>) -> Option<Running> {
+    let roots = config_roots(config);
+    let mut level = vec![shell];
+    // The shell's children, and theirs (`claude` run by a wrapper script).
+    for _ in 0..3 {
+        let next: Vec<u32> = level
+            .iter()
+            .flat_map(|&p| abromux_platform::process::children(p))
+            .take(256)
+            .collect();
+        for pid in &next {
+            let file = format!("sessions/{pid}.json");
+            if let Some(r) = roots.iter().find_map(|r| session_file(&r.join(&file))) {
+                return Some(r);
+            }
+        }
+        level = next;
+    }
+    None
+}
+
+fn session_file(path: &Path) -> Option<Running> {
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let session = v["sessionId"].as_str().filter(|s| is_session_id(s))?;
+    let cwd = PathBuf::from(v["cwd"].as_str()?);
+    cwd.is_absolute().then(|| Running {
+        session: session.into(),
+        cwd,
+        busy: v["status"].as_str() == Some("busy"),
+    })
+}
+
+/// Claude Code's config folders: abromux's `claude.configDir`, then
+/// `$CLAUDE_CONFIG_DIR`, then `~/.claude`.
+fn config_roots(config: Option<&Path>) -> Vec<PathBuf> {
+    let mut roots = vec![];
+    if let Some(dir) = config {
+        roots.push(dir.to_path_buf());
+    }
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR")
+        && !dir.is_empty()
+    {
+        roots.push(PathBuf::from(dir));
+    }
+    roots.push(abromux_core::paths::home().join(".claude"));
+    roots
+}
+
 fn project_dirs(cwd: &Path, config: Option<&Path>) -> Vec<PathBuf> {
     let name: String = cwd
         .to_string_lossy()
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
-    let mut roots = vec![];
-    if let Some(dir) = config {
-        roots.push(dir.join("projects"));
-    }
-    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR")
-        && !dir.is_empty()
-    {
-        roots.push(PathBuf::from(dir).join("projects"));
-    }
-    roots.push(abromux_core::paths::home().join(".claude/projects"));
-    roots.into_iter().map(|r| r.join(&name)).collect()
+    config_roots(config)
+        .into_iter()
+        .map(|r| r.join("projects").join(&name))
+        .collect()
 }
 
 /// This folder's past conversations, newest first: id, when, and the
@@ -1791,6 +1881,51 @@ fn result_text(content: &Value) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_command_resumes_with_settings() {
+        let start = Start {
+            session: Some("fb276ed8-926e-467b-91cd-3a24258c3ef7".into()),
+            model: Some("opus[1m]".into()),
+            effort: Some("high".into()),
+            mode: Some("acceptEdits".into()),
+        };
+        assert_eq!(
+            terminal_command(&start),
+            "claude --resume 'fb276ed8-926e-467b-91cd-3a24258c3ef7' --model 'opus[1m]' \
+             --effort 'high' --permission-mode 'acceptEdits'"
+        );
+        assert_eq!(terminal_command(&Start::default()), "claude");
+        let bad = Start {
+            session: Some("x; rm -rf ~".into()),
+            model: Some("o'pus".into()),
+            ..Default::default()
+        };
+        assert_eq!(terminal_command(&bad), "claude");
+    }
+
+    #[test]
+    fn finds_the_session_claude_records_for_a_child() {
+        let dir = std::env::temp_dir().join(format!("abromux-running-{}", std::process::id()));
+        let mut child = Command::new("sleep").arg("5").spawn().unwrap();
+        std::fs::create_dir_all(dir.join("sessions")).unwrap();
+        std::fs::write(
+            dir.join(format!("sessions/{}.json", child.id())),
+            r#"{"pid":1,"sessionId":"95a19daa-2cbc-42a2-843c-208f000a0e8c","cwd":"/p","status":"busy"}"#,
+        )
+        .unwrap();
+        let got = running_under(std::process::id(), Some(&dir));
+        let _ = child.kill();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            got,
+            Some(Running {
+                session: "95a19daa-2cbc-42a2-843c-208f000a0e8c".into(),
+                cwd: "/p".into(),
+                busy: true,
+            })
+        );
+    }
 
     #[test]
     fn url_round_trip() {
