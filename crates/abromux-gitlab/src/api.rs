@@ -1033,6 +1033,31 @@ impl Client {
         })
     }
 
+    /// Upload `file` to the project, as the editor's "Attach a file or
+    /// image" does: GitLab answers with the markdown that shows it.
+    /// Through curl's multipart form, whatever the transport (a local
+    /// review has nowhere to upload to).
+    pub fn upload(&self, project: u64, file: &std::path::Path) -> anyhow::Result<String> {
+        #[derive(serde::Deserialize)]
+        struct Uploaded {
+            markdown: String,
+        }
+        let url = format!("{}/api/v4/projects/{project}/uploads", self.host);
+        // curl's -F: quotes keep commas and semicolons in the name.
+        let form = format!(
+            "file=@\"{}\"",
+            file.display()
+                .to_string()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+        );
+        let r = curl(&["-X", "POST", "-F", &form], &url, &self.token)
+            .with_context(|| format!("uploading {}", file.display()))?;
+        let r = self.check(r, &url)?;
+        let u: Uploaded = decode(&r.body, "uploads")?;
+        Ok(u.markdown)
+    }
+
     /// Delete the merge request (owners and admins only).
     pub fn delete_mr(&self, project: u64, iid: u64) -> anyhow::Result<()> {
         let _: serde_json::Value = self.write(

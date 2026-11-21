@@ -175,6 +175,66 @@ impl GitLabView {
         cx.notify();
     }
 
+    /// "Attach a file or image": pick files, upload each to the project,
+    /// and put GitLab's markdown for them in box `b` at the cursor.
+    pub(crate) fn attach(&mut self, b: MdBox, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let _ = this.update_in(cx, |v, window, cx| v.upload_files(b, paths, window, cx));
+        })
+        .detach();
+    }
+
+    /// Upload `paths` and insert their markdown in box `b`.
+    pub(crate) fn upload_files(
+        &mut self,
+        b: MdBox,
+        paths: Vec<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let project = if b == MdBox::NewMr {
+            self.new_mr.project
+        } else {
+            self.loc.project
+        };
+        let (Some(p), Some(c)) = (project, self.client.clone()) else {
+            return;
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            let got = cx
+                .background_spawn(async move {
+                    paths
+                        .iter()
+                        .map(|f| c.upload(p, f))
+                        .collect::<anyhow::Result<Vec<String>>>()
+                })
+                .await;
+            let _ = this.update_in(cx, |v, window, cx| {
+                match got {
+                    Ok(mds) => {
+                        let e = v.md_entity(b);
+                        e.update(cx, |s, cx| {
+                            s.insert(format!("{}\n", mds.join("\n")), window, cx);
+                            s.focus(window, cx);
+                        });
+                    }
+                    Err(e) => v.write_error = Some(format!("{e:#}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// The text of the line a new thread is being written on, and how many
     /// lines that is.
     fn commented_text(&self, _cx: &App) -> Option<(String, usize)> {
@@ -241,7 +301,17 @@ impl GitLabView {
             .child(tool(Md::Bullets, "md-list", "Add a bullet list"))
             .child(tool(Md::Numbers, "list-ordered", "Add a numbered list"))
             .child(tool(Md::Tasks, "md-tasks", "Add a checklist"))
-            .child(tool(Md::Table, "table", "Add a table"));
+            .child(tool(Md::Table, "table", "Add a table"))
+            .when(!self.is_local(), |d| {
+                d.child(
+                    crate::edit::icon_button(
+                        SharedString::from(format!("md-{b:?}-attach")),
+                        icon("paperclip", 15., c(MUTED)),
+                        "Attach a file or image",
+                    )
+                    .on_click(cx.listener(move |v, _, window, cx| v.attach(b, window, cx))),
+                )
+            });
         let head = div()
             .flex()
             .items_center()

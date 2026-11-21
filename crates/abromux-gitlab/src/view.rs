@@ -2193,6 +2193,20 @@ impl Tab for GitLabView {
                 let done = args.get("done").and_then(Value::as_bool).unwrap_or(true);
                 self.toggle_task(n, done, window, cx);
             }
+            // Upload files into a box: `{"box": "comment", "paths": ["/tmp/a.png"]}`.
+            "attach" => {
+                let b = crate::compose::MdBox::parse(str_arg("box").unwrap_or("comment"))
+                    .context("box is comment, reply, line, note or description")?;
+                let paths = args
+                    .get("paths")
+                    .and_then(Value::as_array)
+                    .context("missing paths")?
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                self.upload_files(b, paths, window, cx);
+            }
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);
