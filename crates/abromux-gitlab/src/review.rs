@@ -57,6 +57,8 @@ pub struct Review {
     pub drafts: Vec<DraftNote>,
     /// Approval rules, merge trains and dependencies, on a paid GitLab.
     pub premium: crate::types::Premium,
+    /// Commits added for context ("previously merged commits").
+    pub context_commits: Vec<crate::types::Commit>,
     /// Work items linked to it (GitLab's sidebar), when GitLab has them.
     pub work_items: Vec<crate::types::WorkItemLink>,
     /// GitLab's merge checks: (identifier, status), as its merge widget lists them.
@@ -240,6 +242,7 @@ impl Review {
             reports: Default::default(),
             checks: vec![],
             work_items: vec![],
+            context_commits: vec![],
             premium: Default::default(),
             multiple: (true, true),
             stack: vec![],

@@ -334,4 +334,24 @@ fn suggestions_todos_notifications_lock_and_drafts() {
             serde_json::json!({}),
         );
     }
+
+    // Context commits: one of main's added, listed, removed.
+    let main = c.branch_commits(p, "main").unwrap();
+    let sha = main[1].id.clone();
+    c.context_commits_change(p, iid, std::slice::from_ref(&sha), true)
+        .unwrap();
+    assert!(
+        c.context_commits(p, iid)
+            .unwrap()
+            .iter()
+            .any(|x| x.id == sha)
+    );
+    c.context_commits_change(p, iid, std::slice::from_ref(&sha), false)
+        .unwrap();
+    assert!(
+        !c.context_commits(p, iid)
+            .unwrap()
+            .iter()
+            .any(|x| x.id == sha)
+    );
 }

@@ -1269,6 +1269,37 @@ impl Client {
         Ok(v["web_url"].as_str().unwrap_or_default().to_string())
     }
 
+    /// The merge request's context commits ("previously merged commits").
+    pub fn context_commits(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Commit>> {
+        self.get(&format!(
+            "projects/{project}/merge_requests/{iid}/context_commits"
+        ))
+    }
+
+    /// Add (or with `add` false, remove) context commits `shas`.
+    pub fn context_commits_change(
+        &self,
+        project: u64,
+        iid: u64,
+        shas: &[String],
+        add: bool,
+    ) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            if add { "POST" } else { "DELETE" },
+            &format!("projects/{project}/merge_requests/{iid}/context_commits"),
+            serde_json::json!({ "commits": shas }),
+        )?;
+        Ok(())
+    }
+
+    /// Branch `branch`'s latest commits, for picking context.
+    pub fn branch_commits(&self, project: u64, branch: &str) -> anyhow::Result<Vec<Commit>> {
+        self.get(&format!(
+            "projects/{project}/repository/commits?ref_name={}&per_page=50",
+            query_value(branch)
+        ))
+    }
+
     /// Pipeline `id`'s test report.
     pub fn test_report(&self, project: u64, id: u64) -> anyhow::Result<TestReport> {
         self.get(&format!("projects/{project}/pipelines/{id}/test_report"))

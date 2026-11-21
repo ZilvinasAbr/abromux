@@ -219,6 +219,12 @@ impl GitLabView {
             .any(|b| b.read(cx).focus_handle(cx).is_focused(window))
             || self.duo.ask.read(cx).focus_handle(cx).is_focused(window)
             || self.bulk.value.read(cx).focus_handle(cx).is_focused(window)
+            || self
+                .context
+                .search
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
     }
 
     /// The fields belong to the merge request on screen: another one

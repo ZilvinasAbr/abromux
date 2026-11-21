@@ -199,6 +199,8 @@ pub struct GitLabView {
     pub(crate) boxes: crate::edit::Boxes,
     /// actions.rs: suggestions' batch, the Code menu, merge messages, revert.
     pub(crate) more: crate::actions::More,
+    /// context.rs: "Add previously merged commits".
+    pub(crate) context: crate::context::ContextState,
     /// bulk.rs: the list's Bulk edit and Actions.
     pub(crate) bulk: crate::bulk::BulkState,
     /// jobs.rs: the Pipelines tab's jobs.
@@ -276,6 +278,7 @@ impl GitLabView {
         let boxes = crate::edit::Boxes::new(window, cx);
         let more = crate::actions::More::new(window, cx);
         let new_mr = crate::create::NewMr::new(window, cx);
+        let context = crate::context::ContextState::new(window, cx);
         let bulk = crate::bulk::BulkState::new(window, cx);
         let duo = crate::duo::DuoState::new(window, cx);
         for b in [new_mr.source.clone(), new_mr.target.clone()] {
@@ -335,6 +338,7 @@ impl GitLabView {
         let mut v = Self {
             boxes,
             more,
+            context,
             bulk,
             jobs: Default::default(),
             duo,
@@ -2352,6 +2356,23 @@ impl Tab for GitLabView {
                     self.run_bulk(w, window, cx);
                 }
             }
+            // Context commits: `{"add": ["sha", …]}` or `{"remove": "sha"}`.
+            "context" => {
+                if let Some(list) = args.get("add").and_then(Value::as_array) {
+                    self.context.ticked = list
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect();
+                    self.save_context(None, window, cx);
+                }
+                if let Some(s) = str_arg("remove") {
+                    self.save_context(Some(s.to_string()), window, cx);
+                }
+                if args.get("open").and_then(Value::as_bool) == Some(true) {
+                    self.open_context(window, cx);
+                }
+            }
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);
@@ -3302,7 +3323,18 @@ impl GitLabView {
         let body = match self.loc.section {
             Section::Overview => self.overview_page(&r, window, cx),
             Section::Changes => self.changes_page(&r, cx),
-            Section::Commits => self.commits_page(&r, cx),
+            Section::Commits => div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(self.context_bar(&r, cx))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.))
+                        .child(self.commits_page(&r, cx)),
+                )
+                .into_any_element(),
             Section::Pipelines => self.pipelines_page(&r, cx),
             Section::Reports => self.reports_page(&r, cx),
         };
