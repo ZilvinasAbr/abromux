@@ -473,20 +473,11 @@ impl GitLabView {
             .child(self.fold_all_buttons(r, cx))
             .child(self.view_switch(cx))
             .child(icon("file", 16., c(MUTED)))
-            .child(div().text_color(c(TEXT)).child(if r.partial {
-                // Rapid diffs: the first files, the rest on their way.
-                format!(
-                    "{} of {} files, loading the rest…",
-                    r.files.len(),
-                    r.mr.changes_count.as_deref().unwrap_or("more")
-                )
-            } else {
-                format!(
-                    "{} file{}",
-                    r.files.len(),
-                    if r.files.len() == 1 { "" } else { "s" }
-                )
-            }))
+            .child(div().text_color(c(TEXT)).child(format!(
+                "{} file{}",
+                r.files.len(),
+                if r.files.len() == 1 { "" } else { "s" }
+            )))
             .child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
@@ -1101,35 +1092,6 @@ impl GitLabView {
             .overflow_hidden()
             .child(option("Inline", false, cx))
             .child(option("Side-by-side", true, cx))
-            // GitLab's "Rapid Diffs": a big merge request's first files at
-            // once, the rest streamed in behind.
-            .child({
-                let on = !self.loc.whole_diffs;
-                div()
-                    .id("gl-rapid-diffs")
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .h(px(32.))
-                    .px_3()
-                    .cursor_pointer()
-                    .text_color(c(TEXT))
-                    .bg(ca(0x89888d40))
-                    .hover(|s| s.bg(ca(0x89888d99)))
-                    .child(icon(
-                        if on { "square-check" } else { "square" },
-                        14.,
-                        c(TEXT),
-                    ))
-                    .child("Rapid diffs")
-                    .tooltip(hint(
-                        "Show a big merge request's first files at once, the rest as they load",
-                    ))
-                    .on_click(cx.listener(move |v, _, _, cx| {
-                        v.loc.whole_diffs = on;
-                        cx.notify();
-                    }))
-            })
             // GitLab's "Show whitespace changes" (its diff settings).
             .child({
                 let shown = !self.more.hide_whitespace;
