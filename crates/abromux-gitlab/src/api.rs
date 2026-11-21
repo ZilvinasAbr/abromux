@@ -623,6 +623,40 @@ impl Client {
         )
     }
 
+    /// An internal note on the merge request ("Make this an internal
+    /// note"): only the project's members see it.
+    pub fn internal_comment(&self, project: u64, iid: u64, body: &str) -> anyhow::Result<Note> {
+        self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/notes"),
+            serde_json::json!({ "body": body, "internal": true }),
+        )
+    }
+
+    /// An internal thread: REST's discussions take no `internal`, GraphQL's
+    /// createDiscussion does. `mr`: the merge request's global id.
+    pub fn internal_thread(&self, mr: u64, body: &str) -> anyhow::Result<()> {
+        let url = format!("{}/api/graphql", self.host);
+        let q = "mutation($id: NoteableID!, $body: String!) { createDiscussion(input: { noteableId: $id, body: $body, internal: true }) { errors } }";
+        let r = self.transport.send(
+            "POST",
+            &url,
+            &self.token,
+            serde_json::json!({
+                "query": q,
+                "variables": { "id": format!("gid://gitlab/MergeRequest/{mr}"), "body": body },
+            })
+            .to_string()
+            .as_bytes(),
+        )?;
+        let v: serde_json::Value = decode(&r.body, &url)?;
+        let errs = v["data"]["createDiscussion"]["errors"].as_array().cloned().unwrap_or_default();
+        if let Some(e) = v["errors"].as_array().and_then(|e| e.first()).or(errs.first()) {
+            anyhow::bail!("GitLab didn't take the internal thread: {}", e["message"].as_str().unwrap_or(&e.to_string()));
+        }
+        Ok(())
+    }
+
     /// A thread on the merge request (the comment box's "Start thread"):
     /// one that can be resolved, unlike a comment.
     pub fn start_thread(&self, project: u64, iid: u64, body: &str) -> anyhow::Result<Discussion> {

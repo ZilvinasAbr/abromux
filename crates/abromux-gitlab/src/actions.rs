@@ -58,6 +58,8 @@ pub struct More {
     /// The comment box's button: "Start thread" instead of "Comment", and
     /// its dropdown open.
     pub start_thread: bool,
+    /// "Make this an internal note".
+    pub internal: bool,
     pub comment_menu: bool,
     /// A comment being written on a point of an image: (file, x, y, width,
     /// height) in the image's own pixels.
@@ -107,6 +109,7 @@ impl More {
             image_point: None,
             image_bounds: Default::default(),
             start_thread: false,
+            internal: false,
             comment_menu: false,
             edit_target: cx.new(|cx| InputState::new(window, cx).placeholder("Target branch")),
             edit_remove: false,

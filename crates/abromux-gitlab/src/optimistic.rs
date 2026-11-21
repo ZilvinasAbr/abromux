@@ -32,6 +32,8 @@ pub enum Patch {
     /// A comment on the merge request.
     Comment {
         body: String,
+        /// An internal note.
+        internal: bool,
     },
     /// A reply in `thread`, and with `resolve`, resolving it.
     Reply {
@@ -136,7 +138,7 @@ impl Patch {
         };
         let mine = |n: &Note, body: &str| n.author.id == me.id && n.body.trim() == body.trim();
         match self {
-            Patch::Comment { body } => {
+            Patch::Comment { body, internal } => {
                 if !r
                     .general
                     .iter()
@@ -146,7 +148,10 @@ impl Patch {
                     r.general.push(Discussion {
                         id: format!("{THREAD_PREFIX}{n}"),
                         individual_note: true,
-                        notes: vec![note(body, None, false)],
+                        notes: vec![Note {
+                            internal: *internal,
+                            ..note(body, None, false)
+                        }],
                     });
                     r.mr.user_notes_count += 1;
                 }
@@ -262,6 +267,7 @@ impl Patch {
                 if !summary.trim().is_empty() {
                     Patch::Comment {
                         body: summary.clone(),
+                        internal: false,
                     }
                     .apply(r, me, n);
                 }
@@ -521,7 +527,10 @@ mod tests {
     #[test]
     fn a_comment_shows_once() {
         let mut r = review();
-        let p = Patch::Comment { body: "hi".into() };
+        let p = Patch::Comment {
+            body: "hi".into(),
+            internal: false,
+        };
         p.apply(&mut r, &user(1), 1);
         p.apply(&mut r, &user(1), 2);
         assert_eq!(r.general.len(), 2);

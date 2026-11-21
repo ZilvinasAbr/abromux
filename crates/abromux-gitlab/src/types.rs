@@ -327,6 +327,8 @@ pub struct Note {
     pub created_at: String,
     /// GitLab's own notes ("requested review from …", "approved this …").
     pub system: bool,
+    /// Only the project's members see it ("Internal note").
+    pub internal: bool,
     pub resolvable: bool,
     pub resolved: bool,
     pub resolved_by: Option<User>,

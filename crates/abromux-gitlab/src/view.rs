@@ -2035,6 +2035,9 @@ impl Tab for GitLabView {
                 if let Some(t) = args.get("thread").and_then(Value::as_bool) {
                     self.more.start_thread = t;
                 }
+                if let Some(t) = args.get("internal").and_then(Value::as_bool) {
+                    self.more.internal = t;
+                }
                 let body = str_arg("body").context("missing body")?.to_string();
                 self.boxes
                     .comment

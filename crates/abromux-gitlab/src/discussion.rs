@@ -462,6 +462,16 @@ impl GitLabView {
             (None, Some(o)) => Some(o.ml_1()),
             (Some(a), Some(o)) => Some(a.child(o)),
         };
+        // GitLab's "Internal note" badge, before the rest.
+        let actions = if n.internal {
+            let tag = badge("Internal note", fixed(0xe9731f), on_fill()).flex_none();
+            Some(match actions {
+                Some(a) => div().flex().items_center().gap_1().ml_1().child(tag).child(a.ml_0()),
+                None => div().flex().items_center().ml_1().child(tag),
+            })
+        } else {
+            actions
+        };
         // A comment of your review not yet submitted: GitLab's "Pending".
         let actions = if draft {
             let tag = badge("Pending", ca(0xc17d1033), c(ORANGE));
@@ -498,6 +508,8 @@ impl GitLabView {
             .py_3()
             // Faded until GitLab has it.
             .when(pending, |d| d.opacity(0.6))
+            // An internal note on GitLab's warm background.
+            .when(n.internal, |d| d.bg(c(0x4a3a22)).rounded(px(8.)))
             .when(avatar, |d| d.child(self.avatars.of(&n.author, 24.)))
             .child(
                 div()

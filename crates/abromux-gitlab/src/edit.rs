@@ -457,15 +457,19 @@ impl GitLabView {
             .update(cx, |b, cx| b.set_value("", window, cx));
         let back = body.clone();
         let thread = self.more.start_thread;
+        let internal = self.more.internal && !self.is_local();
+        let mr = self.review.ready().map_or(0, |r| r.mr.id);
         self.write(
             Write::Comment,
-            Some(Patch::Comment { body: body.clone() }),
-            move |c, p, iid| {
-                if thread {
-                    c.start_thread(p, iid, &body).map(|_| ())
-                } else {
-                    c.comment(p, iid, &body).map(|_| ())
-                }
+            Some(Patch::Comment {
+                body: body.clone(),
+                internal,
+            }),
+            move |c, p, iid| match (thread, internal) {
+                (true, true) => c.internal_thread(mr, &body),
+                (true, false) => c.start_thread(p, iid, &body).map(|_| ()),
+                (false, true) => c.internal_comment(p, iid, &body).map(|_| ()),
+                (false, false) => c.comment(p, iid, &body).map(|_| ()),
             },
             move |v, window, cx| put_back(&v.boxes.comment, &back, window, cx),
             window,
@@ -1493,7 +1497,16 @@ impl GitLabView {
             "Comment"
         };
         let enabled = !empty;
-        div()
+        let internal = self.more.internal;
+        let internal_box = (!self.is_local()).then(|| {
+            checkbox("gl-comment-internal", internal, "Make this an internal note")
+                .text_size(px(14.))
+                .on_click(cx.listener(move |v, _, _, cx| {
+                    v.more.internal = !internal;
+                    cx.notify();
+                }))
+        });
+        let form =         div()
             .flex()
             .gap_3()
             .child(match self.me.as_ref() {
@@ -1550,7 +1563,13 @@ impl GitLabView {
                             }))
                             .children(self.comment_kind_menu(cx)),
                     ),
-            )
+            );
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(form)
+            .children(internal_box.map(|b| div().pl(px(44.)).child(b)))
     }
 
     /// Under a thread: the reply placeholder (or the open reply box) and

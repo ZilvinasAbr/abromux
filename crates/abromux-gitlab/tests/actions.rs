@@ -256,4 +256,14 @@ fn suggestions_todos_notifications_lock_and_drafts() {
     }
     assert!(published, "the review's comments and summary");
     assert!(c.draft_notes(p, iid).unwrap().is_empty());
+
+    // Internal notes: a comment (REST) and a thread (GraphQL), seen as such.
+    c.internal_comment(p, iid, "internal comment").unwrap();
+    c.internal_thread(c.merge_request(p, iid).unwrap().id, "internal thread")
+        .unwrap();
+    let d = c.discussions(p, iid).unwrap();
+    let find = |b: &str| d.iter().find(|x| x.notes[0].body == b).unwrap();
+    assert!(find("internal comment").notes[0].internal);
+    let t = find("internal thread");
+    assert!(t.notes[0].internal && t.notes[0].resolvable);
 }
