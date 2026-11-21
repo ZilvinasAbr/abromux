@@ -196,7 +196,9 @@ impl Review {
                 continue;
             };
             match files.iter_mut().find(|f| f.holds(&pos)) {
-                Some(f) if pos.position_type == "file" => f.threads.push((FILE_THREAD, 0, d)),
+                Some(f) if matches!(pos.position_type.as_str(), "file" | "image") => {
+                    f.threads.push((FILE_THREAD, 0, d))
+                }
                 Some(f) => match f.find(&pos) {
                     Some((h, l)) => f.threads.push((h, l, d)),
                     None => f.outdated.push(d),

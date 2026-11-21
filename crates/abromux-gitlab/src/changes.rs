@@ -188,16 +188,21 @@ pub fn rows(r: &Review, s: &Shape) -> Vec<Row> {
     for (fi, f) in r.files.iter().enumerate() {
         out.push(Row::File(fi));
         if !(s.folded)(f) {
-            // Threads on the whole file, and the one being written.
-            for (ti, (h, _, _)) in f.threads.iter().enumerate() {
-                if *h == crate::review::FILE_THREAD
-                    && (s.open)(&f.threads[ti].2.id) | !f.threads[ti].2.resolved()
-                {
-                    out.push(Row::Thread(fi, ti));
+            // Threads on the whole file, and the one being written; on a
+            // picture they go under it (with those on its points), as GitLab's.
+            let file_threads = |out: &mut Vec<Row>| {
+                for (ti, (h, _, d)) in f.threads.iter().enumerate() {
+                    if *h == crate::review::FILE_THREAD && ((s.open)(&d.id) || !d.resolved()) {
+                        out.push(Row::Thread(fi, ti));
+                    }
                 }
-            }
-            if s.draft == Some((fi, None, None)) {
-                out.push(Row::Draft(fi));
+                if s.draft == Some((fi, None, None)) {
+                    out.push(Row::Draft(fi));
+                }
+            };
+            let binary = matches!(f.body(), Body::Binary);
+            if !binary {
+                file_threads(&mut out);
             }
             match f.body() {
                 Body::Text(hunks) => {
@@ -279,7 +284,12 @@ pub fn rows(r: &Review, s: &Shape) -> Vec<Row> {
                         }
                     }
                 }
-                _ => out.push(Row::Message(fi)),
+                _ => {
+                    out.push(Row::Message(fi));
+                    if binary {
+                        file_threads(&mut out);
+                    }
+                }
             }
             // A folded file is its rounded header alone.
             out.push(Row::End(fi));
@@ -1659,7 +1669,7 @@ impl GitLabView {
                 if matches!(r.files[fi].body(), Body::Binary) && is_image(r.files[fi].path()) =>
             {
                 // GitLab's "2-up": old on the left in red, new on the right in green.
-                let side = |s: &Shot, border: Option<u32>| {
+                let side = |s: &Shot, border: Option<u32>, overlay: Option<AnyElement>| {
                     let picture = match &s.image {
                         Some(i) => img(i.clone())
                             .max_w(px(400.))
@@ -1699,20 +1709,29 @@ impl GitLabView {
                         .gap_1()
                         .child(
                             div()
+                                .relative()
                                 .when_some(border, |d, b| d.border_1().border_color(c(b)))
-                                .child(picture),
+                                .child(picture)
+                                .children(overlay),
                         )
                         .child(caption)
                 };
                 let body = match self.pictures.get(&fi) {
                     Some(Load::Ready(p)) => match (&p.old, &p.new) {
-                        (Some(o), Some(n)) => div()
-                            .flex()
-                            .w_full()
-                            .justify_around()
-                            .child(side(o, Some(0xe5484d)))
-                            .child(side(n, Some(GREEN))),
-                        (Some(s), None) | (None, Some(s)) => side(s, None),
+                        (Some(o), Some(n)) => {
+                            let overlay = self.image_overlay(fi, &r, n.size, cx);
+                            div()
+                                .flex()
+                                .w_full()
+                                .justify_around()
+                                .child(side(o, Some(0xe5484d), None))
+                                .child(side(n, Some(GREEN), overlay))
+                        }
+                        (None, Some(s)) => {
+                            let overlay = self.image_overlay(fi, &r, s.size, cx);
+                            side(s, None, overlay)
+                        }
+                        (Some(s), None) => side(s, None, None),
                         (None, None) => div(),
                     },
                     Some(Load::Failed(e)) => div().text_color(c(RED)).child(e.text.clone()),

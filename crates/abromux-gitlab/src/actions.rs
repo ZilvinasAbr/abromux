@@ -59,6 +59,13 @@ pub struct More {
     /// its dropdown open.
     pub start_thread: bool,
     pub comment_menu: bool,
+    /// A comment being written on a point of an image: (file, x, y, width,
+    /// height) in the image's own pixels.
+    pub image_point: Option<(usize, u32, u32, u32, u32)>,
+    /// Where each file's new image was drawn last frame, to place clicks
+    /// and badges.
+    pub image_bounds:
+        std::rc::Rc<std::cell::RefCell<std::collections::HashMap<usize, Bounds<Pixels>>>>,
     /// "Show whitespace changes" turned off.
     pub hide_whitespace: bool,
     /// Boxes showing their Preview instead of the text.
@@ -94,6 +101,8 @@ impl More {
             picked: None,
             previewing: Default::default(),
             hide_whitespace: false,
+            image_point: None,
+            image_bounds: Default::default(),
             start_thread: false,
             comment_menu: false,
             edit_target: cx.new(|cx| InputState::new(window, cx).placeholder("Target branch")),
@@ -1430,6 +1439,14 @@ impl GitLabView {
     pub(crate) fn range_header(&self, cx: &mut Context<Self>) -> Option<Div> {
         let r = self.shown()?;
         let end = self.commenting?;
+        if let Some((_, x, y, ..)) = self.more.image_point.filter(|p| end == (p.0, None, None)) {
+            return Some(
+                div()
+                    .text_size(px(13.))
+                    .text_color(c(MUTED))
+                    .child(format!("Commenting on the image at ({x}, {y})")),
+            );
+        }
         let (fi, ..) = end;
         let label = |k: crate::edit::LineKey| match k {
             (_, _, Some(n)) => format!("+{n}"),
@@ -1697,7 +1714,7 @@ pub fn hide_whitespace(r: &mut Review) {
                 f.outdated.push(d);
                 continue;
             };
-            if p.position_type == "file" {
+            if matches!(p.position_type.as_str(), "file" | "image") {
                 f.threads.push((crate::review::FILE_THREAD, 0, d));
                 continue;
             }
@@ -1816,6 +1833,110 @@ impl GitLabView {
                 )
                 .children(menu),
         )
+    }
+}
+
+impl GitLabView {
+    /// Over the new image: GitLab's numbered badges where its threads are,
+    /// the point being commented on, and a click that starts a thread there.
+    pub(crate) fn image_overlay(
+        &self,
+        fi: usize,
+        r: &Review,
+        natural: Option<(u32, u32)>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let (nw, nh) = natural?;
+        let can_comment = self.me.is_some()
+            && self.loc.iid.is_some()
+            && !self.is_local()
+            && self.compare == crate::Compare::default();
+        let drawn = self.more.image_bounds.borrow().get(&fi).copied();
+        let points: Vec<(u32, u32, u32, u32)> = r.files[fi]
+            .threads
+            .iter()
+            .filter_map(|(_, _, d)| d.position())
+            .filter(|p| p.position_type == "image")
+            .filter_map(|p| Some((p.x?, p.y?, p.width?.max(1), p.height?.max(1))))
+            .collect();
+        let pending = self
+            .more
+            .image_point
+            .filter(|p| p.0 == fi && self.commenting == Some((fi, None, None)))
+            .map(|(_, x, y, w, h)| (x, y, w, h));
+        let bounds = self.more.image_bounds.clone();
+        let badge =
+            |n: String, (x, y, w, h): (u32, u32, u32, u32), b: Bounds<Pixels>, color: Hsla| {
+                let left = b.size.width * (x as f32 / w as f32) - px(10.);
+                let top = b.size.height * (y as f32 / h as f32) - px(10.);
+                div()
+                    .absolute()
+                    .left(left)
+                    .top(top)
+                    .size(px(20.))
+                    .rounded_full()
+                    .bg(color)
+                    .border_1()
+                    .border_color(on_fill())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(on_fill())
+                    .child(n)
+            };
+        let mut layer = div()
+            .id(SharedString::from(format!("image-points-{fi}")))
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(
+                canvas(
+                    move |b, _, _| {
+                        bounds.borrow_mut().insert(fi, b);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            );
+        if let Some(b) = drawn {
+            for (k, p) in points.iter().enumerate() {
+                layer = layer.child(badge((k + 1).to_string(), *p, b, c(0x1f75cb)));
+            }
+            if let Some(p) = pending {
+                layer = layer.child(badge("+".into(), p, b, c(0x1068bf)));
+            }
+        }
+        if can_comment {
+            let bounds = self.more.image_bounds.clone();
+            layer = layer
+                .cursor(CursorStyle::Crosshair)
+                .tooltip(hint("Click to comment on this point of the image"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |v, e: &MouseDownEvent, window, cx| {
+                        let Some(b) = bounds.borrow().get(&fi).copied() else {
+                            return;
+                        };
+                        let rel = e.position - b.origin;
+                        let fx = (rel.x / b.size.width).clamp(0., 1.);
+                        let fy = (rel.y / b.size.height).clamp(0., 1.);
+                        let (x, y) = (
+                            (fx * nw as f32).round() as u32,
+                            (fy * nh as f32).round() as u32,
+                        );
+                        cx.stop_propagation();
+                        v.open_line_comment((fi, None, None), window, cx);
+                        v.more.image_point = Some((fi, x, y, nw, nh));
+                        v.rebuild_rows(cx);
+                        cx.notify();
+                    }),
+                );
+        }
+        Some(layer.into_any_element())
     }
 }
 

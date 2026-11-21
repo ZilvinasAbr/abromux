@@ -2231,6 +2231,29 @@ impl Tab for GitLabView {
                 }
                 self.rebuild_rows(cx);
             }
+            // A click on the new image: `{"path": "a.png", "x": 10, "y": 20, "body": "…", "review": false}`.
+            "image_comment" => {
+                let fi = self.file_index(str_arg("path").context("missing path")?)?;
+                let size = match self.pictures.get(&fi) {
+                    Some(Load::Ready(p)) => p.new.as_ref().and_then(|s| s.size),
+                    _ => None,
+                }
+                .context("the image isn't loaded (scroll to it first)")?;
+                let (x, y) = (
+                    num_arg("x").context("missing x")? as u32,
+                    num_arg("y").context("missing y")? as u32,
+                );
+                self.open_line_comment((fi, None, None), window, cx);
+                self.more.image_point = Some((fi, x, y, size.0, size.1));
+                if let Some(body) = str_arg("body") {
+                    let body = body.to_string();
+                    self.boxes
+                        .line
+                        .update(cx, |b, cx| b.set_value(body, window, cx));
+                    let draft = args.get("review").and_then(Value::as_bool) == Some(true);
+                    self.send_line_comment(draft, window, cx);
+                }
+            }
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);

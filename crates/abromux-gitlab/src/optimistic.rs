@@ -229,6 +229,7 @@ impl Patch {
                     old_line: *old,
                     new_line: *new,
                     line_range: None,
+                    ..Default::default()
                 };
                 let found = if pos.position_type == "file" {
                     Some((crate::review::FILE_THREAD, 0))

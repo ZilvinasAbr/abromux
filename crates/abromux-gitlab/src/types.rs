@@ -280,6 +280,11 @@ pub struct Position {
     pub new_line: Option<u32>,
     /// A comment on several lines: the first and the last.
     pub line_range: Option<PosRange>,
+    /// A comment on a point of an image: the image's size and the point.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub x: Option<u32>,
+    pub y: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]

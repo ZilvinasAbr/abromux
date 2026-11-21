@@ -855,6 +855,23 @@ impl GitLabView {
             return out;
         };
         let actions = self.thread_actions(d, first, cx);
+        // A thread on a point of an image.
+        if let Some((x, y)) = first
+            .position
+            .as_ref()
+            .filter(|p| p.position_type == "image")
+            .and_then(|p| Some((p.x?, p.y?)))
+        {
+            out.push(
+                div()
+                    .px_4()
+                    .pt_2()
+                    .text_size(px(12.))
+                    .text_color(c(MUTED))
+                    .child(format!("Comment on the image at ({x}, {y})"))
+                    .into_any_element(),
+            );
+        }
         // GitLab's "Comment on lines +2 to +4" over a multi-line thread.
         if let Some(lr) = first.position.as_ref().and_then(|p| p.line_range.as_ref()) {
             let label = |p: &crate::types::PosPoint| match (p.old_line, p.new_line) {

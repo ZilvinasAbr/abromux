@@ -1169,6 +1169,46 @@ impl Client {
         Ok(())
     }
 
+    /// A thread on point (`x`, `y`) of the new image at `path` (`width` ×
+    /// `height`), as a click on GitLab's image diff starts; `draft`: into
+    /// your review.
+    #[allow(clippy::too_many_arguments)]
+    pub fn image_comment(
+        &self,
+        project: u64,
+        iid: u64,
+        refs: &DiffRefs,
+        old_path: &str,
+        new_path: &str,
+        (x, y, width, height): (u32, u32, u32, u32),
+        body: &str,
+        draft: bool,
+    ) -> anyhow::Result<()> {
+        let position = serde_json::json!({
+            "position_type": "image",
+            "base_sha": refs.base_sha,
+            "start_sha": refs.start_sha,
+            "head_sha": refs.head_sha,
+            "old_path": old_path,
+            "new_path": new_path,
+            "width": width,
+            "height": height,
+            "x": x,
+            "y": y,
+        });
+        let (path, key) = if draft {
+            ("draft_notes", "note")
+        } else {
+            ("discussions", "body")
+        };
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/{path}"),
+            serde_json::json!({ key: body, "position": position }),
+        )?;
+        Ok(())
+    }
+
     /// Approve, or take back the approval.
     pub fn approve(&self, project: u64, iid: u64, approve: bool) -> anyhow::Result<()> {
         let what = if approve { "approve" } else { "unapprove" };

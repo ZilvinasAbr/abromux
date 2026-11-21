@@ -677,6 +677,7 @@ impl GitLabView {
                 .line
                 .update(cx, |b, cx| b.set_value("", window, cx));
             self.more.range_from = None;
+            self.more.image_point = None;
         }
         self.commenting = Some(key);
         self.boxes.line.update(cx, |b, cx| b.focus(window, cx));
@@ -686,6 +687,7 @@ impl GitLabView {
     pub(crate) fn close_line_comment(&mut self, cx: &mut Context<Self>) {
         self.commenting = None;
         self.more.range_from = None;
+        self.more.image_point = None;
         self.rebuild_rows(cx);
     }
 
@@ -714,6 +716,12 @@ impl GitLabView {
         }
         let (old_path, new_path) = (f.meta.old_path.clone(), f.meta.new_path.clone());
         let range = self.comment_range();
+        let point = self
+            .more
+            .image_point
+            .filter(|p| p.0 == fi && old.is_none() && new.is_none())
+            .map(|(_, x, y, w, h)| (x, y, w, h));
+        self.more.image_point = None;
         self.boxes
             .line
             .update(cx, |b, cx| b.set_value("", window, cx));
@@ -738,6 +746,7 @@ impl GitLabView {
                     old_line: old,
                     new_line: new,
                     line_range: None,
+                    ..Default::default()
                 }),
                 discussion: None,
             }
@@ -758,7 +767,9 @@ impl GitLabView {
             Some(patch),
             move |c, p, iid| {
                 let refs: DiffRefs = refs;
-                if let Some(range) = &range {
+                if let Some(point) = point {
+                    c.image_comment(p, iid, &refs, &old_path, &new_path, point, &body, draft)
+                } else if let Some(range) = &range {
                     c.range_comment(p, iid, &refs, &old_path, &new_path, range, &body, draft)
                 } else if draft {
                     c.draft_line_comment(p, iid, &refs, &old_path, &new_path, old, new, &body)
