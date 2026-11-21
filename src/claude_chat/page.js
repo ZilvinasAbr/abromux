@@ -1061,11 +1061,15 @@
     if (!/^\/[\w:.-]*$/.test(v)) return [];
     const q = v.slice(1).toLowerCase();
     const seen = new Set();
-    const all = [...S.commands, ...BUILTIN].filter((c) => !seen.has(c.name) && seen.add(c.name));
+    // Everything Claude offers (built-ins, skills, plugins' and MCP
+    // commands), in a list that scrolls; those that start with what you
+    // typed first. `__`-names are Claude's own plumbing.
+    const all = [...S.commands, ...BUILTIN]
+      .filter((c) => !c.name.startsWith("__"))
+      .filter((c) => !seen.has(c.name) && seen.add(c.name));
     return all
       .filter((c) => c.name.toLowerCase().includes(q))
-      .sort((a, b) => (a.name.toLowerCase().startsWith(q) ? 0 : 1) - (b.name.toLowerCase().startsWith(q) ? 0 : 1))
-      .slice(0, 8);
+      .sort((a, b) => (a.name.toLowerCase().startsWith(q) ? 0 : 1) - (b.name.toLowerCase().startsWith(q) ? 0 : 1));
   }
 
   // The `@` word the caret is in, if any: [start, query].
@@ -1119,6 +1123,8 @@
     if (sel) sel.scrollIntoView({ block: "nearest" });
   }
   function drawSlash() {
+    // Claude's own list arrives once it runs; until then, the built-ins.
+    warm();
     S.popKind = "slash";
     drawPop();
   }
