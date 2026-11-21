@@ -2692,22 +2692,10 @@ impl GitLabView {
                             .into_any_element(),
                     ];
                 }
-                // The filter: words that must all be in the title, reference, author or branches.
+                // The filter: words and GitLab's tokens (filter.rs).
                 let mut shown: Vec<&MergeRequest> = mrs
                     .iter()
-                    .filter(|m| {
-                        let hay = format!(
-                            "{} {} {} {} {} {}",
-                            m.title,
-                            m.references.full,
-                            m.author.name,
-                            m.author.username,
-                            m.source_branch,
-                            m.target_branch
-                        )
-                        .to_lowercase();
-                        query.split_whitespace().all(|w| hay.contains(w))
-                    })
+                    .filter(|m| crate::filter::matches(m, &query))
                     .collect();
                 if shown.is_empty() {
                     return vec![
@@ -2973,6 +2961,52 @@ impl GitLabView {
                     )
                     .when(!projects, |d| d.child(self.sort_control(cx))),
             )
+            // GitLab's filter tokens, a click puts one in the search.
+            .when(!projects, |d| {
+                d.child(
+                    div()
+                        .px_4()
+                        .py_1()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_1()
+                        .text_size(px(12.))
+                        .text_color(c(MUTED))
+                        .child("Filter:")
+                        .children(crate::filter::TOKENS.iter().map(|(label, token)| {
+                            let token = *token;
+                            div()
+                                .id(SharedString::from(format!("gl-token-{label}")))
+                                .px_2()
+                                .py(px(1.))
+                                .rounded(px(6.))
+                                .bg(ca(0x89888d33))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(ca(0x89888d66)).text_color(c(TEXT)))
+                                .child(*label)
+                                .on_click(cx.listener(move |v, _, window, cx| {
+                                    let now = v.list_search.read(cx).value().to_string();
+                                    let sep = if now.is_empty() || now.ends_with(' ') {
+                                        ""
+                                    } else {
+                                        " "
+                                    };
+                                    let t = format!("{now}{sep}{token}");
+                                    let (line, col) = (0, t.chars().count() as u32);
+                                    v.list_search.update(cx, |s, cx| {
+                                        s.set_value(t, window, cx);
+                                        s.set_cursor_position(
+                                            gpui_component::input::Position::new(line, col),
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                    cx.notify();
+                                }))
+                        })),
+                )
+            })
             .child(
                 div()
                     .id("gl-list")

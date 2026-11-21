@@ -20,6 +20,7 @@ pub mod diff;
 mod discussion;
 mod edit;
 mod emoji;
+mod filter;
 mod gfm;
 pub mod highlight;
 pub mod local;
