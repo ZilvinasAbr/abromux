@@ -745,6 +745,27 @@ impl GitLabView {
             return out;
         };
         let actions = self.thread_actions(d, first, cx);
+        // GitLab's "Comment on lines +2 to +4" over a multi-line thread.
+        if let Some(lr) = first.position.as_ref().and_then(|p| p.line_range.as_ref()) {
+            let label = |p: &crate::types::PosPoint| match (p.old_line, p.new_line) {
+                (_, Some(n)) if p.kind.as_deref() != Some("old") => format!("+{n}"),
+                (Some(o), _) => format!("-{o}"),
+                (_, Some(n)) => format!("+{n}"),
+                _ => String::new(),
+            };
+            let (a, b) = (label(&lr.start), label(&lr.end));
+            if a != b && !a.is_empty() {
+                out.push(
+                    div()
+                        .px_4()
+                        .pt_2()
+                        .text_size(px(12.))
+                        .text_color(c(MUTED))
+                        .child(format!("Comment on lines {a} to {b}"))
+                        .into_any_element(),
+                );
+            }
+        }
         out.push(
             self.note(first, path, first_avatar, Some(actions), window, cx)
                 .into_any_element(),

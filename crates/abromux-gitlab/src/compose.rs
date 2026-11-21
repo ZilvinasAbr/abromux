@@ -145,7 +145,7 @@ impl GitLabView {
         cx: &mut Context<Self>,
     ) {
         let text = if md == Md::Suggestion {
-            match self.commented_text(cx) {
+            match self.range_text().or_else(|| self.commented_text(cx)) {
                 Some((t, n)) => suggestion_block(&t, n),
                 None => return,
             }

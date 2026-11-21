@@ -961,6 +961,65 @@ impl Client {
         Ok(())
     }
 
+    /// A thread on lines `range.start` to `range.end` (its end is where it
+    /// shows, as GitLab places a multi-line comment); `draft`: into your
+    /// review instead.
+    #[allow(clippy::too_many_arguments)]
+    pub fn range_comment(
+        &self,
+        project: u64,
+        iid: u64,
+        refs: &DiffRefs,
+        old_path: &str,
+        new_path: &str,
+        range: &LineRange,
+        body: &str,
+        draft: bool,
+    ) -> anyhow::Result<()> {
+        let point = |l: &LinePoint| {
+            let mut v = serde_json::json!({
+                "line_code": line_code(new_path, l.old_pos, l.new_pos),
+                "type": l.kind,
+            });
+            if let Some(o) = l.old {
+                v["old_line"] = o.into();
+            }
+            if let Some(n) = l.new {
+                v["new_line"] = n.into();
+            }
+            v
+        };
+        let mut position = serde_json::json!({
+            "position_type": "text",
+            "base_sha": refs.base_sha,
+            "start_sha": refs.start_sha,
+            "head_sha": refs.head_sha,
+            "old_path": old_path,
+            "new_path": new_path,
+            "line_range": { "start": point(&range.start), "end": point(&range.end) },
+        });
+        if let Some(o) = range.end.old {
+            position["old_line"] = o.into();
+        }
+        if let Some(n) = range.end.new {
+            position["new_line"] = n.into();
+        }
+        if draft {
+            let _: DraftNote = self.write(
+                "POST",
+                &format!("projects/{project}/merge_requests/{iid}/draft_notes"),
+                serde_json::json!({ "note": body, "position": position }),
+            )?;
+        } else {
+            let _: Discussion = self.write(
+                "POST",
+                &format!("projects/{project}/merge_requests/{iid}/discussions"),
+                serde_json::json!({ "body": body, "position": position }),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Approve, or take back the approval.
     pub fn approve(&self, project: u64, iid: u64, approve: bool) -> anyhow::Result<()> {
         let what = if approve { "approve" } else { "unapprove" };
@@ -1554,6 +1613,30 @@ pub struct MergeOptions {
     /// "Edit commit message": the merge commit's and the squashed one's.
     pub merge_commit_message: Option<String>,
     pub squash_commit_message: Option<String>,
+}
+
+/// One end of a multi-line comment: the line's numbers, GitLab's running
+/// positions (an added line's old position is the old side's count there),
+/// and its type (`new`, `old`, or empty for an unchanged line).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LinePoint {
+    pub old: Option<u32>,
+    pub new: Option<u32>,
+    pub old_pos: u32,
+    pub new_pos: u32,
+    pub kind: &'static str,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LineRange {
+    pub start: LinePoint,
+    pub end: LinePoint,
+}
+
+/// GitLab's code for a diff line: `sha1(path)_old_new`.
+pub fn line_code(path: &str, old_pos: u32, new_pos: u32) -> String {
+    let sha = sha1_smol::Sha1::from(path).digest().to_string();
+    format!("{sha}_{old_pos}_{new_pos}")
 }
 
 /// Your pending to-dos on the project's merge requests.

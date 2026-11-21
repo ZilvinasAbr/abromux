@@ -2138,6 +2138,29 @@ impl Tab for GitLabView {
                     .context("no such line in the diff")?;
                 let key = (fi, line.old, line.new);
                 self.open_line_comment(key, window, cx);
+                // `from_new` / `from_old`: the range's first line.
+                let from = match (num_arg("from_new"), num_arg("from_old")) {
+                    (Some(n), _) => Some((Some(n as u32), true)),
+                    (None, Some(o)) => Some((Some(o as u32), false)),
+                    _ => None,
+                };
+                if let Some((n, new_side)) = from {
+                    let r = self.shown().context("no merge request loaded")?;
+                    let l = r.files[fi]
+                        .body()
+                        .hunks()
+                        .iter()
+                        .flat_map(|h| &h.lines)
+                        .find(|l| {
+                            if new_side {
+                                l.new == n
+                            } else {
+                                l.old == n && l.new.is_none()
+                            }
+                        })
+                        .context("no such first line")?;
+                    self.more.range_from = Some((fi, l.old, l.new));
+                }
                 if let Some(body) = str_arg("body") {
                     self.boxes
                         .line

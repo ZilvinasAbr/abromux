@@ -278,6 +278,24 @@ pub struct Position {
     pub position_type: String,
     pub old_line: Option<u32>,
     pub new_line: Option<u32>,
+    /// A comment on several lines: the first and the last.
+    pub line_range: Option<PosRange>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PosRange {
+    pub start: PosPoint,
+    pub end: PosPoint,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PosPoint {
+    pub old_line: Option<u32>,
+    pub new_line: Option<u32>,
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]

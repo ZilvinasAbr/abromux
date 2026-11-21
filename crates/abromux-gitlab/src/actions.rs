@@ -43,6 +43,10 @@ pub struct More {
     pub branch: Entity<InputState>,
     /// What the last revert or cherry-pick did, to say so.
     pub picked: Option<String>,
+    /// A comment on several lines: the first (the form is under the last).
+    pub range_from: Option<crate::edit::LineKey>,
+    /// The "Commenting on lines" start picker is open.
+    pub range_menu: bool,
     /// Boxes showing their Preview instead of the text.
     pub previewing: std::collections::HashSet<crate::compose::MdBox>,
     /// "Your review": the panel open, its verdict, and the summary.
@@ -75,6 +79,8 @@ impl More {
             branch: cx.new(|cx| InputState::new(window, cx).placeholder("Branch")),
             picked: None,
             previewing: Default::default(),
+            range_from: None,
+            range_menu: false,
             review_panel: false,
             verdict: Verdict::Comment,
             summary: field(3, "Add optional summary content…", window, cx),
@@ -1311,5 +1317,292 @@ impl GitLabView {
             cx,
         );
         self.rebuild_rows(cx);
+    }
+
+    /// Shift-click on another line's comment button while writing one:
+    /// the comment covers the lines between (the form moves to the last).
+    pub(crate) fn extend_comment(
+        &mut self,
+        key: crate::edit::LineKey,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(at) = self.commenting else {
+            return false;
+        };
+        let Some(r) = self.shown() else { return false };
+        if at.0 != key.0 {
+            return false;
+        }
+        let (Some(a), Some(b)) = (line_point(&r, at), line_point(&r, key)) else {
+            return false;
+        };
+        let first = self.more.range_from.unwrap_or(at);
+        let lo = line_point(&r, first).map_or(a.1, |p| p.1);
+        // The far end from what's clicked stays.
+        if b.1 < a.1 {
+            self.more.range_from = Some(key);
+        } else {
+            self.more.range_from = Some(if lo < a.1 { first } else { at });
+            self.commenting = Some(key);
+        }
+        if self.more.range_from == self.commenting {
+            self.more.range_from = None;
+        }
+        self.more.range_menu = false;
+        self.rebuild_rows(cx);
+        cx.notify();
+        true
+    }
+
+    /// The range being commented on, when it's more than a line.
+    pub(crate) fn comment_range(&self) -> Option<crate::api::LineRange> {
+        let r = self.shown()?;
+        let end = self.commenting?;
+        let start = self.more.range_from.filter(|s| *s != end)?;
+        let (s, e) = (line_point(&r, start)?, line_point(&r, end)?);
+        Some(crate::api::LineRange {
+            start: s.0,
+            end: e.0,
+        })
+    }
+
+    /// The lines of the range as text (for a suggestion), and how many.
+    pub(crate) fn range_text(&self) -> Option<(String, usize)> {
+        let r = self.shown()?;
+        let end = self.commenting?;
+        let (fi, ..) = end;
+        let lines: Vec<&crate::diff::Line> = r
+            .files
+            .get(fi)?
+            .body()
+            .hunks()
+            .iter()
+            .flat_map(|h| &h.lines)
+            .collect();
+        let e = line_point(&r, end)?.1;
+        let s = self
+            .more
+            .range_from
+            .and_then(|k| line_point(&r, k))
+            .map_or(e, |p| p.1);
+        // A suggestion replaces new lines: the removed ones aren't in it.
+        let picked: Vec<String> = lines[s.min(e)..=e]
+            .iter()
+            .filter(|l| {
+                l.kind != crate::diff::Kind::Removed && l.kind != crate::diff::Kind::NoNewline
+            })
+            .map(|l| l.text.clone())
+            .collect();
+        let n = picked.len().max(1);
+        Some((picked.join("\n"), n))
+    }
+
+    /// The line form's head: "Commenting on line +15", or on lines from a
+    /// start picked in GitLab's dropdown (the lines above, in the file).
+    pub(crate) fn range_header(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let r = self.shown()?;
+        let end = self.commenting?;
+        let (fi, ..) = end;
+        let label = |k: crate::edit::LineKey| match k {
+            (_, _, Some(n)) => format!("+{n}"),
+            (_, Some(o), None) => format!("-{o}"),
+            _ => String::new(),
+        };
+        let lines: Vec<&crate::diff::Line> = r
+            .files
+            .get(fi)?
+            .body()
+            .hunks()
+            .iter()
+            .flat_map(|h| &h.lines)
+            .collect();
+        let e = line_point(&r, end)?.1;
+        let start = self.more.range_from.unwrap_or(end);
+        let text = if start == end {
+            format!("Commenting on line {}", label(end))
+        } else {
+            format!("Commenting on lines {} to {}", label(start), label(end))
+        };
+        let open = self.more.range_menu;
+        let menu = open.then(|| {
+            let from = e.saturating_sub(30);
+            let items = lines[from..=e]
+                .iter()
+                .filter(|l| l.kind != crate::diff::Kind::NoNewline)
+                .map(|l| (fi, l.old, l.new, l.text.clone()))
+                .collect::<Vec<_>>();
+            deferred(
+                div()
+                    .id("gl-range-menu")
+                    .absolute()
+                    .top(px(26.))
+                    .left_0()
+                    .w(px(420.))
+                    .max_h(px(320.))
+                    .overflow_y_scroll()
+                    .py_1()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(c(BORDER))
+                    .bg(c(CARD))
+                    .shadow_lg()
+                    .occlude()
+                    .on_mouse_down_out(cx.listener(|v, _, _, cx| {
+                        v.more.range_menu = false;
+                        cx.notify();
+                    }))
+                    .children(items.into_iter().map(|(fi, o, n, t)| {
+                        let key = (fi, o, n);
+                        let on = key == start;
+                        div()
+                            .id(SharedString::from(format!("gl-range-{o:?}-{n:?}")))
+                            .flex()
+                            .gap_2()
+                            .px_3()
+                            .py(px(2.))
+                            .cursor_pointer()
+                            .when(on, |d| d.bg(c(RAISED)))
+                            .hover(|s| s.bg(c(RAISED)))
+                            .child(
+                                div()
+                                    .w(px(44.))
+                                    .flex_none()
+                                    .text_color(c(MUTED))
+                                    .child(label(key)),
+                            )
+                            .child(div().truncate().font_family(self.mono(cx)).child(t))
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                v.more.range_from = (Some(key) != v.commenting).then_some(key);
+                                v.more.range_menu = false;
+                                v.rebuild_rows(cx);
+                                cx.notify();
+                            }))
+                    })),
+            )
+            .with_priority(2)
+        });
+        Some(
+            div()
+                .relative()
+                .flex()
+                .items_center()
+                .gap_1()
+                .text_size(px(13.))
+                .text_color(c(MUTED))
+                .child(
+                    div()
+                        .id("gl-range-pick")
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(c(TEXT)))
+                        .child(text)
+                        .child(app_icon("chevron-down", 12., c(MUTED)))
+                        .tooltip(hint(
+                            "Pick the first line (or shift-click another line's comment button)",
+                        ))
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.more.range_menu = !v.more.range_menu;
+                            cx.notify();
+                        })),
+                )
+                .children(menu),
+        )
+    }
+
+    /// Whether line `key` is in the range being commented on (drawn
+    /// marked, as GitLab marks it).
+    pub(crate) fn in_comment_range(&self, key: crate::edit::LineKey) -> bool {
+        let (Some(end), Some(start)) = (self.commenting, self.more.range_from) else {
+            return false;
+        };
+        let Some(r) = self.shown() else { return false };
+        if key.0 != end.0 {
+            return false;
+        }
+        match (
+            line_point(&r, start),
+            line_point(&r, end),
+            line_point(&r, key),
+        ) {
+            (Some(s), Some(e), Some(k)) => (s.1.min(e.1)..=s.1.max(e.1)).contains(&k.1),
+            _ => false,
+        }
+    }
+}
+
+/// Line `key`'s GitLab point, and its index among the file's lines.
+pub fn line_point(r: &Review, key: crate::edit::LineKey) -> Option<(crate::api::LinePoint, usize)> {
+    use crate::diff::Kind;
+    let (fi, old, new) = key;
+    let f = r.files.get(fi)?;
+    let mut ix = 0;
+    for h in f.body().hunks().iter() {
+        // GitLab counts from the header as written: `-0,0` (a new file)
+        // starts the old side at 0, where the parsed hunk says 1.
+        let (mut o, mut n) = literal_starts(&h.header).unwrap_or((h.old_start, h.new_start));
+        for l in &h.lines {
+            let (op, np) = (o, n);
+            match l.kind {
+                Kind::Context => {
+                    o += 1;
+                    n += 1;
+                }
+                Kind::Added => n += 1,
+                Kind::Removed => o += 1,
+                Kind::NoNewline => {}
+            }
+            if l.old == old && l.new == new && l.kind != Kind::NoNewline {
+                let kind = match l.kind {
+                    Kind::Added => "new",
+                    Kind::Removed => "old",
+                    _ => "",
+                };
+                return Some((
+                    crate::api::LinePoint {
+                        old,
+                        new,
+                        old_pos: op,
+                        new_pos: np,
+                        kind,
+                    },
+                    ix,
+                ));
+            }
+            ix += 1;
+        }
+    }
+    None
+}
+
+/// A hunk header's starts as written (`@@ -0,0 +1,5 @@` → (0, 1)).
+fn literal_starts(header: &str) -> Option<(u32, u32)> {
+    let mut parts = header.split_whitespace().skip(1);
+    let mut start = |sign: char| -> Option<u32> {
+        parts
+            .next()?
+            .strip_prefix(sign)?
+            .split(',')
+            .next()?
+            .parse()
+            .ok()
+    };
+    let old = start('-')?;
+    let new = start('+')?;
+    Some((old, new))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn line_codes_as_gitlab_writes_them() {
+        assert_eq!(super::literal_starts("@@ -0,0 +1,5 @@"), Some((0, 1)));
+        assert_eq!(super::literal_starts("@@ -3,5 +3,5 @@ fn x"), Some((3, 3)));
+        // Read off GitLab 19.5's discussions.json for the seeded !1.
+        assert_eq!(
+            crate::api::line_code("src/limiter.rs", 0, 6),
+            "7b998ff499bd195a78fe7b99f0e697fa3c22b054_0_6"
+        );
     }
 }

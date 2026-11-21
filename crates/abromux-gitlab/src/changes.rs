@@ -1968,6 +1968,8 @@ impl GitLabView {
                     .into_any_element();
                 let (t, h) = line_highlights(l);
                 let text = self.sel_text(t, h, Group::Diff(0), ix, cx);
+                // In the range a comment is being written on: marked as selected.
+                let selected = selected || self.in_comment_range(key);
                 let row = code_line_with(l, &mono, Some(gutter), selected, text);
                 card(div().child(self.hover_line(key, row, cx))).into_any_element()
             }
@@ -2333,11 +2335,15 @@ impl GitLabView {
                 .justify_center()
                 .cursor_pointer()
                 .child(icon("comment", 12., on_fill()))
-                .tooltip(hint("Add a comment to this line"))
-                .on_click(cx.listener(move |v, _, window, cx| {
+                .tooltip(hint(
+                    "Add a comment to this line (⇧-click: to the lines between)",
+                ))
+                .on_click(cx.listener(move |v, e: &ClickEvent, window, cx| {
                     // Not also the number's click under it (selecting the line).
                     cx.stop_propagation();
-                    if v.compare == crate::Compare::default() {
+                    if v.compare == crate::Compare::default()
+                        && !(e.modifiers().shift && v.extend_comment(key, cx))
+                    {
                         v.open_line_comment(key, window, cx)
                     }
                 })),

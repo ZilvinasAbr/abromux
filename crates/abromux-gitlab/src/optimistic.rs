@@ -218,6 +218,7 @@ impl Patch {
                     position_type: "text".into(),
                     old_line: *old,
                     new_line: *new,
+                    line_range: None,
                 };
                 let Some((h, l)) = f.find(&pos) else { return };
                 let mut first = note(body, Some("DiffNote"), true);

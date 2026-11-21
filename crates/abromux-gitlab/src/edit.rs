@@ -662,6 +662,7 @@ impl GitLabView {
             self.boxes
                 .line
                 .update(cx, |b, cx| b.set_value("", window, cx));
+            self.more.range_from = None;
         }
         self.commenting = Some(key);
         self.boxes.line.update(cx, |b, cx| b.focus(window, cx));
@@ -670,6 +671,7 @@ impl GitLabView {
 
     pub(crate) fn close_line_comment(&mut self, cx: &mut Context<Self>) {
         self.commenting = None;
+        self.more.range_from = None;
         self.rebuild_rows(cx);
     }
 
@@ -697,10 +699,12 @@ impl GitLabView {
             return;
         }
         let (old_path, new_path) = (f.meta.old_path.clone(), f.meta.new_path.clone());
+        let range = self.comment_range();
         self.boxes
             .line
             .update(cx, |b, cx| b.set_value("", window, cx));
         self.commenting = None;
+        self.more.range_from = None;
         let back = body.clone();
         let patch = if draft {
             Patch::Draft {
@@ -714,6 +718,7 @@ impl GitLabView {
                     position_type: "text".into(),
                     old_line: old,
                     new_line: new,
+                    line_range: None,
                 }),
                 discussion: None,
             }
@@ -734,7 +739,9 @@ impl GitLabView {
             Some(patch),
             move |c, p, iid| {
                 let refs: DiffRefs = refs;
-                if draft {
+                if let Some(range) = &range {
+                    c.range_comment(p, iid, &refs, &old_path, &new_path, range, &body, draft)
+                } else if draft {
                     c.draft_line_comment(p, iid, &refs, &old_path, &new_path, old, new, &body)
                         .map(|_| ())
                 } else {
@@ -1615,6 +1622,7 @@ impl GitLabView {
             .border_t_1()
             .border_b_1()
             .border_color(c(BORDER))
+            .children(self.range_header(cx))
             .child(
                 div()
                     .p_2()
