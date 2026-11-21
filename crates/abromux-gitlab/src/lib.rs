@@ -306,6 +306,11 @@ pub struct Location {
     /// the browser too).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub viewed: Vec<String>,
+    /// Rapid diffs turned off: a merge request shows once all its files
+    /// are in, instead of its first page at once with the rest loading
+    /// behind (GitLab's "Rapid Diffs"; on by default here).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub whole_diffs: bool,
     /// The list in pages of this many, as GitLab's "Show 20 items"; None:
     /// the whole list (the tab's default).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -356,6 +361,44 @@ fn open(params: &Value, window: &mut Window, cx: &mut App) -> anyhow::Result<Tab
 }
 
 /// Everything the review of merge request `iid` in `project` needs. Blocks.
+/// Rapid diffs' first look: the review with only the diff's first page of
+/// files, to show while the whole one loads.
+pub fn load_review_first_page(
+    c: &api::Client,
+    project: u64,
+    iid: u64,
+) -> anyhow::Result<review::Review> {
+    // Just what the first screen needs: the merge request, its first files
+    // and its threads, side by side; the whole load fills in the rest.
+    let c = c.first_page_of_diffs();
+    let (mr, diffs, discussions) = std::thread::scope(|s| {
+        let mr = s.spawn(|| c.merge_request(project, iid));
+        let diffs = s.spawn(|| c.diffs(project, iid));
+        let discussions = discussions_first(&c, project, iid);
+        (mr.join(), diffs.join(), discussions)
+    });
+    let mr = mr.map_err(|_| anyhow::anyhow!("loading the merge request failed"))??;
+    let diffs = diffs.map_err(|_| anyhow::anyhow!("loading the diff failed"))??;
+    let mut r = review::Review::build(
+        mr,
+        diffs,
+        discussions.unwrap_or_default(),
+        Default::default(),
+        vec![],
+    );
+    r.partial = true;
+    Ok(r)
+}
+
+/// The first page of a merge request's threads.
+fn discussions_first(
+    c: &api::Client,
+    project: u64,
+    iid: u64,
+) -> anyhow::Result<Vec<types::Discussion>> {
+    c.get(&api::first_page(&api::discussions_path(project, iid)))
+}
+
 pub fn load_review(c: &api::Client, project: u64, iid: u64) -> anyhow::Result<review::Review> {
     use api::first_page;
     let t0 = std::time::Instant::now();
@@ -929,6 +972,7 @@ mod tests {
             parallel: true,
             viewed: vec!["src/a.rs".into()],
             per_page: Some(20),
+            whole_diffs: true,
         };
         let v = serde_json::to_value(&loc).unwrap();
         assert_eq!(serde_json::from_value::<Location>(v).unwrap(), loc);

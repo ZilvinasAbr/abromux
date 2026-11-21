@@ -59,6 +59,9 @@ pub struct Review {
     pub premium: crate::types::Premium,
     /// Commits added for context ("previously merged commits").
     pub context_commits: Vec<crate::types::Commit>,
+    /// Rapid diffs' first look: only the diff's first page of files is in;
+    /// the rest are loading.
+    pub partial: bool,
     /// Work items linked to it (GitLab's sidebar), when GitLab has them.
     pub work_items: Vec<crate::types::WorkItemLink>,
     /// GitLab's merge checks: (identifier, status), as its merge widget lists them.
@@ -242,6 +245,7 @@ impl Review {
             reports: Default::default(),
             checks: vec![],
             work_items: vec![],
+            partial: false,
             context_commits: vec![],
             premium: Default::default(),
             multiple: (true, true),

@@ -73,7 +73,7 @@ How it was checked:
 | File header: copy path, Viewed, Comment on this file, Show options (View file @ sha, Copy link to the file, Hide comments) | ✓ | app, shot |
 | Comment on a line, on several lines, on an image point | ✓ | app, shot |
 | Expand unchanged lines | ✓ | earlier work |
-| Rapid Diffs (beta) | — a switch between two GitLab renderers of the same diff; the tab's one renderer is virtualized like Rapid Diffs, with every feature above | — |
+| Rapid Diffs (beta) toggle: a big diff shown before all of it has loaded | ✓ Rapid diffs, on by default: on !9 (1,203 files) the first 100 files show in 1.2 s instead of 5.8 s, the rest following, the whole load no slower | timed through `dev/gitlab/slow-proxy.py` |
 | Large merge requests | better: every file (GitLab stops at 1000 and collapses the rest), ~same first load, 0.14 s from cache | timed through `dev/gitlab/slow-proxy.py` |
 
 ## Commits, Pipelines, Reports

@@ -80,6 +80,7 @@ impl<T> Load<T> {
 }
 
 /// Where the merge request to open is.
+#[derive(Clone)]
 enum Target {
     Id(u64, u64),
     Path(String, u64),
@@ -199,6 +200,7 @@ pub struct GitLabView {
     pub(crate) boxes: crate::edit::Boxes,
     /// actions.rs: suggestions' batch, the Code menu, merge messages, revert.
     pub(crate) more: crate::actions::More,
+    _rapid_task: Option<Task<()>>,
     /// context.rs: "Add previously merged commits".
     pub(crate) context: crate::context::ContextState,
     /// bulk.rs: the list's Bulk edit and Actions.
@@ -357,6 +359,7 @@ impl GitLabView {
         let mut v = Self {
             boxes,
             more,
+            _rapid_task: None,
             context,
             bulk,
             jobs: Default::default(),
@@ -849,6 +852,37 @@ impl GitLabView {
         let quiet = quiet && self.review.ready().is_some();
         if !quiet {
             self.clear_review(Load::Loading);
+        }
+        // Rapid diffs: with nothing to show yet, the first page of files
+        // at once, beside the whole load.
+        if !self.loc.whole_diffs
+            && matches!(self.review, Load::Loading)
+            && !crate::local::is_local(&host)
+        {
+            let (qc, t) = (c.clone(), target.clone());
+            self._rapid_task = Some(cx.spawn(async move |this, cx| {
+                let got = cx
+                    .background_spawn(async move {
+                        let (p, iid) = match t {
+                            Target::Id(p, iid) => (p, iid),
+                            Target::Path(path, iid) => (qc.project_id(&path)?, iid),
+                        };
+                        crate::load_review_first_page(&qc, p, iid)
+                    })
+                    .await;
+                this.update(cx, |v, cx| {
+                    if let Ok(r) = got
+                        && matches!(v.review, Load::Loading)
+                        && v.loc.iid == Some(r.mr.iid)
+                    {
+                        let p = r.mr.project_id;
+                        v.loc.project = Some(p);
+                        v.edits_for(r.mr.id);
+                        v.set_review(Rc::new(r), None, cx);
+                    }
+                })
+                .ok();
+            }));
         }
         self.refreshing = true;
         self._review_task = Some(cx.spawn(async move |this, cx| {
@@ -2402,6 +2436,9 @@ impl Tab for GitLabView {
             "per_page" => {
                 self.loc.per_page = num_arg("n").map(|n| n as usize);
                 self.bulk.page = num_arg("page").unwrap_or(0) as usize;
+            }
+            "rapid" => {
+                self.loc.whole_diffs = !args.get("on").and_then(Value::as_bool).unwrap_or(true)
             }
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {

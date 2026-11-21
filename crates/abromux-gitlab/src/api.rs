@@ -313,6 +313,8 @@ pub struct Client {
     /// Answers fetched ahead in one batch (`prefetch`), by URL, each taken
     /// by the first call that asks for it.
     ahead: Arc<std::sync::Mutex<std::collections::HashMap<String, Response>>>,
+    /// Rapid diffs' first look: only the diff's first page (`diffs`).
+    first_page_only: bool,
 }
 
 impl Client {
@@ -320,6 +322,7 @@ impl Client {
         Self {
             host: host.trim_end_matches('/').to_string(),
             token: token.to_string(),
+            first_page_only: false,
             transport,
             ahead: Default::default(),
         }
@@ -349,6 +352,13 @@ impl Client {
     }
 
     /// The same host and token over another transport (nothing fetched ahead).
+    /// This client, its `diffs` the first page only (Rapid diffs' first look).
+    pub fn first_page_of_diffs(&self) -> Self {
+        let mut c = Self::new(&self.host, &self.token, self.transport.clone());
+        c.first_page_only = true;
+        c
+    }
+
     pub fn with_transport(&self, transport: Arc<dyn Transport>) -> Self {
         Self::new(&self.host, &self.token, transport)
     }
@@ -553,7 +563,11 @@ impl Client {
     }
 
     pub fn diffs(&self, project: u64, iid: u64) -> anyhow::Result<Vec<FileDiff>> {
-        self.get_all(&format!("projects/{project}/merge_requests/{iid}/diffs"))
+        let path = format!("projects/{project}/merge_requests/{iid}/diffs");
+        if self.first_page_only {
+            return self.get(&first_page(&path));
+        }
+        self.get_all(&path)
     }
 
     pub fn discussions(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Discussion>> {
