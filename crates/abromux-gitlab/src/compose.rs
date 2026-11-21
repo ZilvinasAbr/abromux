@@ -468,6 +468,42 @@ impl GitLabView {
         Some((line.text.clone(), 1))
     }
 
+    /// Box `b`'s text as GitLab renders it (Preview, and rich text).
+    fn md_rendered(&self, b: MdBox, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let text = self.md_entity(b).read(cx).value().to_string();
+        if text.trim().is_empty() {
+            div()
+                .py_2()
+                .text_color(c(MUTED))
+                .child("Nothing to preview.")
+                .into_any_element()
+        } else {
+            let path = self.commenting.and_then(|(fi, ..)| {
+                self.shown()
+                    .and_then(|r| r.files.get(fi).map(|f| f.path().to_string()))
+            });
+            let mut suggestions =
+                preview_suggestions(&text, self.commenting.and_then(|(_, o, n)| n.or(o)));
+            if let Some((old, _)) = self.commented_text(cx) {
+                for s in &mut suggestions {
+                    s.from_content = format!("{old}\n");
+                }
+            }
+            div()
+                .py_1()
+                .min_h(px(60.))
+                .child(self.markdown(
+                    ("md-preview", b as usize),
+                    &text,
+                    &suggestions,
+                    path.as_deref(),
+                    window,
+                    cx,
+                ))
+                .into_any_element()
+        }
+    }
+
     /// Box `b` with GitLab's editor around it: Write and Preview, the
     /// toolbar, then the box (or, previewing, what it renders as).
     pub(crate) fn md_editor(
@@ -568,43 +604,53 @@ impl GitLabView {
                     ),
             )
             .when(!previewing, |d| d.child(toolbar));
+        let rich = self.more.rich.contains(&b);
         let body: AnyElement = if previewing {
-            let text = self.md_entity(b).read(cx).value().to_string();
-            if text.trim().is_empty() {
-                div()
-                    .py_2()
-                    .text_color(c(MUTED))
-                    .child("Nothing to preview.")
-                    .into_any_element()
-            } else {
-                let path = self.commenting.and_then(|(fi, ..)| {
-                    self.shown()
-                        .and_then(|r| r.files.get(fi).map(|f| f.path().to_string()))
-                });
-                let mut suggestions =
-                    preview_suggestions(&text, self.commenting.and_then(|(_, o, n)| n.or(o)));
-                if let Some((old, _)) = self.commented_text(cx) {
-                    for s in &mut suggestions {
-                        s.from_content = format!("{old}\n");
-                    }
-                }
-                div()
-                    .py_1()
-                    .min_h(px(60.))
-                    .child(self.markdown(
-                        ("md-preview", b as usize),
-                        &text,
-                        &suggestions,
-                        path.as_deref(),
-                        window,
-                        cx,
-                    ))
-                    .into_any_element()
-            }
+            self.md_rendered(b, window, cx)
+        } else if rich {
+            // "Rich text": what's typed, formatted beside it as it's typed.
+            let shown = self.md_rendered(b, window, cx);
+            div()
+                .flex()
+                .gap_3()
+                .child(div().flex_1().min_w(px(0.)).child(input))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .pl_3()
+                        .border_l_1()
+                        .border_color(c(RAISED))
+                        .child(shown),
+                )
+                .into_any_element()
         } else {
             input
         };
-        div().flex().flex_col().child(head).child(body)
+        let switch = div()
+            .id(SharedString::from(format!("md-rich-{b:?}")))
+            .pt_1()
+            .text_size(px(12.))
+            .text_color(c(MUTED))
+            .cursor_pointer()
+            .hover(|s| s.text_color(c(TEXT)))
+            .child(if rich {
+                "Switch to plain text editing"
+            } else {
+                "Switch to rich text editing"
+            })
+            .on_click(cx.listener(move |v, _, _, cx| {
+                if !v.more.rich.remove(&b) {
+                    v.more.rich.insert(b);
+                }
+                cx.notify();
+            }));
+        div()
+            .flex()
+            .flex_col()
+            .child(head)
+            .child(body)
+            .when(!previewing, |d| d.child(switch))
     }
 }
 

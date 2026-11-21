@@ -49,7 +49,7 @@ How it was checked:
 | Create issue to resolve thread | ✓ | live (`actions.rs`) |
 | Apply suggestion (with message), Add suggestion to batch | ✓ | live (`actions.rs`), shot |
 | Comment box: Comment / Start thread ▾, Start a review, internal note | ✓ | live, app |
-| Editor: Write / Preview, Text style, bold, italic, strikethrough, quote, code, link, lists, checklist, table, attach file, quick actions, comment templates | ✓ (Markdown with Preview; GitLab's optional WYSIWYG "rich text" mode isn't reproduced) | live (quick actions, templates), app (attach), shot |
+| Editor: Write / Preview, Text style, bold, italic, strikethrough, quote, code, link, lists, checklist, table, attach file, quick actions, comment templates | ✓ (Switch to rich text editing: the text formatted beside the box as you type, where GitLab's formats it in place) | live (quick actions, templates), app (attach), shot |
 | `/` quick action autocomplete, `@` mentions | ✓ | shot, earlier work |
 
 ## Sidebar
@@ -73,7 +73,7 @@ How it was checked:
 | File header: copy path, Viewed, Comment on this file, Show options (View file @ sha, Copy link to the file, Hide comments) | ✓ | app, shot |
 | Comment on a line, on several lines, on an image point | ✓ | app, shot |
 | Expand unchanged lines | ✓ | earlier work |
-| Rapid Diffs (beta) | — GitLab's own renderer switch; the tab's diff is always virtualized | — |
+| Rapid Diffs (beta) | — a switch between two GitLab renderers of the same diff; the tab's one renderer is virtualized like Rapid Diffs, with every feature above | — |
 | Large merge requests | better: every file (GitLab stops at 1000 and collapses the rest), ~same first load, 0.14 s from cache | timed through `dev/gitlab/slow-proxy.py` |
 
 ## Commits, Pipelines, Reports
@@ -105,4 +105,4 @@ merge request; the tab sends `gid://gitlab/MergeRequest/<id>`.
 | Bulk edit (state, labels, milestone, assignee, subscription) | ✓ | app |
 | Export as CSV, Subscribe to RSS feed | ✓ (the CSV is written by the tab; GitLab mails it) | unit test |
 | New merge request | ✓ | app |
-| Pagination (20 per page) | better: the whole list, scrolled | — |
+| Pagination: Show 20 / 50 / 100 items, Previous, pages, Next | ✓ (and Show all, the default) | shot |

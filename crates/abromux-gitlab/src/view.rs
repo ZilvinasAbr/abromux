@@ -281,6 +281,15 @@ impl GitLabView {
         let context = crate::context::ContextState::new(window, cx);
         let bulk = crate::bulk::BulkState::new(window, cx);
         let duo = crate::duo::DuoState::new(window, cx);
+        // Boxes whose rich text mode renders as you type.
+        for b in [
+            boxes.description.clone(),
+            boxes.note.clone(),
+            new_mr.description.clone(),
+        ] {
+            cx.subscribe(&b, |_, _, _: &InputEvent, cx| cx.notify())
+                .detach();
+        }
         for b in [new_mr.source.clone(), new_mr.target.clone()] {
             cx.subscribe(&b, |_, _, _: &InputEvent, cx| cx.notify())
                 .detach();
@@ -2144,6 +2153,13 @@ impl Tab for GitLabView {
             "md" => {
                 let b = crate::compose::MdBox::parse(str_arg("box").unwrap_or("comment"))
                     .context("box is comment, reply, line, note or description")?;
+                if let Some(on) = args.get("rich").and_then(Value::as_bool) {
+                    if on {
+                        self.more.rich.insert(b);
+                    } else {
+                        self.more.rich.remove(&b);
+                    }
+                }
                 if let Some(on) = args.get("preview").and_then(Value::as_bool) {
                     if on {
                         self.more.previewing.insert(b);

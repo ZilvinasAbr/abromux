@@ -89,6 +89,8 @@ pub struct More {
     pub checks_open: bool,
     /// "Show whitespace changes" turned off.
     pub hide_whitespace: bool,
+    /// Boxes in rich text mode: formatted beside, as typed.
+    pub rich: std::collections::HashSet<crate::compose::MdBox>,
     /// Boxes showing their Preview instead of the text.
     pub previewing: std::collections::HashSet<crate::compose::MdBox>,
     /// "Your review": the panel open, its verdict, and the summary.
@@ -121,6 +123,7 @@ impl More {
             branch: cx.new(|cx| InputState::new(window, cx).placeholder("Branch")),
             picked: None,
             previewing: Default::default(),
+            rich: Default::default(),
             hide_whitespace: false,
             checks_open: false,
             wi_open: false,
