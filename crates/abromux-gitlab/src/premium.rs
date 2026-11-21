@@ -327,7 +327,8 @@ pub fn dependency_field(window: &mut Window, cx: &mut App) -> Entity<InputState>
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{rules_line, train_line};
+    use crate::types::{ApprovalState, Block, TrainEntry};
 
     // Shaped as GitLab's API docs show them (Premium; a free GitLab
     // answers 404, which the client takes as "none").
