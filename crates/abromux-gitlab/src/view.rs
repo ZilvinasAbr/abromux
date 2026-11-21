@@ -2176,6 +2176,11 @@ impl Tab for GitLabView {
                     self.send_line_comment(draft, window, cx);
                 }
             }
+            "task" => {
+                let n = num_arg("n").context("missing n")? as usize;
+                let done = args.get("done").and_then(Value::as_bool).unwrap_or(true);
+                self.toggle_task(n, done, window, cx);
+            }
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);

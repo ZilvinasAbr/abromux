@@ -539,6 +539,8 @@ impl GitLabView {
         let project = web.split("/-/").next().unwrap_or_default().to_string();
         let host = self.host();
         let jira = abromux_plugin::jira_url("", cx);
+        // Task items so far, to know which one a click ticks.
+        let mut task_n = 0;
         for (i, p) in parts(body, suggestions).into_iter().enumerate() {
             out = match p {
                 Part::Markdown(md) => {
@@ -555,17 +557,32 @@ impl GitLabView {
                         .entry(text)
                         .or_insert_with_key(|t| crate::gfm::blocks(t).into())
                         .clone();
-                    out.children(blocks.iter().enumerate().map(|(b, block)| {
-                        TextView::markdown(
-                            SharedString::from(format!("{}-{}-{i}-{b}", id.0, id.1)),
-                            block.clone(),
-                            window,
-                            cx,
-                        )
-                        .style(md_style())
-                        .selectable(true)
-                        .text_size(px(14.))
-                    }))
+                    let mut done = vec![];
+                    for (b, block) in blocks.iter().enumerate() {
+                        // A checklist: GitLab's clickable task items.
+                        if let Some(items) = crate::tasks::parse_block(block) {
+                            let first = task_n;
+                            task_n += items.len();
+                            done.push(
+                                self.task_list(id, i, b, first, items, window, cx)
+                                    .into_any_element(),
+                            );
+                            continue;
+                        }
+                        done.push(
+                            TextView::markdown(
+                                SharedString::from(format!("{}-{}-{i}-{b}", id.0, id.1)),
+                                block.clone(),
+                                window,
+                                cx,
+                            )
+                            .style(md_style())
+                            .selectable(true)
+                            .text_size(px(14.))
+                            .into_any_element(),
+                        );
+                    }
+                    out.children(done)
                 }
                 Part::Suggestion(s) => out.child(self.suggestion(s, path, cx)),
                 Part::Code(lang, code) => {
@@ -576,6 +593,99 @@ impl GitLabView {
             };
         }
         out
+    }
+
+    /// A checklist: each item's checkbox and text. In the description
+    /// (when you may edit it) a click ticks it, as on GitLab's page.
+    #[allow(clippy::too_many_arguments)]
+    fn task_list(
+        &self,
+        id: (&'static str, usize),
+        part: usize,
+        block: usize,
+        first: usize,
+        items: Vec<crate::tasks::Task>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let editable = id.0 == "description"
+            && self.me.is_some()
+            && !self.is_local()
+            && self.review.ready().is_some_and(|r| r.mr.state != "locked");
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .children(items.into_iter().enumerate().map(|(k, t)| {
+                let n = first + k;
+                let done = t.done;
+                let box_ = div()
+                    .id(SharedString::from(format!("task-{}-{}-{n}", id.0, id.1)))
+                    .mt(px(3.))
+                    .flex_none()
+                    .child(icon(
+                        if done { "square-check" } else { "square" },
+                        16.,
+                        c(if done { FOCUS } else { MUTED }),
+                    ))
+                    .when(editable, |d| {
+                        d.cursor_pointer().on_click(
+                            cx.listener(move |v, _, window, cx| {
+                                v.toggle_task(n, !done, window, cx)
+                            }),
+                        )
+                    });
+                div()
+                    .flex()
+                    .items_start()
+                    .gap_2()
+                    .pl(px(t.indent as f32 * 8.))
+                    .child(box_)
+                    .child(
+                        div().flex_1().min_w(px(0.)).child(
+                            TextView::markdown(
+                                SharedString::from(format!(
+                                    "{}-{}-{part}-{block}-t{k}",
+                                    id.0, id.1
+                                )),
+                                t.text,
+                                window,
+                                cx,
+                            )
+                            .style(md_style())
+                            .selectable(true)
+                            .text_size(px(14.)),
+                        ),
+                    )
+            }))
+    }
+
+    /// Tick (or untick) the description's `n`th task item and save it.
+    pub(crate) fn toggle_task(
+        &mut self,
+        n: usize,
+        done: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(body) = self.review.ready().and_then(|r| r.mr.description.clone()) else {
+            return;
+        };
+        let Some(new) = crate::tasks::toggle(&body, n, done) else {
+            return;
+        };
+        let fields = serde_json::json!({ "description": new });
+        self.write(
+            crate::edit::Write::EditMr,
+            Some(crate::optimistic::Patch::Fields {
+                fields: fields.clone(),
+                people: vec![],
+            }),
+            move |c, p, iid| c.update(p, iid, fields).map(|_| ()),
+            |_, _, _| {},
+            window,
+            cx,
+        );
     }
 
     /// A fenced code block as GitLab draws it: the code background, a

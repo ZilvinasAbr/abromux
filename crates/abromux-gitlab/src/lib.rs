@@ -34,6 +34,7 @@ mod search;
 mod select;
 mod side;
 mod style;
+mod tasks;
 pub mod time;
 pub mod types;
 pub mod view;
