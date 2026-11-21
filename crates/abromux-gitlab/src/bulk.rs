@@ -26,6 +26,9 @@ pub struct BulkState {
     /// and whether their list is open.
     pub history: Vec<String>,
     pub history_open: bool,
+    /// The list's page (with pages on), and the page size menu open.
+    pub page: usize,
+    pub per_page_open: bool,
 }
 
 impl BulkState {
@@ -39,6 +42,8 @@ impl BulkState {
             actions_open: false,
             history: vec![],
             history_open: false,
+            page: 0,
+            per_page_open: false,
         }
     }
 }
@@ -297,6 +302,125 @@ impl GitLabView {
                                             }),
                                         )
                                     })),
+                            )
+                            .with_priority(2),
+                        )
+                    }),
+            )
+    }
+
+    /// Under the list: GitLab's pagination (Previous, the pages, Next) and
+    /// "Show 20 items", which also offers the whole list.
+    pub(crate) fn list_pager(&self, total: usize, cx: &mut Context<Self>) -> Div {
+        let per = self.loc.per_page;
+        let open = self.bulk.per_page_open;
+        let pages = per.map_or(1, |n| total.div_ceil(n.max(1)).max(1));
+        let page = self.bulk.page.min(pages - 1);
+        let nav = |id: String, label: String, to: Option<usize>, on: bool| {
+            div()
+                .id(SharedString::from(id))
+                .px_2()
+                .py(px(2.))
+                .rounded(px(6.))
+                .text_color(c(if to.is_some() { TEXT } else { MUTED }))
+                .when(on, |d| {
+                    d.bg(ca(0x89888d55)).font_weight(FontWeight::SEMIBOLD)
+                })
+                .when(to.is_some() && !on, |d| {
+                    d.cursor_pointer().hover(|s| s.bg(ca(0x89888d33)))
+                })
+                .child(label)
+                .when_some(to.filter(|_| !on), |d, p| {
+                    d.on_click(cx.listener(move |v, _, _, cx| {
+                        v.bulk.page = p;
+                        cx.notify();
+                    }))
+                })
+        };
+        let size = |n: Option<usize>| {
+            let label = n.map_or("Show all".to_string(), |n| format!("Show {n} items"));
+            div()
+                .id(SharedString::from(format!("per-page-{n:?}")))
+                .px_3()
+                .py_1()
+                .cursor_pointer()
+                .hover(|s| s.bg(c(RAISED)))
+                .text_color(c(TEXT))
+                .child(label)
+                .on_click(cx.listener(move |v, _, _, cx| {
+                    v.loc.per_page = n;
+                    v.bulk.page = 0;
+                    v.bulk.per_page_open = false;
+                    cx.notify();
+                }))
+        };
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .py_3()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .when(per.is_some() && pages > 1, |d| {
+                        d.child(nav(
+                            "page-prev".into(),
+                            "Previous".into(),
+                            page.checked_sub(1),
+                            false,
+                        ))
+                        .children((0..pages).map(|p| {
+                            nav(format!("page-{p}"), (p + 1).to_string(), Some(p), p == page)
+                        }))
+                        .child(nav(
+                            "page-next".into(),
+                            "Next".into(),
+                            (page + 1 < pages).then_some(page + 1),
+                            false,
+                        ))
+                    }),
+            )
+            .child(
+                div()
+                    .relative()
+                    .child(
+                        crate::edit::secondary("gl-per-page", "")
+                            .gap_1()
+                            .child(
+                                per.map_or("Show all".to_string(), |n| format!("Show {n} items")),
+                            )
+                            .child(app_icon("chevron-down", 12., c(TEXT)))
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.bulk.per_page_open = !v.bulk.per_page_open;
+                                cx.notify();
+                            })),
+                    )
+                    .when(open, |d| {
+                        d.child(
+                            deferred(
+                                div()
+                                    .id("gl-per-page-menu")
+                                    .absolute()
+                                    .bottom(px(36.))
+                                    .right_0()
+                                    .min_w(px(160.))
+                                    .py_1()
+                                    .rounded(px(8.))
+                                    .border_1()
+                                    .border_color(c(BORDER))
+                                    .bg(c(CARD))
+                                    .shadow_lg()
+                                    .occlude()
+                                    .on_mouse_down_out(cx.listener(|v, _, _, cx| {
+                                        v.bulk.per_page_open = false;
+                                        cx.notify();
+                                    }))
+                                    .child(size(Some(20)))
+                                    .child(size(Some(50)))
+                                    .child(size(Some(100)))
+                                    .child(size(None)),
                             )
                             .with_priority(2),
                         )

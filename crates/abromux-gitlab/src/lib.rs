@@ -306,6 +306,10 @@ pub struct Location {
     /// the browser too).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub viewed: Vec<String>,
+    /// The list in pages of this many, as GitLab's "Show 20 items"; None:
+    /// the whole list (the tab's default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_page: Option<usize>,
 }
 
 impl Location {

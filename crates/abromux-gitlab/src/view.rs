@@ -2383,6 +2383,10 @@ impl Tab for GitLabView {
                     self.open_context(window, cx);
                 }
             }
+            "per_page" => {
+                self.loc.per_page = num_arg("n").map(|n| n as usize);
+                self.bulk.page = num_arg("page").unwrap_or(0) as usize;
+            }
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);
@@ -2940,6 +2944,7 @@ impl GitLabView {
             .as_ref()
             .map(|b| format!("{}/{}", self.host().trim_end_matches('/'), b.path));
         let all: Vec<(u64, u64)> = filtered.iter().map(|m| (m.project_id, m.iid)).collect();
+        let pager = self.list_pager(filtered.len(), cx);
         let tools = self.list_tools(project_url, filtered, cx);
         let bulk_bar = if projects {
             None
@@ -2987,6 +2992,13 @@ impl GitLabView {
                     ];
                 }
                 self.loc.sort.apply(&mut shown, self.loc.ascending);
+                // GitLab's pages, when picked.
+                if let Some(n) = self.loc.per_page.filter(|n| *n > 0) {
+                    let page = self.bulk.page.min(shown.len().saturating_sub(1) / n);
+                    let start = (page * n).min(shown.len());
+                    let end = (start + n).min(shown.len());
+                    shown = shown[start..end].to_vec();
+                }
                 shown
                     .into_iter()
                     .map(|m| {
@@ -3319,7 +3331,11 @@ impl GitLabView {
                     .children(match self.new_mr_form(window, cx) {
                         Some(f) => vec![f.into_any_element()],
                         None => rows.unwrap_or_default(),
-                    }),
+                    })
+                    .when(
+                        !projects && self.new_mr.project.is_none() && self.list.ready().is_some(),
+                        |d| d.child(pager),
+                    ),
             )
             .into_any_element()
     }
