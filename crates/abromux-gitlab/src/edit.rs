@@ -310,7 +310,7 @@ impl GitLabView {
     }
 
     /// The last review GitLab sent, with the writes not yet in it on top.
-    fn present(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn present(&mut self, cx: &mut Context<Self>) {
         let Some(base) = self.writes.base.clone() else {
             return;
         };
@@ -332,6 +332,13 @@ impl GitLabView {
                 Rc::new(r)
             }
             _ => base,
+        };
+        let shown = if self.more.hide_whitespace {
+            let mut r = (*shown).clone();
+            crate::actions::hide_whitespace(&mut r);
+            Rc::new(r)
+        } else {
+            shown
         };
         self.review = Load::Ready(shown);
         self.rebuild_rows(cx);

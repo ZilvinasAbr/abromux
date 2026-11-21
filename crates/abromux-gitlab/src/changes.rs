@@ -1069,6 +1069,37 @@ impl GitLabView {
             .overflow_hidden()
             .child(option("Inline", false, cx))
             .child(option("Side-by-side", true, cx))
+            // GitLab's "Show whitespace changes" (its diff settings).
+            .child({
+                let shown = !self.more.hide_whitespace;
+                div()
+                    .id("gl-whitespace")
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .h(px(32.))
+                    .px_3()
+                    .cursor_pointer()
+                    .text_color(c(TEXT))
+                    .bg(ca(0x89888d40))
+                    .hover(|s| s.bg(ca(0x89888d99)))
+                    .child(icon(
+                        if shown { "square-check" } else { "square" },
+                        14.,
+                        c(TEXT),
+                    ))
+                    .child("Whitespace")
+                    .tooltip(hint("Show whitespace changes"))
+                    .on_click(cx.listener(move |v, _, _, cx| v.set_whitespace(shown, cx)))
+            })
+    }
+
+    /// Hide (or show again) changes only in whitespace.
+    pub(crate) fn set_whitespace(&mut self, hide: bool, cx: &mut Context<Self>) {
+        if self.more.hide_whitespace != hide {
+            self.more.hide_whitespace = hide;
+            self.present(cx);
+        }
     }
 
     pub(crate) fn set_parallel(&mut self, parallel: bool, cx: &mut Context<Self>) {

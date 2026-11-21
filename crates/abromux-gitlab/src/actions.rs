@@ -51,6 +51,8 @@ pub struct More {
     pub time_open: bool,
     pub time_spent: Entity<InputState>,
     pub time_summary: Entity<InputState>,
+    /// "Show whitespace changes" turned off.
+    pub hide_whitespace: bool,
     /// Boxes showing their Preview instead of the text.
     pub previewing: std::collections::HashSet<crate::compose::MdBox>,
     /// "Your review": the panel open, its verdict, and the summary.
@@ -83,6 +85,7 @@ impl More {
             branch: cx.new(|cx| InputState::new(window, cx).placeholder("Branch")),
             picked: None,
             previewing: Default::default(),
+            hide_whitespace: false,
             time_open: false,
             time_spent: cx.new(|cx| InputState::new(window, cx).placeholder("Time, e.g. 1h 30m")),
             time_summary: cx
@@ -1664,6 +1667,42 @@ impl GitLabView {
                         ),
                 )
         })
+    }
+}
+
+/// The review with whitespace-only changes hidden (diff.rs), its threads
+/// placed again on the lines now shown.
+pub fn hide_whitespace(r: &mut Review) {
+    use crate::diff::Body;
+    for f in &mut r.files {
+        let Body::Text(hunks) = &f.body else { continue };
+        f.body = Body::Text(std::sync::Arc::new(crate::diff::without_whitespace(hunks)));
+        let threads = std::mem::take(&mut f.threads);
+        for (_, _, d) in threads {
+            let Some(p) = d.position().cloned() else {
+                f.outdated.push(d);
+                continue;
+            };
+            let at = f.find(&p).or_else(|| {
+                // A removed or added line that's unchanged now.
+                f.body().hunks().iter().enumerate().find_map(|(hi, h)| {
+                    h.lines
+                        .iter()
+                        .position(|l| {
+                            (p.new_line.is_some() && l.new == p.new_line)
+                                || (p.new_line.is_none()
+                                    && p.old_line.is_some()
+                                    && l.old == p.old_line)
+                        })
+                        .map(|li| (hi, li))
+                })
+            });
+            match at {
+                Some((h, l)) => f.threads.push((h, l, d)),
+                None => f.outdated.push(d),
+            }
+        }
+        f.threads.sort_by_key(|(h, l, _)| (*h, *l));
     }
 }
 

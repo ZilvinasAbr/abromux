@@ -392,6 +392,112 @@ fn hunk_starts(header: &str) -> Option<(u32, u32)> {
     Some((old, new))
 }
 
+/// The hunks with changes only in whitespace taken out, as GitLab's "Show
+/// whitespace changes" off does: in each run of removed and added lines,
+/// those that match ignoring whitespace become unchanged lines (the new
+/// text, both numbers), and hunks left with no change go.
+pub fn without_whitespace(hunks: &[Hunk]) -> Vec<Hunk> {
+    let bare = |t: &str| t.split_whitespace().collect::<String>();
+    let mut out = vec![];
+    for h in hunks {
+        let mut lines: Vec<Line> = vec![];
+        let mut i = 0;
+        while i < h.lines.len() {
+            if matches!(h.lines[i].kind, Kind::Context | Kind::NoNewline) {
+                lines.push(h.lines[i].clone());
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < h.lines.len() && matches!(h.lines[i].kind, Kind::Added | Kind::Removed) {
+                i += 1;
+            }
+            let run = &h.lines[start..i];
+            let rem: Vec<&Line> = run.iter().filter(|l| l.kind == Kind::Removed).collect();
+            let add: Vec<&Line> = run.iter().filter(|l| l.kind == Kind::Added).collect();
+            let (rb, ab): (Vec<String>, Vec<String>) = (
+                rem.iter().map(|l| bare(&l.text)).collect(),
+                add.iter().map(|l| bare(&l.text)).collect(),
+            );
+            // Longest common subsequence of the two sides, ignoring whitespace.
+            let (n, m) = (rem.len(), add.len());
+            let mut dp = vec![vec![0u32; m + 1]; n + 1];
+            for a in (0..n).rev() {
+                for b in (0..m).rev() {
+                    dp[a][b] = if rb[a] == ab[b] {
+                        dp[a + 1][b + 1] + 1
+                    } else {
+                        dp[a + 1][b].max(dp[a][b + 1])
+                    };
+                }
+            }
+            let (mut a, mut b) = (0, 0);
+            let (mut gone, mut came) = (vec![], vec![]);
+            let flush = |lines: &mut Vec<Line>, gone: &mut Vec<Line>, came: &mut Vec<Line>| {
+                lines.append(gone);
+                lines.append(came);
+            };
+            while a < n || b < m {
+                if a < n && b < m && rb[a] == ab[b] {
+                    flush(&mut lines, &mut gone, &mut came);
+                    let mut l = add[b].clone();
+                    l.kind = Kind::Context;
+                    l.old = rem[a].old;
+                    l.changed.clear();
+                    lines.push(l);
+                    a += 1;
+                    b += 1;
+                } else if b == m || (a < n && dp[a + 1][b] >= dp[a][b + 1]) {
+                    gone.push(rem[a].clone());
+                    a += 1;
+                } else {
+                    came.push(add[b].clone());
+                    b += 1;
+                }
+            }
+            flush(&mut lines, &mut gone, &mut came);
+        }
+        if lines
+            .iter()
+            .any(|l| matches!(l.kind, Kind::Added | Kind::Removed))
+        {
+            out.push(Hunk {
+                header: h.header.clone(),
+                old_start: h.old_start,
+                new_start: h.new_start,
+                lines,
+            });
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod whitespace_tests {
+    #[test]
+    fn whitespace_only_changes_go() {
+        let d = "@@ -1,3 +1,4 @@\n-fn a() {\n-  x\n+fn a()  {\n+    x\n+    y\n }\n@@ -9,1 +10,1 @@\n-z \n+z\n";
+        let hs = super::parse(d);
+        let out = super::without_whitespace(&hs);
+        assert_eq!(out.len(), 1, "the second hunk was whitespace only");
+        let kinds: Vec<_> = out[0]
+            .lines
+            .iter()
+            .map(|l| (l.kind, l.old, l.new))
+            .collect();
+        use super::Kind::*;
+        assert_eq!(
+            kinds,
+            vec![
+                (Context, Some(1), Some(1)),
+                (Context, Some(2), Some(2)),
+                (Added, None, Some(3)),
+                (Context, Some(3), Some(4)),
+            ]
+        );
+    }
+}
+
 #[cfg(test)]
 // Lists of one changed range are what these tests expect.
 #[allow(clippy::single_range_in_vec_init)]
