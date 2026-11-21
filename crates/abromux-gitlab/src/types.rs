@@ -846,3 +846,19 @@ pub struct JobArtifact {
     /// archive, junit, codequality, trace…
     pub file_type: String,
 }
+
+/// A work item linked to the merge request (GitLab's sidebar "Work items").
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WorkItemLink {
+    /// The relation's global id (for unlinking).
+    pub id: String,
+    /// CLOSES, RELATED or MENTIONED.
+    pub link_type: String,
+    /// Made by the description's "Closes #12": unlinked by editing it.
+    pub from_description: bool,
+    pub iid: u64,
+    pub title: String,
+    pub state: String,
+    pub web_url: String,
+    pub reference: String,
+}

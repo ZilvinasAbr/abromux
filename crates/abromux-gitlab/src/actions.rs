@@ -77,6 +77,14 @@ pub struct More {
     pub templates: Option<Vec<(String, String)>>,
     pub templates_open: Option<crate::compose::MdBox>,
     pub style_open: Option<crate::compose::MdBox>,
+    /// A file header's "Show options" open, and files whose comments are hidden.
+    pub file_menu: Option<usize>,
+    pub hidden_comments: std::collections::HashSet<String>,
+    /// The sidebar's "Link work item" form: open, its relationship, and
+    /// the item (`#12`, a link, or a new item's title).
+    pub wi_open: bool,
+    pub wi_type: &'static str,
+    pub wi_input: Entity<InputState>,
     /// The merge widget's checks list is open.
     pub checks_open: bool,
     /// "Show whitespace changes" turned off.
@@ -115,6 +123,14 @@ impl More {
             previewing: Default::default(),
             hide_whitespace: false,
             checks_open: false,
+            wi_open: false,
+            wi_type: "CLOSES",
+            wi_input: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Search existing items or enter an item's URL or reference ID")
+            }),
+            file_menu: None,
+            hidden_comments: Default::default(),
             slash: None,
             templates: None,
             templates_open: None,
@@ -155,8 +171,9 @@ impl More {
         Some(b.read(cx).value().to_string()).filter(|m| !m.trim().is_empty())
     }
 
-    pub fn fields(&self) -> [&Entity<InputState>; 9] {
+    pub fn fields(&self) -> [&Entity<InputState>; 10] {
         [
+            &self.wi_input,
             &self.dependency,
             &self.edit_target,
             &self.time_spent,

@@ -405,36 +405,9 @@ impl GitLabView {
                         None => none(),
                     }),
             )
-            // GitLab's "Work items": what merging closes.
-            .child(
-                self.block("Work items", None, r, cx)
-                    .when(r.closes.is_empty(), |d| d.child(none()))
-                    .children(r.closes.iter().map(|i| {
-                        let url = i.web_url.clone();
-                        div()
-                            .id(SharedString::from(format!("closes-{}", i.iid)))
-                            .flex()
-                            .gap_1()
-                            .min_w(px(0.))
-                            .cursor_pointer()
-                            .hover(|s| s.underline())
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_color(c(MUTED))
-                                    .child(format!("#{}", i.iid)),
-                            )
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_color(c(if i.state == "closed" { MUTED } else { TEXT }))
-                                    .child(i.title.clone()),
-                            )
-                            .on_click(move |_, window, cx| {
-                                abromux_plugin::open_url(&url, window, cx)
-                            })
-                    })),
-            )
+            // GitLab's "Work items": what's linked (closes, related,
+            // mentioned), or what merging closes; + links one.
+            .child(self.work_items_block(r, cx))
             .child(
                 self.block_with("Time tracking", None, self.time_plus(cx), r, cx)
                     .child(time_tracking(&r.mr.time_stats))

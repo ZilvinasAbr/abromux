@@ -1168,6 +1168,107 @@ impl Client {
         Ok(())
     }
 
+    /// The work items linked to the merge request (GraphQL).
+    pub fn work_items(&self, full_path: &str, iid: u64) -> anyhow::Result<Vec<WorkItemLink>> {
+        let v = self.graphql(
+            "query($p: ID!, $iid: String!) { project(fullPath: $p) { mergeRequest(iid: $iid) { workItemRelations { nodes { id linkType fromMrDescription workItem { iid title state webUrl reference } } } } } }",
+            serde_json::json!({ "p": full_path, "iid": iid.to_string() }),
+        )?;
+        Ok(
+            v["data"]["project"]["mergeRequest"]["workItemRelations"]["nodes"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .map(|n| {
+                    let w = &n["workItem"];
+                    WorkItemLink {
+                        id: n["id"].as_str().unwrap_or_default().to_string(),
+                        link_type: n["linkType"].as_str().unwrap_or_default().to_string(),
+                        from_description: n["fromMrDescription"].as_bool().unwrap_or(false),
+                        iid: w["iid"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0),
+                        title: w["title"].as_str().unwrap_or_default().to_string(),
+                        state: w["state"].as_str().unwrap_or_default().to_string(),
+                        web_url: w["webUrl"].as_str().unwrap_or_default().to_string(),
+                        reference: w["reference"].as_str().unwrap_or_default().to_string(),
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// Link issue `issue` (its iid, in the same project) to the merge
+    /// request as `link_type` (CLOSES, RELATED, MENTIONED).
+    pub fn link_work_item(
+        &self,
+        full_path: &str,
+        project: u64,
+        iid: u64,
+        issue: u64,
+        link_type: &str,
+    ) -> anyhow::Result<()> {
+        let i: serde_json::Value = self.get(&format!("projects/{project}/issues/{issue}"))?;
+        let id = i["id"].as_u64().context("no such issue")?;
+        let v = self.graphql(
+            "mutation($p: ID!, $iid: String!, $ids: [WorkItemID!]!, $t: MergeRequestWorkItemLinkType) { mergeRequestCreateWorkItemRelations(input: { projectPath: $p, iid: $iid, workItemIds: $ids, linkType: $t }) { errors } }",
+            serde_json::json!({ "p": full_path, "iid": iid.to_string(), "ids": [format!("gid://gitlab/WorkItem/{id}")], "t": link_type }),
+        )?;
+        if let Some(e) = v["data"]["mergeRequestCreateWorkItemRelations"]["errors"]
+            .as_array()
+            .and_then(|e| e.first())
+        {
+            anyhow::bail!("GitLab: {}", e.as_str().unwrap_or("couldn't link it"));
+        }
+        Ok(())
+    }
+
+    /// Unlink relation `id` (a global id).
+    pub fn unlink_work_item(&self, full_path: &str, iid: u64, id: &str) -> anyhow::Result<()> {
+        let v = self.graphql(
+            "mutation($p: ID!, $iid: String!, $ids: [MergeRequestIssueID!]!) { mergeRequestDestroyWorkItemRelations(input: { projectPath: $p, iid: $iid, ids: $ids }) { errors } }",
+            serde_json::json!({ "p": full_path, "iid": iid.to_string(), "ids": [id] }),
+        )?;
+        if let Some(e) = v["data"]["mergeRequestDestroyWorkItemRelations"]["errors"]
+            .as_array()
+            .and_then(|e| e.first())
+        {
+            anyhow::bail!("GitLab: {}", e.as_str().unwrap_or("couldn't unlink it"));
+        }
+        Ok(())
+    }
+
+    /// A new issue titled `title`: its iid.
+    pub fn create_issue(&self, project: u64, title: &str) -> anyhow::Result<u64> {
+        let v: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/issues"),
+            serde_json::json!({ "title": title }),
+        )?;
+        v["iid"].as_u64().context("GitLab made no issue")
+    }
+
+    /// GitLab's "Create issue to resolve thread": an issue made from thread
+    /// `discussion`, which GitLab then resolves. Its web URL.
+    /// `mr_title`: the merge request's, for GitLab's default title.
+    pub fn issue_for_thread(
+        &self,
+        project: u64,
+        iid: u64,
+        discussion: &str,
+        mr_title: &str,
+    ) -> anyhow::Result<String> {
+        let v: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/issues"),
+            serde_json::json!({
+                "title": format!("Follow-up from \"{mr_title}\""),
+                "merge_request_to_resolve_discussions_of": iid,
+                "discussion_to_resolve": discussion,
+            }),
+        )?;
+        Ok(v["web_url"].as_str().unwrap_or_default().to_string())
+    }
+
     /// Pipeline `id`'s test report.
     pub fn test_report(&self, project: u64, id: u64) -> anyhow::Result<TestReport> {
         self.get(&format!("projects/{project}/pipelines/{id}/test_report"))

@@ -2328,31 +2328,116 @@ impl GitLabView {
                     )
                 },
             )
-            // GitLab's "View file @ <sha>", from the header's menu.
-            .when_some(self.blob_url(f), |d, (url, short)| {
-                let tip: SharedString = format!("View file @ {short}").into();
-                d.child(
-                    div()
-                        .id(SharedString::from(format!("view-{fi}")))
-                        .ml_2()
-                        .size(px(28.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(6.))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(ca(0x89888d66)))
-                        .child(icon("external-link", 14., c(TEXT)))
-                        .tooltip(move |window, cx| {
-                            gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
-                        })
-                        .on_click(move |_, window, cx| abromux_plugin::open_url(&url, window, cx)),
-                )
-            })
+            // GitLab's "Show options": View file @ <sha>, Copy link to the
+            // file, Hide comments.
+            .child(self.file_options(f, fi, cx))
     }
 
     /// The file's page in GitLab at the shown head commit, and that commit's
     /// short sha. None for a deleted file.
+    fn file_options(&self, f: &File, fi: usize, cx: &mut Context<Self>) -> Div {
+        let open = self.more.file_menu == Some(fi);
+        let path = f.path().to_string();
+        let hidden = self.more.hidden_comments.contains(&path);
+        let blob = self.blob_url(f);
+        let link = self.shown().map(|r| {
+            format!(
+                "{}/diffs#{}",
+                r.mr.web_url,
+                sha1_smol::Sha1::from(&path).digest()
+            )
+        });
+        let item = |id: String, label: String| {
+            div()
+                .id(SharedString::from(id))
+                .px_3()
+                .py_1()
+                .cursor_pointer()
+                .hover(|s| s.bg(c(RAISED)))
+                .text_color(c(TEXT))
+                .child(label)
+        };
+        let close = |v: &mut GitLabView, cx: &mut Context<GitLabView>| {
+            v.more.file_menu = None;
+            cx.notify();
+        };
+        div()
+            .relative()
+            .ml_1()
+            .child(
+                crate::edit::icon_button(
+                    SharedString::from(format!("file-options-{fi}")),
+                    icon("ellipsis-v", 15., c(TEXT)),
+                    "Show options",
+                )
+                .on_click(cx.listener(move |v, _, _, cx| {
+                    cx.stop_propagation();
+                    v.more.file_menu = if v.more.file_menu == Some(fi) {
+                        None
+                    } else {
+                        Some(fi)
+                    };
+                    cx.notify();
+                })),
+            )
+            .when(open, |d| {
+                let p2 = path.clone();
+                d.child(
+                    deferred(
+                        div()
+                            .id(SharedString::from(format!("file-options-menu-{fi}")))
+                            .absolute()
+                            .top(px(30.))
+                            .right_0()
+                            .min_w(px(220.))
+                            .py_1()
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(c(BORDER))
+                            .bg(c(CARD))
+                            .shadow_lg()
+                            .occlude()
+                            .on_mouse_down_out(cx.listener(move |v, _, _, cx| close(v, cx)))
+                            .children(blob.map(|(url, short)| {
+                                item(format!("file-view-{fi}"), format!("View file @ {short}"))
+                                    .on_click(cx.listener(move |v, _, window, cx| {
+                                        close(v, cx);
+                                        abromux_plugin::open_url(&url, window, cx);
+                                    }))
+                            }))
+                            .children(link.map(|l| {
+                                item(format!("file-link-{fi}"), "Copy link to the file".into())
+                                    .on_click(cx.listener(move |v, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(l.clone()));
+                                        close(v, cx);
+                                    }))
+                            }))
+                            .child(
+                                item(
+                                    format!("file-hide-comments-{fi}"),
+                                    if hidden {
+                                        "Show comments"
+                                    } else {
+                                        "Hide comments"
+                                    }
+                                    .into(),
+                                )
+                                .on_click(cx.listener(
+                                    move |v, _, _, cx| {
+                                        if !v.more.hidden_comments.remove(&p2) {
+                                            v.more.hidden_comments.insert(p2.clone());
+                                        }
+                                        close(v, cx);
+                                        v.rebuild_rows(cx);
+                                    },
+                                )),
+                            ),
+                    )
+                    .with_priority(2),
+                )
+            })
+    }
+
     fn blob_url(&self, f: &File) -> Option<(String, String)> {
         let r = self.shown()?;
         if f.meta.deleted_file {
@@ -2724,6 +2809,13 @@ impl GitLabView {
             draft: self.commenting,
         };
         let mut rows = rows(&r, &shape);
+        // A file's comments hidden (its "Hide comments").
+        if !self.more.hidden_comments.is_empty() {
+            rows.retain(|row| match row {
+                Row::Thread(f, _) => !self.more.hidden_comments.contains(r.files[*f].path()),
+                _ => true,
+            });
+        }
         // GitLab's "Show one file at a time": only the chosen file's rows.
         if let Some(only) = self.single_file {
             let only = only.min(r.files.len().saturating_sub(1));

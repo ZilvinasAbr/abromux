@@ -45,6 +45,7 @@ mod tasks;
 pub mod time;
 pub mod types;
 pub mod view;
+mod workitems;
 
 pub use edit::{draft_title, pipeline_active};
 
@@ -501,10 +502,12 @@ fn load_rest(
             .unwrap_or_default()
             .to_string();
     let mut checks = vec![];
+    let mut items = vec![];
     // A paid GitLab's approval rules, merge train and dependencies: all
     // answer 404 on a free one, and stay empty.
     r.premium = std::thread::scope(|s| {
         let got_checks = s.spawn(|| c.merge_checks(&full_path, iid).unwrap_or_default());
+        let got_items = s.spawn(|| c.work_items(&full_path, iid).unwrap_or_default());
         let rules = s.spawn(|| c.approval_state(project, iid).ok().flatten());
         let blocks = s.spawn(|| c.blocks(project, iid).unwrap_or_default());
         let duo = s.spawn(|| c.duo_available().unwrap_or(false));
@@ -521,11 +524,13 @@ fn load_rest(
             blocks: blocks.join().unwrap_or_default(),
             duo: {
                 checks = got_checks.join().unwrap_or_default();
+                items = got_items.join().unwrap_or_default();
                 duo.join().unwrap_or(false)
             },
         }
     });
     r.checks = checks;
+    r.work_items = items;
     // The head pipeline's reports, once it has finished (GitLab's widgets).
     if let Some(p) =
         r.mr.head_pipeline

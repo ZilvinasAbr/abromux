@@ -291,4 +291,47 @@ fn suggestions_todos_notifications_lock_and_drafts() {
     );
     // Comment templates come back (none, or what the user made).
     c.saved_replies().unwrap();
+
+    // Work items: an issue made and linked as Closes, seen, then unlinked.
+    let full = "alice/review-fixtures";
+    let issue = c.create_issue(p, "Work item test (temporary)").unwrap();
+    c.link_work_item(full, p, iid, issue, "CLOSES").unwrap();
+    let items = c.work_items(full, iid).unwrap();
+    let it = items.iter().find(|w| w.iid == issue).expect("linked");
+    assert_eq!(it.link_type, "CLOSES");
+    c.unlink_work_item(full, iid, &it.id).unwrap();
+    assert!(
+        !c.work_items(full, iid)
+            .unwrap()
+            .iter()
+            .any(|w| w.iid == issue)
+    );
+    // "Create issue to resolve thread": an issue, and the thread resolved.
+    let open = c
+        .discussions(p, iid)
+        .unwrap()
+        .into_iter()
+        .find(|d| d.resolvable() && !d.resolved())
+        .expect("an open thread");
+    let url = c
+        .issue_for_thread(p, iid, &open.id, "Actions test")
+        .unwrap();
+    assert!(
+        url.contains("/-/issues/") || url.contains("/-/work_items/"),
+        "{url}"
+    );
+    let after = c.discussions(p, iid).unwrap();
+    assert!(
+        after.iter().find(|d| d.id == open.id).unwrap().resolved(),
+        "resolved by the issue"
+    );
+    // The issues go with the test.
+    let made: u64 = url.rsplit('/').next().unwrap().parse().unwrap();
+    for i in [issue, made] {
+        root(
+            "DELETE",
+            &format!("projects/{p}/issues/{i}"),
+            serde_json::json!({}),
+        );
+    }
 }

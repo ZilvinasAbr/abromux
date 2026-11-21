@@ -410,6 +410,24 @@ impl GitLabView {
                     .on_click(cx.listener(move |v, _, window, cx| v.open_reply(&id, window, cx))),
                 )
             })
+            // GitLab's "Create issue to resolve thread".
+            .when(
+                writes && d.resolvable() && !resolved && !self.is_local(),
+                |el| {
+                    let id = d.id.clone();
+                    el.child(
+                        button(
+                            format!("note-issue-{}", d.id),
+                            "square-plus",
+                            c(MUTED),
+                            "Create issue to resolve thread",
+                        )
+                        .on_click(cx.listener(move |v, _, window, cx| {
+                            v.issue_for_thread(id.clone(), window, cx)
+                        })),
+                    )
+                },
+            )
             .when(self.has_web(), |el| {
                 el.child(
                     button(format!("note-link-{}", d.id), "link", c(MUTED), "Copy link").on_click(
