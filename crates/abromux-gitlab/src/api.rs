@@ -1153,6 +1153,21 @@ impl Client {
             .collect())
     }
 
+    /// Pipeline `id`'s jobs (the latest try of each).
+    pub fn jobs(&self, project: u64, pipeline: u64) -> anyhow::Result<Vec<Job>> {
+        self.get_all(&format!("projects/{project}/pipelines/{pipeline}/jobs"))
+    }
+
+    /// Run job `id` again ("Retry").
+    pub fn retry_job(&self, project: u64, id: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/jobs/{id}/retry"),
+            serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
     /// Pipeline `id`'s test report.
     pub fn test_report(&self, project: u64, id: u64) -> anyhow::Result<TestReport> {
         self.get(&format!("projects/{project}/pipelines/{id}/test_report"))

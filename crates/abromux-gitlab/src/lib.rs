@@ -26,6 +26,7 @@ mod emoji;
 mod filter;
 mod gfm;
 pub mod highlight;
+mod jobs;
 pub mod local;
 mod mention;
 mod mr;

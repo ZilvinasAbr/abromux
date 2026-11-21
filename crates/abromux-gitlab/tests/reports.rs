@@ -62,4 +62,20 @@ fn loads_test_and_code_quality_reports() {
     // A free GitLab: no approval rules, trains or dependencies.
     assert!(r.premium.rules.is_none() && !r.premium.trains_enabled && r.premium.blocks.is_empty());
     assert!(!r.premium.duo, "no GitLab Duo on a free GitLab");
+
+    // Its failed job, retried: a new try of it.
+    let pid = r.mr.head_pipeline.as_ref().unwrap().id;
+    let jobs = c.jobs(p, pid).unwrap();
+    let failed = jobs
+        .iter()
+        .find(|j| j.status == "failed")
+        .expect("a failed job");
+    c.retry_job(p, failed.id).unwrap();
+    let again = c.jobs(p, pid).unwrap();
+    assert!(
+        again
+            .iter()
+            .any(|j| j.name == failed.name && j.id != failed.id),
+        "retried"
+    );
 }

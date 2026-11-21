@@ -827,3 +827,22 @@ pub struct Premium {
     /// `aiAction` (Duo's actions show only then).
     pub duo: bool,
 }
+
+/// One of a pipeline's jobs (`/pipelines/:id/jobs`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Job {
+    pub id: u64,
+    pub name: String,
+    pub stage: String,
+    pub status: String,
+    pub web_url: String,
+    pub artifacts: Vec<JobArtifact>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct JobArtifact {
+    /// archive, junit, codequality, trace…
+    pub file_type: String,
+}

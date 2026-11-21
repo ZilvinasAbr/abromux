@@ -199,6 +199,8 @@ pub struct GitLabView {
     pub(crate) boxes: crate::edit::Boxes,
     /// actions.rs: suggestions' batch, the Code menu, merge messages, revert.
     pub(crate) more: crate::actions::More,
+    /// jobs.rs: the Pipelines tab's jobs.
+    pub(crate) jobs: crate::jobs::JobsState,
     /// duo.rs: what GitLab Duo is doing, and whether this host has Duo.
     pub(crate) duo: crate::duo::DuoState,
     pub(crate) duo_seen: bool,
@@ -330,6 +332,7 @@ impl GitLabView {
         let mut v = Self {
             boxes,
             more,
+            jobs: Default::default(),
             duo,
             duo_seen: false,
             reports: Default::default(),
@@ -2303,6 +2306,16 @@ impl Tab for GitLabView {
                 }
                 _ => bail!("action is review, summarize, commit, describe or ask"),
             },
+            // The Pipelines tab: `{"failed": 157}` opens a pipeline's failed jobs,
+            // `{"retry": 161, "pipeline": 157}` retries a job.
+            "jobs" => {
+                if let Some(p) = num_arg("failed") {
+                    self.jobs.failed_open.insert(p);
+                }
+                if let (Some(j), Some(p)) = (num_arg("retry"), num_arg("pipeline")) {
+                    self.retry_job(p, j, window, cx);
+                }
+            }
             "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);
@@ -3229,6 +3242,9 @@ impl Render for GitLabView {
         self.sel_drawn.borrow_mut().clear();
         if let Some(r) = self.review.ready().cloned() {
             self.more_for(&r, window, cx);
+            if self.loc.section == Section::Pipelines {
+                self.want_jobs(&r, window, cx);
+            }
             self.duo_seen |= r.premium.duo;
         }
         let page = if self.sign_in.is_some() {

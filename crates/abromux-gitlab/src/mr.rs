@@ -2237,13 +2237,12 @@ impl GitLabView {
                 "" => "",
                 other => other,
             };
-            div()
+            let jobs = self.pipeline_jobs(p, cx);
+            let row = div()
                 .flex()
                 .items_start()
                 .gap_4()
                 .py_3()
-                .border_b_1()
-                .border_color(c(RAISED))
                 .child(
                     div()
                         .w(px(180.))
@@ -2318,8 +2317,15 @@ impl GitLabView {
                                 }),
                         ),
                 )
-                .child(div().w(px(120.)).flex_none().child(pipeline_icon(p, 20.)))
-                .child(self.pipeline_buttons(p, cx))
+                .child(div().w(px(120.)).flex_none().child(self.stage_icons(p)))
+                .child(self.pipeline_buttons(p, cx));
+            div()
+                .flex()
+                .flex_col()
+                .border_b_1()
+                .border_color(c(RAISED))
+                .child(row)
+                .children(jobs.map(|j| j.pl(px(196.))))
         });
         div()
             .id("gl-pipelines")
