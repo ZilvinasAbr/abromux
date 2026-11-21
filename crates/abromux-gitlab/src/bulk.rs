@@ -22,6 +22,10 @@ pub struct BulkState {
     pub busy: bool,
     pub said: Option<String>,
     pub actions_open: bool,
+    /// Recent searches (GitLab's "Toggle search history"), newest first,
+    /// and whether their list is open.
+    pub history: Vec<String>,
+    pub history_open: bool,
 }
 
 impl BulkState {
@@ -33,6 +37,8 @@ impl BulkState {
             busy: false,
             said: None,
             actions_open: false,
+            history: vec![],
+            history_open: false,
         }
     }
 }
@@ -296,6 +302,77 @@ impl GitLabView {
                         )
                     }),
             )
+    }
+
+    /// GitLab's "Toggle search history": the recent searches, one a click.
+    pub(crate) fn search_history(&self, cx: &mut Context<Self>) -> Div {
+        let open = self.bulk.history_open;
+        let list = self.bulk.history.clone();
+        div()
+            .relative()
+            .child(
+                crate::edit::icon_button(
+                    "gl-search-history",
+                    icon("clock", 15., c(MUTED)),
+                    "Toggle search history",
+                )
+                .on_click(cx.listener(|v, _, _, cx| {
+                    v.bulk.history_open = !v.bulk.history_open;
+                    cx.notify();
+                })),
+            )
+            .when(open, |d| {
+                d.child(
+                    deferred(
+                        div()
+                            .id("gl-search-history-menu")
+                            .absolute()
+                            .top(px(32.))
+                            .left_0()
+                            .w(px(360.))
+                            .py_1()
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(c(BORDER))
+                            .bg(c(CARD))
+                            .shadow_lg()
+                            .occlude()
+                            .on_mouse_down_out(cx.listener(|v, _, _, cx| {
+                                v.bulk.history_open = false;
+                                cx.notify();
+                            }))
+                            .when(list.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .px_3()
+                                        .py_1()
+                                        .text_color(c(MUTED))
+                                        .child("You don't have any recent searches"),
+                                )
+                            })
+                            .children(list.into_iter().enumerate().map(|(i, q)| {
+                                let text = q.clone();
+                                div()
+                                    .id(("gl-recent", i))
+                                    .px_3()
+                                    .py_1()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(c(RAISED)))
+                                    .text_color(c(TEXT))
+                                    .truncate()
+                                    .child(q)
+                                    .on_click(cx.listener(move |v, _, window, cx| {
+                                        v.bulk.history_open = false;
+                                        let t = text.clone();
+                                        v.list_search
+                                            .update(cx, |s, cx| s.set_value(t, window, cx));
+                                        cx.notify();
+                                    }))
+                            })),
+                    )
+                    .with_priority(2),
+                )
+            })
     }
 
     /// Bulk edit's bar over the list: how many are ticked and what to do.

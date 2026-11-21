@@ -324,6 +324,16 @@ impl GitLabView {
         // A merge request's link pasted into it opens it; on the Projects
         // tab, what's typed searches GitLab's projects.
         cx.subscribe_in(&list_search, window, |v, s, ev: &InputEvent, window, cx| {
+            // A search left (Enter, or the field losing the keys) is
+            // remembered, as GitLab's recent searches.
+            if matches!(ev, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                let text = s.read(cx).value().trim().to_string();
+                if !text.is_empty() {
+                    v.bulk.history.retain(|h| *h != text);
+                    v.bulk.history.insert(0, text);
+                    v.bulk.history.truncate(5);
+                }
+            }
             if matches!(ev, InputEvent::Change) {
                 let text = s.read(cx).value().trim().to_string();
                 if v.open_link(&text, window, cx) {
@@ -3239,6 +3249,7 @@ impl GitLabView {
                     .gap_2()
                     .border_b_1()
                     .border_color(c(RAISED))
+                    .when(!projects, |d| d.child(self.search_history(cx)))
                     .child(
                         div().flex_1().child(
                             Input::new(&self.list_search)
