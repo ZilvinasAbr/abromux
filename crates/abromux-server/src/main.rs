@@ -137,7 +137,6 @@ fn serve(args: &[String]) -> i32 {
             version: env!("CARGO_PKG_VERSION").into(),
             control: Some(control),
             idle_exit,
-            ..Default::default()
         };
         abromux_server::serve(&socket, &opts)
     };

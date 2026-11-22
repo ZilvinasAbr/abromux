@@ -192,7 +192,7 @@ impl State {
                 .iter()
                 .find(|w| {
                     w["ref"].as_str() == Some(&t)
-                        || w["index"].to_string() == t
+                        || w["index"].as_u64().is_some_and(|i| i.to_string() == t)
                         || w["name"].as_str() == Some(&t)
                         || w["ref"].as_str().and_then(|r| r.strip_prefix("workspace:")) == Some(&t)
                 })
