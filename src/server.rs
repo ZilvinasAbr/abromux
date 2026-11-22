@@ -1061,6 +1061,39 @@ impl AbroMux {
             // made itself (its methods: abromux_server::owned), which the
             // app mirrors in its views with its own handlers, then follows
             // in its replica: the server is the source.
+            // A model method the server has the app carry out (it makes or
+            // closes views): the app's handler does it, and the server gets
+            // the result with the model change, to commit before answering.
+            "model.exec" => {
+                let link = crate::control_link::by_name(str_param(p, "link").unwrap_or("local"));
+                let exec = p["exec"].clone();
+                let method = exec["method"].as_str().unwrap_or_default().to_string();
+                let token = exec["token"].clone();
+                let error = |e: &anyhow::Error| format!("{e:#}");
+                match self.handle(&method, &exec["params"], gone, window, cx) {
+                    Ok(Reply::Now(v)) => {
+                        if let Some(l) = link {
+                            l.done(&token, Ok(v), &self.model(cx));
+                        }
+                    }
+                    Ok(Reply::Later(fut)) => {
+                        cx.spawn(async move |this, cx| {
+                            let r = fut.await.map_err(|e| format!("{e:#}"));
+                            let model = this.update(cx, |this, cx| this.model(cx)).ok();
+                            if let (Some(l), Some(m)) = (link, model) {
+                                l.done(&token, r, &m);
+                            }
+                        })
+                        .detach();
+                    }
+                    Err(e) => {
+                        if let Some(l) = link {
+                            l.done(&token, Err(error(&e)), &self.model(cx));
+                        }
+                    }
+                }
+                json!(null)
+            }
             "model.snapshot" => {
                 let link = crate::control_link::by_name(str_param(p, "link").unwrap_or("local"));
                 if let (Some(l), Ok(m)) = (link, serde_json::from_value(p["model"].clone())) {
@@ -4139,7 +4172,7 @@ impl AbroMux {
                     }),
                     unread: self.ws_unread(w) as u32,
                     color: w.color.map(|c| format!("#{c:06x}")),
-                    branch: w.cwd(cx).as_deref().and_then(git_branch),
+                    branch: w.local_cwd(cx).as_deref().and_then(git_branch),
                     log: w
                         .log
                         .iter()
@@ -4270,7 +4303,7 @@ impl AbroMux {
             "selected": wi == self.active,
             "unread": self.ws_unread(ws),
             "cwd": cwd,
-            "branch": cwd.as_deref().and_then(git_branch),
+            "branch": ws.local_cwd(cx).as_deref().and_then(git_branch),
             "pane_count": ws.panes().count(),
             "description": ws.description,
             "color": ws.color.map(|c| format!("#{c:06x}")),

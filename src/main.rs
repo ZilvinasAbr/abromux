@@ -1094,7 +1094,10 @@ impl AbroMux {
         let ws = &self.workspaces[wi];
         let places = gitlab::remote::places(
             ws.home.as_deref(),
-            &ws.surfaces().filter_map(|s| s.cwd(cx)).collect::<Vec<_>>(),
+            &ws.surfaces()
+                .filter(|s| !s.is_remote(cx))
+                .filter_map(|s| s.cwd(cx))
+                .collect::<Vec<_>>(),
         );
         let mut repos = vec![];
         for p in places {

@@ -267,6 +267,9 @@ enum Mode {
     /// the requests it owns ([`owned`]) itself; the first one it doesn't
     /// hands the connection to the app.
     Sniff,
+    /// A control connection waiting while the app carries out a model
+    /// method for the server (`exec`); what it sends meanwhile waits.
+    Exec,
 }
 
 struct Client {
@@ -415,6 +418,8 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
         held_dir: path.with_file_name("held"),
         ports: None,
         ports_at: Instant::now(),
+        execs: HashMap::new(),
+        next_exec: 0,
     };
     let mut idle_since = Instant::now();
     let mut buf = vec![0u8; 1 << 16];
@@ -568,6 +573,10 @@ struct Server {
     app_owner: Option<String>,
     /// This machine, as `hello` says: made once, kept beside the socket.
     host_id: String,
+    /// Model methods the app is carrying out for the server: the caller
+    /// waiting, and its request's id.
+    execs: HashMap<u64, (u64, Value)>,
+    next_exec: u64,
     /// The listening ports seen since the app asked to watch them
     /// (`watch-ports`), and when they were last looked at.
     ports: Option<std::collections::BTreeSet<u16>>,
@@ -770,6 +779,32 @@ impl Server {
                                 self.flush(cid);
                                 continue;
                             }
+                            // A model method that makes or closes views: the
+                            // app carries it out, the server commits the change
+                            // before the caller hears back.
+                            let method = req["method"].as_str().unwrap_or_default();
+                            if owned::executed(method)
+                                && let Some(app) = self.app
+                            {
+                                self.next_exec += 1;
+                                let token = self.next_exec;
+                                self.execs.insert(
+                                    token,
+                                    (cid, req.get("id").cloned().unwrap_or(Value::Null)),
+                                );
+                                let c = self.clients.get_mut(&cid).unwrap();
+                                c.mode = Mode::Exec;
+                                let call = json!({
+                                    "token": token,
+                                    "method": method,
+                                    "params": req.get("params").cloned().unwrap_or_else(|| json!({})),
+                                });
+                                if let Some(a) = self.clients.get_mut(&app) {
+                                    a.reply(json!({ "exec": call }));
+                                }
+                                self.flush(app);
+                                return;
+                            }
                             // The app's to answer: this request and the rest
                             // of the connection go to it as they are.
                             let c = self.clients.get_mut(&cid).unwrap();
@@ -821,6 +856,8 @@ impl Server {
                                 let c = self.clients.get_mut(&cid).unwrap();
                                 c.reply(json!({ "applied": stamped, "from": "app" }));
                                 self.flush(cid);
+                            } else if msg["op"] == "done" {
+                                self.exec_done(cid, &msg);
                             } else if msg["op"] == "watch-ports" {
                                 // A dev server starting here is worth offering to forward:
                                 // what listens now is the baseline.
@@ -886,7 +923,9 @@ impl Server {
                         _ => unreachable!(),
                     }
                 }
-                Mode::Pending | Mode::Splice(_) | Mode::Waiting | Mode::Subscriber => return,
+                Mode::Pending | Mode::Splice(_) | Mode::Waiting | Mode::Subscriber | Mode::Exec => {
+                    return;
+                }
             }
         }
     }
@@ -1288,6 +1327,14 @@ impl Server {
             // The app went away: the server answers what was waiting for it.
             Mode::App if self.app == Some(cid) => {
                 self.app = None;
+                // Model methods it was carrying out: their callers hear so.
+                for (_, (c, id)) in std::mem::take(&mut self.execs) {
+                    if let Some(cl) = self.clients.get_mut(&c) {
+                        cl.reply(json!({ "id": id, "ok": false, "error": "the abromux app went away", "code": "app_closed" }));
+                        cl.mode = Mode::Control;
+                    }
+                    self.flush(c);
+                }
                 let pending: Vec<u64> = self
                     .clients
                     .iter()
@@ -1491,6 +1538,38 @@ impl Server {
             None => self.state.keep(method, mirror["params"].clone()),
         }
         Some(json!({ "id": id, "ok": true, "result": result }))
+    }
+
+    /// The app carried out a model method (`{"op":"done"}`): its change is
+    /// committed (stamped, applied, published, echoed to the app), then the
+    /// caller gets the result.
+    fn exec_done(&mut self, app: u64, msg: &Value) {
+        let events: Vec<abromux_model::Event> =
+            serde_json::from_value(msg["events"].clone()).unwrap_or_default();
+        if !events.is_empty() {
+            let stamped = abromux_model::stamp(self.state.model.seq, events);
+            if let Ok(done) = self.state.apply_events(&stamped) {
+                self.publish(&done);
+            }
+            if let Some(a) = self.clients.get_mut(&app) {
+                a.reply(json!({ "applied": stamped, "from": "app" }));
+            }
+            self.flush(app);
+        }
+        let Some((cid, id)) = msg["token"].as_u64().and_then(|t| self.execs.remove(&t)) else {
+            return;
+        };
+        let reply = if msg["ok"] == true {
+            json!({ "id": id, "ok": true, "result": msg["result"] })
+        } else {
+            json!({ "id": id, "ok": false, "error": msg["error"], "code": msg["code"] })
+        };
+        if let Some(c) = self.clients.get_mut(&cid) {
+            c.reply(reply);
+            c.mode = Mode::Sniff;
+            self.flush(cid);
+            self.handle_input(cid);
+        }
     }
 
     /// Look at what listens here; tell the app about ports new since it

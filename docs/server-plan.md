@@ -219,11 +219,26 @@ for a program to be reaped.
       all|path|remove`, and `abromux new-workspace --host H --folder NAME`
       makes the folder on H and puts the workspace's terminals in it.
 
-What stays in the app: the methods that make or close views (a workspace,
-a split, a tab, a terminal, a browser, and browser automation, input and
-focus): the app does them and proposes the change, and the server stamps it.
-A view can only be made where it's shown. Which methods the server owns is
-a list (`owned::OWNED`, `owned::READS`); a test keeps them model methods.
+- [x] **Every model method is committed by the server.** The ones that
+      make or close views (a workspace, a split, a tab, closing them, moving
+      them: `owned::executed`) the server has the app carry out
+      (`{"exec":..}`): the app runs its handler, which makes the views, and
+      reports the result with the model change it made (`{"op":"done"}`);
+      the server stamps and applies the change, publishes it, and only then
+      answers the caller, whose next request waits its turn. The server
+      answers the ones it owns itself, as above. So a caller never hears back
+      before the server's model has the change. The app's own UI changes
+      (keyboard, mouse) are proposed to the server as they happen to be
+      noticed (`change`, every few seconds).
+- [x] Costs measured: through the server, `surface.create` takes 3.3 ms and
+      `surface.close` 1.9 ms on the control socket, against 3.0 and 1.5 ms
+      straight to the app. (A first version took 105 ms: building the model
+      looked up the git branch of remote workspaces' folders, which on macOS
+      wakes the `/home` automounter; the sidebar did the same every 3 s.
+      Folders on another machine are no longer looked up here.)
+
+What stays in the app is only what needs its views: making them, and the
+view methods (browser automation, input, focus, prompts).
 
 **Done when:** quitting the app leaves every workspace's state (status pills,
 progress, notifications, agents' state) live in the server, and the app picks

@@ -1238,7 +1238,8 @@ impl AbroMux {
             .map(|s| s.title(cx))
             .unwrap_or_default();
         let cwd = ws.cwd(cx);
-        let branch = cwd.as_deref().and_then(|c| self.branch(c));
+        // Only a folder on this machine has a branch to look up here.
+        let branch = ws.local_cwd(cx).as_deref().and_then(|c| self.branch(c));
         let path = cwd
             .as_deref()
             .map(|c| short_path(c, sb.path_last_segment_only));

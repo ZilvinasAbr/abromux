@@ -36,32 +36,10 @@ pub enum Kind {
 }
 
 pub fn kind(method: &str) -> Kind {
-    let (ns, verb) = method.split_once('.').unwrap_or((method, ""));
-    match ns {
-        "workspace" | "group" | "status" | "progress" | "log" | "notification" | "link"
-        | "forward" | "agent" | "tab" | "system" | "session" => Kind::Model,
-        "pane" if verb != "zoom" => Kind::Model,
-        "surface"
-            if matches!(
-                verb,
-                "list"
-                    | "split"
-                    | "create"
-                    | "close"
-                    | "rename"
-                    | "respawn"
-                    | "move"
-                    | "reorder"
-                    | "split_off"
-                    | "move_to_new_workspace"
-                    | "clear_history"
-                    | "reclaim"
-                    | "restream"
-            ) =>
-        {
-            Kind::Model
-        }
-        _ => Kind::View,
+    if abromux_server::owned::is_model_method(method) {
+        Kind::Model
+    } else {
+        Kind::View
     }
 }
 
@@ -275,6 +253,12 @@ pub const METHODS: &[Method] = &[
         "forward ports",
         "What listens on the workspace's host: ports to forward.",
         "@workspace;host?:string Another server",
+    ),
+    m(
+        "model.exec",
+        "",
+        "Internal: a model method the server has the app carry out (it makes or closes views); the app reports the result and the model's change.",
+        "link:string The server;exec:object token, method and params",
     ),
     m(
         "model.snapshot",

@@ -106,6 +106,24 @@ impl Link {
             .is_some_and(|s| writeln!(s, "{msg}").is_ok())
     }
 
+    /// A model method the server had the app carry out is done: its result,
+    /// and the change it made to the model (`new` is the app's model now),
+    /// for the server to commit before the caller hears back.
+    pub fn done(&self, token: &Value, result: Result<Value, String>, new: &abromux_model::Model) {
+        let events = abromux_model::diff(&self.model.lock().unwrap(), new);
+        let msg = match result {
+            Ok(v) => {
+                json!({ "op": "done", "token": token, "ok": true, "result": v, "events": events })
+            }
+            Err(e) => {
+                json!({ "op": "done", "token": token, "ok": false, "error": e, "events": events })
+            }
+        };
+        if self.send(&msg) && !events.is_empty() {
+            *self.proposed.lock().unwrap() = events;
+        }
+    }
+
     /// The server's model (when the app attaches, or asked): the replica
     /// starts over from it.
     pub fn set_replica(&self, model: abromux_model::Model) {
@@ -376,6 +394,10 @@ fn run(mut reader: BufReader<UnixStream>, target: Target, link: Link) {
                 }
                 if msg["resync"] == true {
                     link.resync.store(true, Ordering::Relaxed);
+                }
+                // A model method the server has the app carry out.
+                if !msg["exec"].is_null() {
+                    inject("model.exec", json!({ "link": name, "exec": msg["exec"] }));
                 }
                 if msg["ports_new"].is_array() {
                     inject(

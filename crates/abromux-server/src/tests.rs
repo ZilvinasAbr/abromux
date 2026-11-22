@@ -814,3 +814,61 @@ fn tells_the_app_about_new_ports() {
         "{msg}"
     );
 }
+
+/// A model method that makes views: the app carries it out, and the server
+/// commits the model change before the caller hears back; the caller's next
+/// request waits its turn.
+#[test]
+fn the_server_commits_what_the_app_carries_out() {
+    use abromux_model::{Event, Node, Workspace};
+    let (sock, control) = server_with_control("exec");
+    let (mut link, mut lw) = app_link(&sock);
+    let c = control.clone();
+    let caller = std::thread::spawn(move || {
+        let mut conn = UnixStream::connect(&c).unwrap();
+        conn.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        // Two at once: the second waits for the first.
+        write!(
+            conn,
+            "{}\n{}\n",
+            json!({ "id": 1, "method": "workspace.create", "params": { "name": "new" } }),
+            json!({ "id": 2, "method": "workspace.list", "params": {} })
+        )
+        .unwrap();
+        let mut r = BufReader::new(conn);
+        let mut a = String::new();
+        let mut b = String::new();
+        r.read_line(&mut a).unwrap();
+        r.read_line(&mut b).unwrap();
+        (
+            serde_json::from_str::<Value>(&a).unwrap(),
+            serde_json::from_str::<Value>(&b).unwrap(),
+        )
+    });
+    let exec = next_msg(&mut link, "exec");
+    assert_eq!(exec["exec"]["method"], "workspace.create");
+    let made = Workspace {
+        id: 9,
+        name: "new".into(),
+        layout: Node::default(),
+        ..Default::default()
+    };
+    writeln!(
+        lw,
+        "{}",
+        json!({
+            "op": "done", "token": exec["exec"]["token"], "ok": true,
+            "result": { "ref": "workspace:9" },
+            "events": [Event::Workspace { index: 0, workspace: Box::new(made) }],
+        })
+    )
+    .unwrap();
+    let (a, b) = caller.join().unwrap();
+    assert_eq!(a["id"], 1);
+    assert_eq!(a["result"]["ref"], "workspace:9");
+    // Committed before the answer: the server's own list has it.
+    assert_eq!(b["id"], 2);
+    assert_eq!(b["result"][0]["ref"], "workspace:9", "{b}");
+    let echo = next_msg(&mut link, "applied");
+    assert_eq!(echo["from"], "app");
+}
