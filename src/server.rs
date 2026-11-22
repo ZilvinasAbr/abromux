@@ -399,6 +399,7 @@ fn stream_output(
                     }
                     let line = match other {
                         Chunk::Resize(c, r) => json!({ "resize": [c, r] }),
+                        Chunk::Owner(o) => json!({ "owner": o }),
                         _ => json!({ "closed": true }),
                     };
                     out += &line.to_string();
@@ -1239,11 +1240,45 @@ impl AbroMux {
                     })
                 } else {
                     let t = self.terminal_target(p)?;
-                    let (mut start, id) = t.update(cx, |t, _| (t.stream_start(), t.stream_id()));
+                    // A phone (`client`, set by remote.rs) may claim the
+                    // size while this stream lasts (`surface.own`).
+                    let client = str_param(p, "client").map(String::from);
+                    let (mut start, id) = t.update(cx, |t, _| {
+                        if let Some(c) = &client {
+                            t.watch_size(c);
+                        }
+                        (t.stream_start(), t.stream_id())
+                    });
                     start["token"] = json!(crate::stream::open(id));
                     start["surface"] = json!(r);
+                    start["client"] = json!(client);
+                    if let Some(c) = client {
+                        let (t, gone) = (t.downgrade(), gone.clone());
+                        cx.spawn(async move |_, cx| {
+                            let _ = gone.await;
+                            let _ = t.update(cx, |t, cx| t.unwatch_size(&c, cx));
+                        })
+                        .detach();
+                    }
                     start
                 }
+            }
+            "surface.own" => {
+                let t = self.terminal_target(p)?;
+                let client = str_param(p, "client").context("missing client")?;
+                let cols = p
+                    .get("cols")
+                    .and_then(Value::as_u64)
+                    .context("missing cols")?;
+                let rows = p
+                    .get("rows")
+                    .and_then(Value::as_u64)
+                    .context("missing rows")?;
+                let size = crate::size_owner::clamp(cols, rows);
+                let take = bool_param(p, "take", true);
+                t.update(cx, |t, cx| t.claim_size(client, size, take, cx))?;
+                let owner = t.read(cx).size_owner().map(String::from);
+                json!({ "owner": owner, "cols": size.0, "rows": size.1 })
             }
             "surface.chat" => {
                 // What a Claude tab's page would post, from a copy of it on
@@ -1275,6 +1310,9 @@ impl AbroMux {
                 } else {
                     unescape(text)
                 };
+                if let Some(c) = str_param(p, "client") {
+                    t.update(cx, |t, cx| t.retake_size(c, cx));
+                }
                 if bool_param(p, "submit", false) {
                     submit_to(&t, &text, cx);
                 } else {
@@ -1296,6 +1334,9 @@ impl AbroMux {
                     } else {
                         ks.key.clone()
                     });
+                }
+                if let Some(c) = str_param(p, "client") {
+                    t.update(cx, |t, cx| t.retake_size(c, cx));
                 }
                 if !t.update(cx, |t, cx| t.send_keystroke(&ks, cx)) {
                     bail!("key {key:?} doesn't map to terminal input");

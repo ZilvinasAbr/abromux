@@ -340,7 +340,8 @@ pub const METHODS: &[Method] = &[
         "send",
         "Type text into a terminal. \\n presses Return; also \\t, \\e and \\\\.",
         "@surface;text:string What to type;raw?:boolean Exactly these characters, no backslash escapes;\
-         submit?:boolean As one message to an agent: pasted, then Return",
+         submit?:boolean As one message to an agent: pasted, then Return;\
+         client?:string A phone typing (phone access sets it): the size is its again (surface.own)",
     ),
     m(
         "remote.status",
@@ -359,10 +360,21 @@ pub const METHODS: &[Method] = &[
         "",
         "Follow a terminal: the result has its viewport as VT text (vt, cols, rows, fg, bg), \
          then the connection carries one JSON line per batch of output: {output: base64}, \
-         {resize: [cols, rows]}, {closed: true}, or {behind: true} when it fell too far behind \
-         (start over). On a Claude tab the result is {chat: true, events: [...]}, the \
-         conversation as its page gets it, and each line after is {events: [...]}.",
-        "@surface",
+         {resize: [cols, rows]}, {owner: client, null for the Mac}, {closed: true}, or \
+         {behind: true} when it fell too far behind (start over). On a Claude tab the result \
+         is {chat: true, events: [...]}, the conversation as its page gets it, and each line \
+         after is {events: [...]}.",
+        "@surface;client?:string Who follows it (phone access sets it), for surface.own",
+    ),
+    m(
+        "surface.own",
+        "",
+        "Size a terminal for the caller, a client with it open (surface.stream with the same \
+         client): it owns the size until it closes it or someone types in the Mac's pane. \
+         Typing with send_text/send_key and a client takes the size back for it.",
+        "@surface;client:string Who asks (a phone's id, set by phone access);\
+         cols:integer Columns;rows:integer Rows;\
+         take?:boolean Own the size now (default); false only updates the size it asks for",
     ),
     m(
         "surface.chat",
@@ -375,7 +387,8 @@ pub const METHODS: &[Method] = &[
         "surface.send_key",
         "send-key",
         "Press a key in a terminal.",
-        "@surface;key:string enter, tab, escape, up, ctrl-c, alt-b, ...",
+        "@surface;key:string enter, tab, escape, up, ctrl-c, alt-b, ...;\
+         client?:string A phone typing (phone access sets it): the size is its again (surface.own)",
     ),
     m(
         "surface.rename",

@@ -187,6 +187,8 @@ static GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Phone app connections, and how many have the app on screen.
 static CLIENTS: AtomicUsize = AtomicUsize::new(0);
 static VISIBLE: AtomicUsize = AtomicUsize::new(0);
+/// Numbers each phone connection, for the `client` its requests carry.
+static NEXT_CLIENT: AtomicU64 = AtomicU64::new(0);
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 /// The settings serving now, once the app has started serving at all.
 static APPLIED: Mutex<Option<Config>> = Mutex::new(None);
@@ -505,6 +507,9 @@ fn session(stream: TcpStream, cfg: &Config, generation: u64) {
     let mut reader = ws::Reader::new(BufReader::new(stream), writer.clone());
     CLIENTS.fetch_add(1, Ordering::Relaxed);
     changed();
+    // Who this phone is to the terminals it sizes (size_owner.rs). Set
+    // here on every request, so a phone can't speak for another.
+    let client = format!("phone:{}", NEXT_CLIENT.fetch_add(1, Ordering::Relaxed) + 1);
     let visible = Arc::new(AtomicBool::new(false));
     let subs: Arc<Mutex<HashMap<u64, UnixStream>>> = Arc::default();
     let done = Arc::new(AtomicBool::new(false));
@@ -557,11 +562,11 @@ fn session(stream: TcpStream, cfg: &Config, generation: u64) {
             );
             continue;
         }
-        let req = json!({
-            "id": 1,
-            "method": method,
-            "params": msg.get("params").cloned().unwrap_or_else(|| json!({})),
-        });
+        let mut params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
+        if let Some(p) = params.as_object_mut() {
+            p.insert("client".into(), json!(client));
+        }
+        let req = json!({ "id": 1, "method": method, "params": params });
         let (writer, subs) = (writer.clone(), subs.clone());
         let sub = matches!(method, "events.subscribe" | "surface.stream");
         std::thread::spawn(move || relay(req, id, sub, &writer, &subs));

@@ -157,7 +157,11 @@ document.addEventListener("visibilitychange", () => {
   sendVisible();
   if (document.visibilityState === "visible") {
     if (!conn.up && conn.ws && conn.ws.readyState > 1) connect();
-    else refresh();
+    else {
+      refresh();
+      // Back on the phone: the terminal on screen is sized for it again.
+      if (term && term.client) claimSize(term, true);
+    }
   }
 });
 
@@ -947,12 +951,21 @@ function openTerm(surface) {
     theme: { background: "#101114" },
   });
   xterm.open($("term"));
-  const t = { surface, xterm, cols: 80, rows: 24, sub: null };
+  // client: who this phone is to abromux (per connection); owner: who sets
+  // the terminal's size, null for the Mac (size_owner.rs).
+  const t = { surface, xterm, cols: 80, rows: 24, sub: null, client: null, owner: null, started: false, asked: "" };
   term = t;
   xterm.onData((d) => typeIn(surface, d));
   t.sub = subscribe("surface.stream", { surface }, {
     onStart(r) {
       termNote("");
+      // The size is the phone's when it opens the terminal, and again
+      // after a reconnect if it had it; not when the Mac took it back.
+      const take = !t.started || mine(t);
+      t.started = true;
+      t.client = r.client || null;
+      t.owner = r.owner || null;
+      t.asked = "";
       xterm.reset();
       xterm.options.theme = { background: r.bg, foreground: r.fg, cursor: r.cursor || r.fg };
       $("term-wrap").style.background = r.bg;
@@ -962,6 +975,7 @@ function openTerm(surface) {
       xterm.resize(r.cols, r.rows);
       fit();
       xterm.write(r.vt);
+      if (take) claimSize(t, true);
     },
     onData(d) {
       if (d.output) {
@@ -977,6 +991,9 @@ function openTerm(surface) {
         [t.cols, t.rows] = d.resize;
         xterm.resize(t.cols, t.rows);
         fit();
+      } else if ("owner" in d) {
+        t.owner = d.owner || null;
+        fit();
       } else if (d.closed) {
         t.closed = true;
         termNote("This terminal closed.");
@@ -990,18 +1007,75 @@ function openTerm(surface) {
   });
 }
 
-// The Mac's terminal size stays; the font shrinks to fit it in the width,
-// down to a floor, past which the view scrolls sideways. A/A adjust.
+const PER = 0.6021; // Menlo's advance per point
+const OWN_FONT = 11; // the font size while the phone sizes the terminal
+
+// The phone sets the terminal's size (it opened it or typed in it last).
+function mine(t) {
+  return !!t.owner && t.owner === t.client;
+}
+
+// While the phone owns the size the font stays and the terminal is made to
+// fill the screen. While the Mac does, its size stays and the font shrinks
+// to fit it in the width, down to a floor, past which the view scrolls
+// sideways. A/A adjust either.
 function fit() {
   const t = term;
   if (!t) return;
   const width = $("term-wrap").clientWidth - 6;
-  const per = 0.6021; // Menlo's advance per point
-  let size = Math.floor((width / (t.cols * per)) * 10) / 10;
-  size = Math.max(7, Math.min(15, size)) + zoom;
-  size = Math.max(5, Math.min(24, size));
+  let size;
+  if (mine(t)) {
+    size = ownFont();
+  } else {
+    size = Math.floor((width / (t.cols * PER)) * 10) / 10;
+    size = Math.max(7, Math.min(15, size)) + zoom;
+    size = Math.max(5, Math.min(24, size));
+  }
   if (t.xterm.options.fontSize !== size) t.xterm.options.fontSize = size;
+  $("fit-phone").hidden = !t.client || mine(t);
+  // Keep the size it would want up to date, also while the Mac has it:
+  // typing here makes it the terminal's again.
+  claimSize(t, false);
 }
+
+function ownFont() {
+  return Math.max(5, Math.min(24, OWN_FONT + zoom));
+}
+
+// The columns and rows that fill the screen at the phone's font: measured
+// once xterm draws at it, estimated before.
+function phoneSize(t) {
+  const wrap = $("term-wrap");
+  const font = ownFont();
+  let cw = font * PER;
+  let ch = Math.ceil(font * 1.2);
+  const cell = t.xterm.options.fontSize === font && t.xterm._core?._renderService?.dimensions?.css?.cell;
+  if (cell && cell.width > 0 && cell.height > 0) [cw, ch] = [cell.width, cell.height];
+  const cols = Math.floor((wrap.clientWidth - 6) / cw);
+  const rows = Math.floor((wrap.clientHeight - 8) / ch);
+  return [Math.max(2, cols), Math.max(1, rows)];
+}
+
+// Ask for the phone's size: `take` makes it the owner now; without, only
+// the size it asks for changes (debounced: rotating, the keyboard).
+let claimTimer = 0;
+function claimSize(t, take) {
+  if (!t.client) return;
+  clearTimeout(claimTimer);
+  const go = () => {
+    if (term !== t || !conn.up) return;
+    const [cols, rows] = phoneSize(t);
+    const key = cols + "x" + rows;
+    if (!take && key === t.asked) return;
+    t.asked = key;
+    call("surface.own", { surface: t.surface, cols, rows, take })
+      .then((r) => { if (term === t && r && r.owner !== undefined) { t.owner = r.owner || null; fit(); } })
+      .catch(() => { t.asked = ""; });
+  };
+  if (take) go();
+  else claimTimer = setTimeout(go, 150);
+}
+$("fit-phone").onclick = () => term && claimSize(term, true);
 $("zoom-in").onclick = () => setZoom(zoom + 1);
 $("zoom-out").onclick = () => setZoom(zoom - 1);
 function setZoom(z) {

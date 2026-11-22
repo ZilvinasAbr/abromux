@@ -30,6 +30,9 @@ use std::{
 pub enum Chunk {
     Output(Vec<u8>),
     Resize(u16, u16),
+    /// The client that owns the terminal's size now; None is the Mac
+    /// (size_owner.rs).
+    Owner(Option<String>),
     /// The terminal is gone (closed, or its program ended).
     Closed,
     /// A Claude tab's page events (claude_chat.rs), as a JSON array: the
@@ -105,6 +108,13 @@ pub fn output(term: u64, bytes: &[u8]) {
 pub fn resized(term: u64, cols: u16, rows: u16) {
     if ANY.load(Ordering::Relaxed) {
         push(term, Chunk::Resize(cols, rows));
+    }
+}
+
+/// Client `owner` (None: the Mac) sets terminal `term`'s size now.
+pub fn owner(term: u64, owner: Option<&str>) {
+    if ANY.load(Ordering::Relaxed) {
+        push(term, Chunk::Owner(owner.map(String::from)));
     }
 }
 

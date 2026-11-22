@@ -203,7 +203,12 @@ pub struct TerminalView {
     /// Shared with the paint that draws it, so a paint doesn't copy it.
     frame: Rc<Frame>,
     dirty: bool,
+    /// The size the PTY has: the owner's (size_owner.rs).
     grid: (u16, u16),
+    /// The size the pane has room for, the Mac's claim.
+    layout_grid: (u16, u16),
+    /// Who sets the size: the Mac pane, or a phone showing it.
+    sizing: crate::size_owner::Sizing,
     cell: Size<Pixels>,
     /// The cell size the program is told, in device pixels, so images it
     /// sends are sharp on Retina screens.
@@ -353,6 +358,8 @@ impl TerminalView {
             frame: Rc::default(),
             dirty: true,
             grid: (cols, rows),
+            layout_grid: (cols, rows),
+            sizing: Default::default(),
             cell: size(px(8.), px(16.)),
             cell_px: (0, 0),
             scale: 1.,
@@ -618,11 +625,67 @@ impl TerminalView {
             "bg": crate::stream::hex(frame.background),
             "cursor": frame.cursor_color.map(crate::stream::hex),
             "title": self.shown_title(),
+            "owner": self.sizing.owner(),
         })
     }
 
     pub fn stream_id(&self) -> u64 {
         self.stream_id
+    }
+
+    /// The client that owns the size; None while the Mac's pane does.
+    pub fn size_owner(&self) -> Option<&str> {
+        self.sizing.owner()
+    }
+
+    /// `client` opened a stream of this terminal (`surface.stream`).
+    pub fn watch_size(&mut self, client: &str) {
+        self.sizing.watch(client);
+    }
+
+    /// One of `client`'s streams ended; with its last it gives up the size.
+    pub fn unwatch_size(&mut self, client: &str, cx: &mut Context<Self>) {
+        if self.sizing.unwatch(client) {
+            self.apply_owner(cx);
+        }
+    }
+
+    /// `client` asks for `cols`×`rows` (`surface.own`): with `take` it
+    /// owns the size now, else it keeps its place with the new size.
+    pub fn claim_size(
+        &mut self,
+        client: &str,
+        (cols, rows): (u16, u16),
+        take: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), crate::size_owner::NotOpen> {
+        if self.sizing.claim(client, (cols, rows), take)? {
+            self.apply_owner(cx);
+        }
+        Ok(())
+    }
+
+    /// `client` typed here: the size is its again, if it asked for one.
+    pub fn retake_size(&mut self, client: &str, cx: &mut Context<Self>) {
+        if self.sizing.retake(client) {
+            self.apply_owner(cx);
+        }
+    }
+
+    /// Someone typed in the Mac's pane: it sizes the terminal again.
+    fn take_size_local(&mut self, cx: &mut Context<Self>) {
+        if self.sizing.take_local() {
+            self.apply_owner(cx);
+        }
+    }
+
+    /// Size the PTY for the owner now, not at the next paint: the tab may
+    /// be hidden on the Mac, which doesn't paint it.
+    fn apply_owner(&mut self, cx: &mut Context<Self>) {
+        let (cols, rows) = self.sizing.size().unwrap_or(self.layout_grid);
+        self.resize(cols, rows);
+        crate::stream::owner(self.stream_id, self.sizing.owner());
+        cx.notify();
     }
 
     /// The program's title for tabs and the sidebar: Claude Code's without
@@ -1277,6 +1340,8 @@ impl TerminalView {
             && !m.platform
             && !m.function;
         if text_like && self.config.keybind(ks).is_none() && self.term.kitty_flags() == 0 {
+            // Typing here takes the size back from a phone.
+            self.take_size_local(cx);
             return;
         }
         let action = if ev.is_held {
@@ -1285,6 +1350,7 @@ impl TerminalView {
             ffi::GHOSTTY_KEY_ACTION_PRESS
         };
         if self.send_key(ks, action, cx) {
+            self.take_size_local(cx);
             cx.stop_propagation();
         } else if self.app.as_ref().is_some_and(|a| a.keeps_key(ks)) {
             // Not on to the menu, whose ⌘C copies the grid, not the page.
@@ -1891,6 +1957,64 @@ impl TerminalView {
     }
 }
 
+impl TerminalView {
+    /// While a phone owns the size: the room past its grid dimmed, and a
+    /// badge that gives the size back to the pane (as typing here does).
+    fn render_phone_sized(&self, cx: &mut Context<Self>) -> Option<Vec<AnyElement>> {
+        self.sizing.owner()?;
+        let (cols, rows) = self.grid;
+        let w = PADDING + f32::from(self.cell.width) * f32::from(cols);
+        let h = PADDING + f32::from(self.cell.height) * f32::from(rows);
+        let dim = rgba(0x00000059);
+        let right = div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(w))
+            .right_0()
+            .bg(dim);
+        let below = div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .top(px(h))
+            .bottom_0()
+            .bg(dim);
+        let badge = div()
+            .id("phone-sized")
+            .absolute()
+            .bottom(px(PADDING * 2.))
+            .right(px(PADDING * 2. + 4.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(8.))
+            .py(px(4.))
+            .rounded(px(6.))
+            .bg(rgba(0x000000c0))
+            .text_size(px(12.))
+            .text_color(rgb(0xd8d8d8))
+            .cursor_pointer()
+            .hover(|s| s.bg(rgba(0x000000e0)))
+            .child(
+                svg()
+                    .path("icons/smartphone.svg")
+                    .size(px(13.))
+                    .text_color(rgb(0xd0d0d0)),
+            )
+            .child(format!(
+                "Sized for a phone ({cols}×{rows}) · Type or click to take back"
+            ))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, _, cx| this.take_size_local(cx)));
+        Some(vec![
+            right.into_any_element(),
+            below.into_any_element(),
+            badge.into_any_element(),
+        ])
+    }
+}
+
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.hook_focus(window, cx);
@@ -1904,6 +2028,7 @@ impl Render for TerminalView {
             .as_deref()
             .map(|text| self.render_paste_prompt(text, cx));
         let scrollbar = self.render_scrollbar(cx);
+        let phone_sized = self.render_phone_sized(cx);
         // The find bar sits where the lock would.
         let lock = (!self.find.open && self.password_input()).then(|| {
             div()
@@ -1979,6 +2104,7 @@ impl Render for TerminalView {
                 let Some(item) = cx.read_from_clipboard() else {
                     return;
                 };
+                this.take_size_local(cx);
                 if let Some(text) = item.text() {
                     this.paste(&text, cx);
                 } else if item
@@ -2022,6 +2148,7 @@ impl Render for TerminalView {
             .child(TerminalElement { view: cx.entity() })
             .children(scrollbar)
             .children(lock)
+            .children(phone_sized.into_iter().flatten())
             .children(find_bar)
             .children(paste_prompt)
     }
@@ -2123,6 +2250,10 @@ impl Element for TerminalElement {
             v.cell = cell;
             v.scale = v.pixel_scale.unwrap_or_else(|| window.scale_factor());
             v.window = Some(window.window_handle());
+            // The pane's room is the Mac's claim; a phone that owns the
+            // size gets its own (size_owner.rs).
+            v.layout_grid = (cols, rows);
+            let (cols, rows) = v.sizing.size().unwrap_or((cols, rows));
             v.resize(cols, rows);
             v.animate(cx);
             let frame = v.frame().clone();
