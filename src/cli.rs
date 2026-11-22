@@ -57,9 +57,9 @@ Commands:
   last-pane [--workspace <id|ref|index>]                     (focus the pane focused before this one)
   swap-pane [--pane <id|ref|index>] [--workspace <id|ref|index>] [-L|-R|-U|-D]   (swap tabs with the pane that way; default -R)
   resize-pane [--pane <id|ref|index>] [--workspace <id|ref|index>] [-L|-R|-U|-D] [--amount <px>]   (default -R, panes.resizeStep: 20px)
-  new-pane [--type <terminal|browser>] [--direction <left|right|up|down>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>]
-  new-split <left|right|up|down> [--surface <ref>] [--workspace <ref>] [--type <terminal|browser>] [--url <url>] [--command <text>] [--focus <true|false>]
-  new-surface [--type <terminal|browser>] [--pane <ref>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>]
+  new-pane [--type <terminal|browser>] [--direction <left|right|up|down>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>] [--host <ssh://host|local>]
+  new-split <left|right|up|down> [--surface <ref>] [--workspace <ref>] [--type <terminal|browser>] [--url <url>] [--command <text>] [--focus <true|false>] [--host <ssh://host|local>]
+  new-surface [--type <terminal|browser>] [--pane <ref>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>] [--host <ssh://host|local>]
                                                              (new-pane, new-split and new-surface also take --label <name>,
                                                              to target the tab by that name, and --wait [--timeout <s>]:
                                                              wait for --command to finish and exit with its status)
@@ -2271,7 +2271,11 @@ fn markdown(mut pos: Vec<String>, opts: Map<String, Value>) -> Result<(), String
 /// checked here so a typo fails before a tab opens.
 fn claude(mut pos: Vec<String>, mut opts: Map<String, Value>) -> Result<(), String> {
     use crate::claude_chat::{effort_name, is_model_name, mode_name};
-    let dir = if pos.is_empty() { ".".to_string() } else { pos.remove(0) };
+    let dir = if pos.is_empty() {
+        ".".to_string()
+    } else {
+        pos.remove(0)
+    };
     let dir = absolute(&dir);
     if !Path::new(&dir).is_dir() {
         return Err(format!("claude: no such folder: {dir}"));
@@ -2289,8 +2293,9 @@ fn claude(mut pos: Vec<String>, mut opts: Map<String, Value>) -> Result<(), Stri
         p.insert("model".into(), json!(m));
     }
     if let Some(e) = take(&mut opts, "effort") {
-        let e = effort_name(&e)
-            .ok_or_else(|| format!("claude: unknown effort {e:?} (low, medium, high, xhigh, max)"))?;
+        let e = effort_name(&e).ok_or_else(|| {
+            format!("claude: unknown effort {e:?} (low, medium, high, xhigh, max)")
+        })?;
         p.insert("effort".into(), json!(e));
     }
     if let Some(m) = take(&mut opts, "mode").or_else(|| take(&mut opts, "permission_mode")) {
@@ -2321,7 +2326,10 @@ fn claude(mut pos: Vec<String>, mut opts: Map<String, Value>) -> Result<(), Stri
         }
         None => call("surface.create", p)?,
     };
-    let r = v.get("surface").and_then(|s| s.get("ref")).unwrap_or(&v["ref"]);
+    let r = v
+        .get("surface")
+        .and_then(|s| s.get("ref"))
+        .unwrap_or(&v["ref"]);
     println!("OK {}", s(r));
     Ok(())
 }

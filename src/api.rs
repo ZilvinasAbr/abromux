@@ -65,6 +65,7 @@ const NEW_TAB: &str = "type?:string terminal (default), browser, markdown, claud
     path?:string For a markdown tab: the absolute path of the file;\
     command?:string For a terminal: typed into its shell, then Return;\
     cwd?:string For a terminal or Claude tab: where it runs;\
+    host?:string For a terminal: the abromux server it runs on, ssh://[user@]host[:port], or local for this machine (default: the workspace's);\
     session?:string For a Claude tab: the conversation to resume;\
     continue?:boolean For a Claude tab: resume the folder's latest conversation;\
     model?:string For a Claude tab: opus, sonnet, haiku, fable, default, or a full model name;\

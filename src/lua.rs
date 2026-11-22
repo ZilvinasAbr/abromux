@@ -535,14 +535,13 @@ fn new_lua(st: &Shared, values: &[(&str, Value)]) -> mlua::Result<Lua> {
             .to_string_lossy()
             .into_owned(),
     )?;
-    let preload: Table = lua
-        .globals()
-        .get::<Table>("package")?
-        .get("preload")?;
+    let preload: Table = lua.globals().get::<Table>("package")?.get("preload")?;
     for (name, src) in MODULES {
         preload.set(
             *name,
-            lua.load(*src).set_name(format!("={name}")).into_function()?,
+            lua.load(*src)
+                .set_name(format!("={name}"))
+                .into_function()?,
         )?;
     }
 
@@ -862,7 +861,12 @@ fn load_actions(path: &Path, files: &mut Vec<PathBuf>) -> Result<Vec<ActionDef>,
         .set_name(format!("@{}", path.display()))
         .exec();
     lua.remove_hook();
-    files.extend(required.sequence_values::<String>().flatten().map(PathBuf::from));
+    files.extend(
+        required
+            .sequence_values::<String>()
+            .flatten()
+            .map(PathBuf::from),
+    );
     ran.map_err(|e| at(&e))?;
     actions_of(&lua).map_err(|e| at(&e))
 }
@@ -1502,8 +1506,10 @@ mod tests {
                 .success();
             assert!(ok, "{cmd}");
         };
-        sh("mkdir -p repo plain && echo hi > plain/a.txt && cd repo && git init -q -b main \
-            && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init");
+        sh(
+            "mkdir -p repo plain && echo hi > plain/a.txt && cd repo && git init -q -b main \
+            && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init",
+        );
         let r = eval(&format!(
             r#"local wf = require "abromux.workspace_folders"
             local base = "{b}"
@@ -1533,7 +1539,10 @@ mod tests {
         assert_eq!(r["dirs"], json!(["ws/my-task", "ws/my-task-2"]));
         assert_eq!(r["meta"]["name"], "My Task");
         assert_eq!(r["agents"], true);
-        assert_eq!(r["copy"], json!({ "path": "plain", "source": format!("{b}/plain") }));
+        assert_eq!(
+            r["copy"],
+            json!({ "path": "plain", "source": format!("{b}/plain") })
+        );
         assert_eq!(
             r["tree"],
             json!({ "path": "repo", "source": format!("{b}/repo"), "branch": "ws/my-task", "new_branch": true })
@@ -1544,13 +1553,24 @@ mod tests {
             "{}",
             r["json"]
         );
-        assert_eq!(r["blockers"], json!(["repo: 1 uncommitted or untracked file(s)"]));
+        assert_eq!(
+            r["blockers"],
+            json!(["repo: 1 uncommitted or untracked file(s)"])
+        );
         assert!(
-            r["refused"].as_str().unwrap().contains("work would be lost"),
+            r["refused"]
+                .as_str()
+                .unwrap()
+                .contains("work would be lost"),
             "{}",
             r["refused"]
         );
-        assert_eq!(r["removed"].as_array().unwrap().len(), 3, "{}", r["removed"]);
+        assert_eq!(
+            r["removed"].as_array().unwrap().len(),
+            3,
+            "{}",
+            r["removed"]
+        );
         assert!(
             r["removed"][1]
                 .as_str()
