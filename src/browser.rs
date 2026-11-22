@@ -247,6 +247,8 @@ pub struct BrowserView {
     /// runs `claude` for it.
     pub chat: Option<Chat>,
     chat_lines: Option<mpsc::UnboundedSender<(u64, claude_chat::Line)>>,
+    /// Its entity id, which a phone's copy of a Claude tab is tapped by.
+    stream_id: u64,
 }
 
 impl EventEmitter<BrowserEvent> for BrowserView {}
@@ -495,6 +497,9 @@ impl BrowserView {
         if is_markdown {
             Self::follow_markdown(cx);
         }
+        let stream_id = cx.entity_id().as_u64();
+        cx.on_release(move |_, _| crate::stream::closed(stream_id))
+            .detach();
         let (chat, chat_lines) = match chat_at {
             Some((cwd, mut start)) => {
                 if start.mode.is_none() {
@@ -540,6 +545,7 @@ impl BrowserView {
             md_seen: None,
             chat,
             chat_lines,
+            stream_id,
         }
     }
 
@@ -651,9 +657,31 @@ impl BrowserView {
     }
 
     fn flush_chat(&mut self, cx: &App) {
-        if let Some(js) = self.chat.as_mut().and_then(Chat::take_script) {
-            self.page.run(&js, cx);
+        if let Some(batch) = self.chat.as_mut().and_then(Chat::take_batch) {
+            crate::stream::events(self.stream_id, &batch);
+            self.page.run(&Chat::script(&batch), cx);
         }
+    }
+
+    /// For a phone's copy of this Claude tab's page (`surface.stream`): the
+    /// conversation so far. `None` if this isn't a Claude tab.
+    pub fn chat_mirror(&mut self) -> Option<Vec<Value>> {
+        self.chat.as_mut().map(Chat::mirror_start)
+    }
+
+    /// A message from a phone's copy of the page, as this page would post
+    /// it (`surface.chat`). False if this isn't a Claude tab.
+    pub fn chat_message(&mut self, body: &str, cx: &mut Context<Self>) -> bool {
+        if self.chat.is_none() {
+            return false;
+        }
+        self.chat_ipc(body, cx);
+        true
+    }
+
+    /// The key its `surface.stream` taps go by (stream.rs).
+    pub fn stream_id(&self) -> u64 {
+        self.stream_id
     }
 
     /// A Markdown tab's live reload: while it's on screen, check the shown

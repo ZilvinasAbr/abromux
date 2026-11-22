@@ -28,12 +28,12 @@ use std::{
 pub const SCHEME: &str = "abromux-claude";
 const PREFIX: &str = "abromux-claude://localhost";
 
-const PAGE_HTML: &str = include_str!("claude_chat/page.html");
-const PAGE_CSS: &str = include_str!("claude_chat/page.css");
-const PAGE_JS: &str = include_str!("claude_chat/page.js");
-const LOGO_SVG: &str = include_str!("../assets/icons/claude.svg");
+pub const PAGE_HTML: &str = include_str!("claude_chat/page.html");
+pub const PAGE_CSS: &str = include_str!("claude_chat/page.css");
+pub const PAGE_JS: &str = include_str!("claude_chat/page.js");
+pub const LOGO_SVG: &str = include_str!("../assets/icons/claude.svg");
 /// highlight.js, for code in replies and diffs (`claude_chat/vendor/`).
-const HIGHLIGHT_JS: &str = include_str!("claude_chat/vendor/highlight.min.js");
+pub const HIGHLIGHT_JS: &str = include_str!("claude_chat/vendor/highlight.min.js");
 
 /// The page's own script and style only: Claude's replies are Markdown
 /// rendered without raw HTML, and nothing inline runs.
@@ -62,15 +62,17 @@ pub struct Start {
 
 /// Claude Code's name for a permission mode, from it or a friendlier one.
 pub fn mode_name(s: &str) -> Option<&'static str> {
-    Some(match s.to_ascii_lowercase().replace(['_', ' '], "-").as_str() {
-        "ask" | "default" | "manual" | "ask-permissions" => "default",
-        "accept-edits" | "acceptedits" | "edits" => "acceptEdits",
-        "plan" => "plan",
-        "auto" => "auto",
-        "dont-ask" | "dontask" => "dontAsk",
-        "bypass" | "bypass-permissions" | "bypasspermissions" | "yolo" => "bypassPermissions",
-        _ => return None,
-    })
+    Some(
+        match s.to_ascii_lowercase().replace(['_', ' '], "-").as_str() {
+            "ask" | "default" | "manual" | "ask-permissions" => "default",
+            "accept-edits" | "acceptedits" | "edits" => "acceptEdits",
+            "plan" => "plan",
+            "auto" => "auto",
+            "dont-ask" | "dontask" => "dontAsk",
+            "bypass" | "bypass-permissions" | "bypasspermissions" | "yolo" => "bypassPermissions",
+            _ => return None,
+        },
+    )
 }
 
 /// An effort level `claude --effort` takes.
@@ -151,7 +153,9 @@ pub fn parse(url: &str) -> Option<(PathBuf, Start)> {
     let start = Start {
         session: get("session").filter(|s| is_session_id(s)),
         model: get("model").filter(|m| is_model_name(m)),
-        effort: get("effort").and_then(|e| effort_name(&e)).map(String::from),
+        effort: get("effort")
+            .and_then(|e| effort_name(&e))
+            .map(String::from),
         mode: get("mode").and_then(|m| mode_name(&m)).map(String::from),
     };
     cwd.is_absolute().then_some((cwd, start))
@@ -211,7 +215,10 @@ pub fn respond(req: &Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
         "/__chat/page.js" => ("text/javascript; charset=utf-8", PAGE_JS.as_bytes().into()),
         "/__chat/page.css" => ("text/css; charset=utf-8", PAGE_CSS.as_bytes().into()),
         "/__chat/logo.svg" => ("image/svg+xml", LOGO_SVG.as_bytes().into()),
-        "/__chat/hl.js" => ("text/javascript; charset=utf-8", HIGHLIGHT_JS.as_bytes().into()),
+        "/__chat/hl.js" => (
+            "text/javascript; charset=utf-8",
+            HIGHLIGHT_JS.as_bytes().into(),
+        ),
         _ => ("text/html; charset=utf-8", PAGE_HTML.as_bytes().into()),
     };
     Response::builder()
@@ -451,12 +458,7 @@ impl Chat {
             "effort": self.effort,
             "contextWindow": self.context_window,
             "running": self.proc.is_some(),
-            "state": match self.state {
-                State::Idle => "idle",
-                State::Running => "running",
-                State::Waiting => "waiting",
-                State::Done => "done",
-            },
+            "state": self.state_name(),
         })
     }
 
@@ -484,13 +486,37 @@ impl Chat {
         }
     }
 
-    /// The script that hands the page what's waiting, if anything is.
-    pub fn take_script(&mut self) -> Option<String> {
+    /// What's waiting for the page, if anything is, as a JSON array.
+    pub fn take_batch(&mut self) -> Option<String> {
         if self.outbox.is_empty() {
             return None;
         }
-        let batch = serde_json::to_string(&std::mem::take(&mut self.outbox)).ok()?;
-        Some(format!("window.__chat && window.__chat.recv({batch})"))
+        serde_json::to_string(&std::mem::take(&mut self.outbox)).ok()
+    }
+
+    /// The script that hands the page `batch` (from `take_batch`).
+    pub fn script(batch: &str) -> String {
+        format!("window.__chat && window.__chat.recv({batch})")
+    }
+
+    /// The conversation as a page that just loaded gets it, for a copy of
+    /// the page elsewhere (a phone); from now on everything the page is
+    /// sent goes out, for that copy too, even if this tab's own page
+    /// hasn't loaded.
+    pub fn mirror_start(&mut self) -> Vec<Value> {
+        self.ready = true;
+        let mut out = vec![json!({"t": "reset"}), self.meta()];
+        out.extend(self.events.iter().cloned());
+        out
+    }
+
+    pub fn state_name(&self) -> &'static str {
+        match self.state {
+            State::Idle => "idle",
+            State::Running => "running",
+            State::Waiting => "waiting",
+            State::Done => "done",
+        }
     }
 
     fn set_state(&mut self, state: State, notices: &mut Vec<Notice>) {
@@ -654,7 +680,8 @@ impl Chat {
                 let config = self.config_dir.clone();
                 std::thread::spawn(move || {
                     let items = past_sessions(&cwd, config.as_deref(), current.as_deref());
-                    let _ = tx.unbounded_send((0, Line::Page(json!({"t": "sessions", "items": items}))));
+                    let _ = tx
+                        .unbounded_send((0, Line::Page(json!({"t": "sessions", "items": items}))));
                 });
             }
             "resume" => {
@@ -670,7 +697,8 @@ impl Chat {
                 match &self.files {
                     Some(files) => {
                         let items = match_files(files, &q);
-                        self.outbox.push(json!({"t": "files", "q": q, "items": items}));
+                        self.outbox
+                            .push(json!({"t": "files", "q": q, "items": items}));
                     }
                     None => {
                         if self.files_query.replace(q).is_none() {
@@ -756,7 +784,11 @@ impl Chat {
                 }));
                 continue;
             }
-            let shown = path.strip_prefix(&self.cwd).unwrap_or(path).to_string_lossy().into_owned();
+            let shown = path
+                .strip_prefix(&self.cwd)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .into_owned();
             let mention = if shown.contains(char::is_whitespace) {
                 format!("@\"{shown}\"")
             } else {
@@ -789,7 +821,10 @@ impl Chat {
     /// message before it when you next send, and the composer gets the
     /// message back to edit.
     fn rewind_conversation(&mut self, uuid: &str, notices: &mut Vec<Notice>) -> Option<PageAction> {
-        let at = self.events.iter().position(|e| e["t"] == "user" && e["uuid"] == uuid)?;
+        let at = self
+            .events
+            .iter()
+            .position(|e| e["t"] == "user" && e["uuid"] == uuid)?;
         let text = self.events[at]["text"].clone();
         let before = self
             .session
@@ -959,7 +994,8 @@ impl Chat {
             Line::Files(files) => {
                 if let Some(q) = self.files_query.take() {
                     let items = match_files(&files, &q);
-                    self.outbox.push(json!({"t": "files", "q": q, "items": items}));
+                    self.outbox
+                        .push(json!({"t": "files", "q": q, "items": items}));
                 }
                 self.files = Some(files);
                 return false;
@@ -1059,8 +1095,12 @@ impl Chat {
                     .is_some_and(|id| self.pending.contains_key(id)) =>
             {
                 let id = v["response"]["request_id"].as_str().unwrap_or_default();
-                let error = (v["response"]["subtype"] == "error")
-                    .then(|| v["response"]["error"].as_str().unwrap_or("refused").to_string());
+                let error = (v["response"]["subtype"] == "error").then(|| {
+                    v["response"]["error"]
+                        .as_str()
+                        .unwrap_or("refused")
+                        .to_string()
+                });
                 let r = &v["response"]["response"];
                 match self.pending.remove(id) {
                     Some(Pending::Mode(previous)) => {
@@ -1301,11 +1341,16 @@ fn transcript(cwd: &Path, config: Option<&Path>, session: &str) -> Option<PathBu
 fn resume_point(transcript: &str, uuid: &str) -> Option<String> {
     let mut by_id: HashMap<String, (Option<String>, bool)> = HashMap::new();
     for line in transcript.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         if let Some(id) = v["uuid"].as_str() {
             by_id.insert(
                 id.to_string(),
-                (v["parentUuid"].as_str().map(String::from), v["type"] == "assistant"),
+                (
+                    v["parentUuid"].as_str().map(String::from),
+                    v["type"] == "assistant",
+                ),
             );
         }
     }
@@ -1429,11 +1474,15 @@ fn past_sessions(cwd: &Path, config: Option<&Path>, current: Option<&str>) -> Ve
         if out.len() >= 40 {
             break;
         }
-        let Ok(file) = std::fs::File::open(&path) else { continue };
+        let Ok(file) = std::fs::File::open(&path) else {
+            continue;
+        };
         let mut title = None;
         let mut summary = None;
         for line in BufReader::new(file).lines().take(400).map_while(Result::ok) {
-            let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+            let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
             if v["type"] == "summary" {
                 summary = v["summary"].as_str().map(String::from);
             }
@@ -1447,7 +1496,8 @@ fn past_sessions(cwd: &Path, config: Option<&Path>, current: Option<&str>) -> Ve
         let last = std::fs::File::open(&path).ok().and_then(|mut f| {
             use std::io::{Seek, SeekFrom};
             let len = f.metadata().ok()?.len();
-            f.seek(SeekFrom::Start(len.saturating_sub(256 * 1024))).ok()?;
+            f.seek(SeekFrom::Start(len.saturating_sub(256 * 1024)))
+                .ok()?;
             let mut buf = Vec::new();
             f.read_to_end(&mut buf).ok()?;
             String::from_utf8_lossy(&buf)
@@ -1564,7 +1614,11 @@ fn match_files(files: &[String], q: &str) -> Vec<String> {
         })
         .collect();
     scored.sort();
-    scored.into_iter().take(12).map(|(_, _, f)| f.clone()).collect()
+    scored
+        .into_iter()
+        .take(12)
+        .map(|(_, _, f)| f.clone())
+        .collect()
 }
 
 // ---- claude's stream to the page's events --------------------------------
@@ -1722,10 +1776,15 @@ impl Translator {
         // How full the context is: what this reply read and wrote.
         let u = &m["usage"];
         if u.is_object() {
-            let used: u64 = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"]
-                .iter()
-                .filter_map(|k| u[*k].as_u64())
-                .sum();
+            let used: u64 = [
+                "input_tokens",
+                "cache_creation_input_tokens",
+                "cache_read_input_tokens",
+                "output_tokens",
+            ]
+            .iter()
+            .filter_map(|k| u[*k].as_u64())
+            .sum();
             if used > 0 {
                 out.push(json!({"t": "usage", "used": used}));
             }
@@ -1945,7 +2004,9 @@ mod tests {
         );
         // Nothing but ids and known names reach the command line.
         assert_eq!(
-            parse("abromux-claude://localhost/tmp?session=--dangerously&model=--x&mode=sudo&effort=11"),
+            parse(
+                "abromux-claude://localhost/tmp?session=--dangerously&model=--x&mode=sudo&effort=11"
+            ),
             Some((PathBuf::from("/tmp"), Start::default()))
         );
         assert_eq!(mode_name("accept-edits"), Some("acceptEdits"));
@@ -2049,17 +2110,31 @@ mod tests {
     #[test]
     fn drops_become_mentions() {
         let mut chat = Chat::new(PathBuf::from("/repo"), Start::default());
-        chat.dropped(&[PathBuf::from("/repo/src/main.rs"), PathBuf::from("/tmp/my notes.txt")]);
+        chat.dropped(&[
+            PathBuf::from("/repo/src/main.rs"),
+            PathBuf::from("/tmp/my notes.txt"),
+        ]);
         let texts: Vec<_> = chat.outbox.iter().map(|e| e["text"].clone()).collect();
-        assert_eq!(texts, [json!("@src/main.rs"), json!("@\"/tmp/my notes.txt\"")]);
+        assert_eq!(
+            texts,
+            [json!("@src/main.rs"), json!("@\"/tmp/my notes.txt\"")]
+        );
     }
 
     #[test]
     fn files_match_by_name_first() {
-        let files: Vec<String> = ["src/main.rs", "docs/maintain.md", "src/ui/domain.rs", "README.md"]
-            .map(String::from)
-            .into();
-        assert_eq!(match_files(&files, "main"), ["src/main.rs", "docs/maintain.md", "src/ui/domain.rs"]);
+        let files: Vec<String> = [
+            "src/main.rs",
+            "docs/maintain.md",
+            "src/ui/domain.rs",
+            "README.md",
+        ]
+        .map(String::from)
+        .into();
+        assert_eq!(
+            match_files(&files, "main"),
+            ["src/main.rs", "docs/maintain.md", "src/ui/domain.rs"]
+        );
         assert_eq!(match_files(&files, "ui/"), ["src/ui/domain.rs"]);
         assert_eq!(match_files(&files, "").len(), 4);
     }

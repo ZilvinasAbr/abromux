@@ -189,6 +189,8 @@ struct HoverLink {
 
 pub struct TerminalView {
     term: ghostty::Terminal,
+    /// Its entity id, which phones watching it know it by (stream.rs).
+    stream_id: u64,
     pty: Pty,
     /// Where the program's output waits for the main thread.
     feed: Feed,
@@ -318,6 +320,10 @@ impl TerminalView {
         let focus = cx.focus_handle();
         let config = cx.try_global::<Config>().cloned().unwrap_or_default();
         cx.on_release(Self::free_images).detach();
+        // A phone watching it (stream.rs) hears it's gone.
+        let id = cx.entity_id().as_u64();
+        cx.on_release(move |_, _| crate::stream::closed(id))
+            .detach();
         // The config changes with the app's appearance (`main::sync_appearance`).
         cx.observe_global::<Config>(|this, cx| {
             if let Some(c) = cx.try_global::<Config>().cloned() {
@@ -338,6 +344,7 @@ impl TerminalView {
         let _ = term.take_effects();
         Self {
             term,
+            stream_id: id,
             pty: opened.pty,
             attached: opened.attached,
             feed,
@@ -538,6 +545,7 @@ impl TerminalView {
             }
         }
         self.term.write(bytes);
+        crate::stream::output(self.stream_id, bytes);
         if std::mem::take(&mut self.clear_pending) {
             self.term.write(b"\x1b[3J");
         }
@@ -588,6 +596,33 @@ impl TerminalView {
             self.update_link(true);
         }
         cx.notify();
+    }
+
+    /// `surface.stream`'s start (stream.rs): the viewport as VT text that
+    /// paints it on a blank terminal of the same size, with its size and
+    /// default colors. Taken on the main thread, as output is processed, so
+    /// a tap opened in the same turn misses nothing between the two.
+    pub fn stream_start(&mut self) -> serde_json::Value {
+        let alt = self.term.alt_screen();
+        let frame = self.frame().clone();
+        let cursor = self.term.cursor_at();
+        let (cols, rows) = self.grid;
+        serde_json::json!({
+            "cols": cols,
+            "rows": rows,
+            // On the alternate screen the normal one isn't in `vt`: the
+            // client starts over when the program leaves it.
+            "alt": alt,
+            "vt": crate::stream::frame_vt(&frame, alt, cursor),
+            "fg": crate::stream::hex(frame.foreground),
+            "bg": crate::stream::hex(frame.background),
+            "cursor": frame.cursor_color.map(crate::stream::hex),
+            "title": self.shown_title(),
+        })
+    }
+
+    pub fn stream_id(&self) -> u64 {
+        self.stream_id
     }
 
     /// The program's title for tabs and the sidebar: Claude Code's without
@@ -776,6 +811,9 @@ impl TerminalView {
         );
         if (cols, rows) == self.grid && (cw, ch) == self.cell_px {
             return;
+        }
+        if (cols, rows) != self.grid {
+            crate::stream::resized(self.stream_id, cols, rows);
         }
         self.grid = (cols, rows);
         self.cell_px = (cw, ch);

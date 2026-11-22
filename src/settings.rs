@@ -80,6 +80,7 @@ pub struct Settings {
     pub gitlab: GitlabSettings,
     pub jira: JiraSettings,
     pub claude: ClaudeSettings,
+    pub remote: RemoteSettings,
 }
 
 impl Global for Settings {}
@@ -99,7 +100,12 @@ pub struct ClaudeSettings {
 
 /// The config folder Claude tabs use, if the config file names one.
 pub fn claude_config_dir(cx: &gpui::App) -> Option<PathBuf> {
-    let dir = cx.try_global::<Settings>()?.claude.config_dir.as_deref()?.trim();
+    let dir = cx
+        .try_global::<Settings>()?
+        .claude
+        .config_dir
+        .as_deref()?
+        .trim();
     (!dir.is_empty()).then(|| abromux_core::paths::expand_tilde(dir))
 }
 
@@ -111,6 +117,47 @@ pub fn claude_default_mode(cx: &gpui::App) -> &'static str {
         .and_then(crate::claude_chat::mode_name)
         .filter(|m| *m != "bypassPermissions")
         .unwrap_or("auto")
+}
+
+/// Phone access over Tailscale (`crate::remote`, `abromux remote`,
+/// Settings › Phone Access). The release and nightly apps share it, each on
+/// its own ports.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct RemoteSettings {
+    /// Serve the phone app on this Mac's tailnet address.
+    pub enabled: bool,
+    /// Tailscale logins let in besides this Mac's own user, who always is.
+    pub allow: Vec<String>,
+    /// Let phones call every method, browser automation and files too.
+    pub all_methods: bool,
+    /// Keep the Mac awake (not the display) while an agent is working.
+    pub keep_awake: bool,
+    /// Notify phones only after this long without keyboard or mouse use on
+    /// the Mac (seconds); 0: always.
+    pub push_when_idle: u64,
+    /// Show a notification's text on the phone, not just its title.
+    pub push_preview: bool,
+    /// The loopback port the app listens on. None: 7298 (the nightly 7299).
+    pub port: Option<u16>,
+    /// The tailnet HTTPS port `tailscale serve` uses: 443, 8443 or 10000.
+    /// None: 8443 (the nightly 10000).
+    pub https_port: Option<u16>,
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow: Vec::new(),
+            all_methods: false,
+            keep_awake: true,
+            push_when_idle: 60,
+            push_preview: true,
+            port: None,
+            https_port: None,
+        }
+    }
 }
 
 /// Jira, for tracked links (`crate::links`).

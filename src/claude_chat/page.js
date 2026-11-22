@@ -20,6 +20,10 @@
   const post = (msg) => {
     try { window.ipc.postMessage(JSON.stringify(msg)); } catch (_) {}
   };
+  // A copy of this page in the phone app (src/remote/web/chat-shim.js):
+  // the phone's theme, and Return types a new line on a touch keyboard.
+  const PHONE = !!window.__phone;
+  const touchKeys = () => PHONE && !matchMedia("(pointer: fine)").matches;
 
   // Claude Code's permission modes. ⇧Tab cycles the first four, as in the terminal.
   const MODES = [
@@ -824,7 +828,7 @@
   function onMeta(m) {
     S.meta = Object.assign(S.meta, m);
     if (m.cwdFull) S.meta.cwdAbs = m.cwdFull;
-    if (m.dark !== undefined) document.documentElement.dataset.theme = m.dark ? "dark" : "light";
+    if (m.dark !== undefined && !PHONE) document.documentElement.dataset.theme = m.dark ? "dark" : "light";
     const cwd = S.meta.cwd || "";
     // A long folder shows by its last two parts; hover for all of it.
     const parts = cwd.split("/");
@@ -1204,7 +1208,7 @@
       }
       if (ev.key === "Escape") { slash.hidden = true; ev.preventDefault(); ev.stopPropagation(); return; }
     }
-    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && !touchKeys()) {
       ev.preventDefault();
       // Enter on an empty composer answers the waiting prompt.
       if (!input.value.trim() && !S.images.length) {
@@ -1235,7 +1239,7 @@
   sendBtn.addEventListener("click", () => {
     if (sendBtn.classList.contains("stop")) post({ chat: "interrupt" });
     else send();
-    input.focus();
+    if (!PHONE) input.focus();
   });
 
   input.addEventListener("paste", (ev) => {
@@ -1373,6 +1377,7 @@
   }
 
   window.__chat = {
+    addImage,
     recv(batch) {
       const stick = S.stick || nearBottom();
       for (const e of batch) {
@@ -1391,5 +1396,5 @@
   drawModel();
   drawSend();
   post({ chat: "ready" });
-  input.focus();
+  if (!PHONE) input.focus();
 })();

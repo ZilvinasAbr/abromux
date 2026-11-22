@@ -260,6 +260,24 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
                 stream_events(&mut writer, peer, events, &resp["result"]);
                 return;
             }
+            Ok(req) if req["method"] == "surface.stream" => {
+                let (reply_tx, reply_rx) = oneshot::channel();
+                if tx.unbounded_send((req, reply_tx, gone.clone())).is_err() {
+                    return;
+                }
+                let resp = futures::executor::block_on(reply_rx)
+                    .unwrap_or_else(|_| ipc::err(&Value::Null, "app closed"));
+                let tap = resp["result"]["token"]
+                    .as_u64()
+                    .and_then(crate::stream::take);
+                if writer.write_all(format!("{resp}\n").as_bytes()).is_err() {
+                    return;
+                }
+                if let Some(tap) = tap {
+                    stream_output(&mut writer, peer, tap);
+                }
+                return;
+            }
             Ok(req) => {
                 let (reply_tx, reply_rx) = oneshot::channel();
                 // A question waits on a person, as long as it takes: notice
@@ -327,6 +345,97 @@ fn watch_hangup(
         }
     });
     (done, gone.shared())
+}
+
+/// Write a terminal's output (stream.rs) to `writer`, one JSON line per
+/// batch, until the terminal or the caller is gone:
+/// `{"output":"<base64>"}`, `{"resize":[cols,rows]}`, `{"closed":true}`.
+/// A tap that ends without `closed` was cut off for falling behind: the
+/// caller should start over.
+fn stream_output(
+    writer: &mut UnixStream,
+    peer: std::os::fd::RawFd,
+    tap: std::sync::mpsc::Receiver<crate::stream::Chunk>,
+) {
+    use crate::stream::Chunk;
+    use base64::Engine as _;
+    use std::sync::mpsc::RecvTimeoutError;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    loop {
+        let first = match tap.recv_timeout(Duration::from_secs(1)) {
+            Ok(c) => c,
+            Err(RecvTimeoutError::Timeout) => {
+                if hung_up(peer) {
+                    return;
+                }
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                let _ = writer.write_all(b"{\"behind\":true}\n");
+                return;
+            }
+        };
+        // Everything already queued goes in one line: a flood costs one write.
+        let mut out = String::new();
+        let mut bytes = Vec::new();
+        let mut next = Some(first);
+        while let Some(c) = next.take() {
+            match c {
+                Chunk::Output(b) => bytes.extend_from_slice(&b),
+                other => {
+                    if !bytes.is_empty() {
+                        out += &json!({ "output": b64.encode(&bytes) }).to_string();
+                        out.push('\n');
+                        bytes.clear();
+                    }
+                    if let Chunk::Events(batch) = &other {
+                        out += "{\"events\":";
+                        out += batch;
+                        out += "}\n";
+                        if out.len() < 1 << 20 {
+                            next = tap.try_recv().ok();
+                        }
+                        continue;
+                    }
+                    let line = match other {
+                        Chunk::Resize(c, r) => json!({ "resize": [c, r] }),
+                        _ => json!({ "closed": true }),
+                    };
+                    out += &line.to_string();
+                    out.push('\n');
+                    if line["closed"] == true {
+                        let _ = writer.write_all(out.as_bytes());
+                        return;
+                    }
+                }
+            }
+            if bytes.len() < 1 << 20 {
+                next = tap.try_recv().ok();
+            }
+        }
+        if !bytes.is_empty() {
+            out += &json!({ "output": b64.encode(&bytes) }).to_string();
+            out.push('\n');
+        }
+        if writer.write_all(out.as_bytes()).is_err() {
+            return;
+        }
+    }
+}
+
+/// The peer closed its end (a non-blocking peek reads end of file).
+fn hung_up(peer: std::os::fd::RawFd) -> bool {
+    let mut b = 0u8;
+    // SAFETY: peeks at most one byte into `b`, without blocking.
+    let n = unsafe {
+        libc::recv(
+            peer,
+            (&raw mut b).cast(),
+            1,
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        )
+    };
+    n == 0
 }
 
 /// Write each event that passes `filter` to `writer` until the caller hangs up.
@@ -573,6 +682,12 @@ impl AbroMux {
         let p = named.as_ref().unwrap_or(p);
         let v = match method {
             "system.ping" => json!("pong"),
+            "remote.status" => crate::remote::status(),
+            "remote.reload" => {
+                let s = crate::settings::load().map_err(anyhow::Error::msg)?;
+                crate::settings_window::apply(s, cx);
+                crate::remote::status()
+            }
             "system.methods" => crate::api::methods(p)?,
             "system.identify" => {
                 let caller = self.caller(p).map(
@@ -1020,13 +1135,58 @@ impl AbroMux {
                     .collect();
                 json!(list)
             }
+            "surface.stream" => {
+                // The connection thread (`serve`) takes the tap by its token
+                // and writes what comes on it (stream.rs).
+                let (_, _, s) = self.surface_target(p)?;
+                let r = self.sref(&s);
+                if let Surface::Browser(b) = &s {
+                    let (events, id) = b.update(cx, |b, _| (b.chat_mirror(), b.stream_id()));
+                    let events = events.context("that browser tab isn't a Claude tab")?;
+                    json!({
+                        "chat": true,
+                        "events": events,
+                        "token": crate::stream::open(id),
+                        "surface": r,
+                    })
+                } else {
+                    let t = self.terminal_target(p)?;
+                    let (mut start, id) = t.update(cx, |t, _| (t.stream_start(), t.stream_id()));
+                    start["token"] = json!(crate::stream::open(id));
+                    start["surface"] = json!(r);
+                    start
+                }
+            }
+            "surface.chat" => {
+                // What a Claude tab's page would post, from a copy of it on
+                // a phone (`surface.stream` feeds that copy).
+                let b = self.browser_target(p)?;
+                let msg = p
+                    .get("message")
+                    .filter(|m| m.is_object())
+                    .context("missing message")?;
+                if msg["chat"] == "ready" {
+                    bail!("start with surface.stream");
+                }
+                let body = msg.to_string();
+                if !b.update(cx, |b, cx| b.chat_message(&body, cx)) {
+                    bail!("that browser tab isn't a Claude tab");
+                }
+                json!({ "ok": true })
+            }
             "surface.send_text" => {
                 let t = self.terminal_target(p)?;
-                let text = unescape(
-                    p.get("text")
-                        .and_then(Value::as_str)
-                        .context("missing text")?,
-                );
+                let text = p
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .context("missing text")?;
+                // `raw`: exactly these characters (a phone's typing), no
+                // backslash escapes.
+                let text = if bool_param(p, "raw", false) {
+                    text.to_string()
+                } else {
+                    unescape(text)
+                };
                 t.update(cx, |t, cx| {
                     t.send(text.as_bytes());
                     cx.notify();
@@ -3227,7 +3387,9 @@ impl AbroMux {
                 );
                 use crate::claude_chat::{self as chat, Start};
                 let mut start = Start {
-                    session: str_param(p, "session").or(str_param(p, "resume")).map(String::from),
+                    session: str_param(p, "session")
+                        .or(str_param(p, "resume"))
+                        .map(String::from),
                     ..Default::default()
                 };
                 if let Some(m) = str_param(p, "model") {
@@ -3242,7 +3404,9 @@ impl AbroMux {
                 }
                 if let Some(m) = str_param(p, "mode") {
                     let m = chat::mode_name(m).with_context(|| {
-                        format!("unknown mode {m:?} (ask, accept-edits, plan, auto, dont-ask, bypass)")
+                        format!(
+                            "unknown mode {m:?} (ask, accept-edits, plan, auto, dont-ask, bypass)"
+                        )
                     })?;
                     start.mode = Some(m.into());
                 }
@@ -3334,8 +3498,12 @@ impl AbroMux {
                 }
             }
             Surface::Browser(b) => {
+                let b = b.read(cx);
                 v["type"] = json!("browser");
-                v["url"] = json!(b.read(cx).url);
+                v["url"] = json!(b.url);
+                if let Some(chat) = &b.chat {
+                    v["claude"] = json!({ "state": chat.state_name(), "cwd": chat.cwd });
+                }
             }
             Surface::Plugin(t) => {
                 v["type"] = json!(t.plugin());
@@ -3498,7 +3666,14 @@ impl AbroMux {
             "color": ws.color.map(|c| format!("#{c:06x}")),
             "group": ws.group.map(|g| format!("group:{g}")),
             "home": ws.home.as_ref().map(|h| h.to_string_lossy()),
-            "status": ws.status.iter().map(status::status_json).collect::<Vec<_>>(),
+            "status": ws.status.iter().map(|s| {
+                let mut v = status::status_json(s);
+                // An agent's pill: the tab it's about.
+                if let Some(n) = s.owner.and_then(|o| self.surface_refs.get(&o)) {
+                    v["surface"] = json!(format!("surface:{n}"));
+                }
+                v
+            }).collect::<Vec<_>>(),
             "progress": ws.progress.as_ref().map(|p| json!({ "value": (p.value as f64 * 1000.).round() / 1000., "label": p.label })),
         });
         if panes {

@@ -314,9 +314,53 @@ What's listed:
 
 A bare key like `PAY-1423` needs to know its Jira: `"jira": { "host": "acme.atlassian.net" }` in the config file, else the one a ticket opened before is on. `"sidebar": { "showLinks": false }` hides the list. Pinned tabs, hidden ones with them, are saved with the session.
 
+## Phone access
+
+Control abromux on this Mac from a phone, over [Tailscale](https://tailscale.com): the workspaces in a sidebar as the Mac shows them, each terminal live with typing and keys into it, Claude tabs as the same chat, the notifications, and the notifications pushed to the phone when you're away. As in Rex, the network and who's asking are Tailscale's job, so there is no password or pairing token.
+
+It needs [Tailscale](https://tailscale.com/download) on the Mac and on the phone, signed in to the same account, with MagicDNS and HTTPS certificates on for the tailnet (the Tailscale admin console, DNS). Then turn on **Settings › Phone Access**: abromux puts itself on the Mac's tailnet address and shows the address and a QR code to scan. If Tailscale isn't ready, the page says what's missing. Or from a terminal:
+
+```bash
+abromux remote enable     # the same, printing the URL and QR code
+abromux remote            # status: URL, tailscale serve, phones connected
+abromux remote pair       # the URL and QR code again
+abromux remote allow someone@example.com   # another Tailscale user (`deny` takes them out)
+abromux remote push test  # a notification to every phone that turned them on
+abromux remote disable
+```
+
+On the phone, signed in to Tailscale as the Mac's Tailscale user: scan the code (or open the URL in Safari), Share → Add to Home Screen, and open abromux from there. Open **Notifications** at the bottom of the sidebar and tap **Turn On Alerts** to get notifications (iOS sends web apps notifications only from the Home Screen, iOS 16.4 and later).
+
+- **The app.** The sidebar lists the workspaces as the Mac's does: groups (tap a header to fold it), colors, descriptions, the latest notification, agent pills with what they said, branch and folder. It sits on the right: swipe in from the right edge (or tap the sidebar button) to open it; on an iPad or a phone on its side it stays open. A workspace shows its tabs along the top: tap one to show it, **+** for a new Claude chat or terminal there. Notifications, at the bottom of the sidebar, lists them, and turns the phone alerts on or off. It follows the phone's light or dark setting.
+
+- **How it's reached.** The app listens on a loopback port only (`127.0.0.1:7298`; the nightly 7299). While phone access is on, the app runs `tailscale serve --bg --https=8443 http://127.0.0.1:7298` (the nightly uses 10000) when it starts, so it's at `https://<mac>.<tailnet>.ts.net:8443/` with Tailscale's certificate, and on nothing but the tailnet; turning phone access off takes that down. If that port of the tailnet address already serves something else, abromux says so and leaves it: pick another with `"httpsPort"` or `--https-port` (443, 8443 or 10000, the ports `tailscale serve` takes).
+- **Who gets in.** `tailscale serve` tells abromux which tailnet user each request is from (`Tailscale-User-Login`). The Mac's own Tailscale user always gets in, and so do the logins in `allow` (Settings › Phone Access › Who Can Connect); a request that didn't come through `tailscale serve` has no user and gets nothing. WebSockets and POSTs must also come from the page itself, so another site open on the phone can't use it.
+- **What a phone can do.** Workspaces, panes, tabs, terminals (reading, typing, keys), Claude tabs and notifications. Not browser automation (your logged-in browser), files, quitting, or agent reports, unless `"allMethods": true`.
+- **Terminals.** A terminal shows at the Mac's size, in a font small enough to fit the phone's width (A− and A+ change it; past the smallest it scrolls sideways). Its screen comes first, then its output as it prints (`surface.stream`). Keys and text go through abromux, so they're sent the way the Mac's terminal expects. A web page tab offers to open its page on the phone; other tabs show on the Mac only.
+- **Claude tabs.** A [Claude tab](#claude-tabs) shows on the phone as the same chat page, with the conversation so far, and stays in step with the Mac: what either side sends, answers or changes (mode, model, effort, stopping) goes to the one `claude` running on the Mac. The **+** in the composer adds photos; Return types a new line on the phone's keyboard (send with the arrow). Links open on the phone.
+- **Notifications.** abromux's own notifications (an agent needs input or finished) are pushed to the phones that turned them on, when no phone has the app open and the Mac has had no keyboard or mouse use for a minute (`pushWhenIdle`, seconds; 0: always). `"pushPreview": false` leaves the text out. Pushes go from the Mac to the phone's push service (Apple's), encrypted for the phone (Web Push).
+- **Staying awake.** While phone access is on and an agent is working, the Mac doesn't idle-sleep (`caffeinate -i`, ended when no agent is working or the app quits; `"keepAwake": false` turns it off). The display still sleeps. A closed lid still sleeps a Mac that isn't on power with an external display.
+
+The settings are `"remote"` in the config file, beside the rest (every key optional; these are the defaults, apart from `enabled` and `allow`):
+
+```json
+"remote": {
+  "enabled": true,
+  "allow": ["friend@example.com"],
+  "allMethods": false,
+  "keepAwake": true,
+  "pushWhenIdle": 60,
+  "pushPreview": true,
+  "port": 7298,
+  "httpsPort": 8443
+}
+```
+
+The release and nightly apps share the config file, so phone access is on for both; each has its own ports unless `port` and `httpsPort` say otherwise. The push keys and the phones that subscribed are in `push.json` in the support folder (`~/Library/Application Support/abromux/`; only you can read it).
+
 ## Settings window
 
-⌘, (or the app menu › Settings…) opens Settings: a page each for General, Sidebar, Workspace Colors, Panes, Keyboard Shortcuts, Commands and GitLab, with a search field over all of them. It's a front end for the config file below, not a separate store. Each change writes just that key to `config.json` and applies at once. A setting put back to its default is removed from the file, and the rest of the file (other keys, their order, commands) stays as you wrote it. The undo arrow next to a setting resets it, and the one by a page's title resets the whole page.
+⌘, (or the app menu › Settings…) opens Settings: a page each for General, Sidebar, Workspace Colors, Panes, Keyboard Shortcuts, Commands, GitLab and Phone Access, with a search field over all of them. It's a front end for the config file below, not a separate store. Each change writes just that key to `config.json` and applies at once. A setting put back to its default is removed from the file, and the rest of the file (other keys, their order, commands) stays as you wrote it. The undo arrow next to a setting resets it, and the one by a page's title resets the whole page.
 
 On Keyboard Shortcuts, click a shortcut and press the new keys; Esc cancels. A shortcut needs ⌘, ⌃ or ⌥, unless it's a function key. If another action had that key, a toast says the new one takes it over. × removes a shortcut. Chords (`ctrl-a h`), per-context keys (`"when"`), workspace palette colors and commands are edited in the file; Settings shows them, and General › Config Files opens the file. If the file doesn't parse, Settings says why and saves nothing until it's fixed.
 

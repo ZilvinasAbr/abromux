@@ -326,7 +326,36 @@ pub const METHODS: &[Method] = &[
         "surface.send_text",
         "send",
         "Type text into a terminal. \\n presses Return; also \\t, \\e and \\\\.",
-        "@surface;text:string What to type",
+        "@surface;text:string What to type;raw?:boolean Exactly these characters, no backslash escapes",
+    ),
+    m(
+        "remote.status",
+        "remote status",
+        "Phone access (remote.rs): whether it's listening, its URL, phones connected.",
+        "",
+    ),
+    m(
+        "remote.reload",
+        "remote enable",
+        "Read the config file again (its \"remote\" settings) and serve phones as it says.",
+        "",
+    ),
+    m(
+        "surface.stream",
+        "",
+        "Follow a terminal: the result has its viewport as VT text (vt, cols, rows, fg, bg), \
+         then the connection carries one JSON line per batch of output: {output: base64}, \
+         {resize: [cols, rows]}, {closed: true}, or {behind: true} when it fell too far behind \
+         (start over). On a Claude tab the result is {chat: true, events: [...]}, the \
+         conversation as its page gets it, and each line after is {events: [...]}.",
+        "@surface",
+    ),
+    m(
+        "surface.chat",
+        "",
+        "Act in a Claude tab as its page would: send, interrupt, answer a permission prompt, \
+         change mode or model (what a phone's copy of the page posts).",
+        "@surface;message:object The page's message, e.g. {chat: \"send\", text: \"hi\", images: []}",
     ),
     m(
         "surface.send_key",

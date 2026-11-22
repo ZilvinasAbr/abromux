@@ -137,6 +137,12 @@ Commands:
                                                              with the workspace folders script, `folder add <path>`,
                                                              `folder list|all|repos|resources|remove`)
   wait-for [-S|--signal] <name> [--timeout <seconds>]        (wait until another script signals <name>; default 30s)
+  remote [status]                                            (phone access over Tailscale: its URL, phones connected)
+  remote enable [--https-port <443|8443|10000>] [--port <n>] (serve the phone app on this Mac's tailnet address with
+                                                             `tailscale serve`, for its Tailscale user; prints a QR code)
+  remote disable | pair                                      (stop serving phones; show the URL and QR code again)
+  remote allow|deny <login>                                  (let another Tailscale user in, or not)
+  remote push list|test|clear                                (phones that get notifications; send them a test; forget them)
   completion <zsh|bash|fish>                                 (a shell completion script: eval \"$(abromux completion zsh)\")
   open <path-or-url>...                                      (directories open workspaces, Markdown files and images the viewer,
                                                              URLs browser splits)
@@ -1335,6 +1341,7 @@ fn dispatch(
             EXIT_STATUS.store(status, std::sync::atomic::Ordering::Relaxed);
             return Ok(());
         }
+        "remote" => return crate::remote::cli(&pos, &opts, as_json),
         _ => {
             // An action of init.lua: `abromux folder add ~/repos/x --branch y`
             // runs action `folder` with args { "add", "~/repos/x", branch = "y" }.

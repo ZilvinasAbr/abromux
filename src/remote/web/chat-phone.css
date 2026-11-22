@@ -1,0 +1,71 @@
+/* The Claude tab's page on a phone (after its own page.css): narrower
+   margins, touch-sized controls, a 16px composer so iOS doesn't zoom into
+   it, the home indicator's inset, and menus as sheets from the bottom. */
+
+html, body {
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+:root { --bg: #fbfaf7; }
+:root[data-theme="dark"] { --bg: #1a1918; --field: #262624; --bubble: #2c2b28; --raised: #22211f; }
+
+#scroll { padding: 0 16px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.thread { padding-top: 16px; }
+.scroll-pad { height: 16px; }
+.empty { min-height: calc(100vh - 200px); padding: 0 12px; }
+.empty h1 { font-size: 26px; }
+.user { margin: 22px 0 4px; }
+.md { margin: 8px 0; }
+.bubble { max-width: 86%; border-radius: 18px; padding: 9px 14px; }
+.md { font-size: 16px; line-height: 1.6; }
+.md pre, .codeblock pre, .codeblock pre code { font-size: 12.5px; }
+.turn-meta { opacity: 1; }
+.working .hint { display: none; }
+
+.to-bottom { bottom: calc(112px + env(safe-area-inset-bottom)); width: 36px; height: 36px; }
+
+.composer-wrap { padding: 16px 10px calc(6px + env(safe-area-inset-bottom)); }
+.composer { border-radius: 22px; padding: 5px 5px 5px 6px; }
+.composer-row { align-items: flex-end; gap: 6px; }
+textarea { font-size: 16px; line-height: 1.4; padding: 7px 2px; max-height: 30vh; }
+.send { width: 34px; height: 34px; border-radius: 50%; }
+.attach {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--muted);
+  background: var(--hover);
+}
+.attach svg { width: 17px; height: 17px; }
+.attach:active { transform: scale(0.94); }
+.composer-bar { padding: 4px 2px 0; min-height: 32px; }
+.bar-right { flex: 1; justify-content: flex-end; }
+.chip { height: 30px; font-size: 13.5px; }
+.chip:active { background: var(--hover); }
+
+/* Buttons in permission prompts and questions: thumb-sized. */
+.btn { min-height: 38px; }
+.option { padding-top: 10px; padding-bottom: 10px; }
+
+/* Model and mode menus: a sheet along the bottom. */
+.menu {
+  position: fixed;
+  left: 8px !important;
+  right: 8px;
+  bottom: calc(8px + env(safe-area-inset-bottom)) !important;
+  min-width: 0;
+  max-height: 72vh;
+  border-radius: 16px;
+  padding: 6px;
+}
+.menu-row { padding: 11px 36px 11px 12px; font-size: 15.5px; border-radius: 10px; }
+.menu-row small { white-space: normal; }
+.menu-row .check { top: 12px; }
+
+.slash { left: 10px; right: 10px; max-height: 45vh; }
+.slash-row { padding: 10px; font-size: 15px; }
+.slash-row small { white-space: nowrap; }
