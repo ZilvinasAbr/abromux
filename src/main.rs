@@ -32,6 +32,7 @@ mod plugins;
 mod quit;
 mod remote;
 mod server;
+mod servers;
 mod session;
 mod settings;
 mod settings_window;
@@ -1703,6 +1704,26 @@ impl AbroMux {
 
     fn new_workspace(&mut self, cwd: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         self.create_workspace(cwd, true, window, cx);
+    }
+
+    /// A workspace, or a terminal tab beside the focused one, on the
+    /// abromux server at `host` (Settings › Servers, the palette).
+    fn on_server(&mut self, host: String, tab: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if tab {
+            let ws = self.ws().id;
+            let opts = TerminalOpts {
+                host: Some(host),
+                ..Default::default()
+            };
+            let s = self.make_terminal(ws, opts, window, cx);
+            self.add_tab(s, window, cx);
+        } else {
+            self.building_host = Some(host.clone());
+            let wi = self.create_workspace(None, true, window, cx);
+            self.building_host = None;
+            self.workspaces[wi].host = Some(host);
+        }
+        cx.notify();
     }
 
     /// ⌘N: a new workspace in the focused terminal's directory, unless
@@ -3444,6 +3465,9 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &SwapDown, w, cx| this.swap_dir(Dir::Down, w, cx)))
             .on_action(cx.listener(|this, a: &keymap::OpenPlugin, window, cx| {
                 this.open_plugin(&a.id, window, cx)
+            }))
+            .on_action(cx.listener(|this, a: &keymap::OnServer, window, cx| {
+                this.on_server(a.address.clone(), a.tab, window, cx)
             }))
             .on_action(cx.listener(|_, a: &keymap::OpenPluginLink, window, cx| {
                 // Chosen from the palette, focus is going back to the pane

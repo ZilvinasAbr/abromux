@@ -161,7 +161,40 @@ fn commands(project: Option<&Path>, cx: &App) -> Vec<Cmd> {
             }
             cmds
         });
-    let builtin = builtin.chain(plugins);
+    // Each server of Settings › Servers: a workspace or a tab there.
+    let servers = crate::servers::load()
+        .into_iter()
+        .flat_map(|s| -> Vec<Cmd> {
+            let words = || {
+                vec![
+                    "server".into(),
+                    "remote".into(),
+                    "ssh".into(),
+                    s.address.clone(),
+                ]
+            };
+            let on = |tab| -> Box<dyn Action> {
+                Box::new(keymap::OnServer {
+                    address: s.address.clone(),
+                    tab,
+                })
+            };
+            vec![
+                (
+                    format!("New Workspace on {}", s.name),
+                    Some(s.address.clone()),
+                    words(),
+                    on(false),
+                ),
+                (
+                    format!("New Tab on {}", s.name),
+                    Some(s.address.clone()),
+                    words(),
+                    on(true),
+                ),
+            ]
+        });
+    let builtin = builtin.chain(plugins).chain(servers);
     // A project file that doesn't parse shows its error as a command.
     let local = project.map(|p| (p, settings::read_project(p)));
     let local_titles: Vec<String> = match &local {

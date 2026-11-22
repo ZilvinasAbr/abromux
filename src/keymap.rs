@@ -328,6 +328,15 @@ pub fn find(name: &str) -> Option<&'static Act> {
     ACTIONS.iter().find(|a| a.name == name)
 }
 
+/// A new workspace (`tab` false) or a terminal tab in the focused pane
+/// (`tab` true) on the abromux server at `address` (src/servers.rs).
+#[derive(Clone, PartialEq, serde::Deserialize, gpui::Action)]
+#[action(namespace = abromux, no_json)]
+pub struct OnServer {
+    pub address: String,
+    pub tab: bool,
+}
+
 /// Opens a new tab of plugin `id` (src/plugins.rs) in the focused pane.
 #[derive(Clone, PartialEq, serde::Deserialize, gpui::Action)]
 #[action(namespace = abromux, no_json)]
