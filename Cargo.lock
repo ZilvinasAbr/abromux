@@ -116,9 +116,11 @@ dependencies = [
  "abromux-core",
  "abromux-vt",
  "anyhow",
+ "base64",
  "libc",
  "portable-pty",
  "serde_json",
+ "sha1_smol",
 ]
 
 [[package]]

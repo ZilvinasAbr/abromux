@@ -16,6 +16,8 @@ path = "src/main.rs"
 [dependencies]
 abromux-core = { path = "../abromux-core" }
 anyhow = "1"
+base64 = "0.22"
+sha1_smol = "1"
 # Parsing terminals (feature vt): libghostty-vt, which needs
 # scripts/build-libghostty.sh first. The app's server has it; a headless one
 # builds with plain cargo without it.

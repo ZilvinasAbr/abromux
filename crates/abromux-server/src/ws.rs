@@ -1,6 +1,6 @@
-//! WebSocket (RFC 6455), server side, as much as the phone app uses: the
-//! handshake, text frames each way (fragmented ones reassembled), ping,
-//! pong and close. Reading and writing are separate halves, so a reader
+//! WebSocket (RFC 6455), server side, as much as the phone app and the
+//! server's web client use: the handshake, text frames each way (fragmented
+//! ones reassembled), binary frames out, ping, pong and close. Reading and writing are separate halves, so a reader
 //! thread can block while other threads write.
 
 use base64::Engine as _;
@@ -43,6 +43,12 @@ impl Writer {
 
     pub fn text(&self, s: &str) -> io::Result<()> {
         self.frame(0x1, s.as_bytes())
+    }
+
+    /// Bytes as they are (a terminal's output, which may split a UTF-8
+    /// character between reads).
+    pub fn binary(&self, data: &[u8]) -> io::Result<()> {
+        self.frame(0x2, data)
     }
 
     pub fn pong(&self, data: &[u8]) -> io::Result<()> {
@@ -102,6 +108,7 @@ impl<R: Read> Reader<R> {
     }
 
     /// The next text message; pings are answered on the way.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> io::Result<Message> {
         let mut message = Vec::new();
         loop {

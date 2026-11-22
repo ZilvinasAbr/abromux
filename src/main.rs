@@ -3931,14 +3931,38 @@ fn server_command(args: &[String]) -> i32 {
     let mut socket = None;
     let mut control = None;
     let mut stdio = false;
-    let mut it = args.iter();
+    let mut tailnet: Option<abromux_server::tailnet::Config> = None;
+    let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--socket" => socket = it.next().map(std::path::PathBuf::from),
             "--control" => control = it.next().map(std::path::PathBuf::from),
             "--stdio" => stdio = true,
+            "--tailnet" => {
+                let port = it
+                    .next_if(|p| p.parse::<u16>().is_ok())
+                    .and_then(|p| p.parse().ok());
+                tailnet.get_or_insert_default().port =
+                    port.unwrap_or(abromux_server::tailnet::DEFAULT_PORT);
+            }
+            "--tailnet-allow" => {
+                let t = tailnet.get_or_insert_with(|| abromux_server::tailnet::Config {
+                    port: abromux_server::tailnet::DEFAULT_PORT,
+                    ..Default::default()
+                });
+                t.allow.extend(
+                    it.next()
+                        .into_iter()
+                        .flat_map(|l| l.split(','))
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty()),
+                );
+            }
             _ => {
-                eprintln!("usage: abromux server [--socket PATH] [--control PATH] [--stdio]");
+                eprintln!(
+                    "usage: abromux server [--socket PATH] [--control PATH] [--stdio] \
+                     [--tailnet [PORT]] [--tailnet-allow LOGINS]"
+                );
                 return 2;
             }
         }
@@ -3953,8 +3977,23 @@ fn server_command(args: &[String]) -> i32 {
         let opts = abromux_server::Options {
             version: env!("ABROMUX_VERSION").into(),
             control,
-            ..Default::default()
+            idle_exit: tailnet.is_none(),
         };
+        if let Some(cfg) = &tailnet {
+            match abromux_server::tailnet::start(cfg, &socket) {
+                Ok(addrs) => {
+                    for a in addrs {
+                        eprintln!(
+                            "abromux server: on the tailnet at {a} (web client: http://{a}/)"
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("abromux server: --tailnet: {e}");
+                    return 1;
+                }
+            }
+        }
         abromux_server::serve(&socket, &opts)
     };
     match res {

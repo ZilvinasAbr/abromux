@@ -93,7 +93,11 @@ pub fn normalize(address: &str) -> Result<String, String> {
     let a = address.trim();
     Endpoint::parse(a)?;
     Ok(
-        if a.starts_with("ssh://") || a.starts_with("unix://") || a.starts_with('/') {
+        if ["ssh://", "unix://", "tailnet://", "tcp://"]
+            .iter()
+            .any(|p| a.starts_with(p))
+            || a.starts_with('/')
+        {
             a.to_string()
         } else {
             format!("ssh://{a}")

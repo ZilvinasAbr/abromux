@@ -29,8 +29,17 @@ use std::time::{Duration, Instant};
 /// or `unix:///path/to/server.sock` (or an absolute path).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Endpoint {
-    Ssh { dest: String, port: Option<u16> },
+    Ssh {
+        dest: String,
+        port: Option<u16>,
+    },
     Unix(PathBuf),
+    /// `tailnet://host[:port]` (or `tcp://`): a server listening on its
+    /// tailnet addresses (`--tailnet`), which tailscaled tells who's asking.
+    Tcp {
+        host: String,
+        port: u16,
+    },
 }
 
 impl Endpoint {
@@ -41,6 +50,25 @@ impl Endpoint {
         }
         if s.starts_with('/') {
             return Ok(Endpoint::Unix(s.into()));
+        }
+        if let Some(rest) = s
+            .strip_prefix("tailnet://")
+            .or_else(|| s.strip_prefix("tcp://"))
+        {
+            let rest = rest.trim_end_matches('/');
+            let (host, port) = match rest.rsplit_once(':') {
+                Some((h, p)) if !h.contains(':') => {
+                    (h, p.parse().map_err(|_| format!("bad port in {s:?}"))?)
+                }
+                _ => (rest, 7297),
+            };
+            if host.is_empty() || host.contains(['/', ' ', '@']) {
+                return Err(format!("not a host: {s:?}"));
+            }
+            return Ok(Endpoint::Tcp {
+                host: host.to_string(),
+                port,
+            });
         }
         let rest = s.strip_prefix("ssh://").unwrap_or(s);
         let rest = rest.trim_end_matches('/');
@@ -65,6 +93,7 @@ impl Endpoint {
         match self {
             Endpoint::Ssh { dest, .. } => dest.clone(),
             Endpoint::Unix(p) => p.display().to_string(),
+            Endpoint::Tcp { host, .. } => host.clone(),
         }
     }
 
@@ -84,6 +113,26 @@ impl Endpoint {
                 })
             }
             Endpoint::Ssh { dest, port } => ssh(dest, *port),
+            Endpoint::Tcp { host, port } => {
+                use std::net::ToSocketAddrs;
+                let addr = (host.as_str(), *port)
+                    .to_socket_addrs()
+                    .map_err(|e| format!("{host}: {e}"))?
+                    .next()
+                    .ok_or_else(|| format!("{host}: no address"))?;
+                let s = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(10))
+                    .map_err(|e| format!("{host}:{port}: {e}"))?;
+                let _ = s.set_nodelay(true);
+                let read = OwnedFd::from(s.try_clone().map_err(|e| e.to_string())?);
+                Ok(Conn {
+                    read,
+                    write: Pipe {
+                        write: Box::new(s),
+                        child: None,
+                    },
+                    stderr: Arc::default(),
+                })
+            }
         }
     }
 }
@@ -661,11 +710,16 @@ fn connect(s: &Shared, spawn: &SpawnSpec) -> Result<(OwnedFd, Vec<u8>), Failed> 
         if reply["ok"] == true {
             // The server's snapshot is for a view without a screen of its
             // own; this app restored its own before connecting otherwise.
+            let mut screen = vec![0u8; reply["screen"].as_u64().unwrap_or(0) as usize];
+            read_exact(&conn.read, &mut screen).map_err(Failed::Retry)?;
             let mut snap = vec![0u8; reply["snapshot"].as_u64().unwrap_or(0) as usize];
             read_exact(&conn.read, &mut snap).map_err(Failed::Retry)?;
             backlog.resize(reply["backlog"].as_u64().unwrap_or(0) as usize, 0);
             read_exact(&conn.read, &mut backlog).map_err(Failed::Retry)?;
-            if fresh && reply["parsed"] == true && !snap.is_empty() {
+            // The server's parsed screen is the whole of it (whoever else
+            // watched while this view was away): start from it.
+            let _ = fresh;
+            if reply["parsed"] == true && !snap.is_empty() {
                 *s.reset.lock().unwrap() = Some(snap);
             }
         } else {
@@ -819,6 +873,20 @@ mod tests {
         assert!(Endpoint::parse("").is_err());
         assert!(Endpoint::parse("http://box").is_err());
         assert!(Endpoint::parse("box:notaport").is_err());
+        assert_eq!(
+            Endpoint::parse("tailnet://vps.tail1234.ts.net"),
+            Ok(Endpoint::Tcp {
+                host: "vps.tail1234.ts.net".into(),
+                port: 7297
+            })
+        );
+        assert_eq!(
+            Endpoint::parse("tcp://127.0.0.1:9000"),
+            Ok(Endpoint::Tcp {
+                host: "127.0.0.1".into(),
+                port: 9000
+            })
+        );
     }
 
     /// Bytes a feed got, until `want` shows up.
@@ -831,7 +899,13 @@ mod tests {
                 "never saw {want:?}: {}",
                 String::from_utf8_lossy(&seen)
             );
-            seen.extend(feed.take().bytes);
+            let q = feed.take();
+            // The server's whole screen, when it parses the terminal.
+            if let Some(snap) = q.reset {
+                let t = crate::ghostty::Terminal::from_snapshot(&snap, true).unwrap();
+                seen.extend(t.screen_text().into_bytes());
+            }
+            seen.extend(q.bytes);
             std::thread::sleep(Duration::from_millis(10));
         }
         String::from_utf8_lossy(&seen).into_owned()
@@ -901,11 +975,9 @@ mod tests {
             false,
             &feed,
         );
-        let seen = wait_for(&feed, "later");
-        assert!(
-            !seen.contains("hi-42"),
-            "only what came after the quit: {seen:?}"
-        );
+        // What it printed while the app was away comes back: the server's
+        // whole screen (it parses it), or the backlog since the quit.
+        wait_for(&feed, "later");
         assert_eq!(r.id(), Some(id.clone()));
         r.kill();
         drop(r);

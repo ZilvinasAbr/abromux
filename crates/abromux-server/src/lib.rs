@@ -44,7 +44,11 @@
 //!   → `{"ok":true,"code":n|null}`: its exit status, null if a signal ended it
 
 pub mod control;
+pub mod http;
 pub mod service;
+pub mod tailnet;
+pub mod web;
+pub mod ws;
 
 use abromux_core::wire::{self, Decoder, Size};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -178,6 +182,15 @@ impl Term {
         #[cfg(feature = "vt")]
         if let Some(v) = &mut self.vt {
             return v.snapshot();
+        }
+        None
+    }
+
+    /// The server's copy of the screen as VT text, scrollback and all.
+    fn parsed_vt(&self) -> Option<Vec<u8>> {
+        #[cfg(feature = "vt")]
+        if let Some(v) = &self.vt {
+            return Some(v.screen_vt().into_bytes());
         }
         None
     }
@@ -1028,7 +1041,9 @@ impl Server {
                         return self.flush(app);
                     }
                     let fresh = req["fresh"] == true;
-                    self.stream_to(cid, &id, fresh);
+                    let vt = req["vt"] == true;
+                    let _ = fresh;
+                    self.stream_to(cid, &id, vt);
                 } else {
                     if held {
                         fail(c, format!("{id} is attached elsewhere"));
@@ -1130,7 +1145,7 @@ impl Server {
                 let snap = std::fs::read(self.held_dir.join(format!("{id}.snap"))).ok();
                 t.start_parsing(snap.as_deref());
                 for w in std::mem::take(&mut t.waiting) {
-                    self.stream_to(w, &id, true);
+                    self.stream_to(w, &id, false);
                 }
             }
         }
@@ -1235,35 +1250,46 @@ impl Server {
     }
 
     /// Stream terminal `id` to `cid`: the reply, the screen so far, then
-    /// frames. `fresh`: the app has no screen of its own (another app, or
-    /// one that lost it), so the server's parsed one if it has it.
-    fn stream_to(&mut self, cid: u64, id: &str, fresh: bool) {
+    /// frames. The screen is the server's parsed one when it has it (the
+    /// whole of it, whoever watched meanwhile), else what the last app left
+    /// and what came after. `vt`: as VT text (`screen`), for a client that
+    /// isn't libghostty (the web client).
+    fn stream_to(&mut self, cid: u64, id: &str, vt: bool) {
         let Some(t) = self.terms.get_mut(id) else {
             return;
         };
         let Some(c) = self.clients.get_mut(&cid) else {
             return;
         };
-        let parsed = if fresh { t.parsed_snapshot() } else { None };
-        let (snapshot, backlog, is_parsed) = match parsed {
-            Some(s) => {
+        let screen = if vt { t.parsed_vt() } else { None };
+        let parsed = if screen.is_some() {
+            None
+        } else {
+            t.parsed_snapshot()
+        };
+        let (snapshot, backlog, is_parsed) = match (&screen, parsed) {
+            (Some(_), _) => (vec![], vec![], true),
+            (None, Some(s)) => {
                 t.backlog.clear();
                 (s, vec![], true)
             }
-            None => (
+            (None, None) => (
                 t.snapshot.take().unwrap_or_default(),
                 std::mem::take(&mut t.backlog),
                 false,
             ),
         };
+        let screen = screen.unwrap_or_default();
         set_nonblocking(t.master.as_raw_fd().unwrap_or(-1), true);
         c.reply(json!({
             "ok": true,
             "pid": t.pid,
+            "screen": screen.len(),
             "snapshot": snapshot.len(),
             "backlog": backlog.len(),
             "parsed": is_parsed,
         }));
+        c.out.extend_from_slice(&screen);
         c.out.extend_from_slice(&snapshot);
         c.out.extend_from_slice(&backlog);
         c.mode = Mode::Frames;

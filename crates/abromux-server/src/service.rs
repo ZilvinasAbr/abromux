@@ -16,15 +16,17 @@ fn unit_path() -> anyhow::Result<PathBuf> {
     Ok(base.join("systemd/user").join(UNIT))
 }
 
-/// The unit's text, for the binary at `exe` serving `socket`.
-pub fn unit(exe: &str, socket: &str) -> String {
+/// The unit's text, for the binary at `exe` serving `socket`, with `extra`
+/// flags (`--tailnet`, ...).
+pub fn unit(exe: &str, socket: &str, extra: &[String]) -> String {
+    let extra: String = extra.iter().map(|a| format!(" \"{a}\"")).collect();
     format!(
         "[Unit]\n\
          Description=abromux server: keeps abromux terminals running\n\
          Documentation=https://github.com/ZilvinasAbr/abromux/blob/main/docs/server-plan.md\n\
          \n\
          [Service]\n\
-         ExecStart=\"{exe}\" serve --socket \"{socket}\" --no-idle-exit\n\
+         ExecStart=\"{exe}\" serve --socket \"{socket}\" --no-idle-exit{extra}\n\
          Restart=on-failure\n\
          # Its terminals are its children: stopping it ends them.\n\
          KillMode=control-group\n\
@@ -46,7 +48,8 @@ fn systemctl(args: &[&str]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Write the unit, enable and start it. `--no-start` only writes it.
+/// Write the unit, enable and start it. `--no-start` only writes it; other
+/// flags go to the server (`--tailnet`, `--tailnet-allow ..`).
 pub fn install(args: &[String]) -> anyhow::Result<()> {
     if cfg!(target_os = "macos") {
         bail!("on a Mac the app starts the server itself; this is for Linux (systemd)");
@@ -57,7 +60,15 @@ pub fn install(args: &[String]) -> anyhow::Result<()> {
     let socket = crate::default_socket();
     std::fs::write(
         &path,
-        unit(&exe.to_string_lossy(), &socket.to_string_lossy()),
+        unit(
+            &exe.to_string_lossy(),
+            &socket.to_string_lossy(),
+            &args
+                .iter()
+                .filter(|a| *a != "--no-start")
+                .cloned()
+                .collect::<Vec<_>>(),
+        ),
     )?;
     println!("Wrote {}", path.display());
     if args.iter().any(|a| a == "--no-start") {
@@ -108,7 +119,9 @@ mod tests {
         let u = super::unit(
             "/home/me/.local/bin/abromux-server",
             "/home/me/.local/state/abromux/server.sock",
+            &["--tailnet".into()],
         );
+        assert!(u.contains("--no-idle-exit \"--tailnet\""), "{u}");
         assert!(u.contains("ExecStart=\"/home/me/.local/bin/abromux-server\" serve --socket"));
         assert!(u.contains("--no-idle-exit"));
         assert!(u.contains("WantedBy=default.target"));

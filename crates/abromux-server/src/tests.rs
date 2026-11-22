@@ -42,6 +42,31 @@ fn read_until(r: &mut impl Read, want: &str) -> String {
     seen
 }
 
+/// What a streamed attach sends before its frames, as text: the server's
+/// parsed screen when it has one, else the snapshot an app left and the
+/// backlog.
+fn attached_screen(reply: &Value, r: &mut impl Read) -> String {
+    let n = |k: &str| reply[k].as_u64().unwrap_or(0) as usize;
+    let mut screen = vec![0u8; n("screen")];
+    let mut snap = vec![0u8; n("snapshot")];
+    let mut backlog = vec![0u8; n("backlog")];
+    r.read_exact(&mut screen).unwrap();
+    r.read_exact(&mut snap).unwrap();
+    r.read_exact(&mut backlog).unwrap();
+    let mut text = String::from_utf8_lossy(&screen).into_owned();
+    if reply["parsed"] == true {
+        #[cfg(feature = "vt")]
+        text.push_str(
+            &abromux_vt::Terminal::from_snapshot(&snap, true)
+                .unwrap()
+                .screen_text(),
+        );
+    } else {
+        text.push_str(&String::from_utf8_lossy(&snap));
+    }
+    text + &String::from_utf8_lossy(&backlog)
+}
+
 fn sh() -> Value {
     json!(["/bin/sh"])
 }
@@ -107,13 +132,13 @@ fn streams_a_terminal_and_takes_it_back() {
         json!({ "op": "attach", "id": id, "stream": true, "owner": "mac-a" }),
     );
     assert_eq!(reply["ok"], true, "{reply}");
-    let mut snap = vec![0u8; reply["snapshot"].as_u64().unwrap() as usize];
-    r.read_exact(&mut snap).unwrap();
-    assert_eq!(snap, b"the screen");
-    let mut backlog = vec![0u8; reply["backlog"].as_u64().unwrap() as usize];
-    r.read_exact(&mut backlog).unwrap();
-    let backlog = String::from_utf8_lossy(&backlog);
-    assert!(backlog.contains("later-2"), "{backlog:?}");
+    // The app's own snapshot and the backlog, or (the server parses it)
+    // the server's whole screen.
+    let screen = attached_screen(&reply, &mut r);
+    assert!(screen.contains("later-2"), "{screen:?}");
+    if reply["parsed"] != true {
+        assert!(screen.starts_with("the screen"), "{screen:?}");
+    }
 
     // Another app streams it too: both see what it prints, either types.
     let (other, mut ro, mut wo) = request(
@@ -121,6 +146,7 @@ fn streams_a_terminal_and_takes_it_back() {
         json!({ "op": "attach", "id": id, "stream": true, "owner": "mac-b" }),
     );
     assert_eq!(other["ok"], true, "{other}");
+    attached_screen(&other, &mut ro);
     write_frame(&mut wo, wire::INPUT, b"echo both-$((2+2))\n").unwrap();
     read_until(&mut ro, "both-4");
     read_until(&mut r, "both-4");
@@ -133,6 +159,7 @@ fn streams_a_terminal_and_takes_it_back() {
     );
     assert_eq!(took["ok"], true, "{took}");
     assert_eq!(took["backlog"], 0);
+    attached_screen(&took, &mut r2);
     while let Some((kind, _)) = read_frame(&mut r).unwrap() {
         assert_eq!(kind, wire::OUTPUT, "the old connection only ends");
     }
@@ -164,10 +191,8 @@ fn a_dropped_stream_lets_go() {
     std::thread::sleep(Duration::from_millis(600));
     let (reply, mut r, _w) = request(&sock, json!({ "op": "attach", "id": id, "stream": true }));
     assert_eq!(reply["ok"], true, "{reply}");
-    assert_eq!(reply["snapshot"], 0);
-    let mut backlog = vec![0u8; reply["backlog"].as_u64().unwrap() as usize];
-    r.read_exact(&mut backlog).unwrap();
-    assert!(String::from_utf8_lossy(&backlog).contains("after-drop"));
+    let screen = attached_screen(&reply, &mut r);
+    assert!(screen.contains("after-drop"), "{screen:?}");
 }
 
 #[test]
@@ -466,7 +491,9 @@ fn parses_what_nobody_watches() {
     write_frame(&mut w, wire::DETACH, b"").unwrap();
     while read_frame(&mut r).unwrap().is_some() {}
     // Printed while nobody watches.
-    let (_, mut r2, mut w2) = request(&sock, json!({ "op": "attach", "id": id, "stream": true }));
+    let (reply2, mut r2, mut w2) =
+        request(&sock, json!({ "op": "attach", "id": id, "stream": true }));
+    attached_screen(&reply2, &mut r2);
     // (attach to type, then let go again)
     write_frame(
         &mut w2,

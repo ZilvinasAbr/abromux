@@ -30,6 +30,12 @@ or on another machine (docs/server-plan.md).
   --control PATH   the control socket, for the CLI and agent hooks (default:
                    abromux.sock beside the server's socket)
   --no-idle-exit   keep running with no terminals (a service)
+  --tailnet [PORT] also listen on this machine's Tailscale addresses (port
+                   7297): apps at tailnet://host, and a web client for a
+                   phone's browser at http://host:7297/. Only this machine's
+                   Tailscale user gets in, and --tailnet-allow's
+  --tailnet-allow LOGINS
+                   more Tailscale logins (or tag:names), comma-separated
   --stdio          connect stdin and stdout to the server, starting it if
                    needed: how an app elsewhere reaches it over ssh
   --version        print the version
@@ -99,7 +105,8 @@ fn serve(args: &[String]) -> i32 {
     let mut control: Option<PathBuf> = None;
     let mut stdio = false;
     let mut idle_exit = true;
-    let mut it = args.iter();
+    let mut tailnet: Option<abromux_server::tailnet::Config> = None;
+    let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
             "serve" => {}
@@ -107,8 +114,32 @@ fn serve(args: &[String]) -> i32 {
             "--control" => control = it.next().map(PathBuf::from),
             "--stdio" => stdio = true,
             "--no-idle-exit" => idle_exit = false,
+            "--tailnet" => {
+                let port = it
+                    .peek()
+                    .and_then(|p| p.parse::<u16>().ok())
+                    .inspect(|_| {
+                        it.next();
+                    })
+                    .unwrap_or(abromux_server::tailnet::DEFAULT_PORT);
+                tailnet.get_or_insert_default().port = port;
+            }
+            "--tailnet-allow" => {
+                let list = it.next().cloned().unwrap_or_default();
+                tailnet
+                    .get_or_insert_with(|| abromux_server::tailnet::Config {
+                        port: abromux_server::tailnet::DEFAULT_PORT,
+                        ..Default::default()
+                    })
+                    .allow
+                    .extend(
+                        list.split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty()),
+                    );
+            }
             "--version" => {
-                println!("abromux-server {}", env!("CARGO_PKG_VERSION"));
+                println!("abromux-server {}", env!("ABROMUX_VERSION"));
                 return 0;
             }
             "-h" | "--help" | "help" => {
@@ -134,10 +165,28 @@ fn serve(args: &[String]) -> i32 {
         abromux_server::connect_or_start(&socket, &exe, &args).and_then(abromux_server::stdio)
     } else {
         let opts = abromux_server::Options {
-            version: env!("CARGO_PKG_VERSION").into(),
+            version: env!("ABROMUX_VERSION").into(),
             control: Some(control),
-            idle_exit,
+            // On the tailnet, it stays up for whoever comes.
+            idle_exit: idle_exit && tailnet.is_none(),
         };
+        // A listener that can't start stops the server: one asked to be on
+        // the tailnet but isn't would only look like it is.
+        if let Some(cfg) = &tailnet {
+            match abromux_server::tailnet::start(cfg, &socket) {
+                Ok(addrs) => {
+                    for a in addrs {
+                        eprintln!(
+                            "abromux-server: on the tailnet at {a} (web client: http://{a}/)"
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("abromux-server: --tailnet: {e}");
+                    return 1;
+                }
+            }
+        }
         abromux_server::serve(&socket, &opts)
     };
     match res {
