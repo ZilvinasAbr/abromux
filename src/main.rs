@@ -37,6 +37,7 @@ mod settings;
 mod settings_window;
 mod shell;
 mod sidebar;
+mod size_owner;
 mod skills;
 mod sprite;
 mod status;
