@@ -183,8 +183,12 @@ it back up at launch; perf numbers as before, startup measured.
 
 ### Phase 3: the app as a client of several servers
 
-- [ ] Hosts: label + endpoints tried in order, in `config.json`; host id from
-      `hello` to warn when an address leads to another machine.
+- [x] Servers by name: Settings › Servers (add, check, remove), ⌘⇧P "New
+      Workspace on …" / "New Tab on …", `abromux servers`, `--host NAME`.
+      In `servers.json`, not `config.json` (app versions share that file and
+      refuse keys they don't know).
+- [ ] Several endpoints per server tried in order; host id from `hello` to
+      warn when an address leads to another machine.
 - [ ] One connection per host (ssh `ControlMaster`); reconnect with backoff;
       a host's workspaces go grey while it's away and come back on reconnect.
 - [ ] Sidebar: workspaces grouped by host; "New workspace on…"; ⌘P searches
