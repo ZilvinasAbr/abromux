@@ -988,3 +988,34 @@ fn the_apps_stale_proposals_are_merged() {
     assert_eq!(tabs(&m), vec![1, 7, 9]);
     assert_eq!(m["workspaces"][0]["status"][0]["value"], "ok", "{m}");
 }
+
+/// A program that lets go of its terminal before it ends: the server
+/// doesn't wait for it on its loop (others are answered meanwhile), and
+/// the stream still gets its exit code once it's reaped.
+#[test]
+fn an_ending_program_doesnt_hold_the_server_up() {
+    let sock = server("ending");
+    let (reply, mut r, _w) = request(
+        &sock,
+        json!({ "op": "spawn", "stream": true, "argv": ["/bin/sh", "-c", "exec >/dev/null 2>&1 </dev/null; sleep 0.25; exit 5"] }),
+    );
+    assert_eq!(reply["ok"], true, "{reply}");
+    // The terminal's output ends at once; the program 250 ms later.
+    std::thread::sleep(Duration::from_millis(60));
+    let t = std::time::Instant::now();
+    let (hello, _, _) = request(&sock, json!({ "op": "hello" }));
+    assert_eq!(hello["ok"], true);
+    assert!(
+        t.elapsed() < Duration::from_millis(100),
+        "hello took {:?}",
+        t.elapsed()
+    );
+    loop {
+        let (kind, p) = read_frame(&mut r).unwrap().expect("EXIT before the end");
+        if kind == wire::EXIT {
+            let v: Value = serde_json::from_slice(&p).unwrap();
+            assert_eq!(v["code"], 5, "{v}");
+            break;
+        }
+    }
+}

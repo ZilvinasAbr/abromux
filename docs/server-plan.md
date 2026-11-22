@@ -164,10 +164,21 @@ real ssh (`ABROMUX_E2E_HOST=ssh://box cargo test -p abromux-term e2e --
 and came back with no gap. `perf.py run`: startup, throughput, app CPU and
 per-terminal memory within the range of earlier runs.
 
-Left for later in this phase: a reconnect after a broken connection
-replays only what the server had kept, so a full-screen program may need a
-resize to redraw; the server's `exit_code` waits up to 300 ms on its loop
-for a program to be reaped.
+Two things left at first, both done since:
+
+- [x] **A reconnect redraws a full-screen program.** A server that parses
+      (feature `vt`, as the app's and the Linux packages from 0.44.0 are)
+      sends its whole screen to a client coming back, not just what it had
+      kept since. Checked on the Docker VPS: a program drawing 20 rows once
+      on the alternate screen, then waiting, showed all 20 after every ssh
+      bridge there was killed, and after the app was quit and opened again,
+      with no resize.
+- [x] **The loop doesn't wait for a program to be reaped.** A terminal
+      whose output ends before its program does is set aside; the loop
+      looks every 10 ms (only while there's one) and sends the exit code to
+      its streams, or to a `status` call, once it's reaped, or after 300 ms
+      without one. Test: `an_ending_program_doesnt_hold_the_server_up` (a
+      `hello` answered within 100 ms meanwhile; the stream got its code).
 
 ### Phase 2: the model leaves GPUI; the server owns the control socket
 
