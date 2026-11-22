@@ -1037,6 +1037,47 @@ impl AbroMux {
                     async move { task.await.map_err(|e| anyhow!(e)) }.boxed_local(),
                 ));
             }
+            // A server's model (abromux_model), its changes, and the ones it
+            // made itself (its methods: abromux_server::owned), which the
+            // app mirrors in its views with its own handlers, then follows
+            // in its replica: the server is the source.
+            "model.snapshot" => {
+                let link = crate::control_link::by_name(str_param(p, "link").unwrap_or("local"));
+                if let (Some(l), Ok(m)) = (link, serde_json::from_value(p["model"].clone())) {
+                    l.set_replica(m);
+                }
+                json!(null)
+            }
+            "model.applied" => {
+                let link = crate::control_link::by_name(str_param(p, "link").unwrap_or("local"));
+                let events: Vec<abromux_model::Stamped> =
+                    serde_json::from_value(p["events"].clone()).unwrap_or_default();
+                if let Some(l) = link {
+                    l.apply_replica(&events);
+                }
+                json!(null)
+            }
+            "model.mirror" => {
+                let call = &p["call"];
+                let method = call["method"].as_str().unwrap_or_default().to_string();
+                let out = if crate::api::kind(&method) == crate::api::Kind::Model
+                    && abromux_server::owned::OWNED.contains(&method.as_str())
+                {
+                    self.handle(&method, &call["params"], gone, window, cx)
+                        .map(|_| ())
+                } else {
+                    Ok(())
+                };
+                let events: Vec<abromux_model::Stamped> =
+                    serde_json::from_value(p["events"].clone()).unwrap_or_default();
+                if let Some(l) =
+                    crate::control_link::by_name(str_param(p, "link").unwrap_or("local"))
+                {
+                    l.apply_replica(&events);
+                }
+                out?;
+                json!(null)
+            }
             // The server wants a terminal this app holds shared with
             // another app (crate::control_link): stream it instead.
             "surface.restream" => {
@@ -4068,6 +4109,7 @@ impl AbroMux {
                                 key: v["key"].as_str().unwrap_or_default().into(),
                                 value: v["value"].as_str().unwrap_or_default().into(),
                                 color: v["color"].as_str().map(String::from),
+                                icon: v["icon"].as_str().map(String::from),
                             }
                         })
                         .collect(),

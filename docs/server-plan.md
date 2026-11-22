@@ -179,16 +179,23 @@ for a program to be reaped.
 - [x] Model methods vs view methods: every control method is one or the
       other (`api::kind`, shown by `abromux rpc describe`); a test keeps
       what the server takes for an absent app to model methods.
-- [x] The app keeps its model in-process and changes it only through
-      `apply` of the events `diff` gives, the path a replica takes
-      (`control_link::Link::push_model`; it checks the result equals the
-      model it built). Changes are batched: one set of events per tick.
-- [x] Events with a gapless `seq`: the app's server keeps a replica
-      (`{"op":"events"}`); on a gap it asks for a snapshot (`resync`), which
-      the app sends (`{"op":"model"}`), as it does on every new link. Any
-      client gets the replica (`{"op":"model"}`) or a snapshot then every
-      event (`{"op":"subscribe"}`). Remote servers get a replica of the
-      workspaces with something on them.
+- [x] **The server is the source of the model.** It orders every change:
+      the app *proposes* what changed in its views (`{"op":"change"}`,
+      unstamped events from `diff`), the server stamps them (a gapless
+      `seq`), applies them and sends them back (`applied`). The app keeps a
+      replica of the server's model, changed only by what the server sends
+      (its model when the app attaches or asks, `sync`; the stamped
+      events), on its main thread together with its views. Remote servers
+      have a replica of the workspaces with something on them.
+- [x] **The server runs the model methods it owns itself**
+      (`abromux_server::owned`: status, progress, a workspace's name),
+      whether or not the app is attached: it reads the first request on each
+      control connection, changes its model, answers the caller, and has the
+      app mirror the change in its views (`{"mirror":..}`, with the stamped
+      events), or keeps it for when the app is back. Everything else is
+      spliced to the app's handlers, which propose their changes as above.
+- [x] Any client gets the model (`{"op":"model"}`) or a snapshot then every
+      event (`{"op":"subscribe"}`).
 - [x] The control socket (`abromux.sock`) is the server's. While the app is
       attached, each connection is handed to it and spliced to its
       handlers; while it's away, the server answers model methods from its
@@ -208,13 +215,11 @@ for a program to be reaped.
       all|path|remove`, and `abromux new-workspace --host H --folder NAME`
       makes the folder on H and puts the workspace's terminals in it.
 
-Who is the source: the server, for every client and for the app at launch
-(it bootstraps from the server's snapshot when that's newer). While the app
-runs, it changes the model and the server follows its events: the app's GPUI
-views hold the live state (terminals, browsers), so the ~140 handlers that
-change it stay in the app, which is what keeps every change as fast as
-before. The server's replica is what everyone else, and the app's next
-launch, starts from.
+What stays in the app: the handlers that change its views directly
+(splits, tabs, browsers, terminals: ~130 of them), which propose their
+changes to the server rather than make them in its model; moving them would
+put a round trip on every keystroke-driven action. Which methods the server
+owns is a list (`owned::OWNED`) that can grow one method at a time.
 
 **Done when:** quitting the app leaves every workspace's state (status pills,
 progress, notifications, agents' state) live in the server, and the app picks

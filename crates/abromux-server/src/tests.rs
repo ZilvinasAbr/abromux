@@ -302,17 +302,33 @@ fn ctl(control: &Path, method: &str, params: Value) -> Value {
 /// The app's link: its reader, and a function that answers each control
 /// connection the server hands it with `answer`.
 fn app_link(sock: &Path) -> (BufReader<UnixStream>, UnixStream) {
-    let (reply, r, w) = request(sock, json!({ "op": "app" }));
+    let (reply, mut r, w) = request(sock, json!({ "op": "app" }));
     assert_eq!(reply["ok"], true, "{reply}");
+    // The server's model comes first: the app's replica starts from it.
+    let first = next_msg(&mut r, "model");
+    assert!(first["model"].is_object(), "{first}");
     (r, w)
+}
+
+/// The next message on the app's link that has `key`.
+fn next_msg(link: &mut BufReader<UnixStream>, key: &str) -> Value {
+    loop {
+        let mut line = String::new();
+        assert!(
+            link.read_line(&mut line).unwrap() > 0,
+            "the link closed before {key}"
+        );
+        let v: Value = serde_json::from_str(&line).unwrap();
+        if !v[key].is_null() {
+            return v;
+        }
+    }
 }
 
 /// Take the next `{"open":N}` from the link, open the app's side and
 /// answer one request on it the way `f` says.
 fn serve_one(sock: &Path, link: &mut BufReader<UnixStream>, f: impl Fn(&Value) -> Value) -> u64 {
-    let mut line = String::new();
-    link.read_line(&mut line).unwrap();
-    let open: Value = serde_json::from_str(&line).unwrap();
+    let open = next_msg(link, "open");
     let n = open["open"].as_u64().expect("an open");
     let mut side = UnixStream::connect(sock).unwrap();
     side.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
@@ -401,9 +417,7 @@ fn a_call_waiting_on_a_gone_app_is_answered_by_the_server() {
     let (mut link, w) = app_link(&sock);
     let c = control.clone();
     let caller = std::thread::spawn(move || ctl(&c, "system.ping", json!({})));
-    let mut line = String::new();
-    link.read_line(&mut line).unwrap();
-    assert!(line.contains("open"));
+    next_msg(&mut link, "open");
     drop((link, w));
     let r = caller.join().unwrap();
     assert_eq!(r["result"], "pong");
@@ -564,9 +578,7 @@ fn a_second_client_asks_the_local_app_to_share() {
         );
         (reply, r, w)
     });
-    let mut line = String::new();
-    link.read_line(&mut line).unwrap();
-    let msg: Value = serde_json::from_str(&line).unwrap();
+    let msg = next_msg(&mut link, "release");
     assert_eq!(msg["release"], id.as_str(), "the app is asked to share");
     // The app lets go (and would stream it itself now).
     drop((hr, holder));
@@ -592,6 +604,7 @@ fn the_local_app_is_told_to_hold_it_again() {
     let (reply, r, w) = request(&sock, json!({ "op": "app", "owner": "mac-a" }));
     assert_eq!(reply["ok"], true);
     let mut link = r;
+    next_msg(&mut link, "model");
     let _lw = w;
     let (reply, _ra, _wa) = request(
         &sock,
@@ -604,9 +617,7 @@ fn the_local_app_is_told_to_hold_it_again() {
     );
     assert_eq!(other["ok"], true);
     drop((rb, wb));
-    let mut line = String::new();
-    link.read_line(&mut line).unwrap();
-    let msg: Value = serde_json::from_str(&line).unwrap();
+    let msg = next_msg(&mut link, "reclaim");
     assert_eq!(msg["reclaim"], id.as_str(), "{msg}");
 }
 
@@ -686,9 +697,7 @@ fn keeps_a_replica_of_the_apps_model() {
     // A gap: the app is asked for the whole model, which subscribers get.
     let late = stamp(5, vec![Event::Removed { id: 1 }]);
     writeln!(lw, "{}", json!({ "op": "events", "events": late })).unwrap();
-    let mut line = String::new();
-    link.read_line(&mut line).unwrap();
-    assert!(line.contains("resync"), "{line}");
+    next_msg(&mut link, "resync");
     let whole = Model {
         seq: 6,
         workspaces: vec![ws(2, "vps")],
@@ -701,4 +710,84 @@ fn keeps_a_replica_of_the_apps_model() {
     assert_eq!(v["model"]["seq"], 6, "{v}");
     let (m, ..) = request(&sock, json!({ "op": "model" }));
     assert_eq!(m["model"]["workspaces"][0]["name"], "vps");
+}
+
+/// The server is the source of the model: the app proposes, the server
+/// stamps; what the server owns (status, progress, names) it answers itself
+/// and has the app mirror; the rest goes to the app.
+#[test]
+fn the_server_owns_the_model() {
+    use abromux_model::{Event, Node, Tab, Workspace};
+    let (sock, control) = server_with_control("owns");
+    let (mut link, mut lw) = app_link(&sock);
+    let ws = Workspace {
+        id: 4,
+        name: "vps".into(),
+        layout: Node::Pane {
+            id: 1,
+            active: 0,
+            tabs: vec![Tab {
+                surface: 7,
+                kind: "terminal".into(),
+                ..Default::default()
+            }],
+        },
+        ..Default::default()
+    };
+    // The app proposes; the server stamps it and says so.
+    let change = vec![Event::Workspace {
+        index: 0,
+        workspace: Box::new(ws),
+    }];
+    writeln!(lw, "{}", json!({ "op": "change", "events": change })).unwrap();
+    let applied = next_msg(&mut link, "applied");
+    assert_eq!(applied["from"], "app");
+    assert_eq!(applied["applied"][0]["seq"], 1);
+
+    // An agent's status, from its terminal: the server answers.
+    let r = ctl(
+        &control,
+        "status.set",
+        json!({ "key": "tests", "value": "42 passed", "caller": { "surface": "surface:7" } }),
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["result"]["workspace"], "workspace:4");
+    let m = next_msg(&mut link, "mirror");
+    assert_eq!(m["mirror"]["method"], "status.set");
+    assert_eq!(m["mirror"]["params"]["workspace"], "workspace:4");
+    assert_eq!(m["applied"][0]["seq"], 2);
+    let (model, ..) = request(&sock, json!({ "op": "model" }));
+    assert_eq!(
+        model["model"]["workspaces"][0]["status"][0]["value"],
+        "42 passed"
+    );
+
+    // Anything else is the app's to answer.
+    let c = control.clone();
+    let caller = std::thread::spawn(move || ctl(&c, "window.focus", json!({})));
+    serve_one(&sock, &mut link, |req| {
+        assert_eq!(req["method"], "window.focus");
+        json!({ "id": req["id"], "ok": true, "result": "the app's" })
+    });
+    assert_eq!(caller.join().unwrap()["result"], "the app's");
+
+    // With the app away the server still owns it, and keeps the call for
+    // the app to mirror when it's back.
+    drop((link, lw));
+    std::thread::sleep(Duration::from_millis(100));
+    let r = ctl(
+        &control,
+        "workspace.rename",
+        json!({ "title": "VPS", "workspace": "workspace:4" }),
+    );
+    assert_eq!(r["result"]["name"], "VPS");
+    let (model, ..) = request(&sock, json!({ "op": "model" }));
+    assert_eq!(model["model"]["workspaces"][0]["name"], "VPS");
+    let (mut link, _lw) = app_link(&sock);
+    let n = serve_one(&sock, &mut link, |req| {
+        assert_eq!(req["method"], "workspace.rename");
+        assert_eq!(req["params"]["workspace"], "workspace:4");
+        json!({ "id": req["id"], "ok": true, "result": {} })
+    });
+    assert_eq!(n, 0, "the replay");
 }

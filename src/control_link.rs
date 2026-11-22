@@ -52,11 +52,13 @@ pub struct Link {
     last: Arc<Mutex<Option<Value>>>,
     up: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
-    /// The app's copy of the model as this server has it: changed only by
-    /// applying the events sent (abromux_model), as the server's replica
-    /// is. `resync`: the server asked for a snapshot (it saw a gap, or it's
-    /// a new connection).
+    /// The app's replica of this server's model (abromux_model): changed
+    /// only by what the server sends (its model when the app attaches, and
+    /// the stamped events it applies), on the app's main thread, together
+    /// with the views (`model.*` in server.rs). The server is the source.
     model: Arc<Mutex<abromux_model::Model>>,
+    /// The last changes proposed and not yet seen applied.
+    proposed: Arc<Mutex<Vec<abromux_model::Event>>>,
     resync: Arc<AtomicBool>,
 }
 
@@ -77,35 +79,51 @@ impl Link {
         }
     }
 
-    /// Bring the server's replica to `new`: the events from the last model
-    /// sent to it (applied to the app's copy first, the same way the server
-    /// applies them), or the whole model when it needs a snapshot.
+    /// Propose what the app changed to the server: the events from the
+    /// server's model as the app has it to `new`, the app's own state. The
+    /// server orders and applies them, and sends them back stamped
+    /// (`applied`), which is when the app's replica takes them.
     pub fn push_model(&self, new: abromux_model::Model) {
-        let mut cur = self.model.lock().unwrap();
-        let events = abromux_model::stamp(cur.seq, abromux_model::diff(&cur, &new));
-        for e in &events {
-            cur.apply(e).expect("stamped in order");
-        }
-        debug_assert_eq!(
-            abromux_model::Model {
-                seq: cur.seq,
-                ..new
-            },
-            *cur,
-            "the events didn't make the model"
-        );
-        let msg = if self.resync.swap(false, Ordering::Relaxed) {
-            json!({ "op": "model", "model": *cur })
-        } else if events.is_empty() {
+        if self.resync.swap(false, Ordering::Relaxed) {
+            self.send(&json!({ "op": "sync" }));
             return;
-        } else {
-            json!({ "op": "events", "events": events })
-        };
-        if let Some(s) = self.writer.lock().unwrap().as_mut()
-            && writeln!(s, "{msg}").is_err()
-        {
-            self.resync.store(true, Ordering::Relaxed);
         }
+        let events = abromux_model::diff(&self.model.lock().unwrap(), &new);
+        let mut proposed = self.proposed.lock().unwrap();
+        if events.is_empty() || *proposed == events {
+            return;
+        }
+        if self.send(&json!({ "op": "change", "events": events })) {
+            *proposed = events;
+        }
+    }
+
+    fn send(&self, msg: &Value) -> bool {
+        self.writer
+            .lock()
+            .unwrap()
+            .as_mut()
+            .is_some_and(|s| writeln!(s, "{msg}").is_ok())
+    }
+
+    /// The server's model (when the app attaches, or asked): the replica
+    /// starts over from it.
+    pub fn set_replica(&self, model: abromux_model::Model) {
+        *self.model.lock().unwrap() = model;
+        self.proposed.lock().unwrap().clear();
+    }
+
+    /// Events the server applied: the replica follows; on a gap it asks for
+    /// the model.
+    pub fn apply_replica(&self, events: &[abromux_model::Stamped]) {
+        let mut m = self.model.lock().unwrap();
+        for e in events {
+            if m.apply(e).is_err() {
+                self.resync.store(true, Ordering::Relaxed);
+                return;
+            }
+        }
+        self.proposed.lock().unwrap().clear();
     }
 
     pub fn is_up(&self) -> bool {
@@ -213,6 +231,14 @@ pub fn sync_remotes(hosts: &[String]) {
     }
 }
 
+/// A link by name: `local`, or a host.
+pub fn by_name(name: &str) -> Option<Link> {
+    if name == "local" {
+        return current().cloned();
+    }
+    remote(name)
+}
+
 /// The link to the server at `host`, if the app keeps one.
 pub fn remote(host: &str) -> Option<Link> {
     REMOTES.lock().unwrap().as_ref()?.get(host).cloned()
@@ -310,7 +336,39 @@ fn run(mut reader: BufReader<UnixStream>, target: Target, link: Link) {
                         let _ = tx.unbounded_send((req, reply, gone.shared()));
                     }
                 };
-                // The replica missed something: a snapshot next time.
+                // The server's model, its changes, and the ones it made
+                // itself for the app to mirror: on the main thread, where
+                // the views and the replica change together.
+                let name = match &target {
+                    Target::Local(_) => "local".to_string(),
+                    Target::Remote(h) => h.clone(),
+                };
+                let inject = |method: &str, params: Value| {
+                    if let Some(tx) = TX.get() {
+                        use futures::FutureExt as _;
+                        let (reply, _) = futures::channel::oneshot::channel();
+                        let (_open, gone) = futures::channel::oneshot::channel::<()>();
+                        let req = json!({ "id": 0, "method": method, "params": params });
+                        let _ = tx.unbounded_send((req, reply, gone.shared()));
+                    }
+                };
+                if !msg["model"].is_null() {
+                    inject(
+                        "model.snapshot",
+                        json!({ "link": name, "model": msg["model"] }),
+                    );
+                }
+                if !msg["mirror"].is_null() {
+                    inject(
+                        "model.mirror",
+                        json!({ "link": name, "call": msg["mirror"], "events": msg["applied"] }),
+                    );
+                } else if msg["applied"].is_array() {
+                    inject(
+                        "model.applied",
+                        json!({ "link": name, "events": msg["applied"] }),
+                    );
+                }
                 if msg["resync"] == true {
                     link.resync.store(true, Ordering::Relaxed);
                 }

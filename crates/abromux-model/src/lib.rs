@@ -117,6 +117,8 @@ pub struct Status {
     pub value: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -200,6 +202,33 @@ impl Model {
 
     pub fn workspace(&self, id: u64) -> Option<&Workspace> {
         self.workspaces.iter().find(|w| w.id == id)
+    }
+
+    /// The workspace a call is about: `workspace` (`workspace:N`, an index,
+    /// or a name), else the caller's (`caller.surface`), else the selected
+    /// one.
+    pub fn target(&self, params: &serde_json::Value) -> Option<u64> {
+        if let Some(t) = params.get("workspace").filter(|t| !t.is_null()) {
+            let t = match t {
+                serde_json::Value::String(s) => s.clone(),
+                v => v.to_string(),
+            };
+            if let Some(n) = t.strip_prefix("workspace:").and_then(|n| n.parse().ok()) {
+                return self.workspace(n).map(|w| w.id);
+            }
+            if let Ok(i) = t.parse::<usize>() {
+                return self.workspaces.get(i).map(|w| w.id);
+            }
+            return self.workspaces.iter().find(|w| w.name == t).map(|w| w.id);
+        }
+        let caller = params["caller"]["surface"]
+            .as_str()
+            .or_else(|| params["surface"].as_str())
+            .and_then(|s| s.trim_start_matches("surface:").parse::<u64>().ok());
+        if let Some(w) = caller.and_then(|s| self.workspace_of(s)) {
+            return Some(w.id);
+        }
+        self.selected.or(self.workspaces.first().map(|w| w.id))
     }
 
     /// The workspace tab `surface` is in.
@@ -307,6 +336,7 @@ mod tests {
             key: "build".into(),
             value: "ok".into(),
             color: None,
+            icon: None,
         });
         check(&b, &c);
         check(&c, &Model::default());

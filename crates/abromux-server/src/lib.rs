@@ -46,6 +46,7 @@
 pub mod control;
 pub mod folder;
 pub mod http;
+pub mod owned;
 pub mod service;
 pub mod tailnet;
 pub mod web;
@@ -260,6 +261,10 @@ enum Mode {
     Waiting,
     /// Gets the model's events as they come (`subscribe`).
     Subscriber,
+    /// A control connection while the app is attached: the server answers
+    /// the requests it owns ([`owned`]) itself; the first one it doesn't
+    /// hands the connection to the app.
+    Sniff,
 }
 
 struct Client {
@@ -580,14 +585,11 @@ impl Server {
     /// opens its side, `{"op":"control","conn":N}`), else the server's.
     fn accept_control(&mut self, cid: u64) {
         match self.app {
-            Some(app) => {
+            Some(_) => {
                 if let Some(c) = self.clients.get_mut(&cid) {
-                    c.mode = Mode::Pending;
+                    c.mode = Mode::Sniff;
                 }
-                if let Some(a) = self.clients.get_mut(&app) {
-                    a.reply(json!({ "open": cid }));
-                }
-                self.flush(app);
+                self.handle_input(cid);
             }
             None => {
                 if let Some(c) = self.clients.get_mut(&cid) {
@@ -620,9 +622,12 @@ impl Server {
             .filter(|(_, c)| c.mode == Mode::Pending)
             .map(|(id, _)| *id)
             .collect();
+        let model = json!({ "model": self.state.model });
         let c = self.clients.get_mut(&cid).unwrap();
         c.mode = Mode::App;
         c.reply(json!({ "ok": true }));
+        // The server's model is where the app's copy starts.
+        c.reply(model);
         for p in pending {
             c.reply(json!({ "open": p }));
         }
@@ -731,18 +736,47 @@ impl Server {
                     Ok(None) => return,
                     Err(_) => return self.drop_client(cid),
                 },
-                Mode::Control | Mode::App | Mode::Replay(_) => {
+                Mode::Control | Mode::App | Mode::Replay(_) | Mode::Sniff => {
                     let Some(nl) = c.buf.iter().position(|&b| b == b'\n') else {
                         return;
                     };
                     let line: Vec<u8> = c.buf.drain(..=nl).collect();
                     match c.mode {
+                        Mode::Sniff => {
+                            if line.iter().all(u8::is_ascii_whitespace) {
+                                continue;
+                            }
+                            let req: Value = serde_json::from_slice(&line).unwrap_or_default();
+                            if let Some(reply) = self.own(&req) {
+                                let c = self.clients.get_mut(&cid).unwrap();
+                                c.reply(reply);
+                                self.flush(cid);
+                                continue;
+                            }
+                            // The app's to answer: this request and the rest
+                            // of the connection go to it as they are.
+                            let c = self.clients.get_mut(&cid).unwrap();
+                            let mut rest = line;
+                            rest.extend_from_slice(&c.buf);
+                            c.buf = rest;
+                            c.mode = Mode::Pending;
+                            if let Some(app) = self.app
+                                && let Some(a) = self.clients.get_mut(&app)
+                            {
+                                a.reply(json!({ "open": cid }));
+                                self.flush(app);
+                            }
+                            return;
+                        }
                         Mode::Control => {
                             if line.iter().all(u8::is_ascii_whitespace) {
                                 continue;
                             }
                             let reply = match serde_json::from_slice::<Value>(&line) {
-                                Ok(req) => self.state.handle(&req),
+                                Ok(req) => match self.own(&req) {
+                                    Some(r) => r,
+                                    None => self.state.handle(&req),
+                                },
                                 Err(e) => {
                                     json!({ "ok": false, "error": format!("bad request: {e}") })
                                 }
@@ -757,6 +791,24 @@ impl Server {
                                 let terms = &self.terms;
                                 self.state
                                     .update(&msg, &|id| terms.get(id).is_some_and(|t| !t.eof));
+                            } else if msg["op"] == "change" {
+                                // The app proposes; the server orders: stamp,
+                                // apply, tell everyone, and the app too.
+                                let events: Vec<abromux_model::Event> =
+                                    serde_json::from_value(msg["events"].clone())
+                                        .unwrap_or_default();
+                                let stamped = abromux_model::stamp(self.state.model.seq, events);
+                                if let Ok(done) = self.state.apply_events(&stamped) {
+                                    self.publish(&done);
+                                }
+                                let c = self.clients.get_mut(&cid).unwrap();
+                                c.reply(json!({ "applied": stamped, "from": "app" }));
+                                self.flush(cid);
+                            } else if msg["op"] == "sync" {
+                                let model = json!({ "model": self.state.model });
+                                let c = self.clients.get_mut(&cid).unwrap();
+                                c.reply(model);
+                                self.flush(cid);
                             } else if msg["op"] == "events" {
                                 // The app's model changed: the replica follows.
                                 let events: Vec<abromux_model::Stamped> =
@@ -1371,6 +1423,51 @@ impl Server {
             a.reply(json!({ "reclaim": id }));
             self.flush(app);
         }
+    }
+
+    /// A request for a method the server owns ([`owned`]): its reply, the
+    /// model changed and stamped, and the app told to mirror it (or the call
+    /// kept for it). None for any other request, or one about a workspace
+    /// the server's model doesn't have (the app answers those).
+    fn own(&mut self, req: &Value) -> Option<Value> {
+        let method = req["method"].as_str()?;
+        if !owned::OWNED.contains(&method) {
+            return None;
+        }
+        let id = req.get("id").cloned().unwrap_or(Value::Null);
+        let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
+        self.state.model.target(&params)?;
+        let mut model = self.state.model.clone();
+        let done = match owned::call(&mut model, method, &params) {
+            Ok(d) => d,
+            Err(e) => return Some(json!({ "id": id, "ok": false, "error": e })),
+        };
+        let index = model
+            .workspaces
+            .iter()
+            .position(|w| w.id == done.workspace)?;
+        let ws = model.workspaces[index].clone();
+        let events = abromux_model::stamp(
+            self.state.model.seq,
+            vec![abromux_model::Event::Workspace {
+                index,
+                workspace: Box::new(ws),
+            }],
+        );
+        let applied = self.state.apply_events(&events).unwrap_or_default();
+        self.publish(&applied);
+        match self
+            .app
+            .and_then(|a| self.clients.get_mut(&a).map(|c| (a, c)))
+        {
+            Some((app, a)) => {
+                a.reply(json!({ "mirror": done.mirror, "applied": events }));
+                self.flush(app);
+            }
+            // Away: the app mirrors it when it's back (the replay).
+            None => self.state.keep(method, done.mirror["params"].clone()),
+        }
+        Some(json!({ "id": id, "ok": true, "result": done.result }))
     }
 
     /// Events the replica applied, to every subscriber.

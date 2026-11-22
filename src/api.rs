@@ -271,6 +271,24 @@ pub const METHODS: &[Method] = &[
         "@workspace;host?:string Another server",
     ),
     m(
+        "model.snapshot",
+        "",
+        "Internal: a server's model, which the app's replica of it starts from.",
+        "link:string The server: local, or a host;model:object The model",
+    ),
+    m(
+        "model.applied",
+        "",
+        "Internal: changes a server applied to its model, for the app's replica.",
+        "link:string The server;events:array Stamped events",
+    ),
+    m(
+        "model.mirror",
+        "",
+        "Internal: a change a server made itself (status, progress, a name), for the app to show; then its replica follows.",
+        "link:string The server;call:object The method and params;events:array Stamped events",
+    ),
+    m(
         "surface.reclaim",
         "",
         "Internal: hold again a terminal of this app's server it streamed while another app shared it.",

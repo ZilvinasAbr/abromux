@@ -216,7 +216,7 @@ The app reaches it with `ssh HOST abromux-server --stdio`, which starts the serv
 
 **Workspace folders there.** `abromux new-workspace --host vps --folder "fix login"` makes a workspace folder on the host (as ⇧⌘I does here: `AGENTS.md`, `CLAUDE.md`, `.abromux/workspace.json`) and opens the workspace in it; `abromux folder add ~/repos/x` in its terminals makes a worktree there, and `abromux-server folder list|all|remove` the rest.
 
-**The model.** Each server keeps a copy of the app's workspaces (theirs, for a remote one), kept up to date with numbered events: `{"op":"model"}` on its socket gives it, and `{"op":"subscribe"}` gives it and then every change, for scripts and other clients.
+**The model.** Each server keeps the model of the app's workspaces (theirs, for a remote one) and is its source: it numbers every change, the app's included, and sets status pills, progress and workspace names itself (the app shows them), so they're right whether or not the app is open. `{"op":"model"}` on its socket gives it, and `{"op":"subscribe"}` gives it and then every change, for scripts and other clients.
 
 **Ports.** A dev server on the host isn't on this machine: `abromux forward 3000` (in the workspace) makes `http://127.0.0.1:<port>` here reach port 3000 there, through the server. `forward list`, `forward remove 3000`, and `forward ports` (what listens there). Forwards are the workspace's: saved with it, on the same port next time, and closed with it.
 
