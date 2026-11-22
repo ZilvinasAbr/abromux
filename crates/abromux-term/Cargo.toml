@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 abromux-core = { path = "../abromux-core" }
+abromux-server = { path = "../abromux-server" }
 anyhow = "1"
 futures = { version = "0.3", features = ["executor"] }
 image = "0.25"
