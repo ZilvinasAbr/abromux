@@ -188,9 +188,15 @@ File › Import cmux Session (also in the command palette, or `abromux restore-s
 
 A workspace can run its terminals on another machine, such as a Linux VPS, which keeps them (and the agents in them) going whether or not the app is open:
 
+**Servers** (Settings › Servers) are those machines by name: add one with its name and address (`ssh://me@box`, `box:2222`, a Tailscale name, or a host from `~/.ssh/config`), see whether it's up with Check, remove it with ×. Each one gets **New Workspace on …** and **New Tab on …** in ⌘⇧P. They're kept in `~/.config/abromux/servers.json`, beside `config.json` rather than in it, so other versions of the app that share the config file aren't upset by a key they don't know. From a shell, the app open or not:
+
 ```bash
-abromux new-workspace --host ssh://me@box --name "VPS"   # or box, box:2222, a Tailscale name
+abromux servers add vps ssh://me@box       # list, remove <name>, check [<name>...]
+abromux new-workspace --host vps --name "VPS"
+abromux new-surface --host vps             # one tab there, in any workspace (--host local: this Mac)
 ```
+
+`--host` takes a server's name or an address, on `new-workspace`, `new-surface`, `new-pane` and `new-split`. A workspace or tab keeps the address, so renaming or removing the server later doesn't strand it.
 
 Its terminals, and every tab or split opened in it later, start there in the host user's login shell, in `--cwd` if that folder exists there (else the home folder). The sidebar shows the host under the name. Quitting the app leaves them running; the next launch takes them back with the screen as it was and what they printed meanwhile, as with local terminals. A broken connection is retried in the background (a dim line in the terminal says so), and the terminal picks up where it was. Closing a tab or the workspace ends its shell there.
 
