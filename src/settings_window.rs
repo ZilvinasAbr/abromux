@@ -1542,8 +1542,14 @@ fn phone_status() -> AnyElement {
     let url = url.to_string();
     let clients = st["clients"].as_u64().unwrap_or(0);
     let copy = url.clone();
+    // Without the scheme, the address fits on a line beside the code.
+    let shown = url
+        .trim_start_matches("https://")
+        .trim_end_matches('/')
+        .to_string();
     div()
         .flex()
+        .items_start()
         .gap(px(16.))
         .children(qr_code(&url))
         .child(
@@ -1555,20 +1561,19 @@ fn phone_status() -> AnyElement {
                 .gap(px(6.))
                 .child(
                     div()
+                        .min_w_0()
+                        .text_size(px(12.5))
+                        .font_family(crate::terminal::mono_font())
+                        .child(shown),
+                )
+                .child(
+                    div()
                         .flex()
-                        .items_center()
-                        .gap(px(8.))
                         .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(13.))
-                                .font_family(crate::terminal::mono_font())
-                                .child(url.clone()),
-                        )
-                        .child(button("copy-url", "Copy").on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
-                        })),
+                            button("copy-url", "Copy Address").on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
+                            }),
+                        ),
                 )
                 .child(line(match clients {
                     0 => "No phone connected.".into(),
