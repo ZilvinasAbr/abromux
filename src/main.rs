@@ -78,6 +78,7 @@ actions!(
         About,
         OpenSettings,
         OpenConfig,
+        OpenInitLua,
         Quit,
         NewWorkspace,
         CloseWorkspace,
@@ -3429,6 +3430,17 @@ impl Render for AbroMux {
             }))
             // Also on the root (not only app-wide) so the palette lists it.
             .on_action(|_: &OpenConfig, _, cx| settings_window::open_config(cx))
+            .on_action(cx.listener(|this, _: &OpenInitLua, window, cx| {
+                let file = crate::lua::ensure_init_file();
+                let wi = this.active;
+                let pane = this.workspaces[wi].focused_pane;
+                if let Err(e) = this.edit_file(wi, pane, &file, true, window, cx) {
+                    window.push_notification(
+                        Notification::warning(e).title("Can't open init.lua"),
+                        cx,
+                    );
+                }
+            }))
             .on_action(cx.listener(|this, _: &ReloadConfig, window, cx| {
                 // A toast says how it went.
                 let _ = this.reload_settings(window, cx);

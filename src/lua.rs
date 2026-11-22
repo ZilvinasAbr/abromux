@@ -54,6 +54,36 @@ pub fn init_path() -> PathBuf {
     crate::settings::path().with_file_name("init.lua")
 }
 
+/// init.lua's path, after making one with a short starter if there's
+/// none, so it can be opened in an editor.
+pub fn ensure_init_file() -> PathBuf {
+    let path = init_path();
+    if !path.exists() {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, INIT_STARTER);
+    }
+    path
+}
+
+const INIT_STARTER: &str = r#"-- AbroMux init.lua: your own commands, in the palette (⌘⇧P) and as
+-- `abromux <name>` on the command line. AbroMux reloads it on save.
+-- The guide's "Lua scripts" section has the whole API.
+
+-- Workspace folders: ⇧⌘I makes one, ⇧⌘X cleans it up.
+-- require("abromux.workspace_folders").setup{}
+
+-- abromux.action{
+--   name  = "hello",
+--   title = "Say Hello",
+--   key   = "cmd-alt-h",
+--   run   = function(ctx)
+--     abromux.notification.create{ title = "Hello from init.lua" }
+--   end,
+-- }
+"#;
+
 /// An action `abromux.action` defined, as the palette lists it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ActionDef {
