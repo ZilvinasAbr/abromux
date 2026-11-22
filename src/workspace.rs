@@ -146,6 +146,11 @@ impl Surface {
         }
     }
 
+    /// A terminal running on another machine: its folder is that one's.
+    pub fn is_remote(&self, cx: &App) -> bool {
+        matches!(self, Surface::Terminal(t) if t.read(cx).host.is_some())
+    }
+
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         match self {
             Surface::Terminal(t) => window.focus(&t.focus_handle(cx)),
@@ -435,6 +440,9 @@ pub struct Workspace {
     /// Environment variables its new terminals get (`workspace.create`'s
     /// `env`).
     pub env: std::collections::BTreeMap<String, String>,
+    /// The server on another machine its new terminals start on
+    /// (`ssh://host`, `abromux new-workspace --host`); None for this one.
+    pub host: Option<String>,
     pub root: Node,
     pub focused_pane: usize,
     /// The pane filling the workspace (⌘⇧↩), hiding the others. Only holds
@@ -514,6 +522,7 @@ impl Workspace {
             group: None,
             home: None,
             env: Default::default(),
+            host: None,
             root,
             focused_pane,
             zoom: None,
@@ -835,6 +844,17 @@ impl Workspace {
 
     /// Name when not renamed: the title a program (e.g. an agent) set on the
     /// focused terminal, or any terminal, else the cwd's folder name.
+    /// Its folder when that's on this machine: not for a workspace on
+    /// another machine, or whose focused tab is (a path there may not
+    /// exist here, and looking it up can be slow: macOS's `/home` is an
+    /// automount point).
+    pub fn local_cwd(&self, cx: &App) -> Option<String> {
+        if self.host.is_some() || self.focused_surface().is_some_and(|s| s.is_remote(cx)) {
+            return None;
+        }
+        self.cwd(cx)
+    }
+
     pub fn auto_name(&self, cx: &App) -> String {
         let title = |s: &Surface| match s {
             Surface::Terminal(t) => {

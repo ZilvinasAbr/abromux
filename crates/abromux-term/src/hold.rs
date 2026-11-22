@@ -1,17 +1,18 @@
-//! `abromux hold`: how abromux keeps shells running across a quit, crash
-//! or update (`"persistence": "abromux"`, the default).
+//! The app's side of `abromux server` (abromux_server; formerly `abromux
+//! hold`): how abromux keeps shells running across a quit, crash or update
+//! (`"persistence": "abromux"`, the default).
 //!
-//! `abromux hold` is a small background process, one per app, started on
+//! The server is a small background process, one per app channel, started on
 //! demand and detached from it (its own session, so quitting abromux doesn't
 //! hang it up). It opens the PTYs and is the shells' parent, so they live as
-//! long as it does. It parses nothing.
+//! long as it does.
 //!
-//! While abromux is attached to a terminal, the holder hands it the PTY
+//! While abromux is attached to a terminal, the server hands it the PTY
 //! itself (the master's file descriptor, over the Unix socket with
 //! `SCM_RIGHTS`) and doesn't touch it: abromux reads and writes it exactly
 //! as it does a PTY of its own, so a held terminal costs nothing extra while
-//! abromux runs. Each terminal has its own connection to the holder; when it
-//! closes (quit, crash), the holder starts reading that PTY again into a
+//! abromux runs. Each terminal has its own connection to the server; when it
+//! closes (quit, crash), the server starts reading that PTY again into a
 //! backlog, so the program never blocks on a full PTY.
 //!
 //! On quit, abromux stops reading, writes each terminal's state with
@@ -19,54 +20,67 @@
 //! attaches: the snapshot, then the backlog, give back the screen exactly as
 //! the program left it. After a crash there's no snapshot, only the backlog.
 //!
-//! Protocol: one JSON request per line; each reply is a JSON line, carrying
-//! the PTY's descriptor for `spawn` and `attach`, and for `attach` followed
-//! by `backlog` raw bytes.
-//!
-//! - `{"op":"spawn","argv":[..],"cwd":"..","env":[[k,v],..],"cols":c,"rows":r}`
-//!   → `{"ok":true,"id":"..","pid":n}`
-//! - `{"op":"attach","id":".."}` → `{"ok":true,"pid":n,"backlog":len}`
-//! - `{"op":"kill"}` (the connection's terminal) → `{"ok":true}`
-//! - `{"op":"status"}` (the connection's terminal, once its output ended)
-//!   → `{"ok":true,"code":n|null}`: its exit status, null if a signal ended it
-//!
-//! The socket is `hold.sock` in the app's support folder (so the release and
-//! nightly apps each have their own holder), or `$ABROMUX_HOLD_SOCKET`.
+//! The socket is `server.sock` in the app's folder ([`set_dir`]; so the
+//! release and nightly apps each have their own server), or
+//! `$ABROMUX_SERVER_SOCKET` (`$ABROMUX_HOLD_SOCKET` as before). Terminals an
+//! older app's holder keeps (`hold.sock`) are still taken back from it.
 
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
+use std::time::Duration;
 
-/// Output kept per terminal while nobody is attached; past it, the oldest
-/// goes (and the screen may come back slightly wrong).
-const BACKLOG_MAX: usize = 16 << 20;
-/// With no terminals and no connections for this long, the holder exits.
-const IDLE_EXIT: Duration = Duration::from_secs(10);
+/// Where the server's socket goes, and where an older app's holder's was.
+static DIRS: std::sync::OnceLock<(PathBuf, PathBuf)> = std::sync::OnceLock::new();
 
-/// The folder `hold.sock` is in unless `$ABROMUX_HOLD_SOCKET` says
-/// otherwise: the app's support folder, set by [`set_dir`].
-static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-
-/// Keep the holder's socket in `dir` (the app's support folder). Call it
+/// Keep the server's socket in `dir` (the app's folder), and look for an
+/// older app's holder in `legacy` (where it kept `hold.sock`). Call it
 /// once, before anything here; later calls are ignored.
-pub fn set_dir(dir: PathBuf) {
-    let _ = DIR.set(dir);
+pub fn set_dir(dir: PathBuf, legacy: PathBuf) {
+    let _ = DIRS.set((dir, legacy));
+}
+
+/// The app's control socket (`abromux.sock`), which a server this app
+/// starts serves (abromux_server::control). Set once at launch.
+static CONTROL: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+pub fn set_control(path: PathBuf) {
+    let _ = CONTROL.set(path);
+}
+
+/// How this app starts its server: `abromux server --socket .. --control ..`.
+pub fn server_args() -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec!["server".into(), "--socket".into(), socket_path().into()];
+    if let Some(c) = CONTROL.get() {
+        args.extend(["--control".into(), c.clone().into()]);
+    }
+    args
+}
+
+fn dirs() -> &'static (PathBuf, PathBuf) {
+    DIRS.get().expect("hold::set_dir before using the server")
+}
+
+fn env_socket() -> Option<PathBuf> {
+    ["ABROMUX_SERVER_SOCKET", "ABROMUX_HOLD_SOCKET"]
+        .into_iter()
+        .find_map(|k| std::env::var_os(k).filter(|v| !v.is_empty()))
+        .map(PathBuf::from)
 }
 
 pub fn socket_path() -> PathBuf {
-    std::env::var_os("ABROMUX_HOLD_SOCKET")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            DIR.get()
-                .expect("hold::set_dir before using the holder")
-                .join("hold.sock")
-        })
+    env_socket().unwrap_or_else(|| dirs().0.join("server.sock"))
+}
+
+/// An older app's holder, still keeping terminals from before an update.
+fn legacy_socket_path() -> Option<PathBuf> {
+    if env_socket().is_some() {
+        return None;
+    }
+    Some(dirs().1.join("hold.sock")).filter(|p| p.exists())
 }
 
 /// Where a terminal's state waits for the next launch.
@@ -75,327 +89,23 @@ pub fn snapshot_path(id: &str) -> PathBuf {
     dir.join(format!("{id}.snap"))
 }
 
-// ---- the holder ----------------------------------------------------------
-
-struct Term {
-    master: Box<dyn MasterPty + Send>,
-    child: Box<dyn Child + Send + Sync>,
-    pid: u32,
-    backlog: Vec<u8>,
-    /// The connection it's handed to; while set, the holder leaves its PTY alone.
-    client: Option<u64>,
-    /// Its PTY reported end of file: the program is gone.
-    eof: bool,
-}
-
-struct Client {
-    stream: UnixStream,
-    buf: Vec<u8>,
-    term: Option<String>,
-}
-
-/// `abromux hold`: serve until idle. Exits at once if a holder already
-/// listens on `path`.
-pub fn serve(path: &Path) -> io::Result<()> {
-    if UnixStream::connect(path).is_ok() {
-        return Ok(());
-    }
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let _ = std::fs::remove_file(path);
-    let listener = UnixListener::bind(path)?;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    listener.set_nonblocking(true)?;
-
-    let mut terms: HashMap<String, Term> = HashMap::new();
-    let mut clients: HashMap<u64, Client> = HashMap::new();
-    let (mut next_client, mut next_term) = (0u64, 0u64);
-    let mut idle_since = Instant::now();
-    let mut buf = vec![0u8; 1 << 16];
-
-    loop {
-        // Programs that ended while nobody was attached are dropped.
-        terms.retain(|_, t| {
-            let exited = t.eof || matches!(t.child.try_wait(), Ok(Some(_)));
-            !(exited && t.client.is_none())
-        });
-        if terms.is_empty() && clients.is_empty() {
-            if idle_since.elapsed() > IDLE_EXIT {
-                let _ = std::fs::remove_file(path);
-                return Ok(());
-            }
-        } else {
-            idle_since = Instant::now();
-        }
-
-        // What to wait on: new connections, requests, and the PTYs nobody holds.
-        let mut fds = vec![pollfd(listener.as_raw_fd())];
-        let client_ids: Vec<u64> = clients.keys().copied().collect();
-        fds.extend(
-            client_ids
-                .iter()
-                .map(|c| pollfd(clients[c].stream.as_raw_fd())),
-        );
-        let term_ids: Vec<String> = terms
-            .iter()
-            .filter(|(_, t)| t.client.is_none() && !t.eof)
-            .map(|(id, _)| id.clone())
-            .collect();
-        fds.extend(
-            term_ids
-                .iter()
-                .filter_map(|id| Some(pollfd(terms[id].master.as_raw_fd()?))),
-        );
-        // SAFETY: `fds` is a valid array of pollfd for its length.
-        let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, 1000) };
-        if n <= 0 {
-            continue;
-        }
-        let ready = |i: usize| fds[i].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0;
-
-        if ready(0) {
-            while let Ok((stream, _)) = listener.accept() {
-                let _ = stream.set_nonblocking(false);
-                next_client += 1;
-                clients.insert(
-                    next_client,
-                    Client {
-                        stream,
-                        buf: Vec::new(),
-                        term: None,
-                    },
-                );
-            }
-        }
-
-        for (i, cid) in client_ids.iter().enumerate() {
-            if !ready(1 + i) {
-                continue;
-            }
-            let Some(c) = clients.get_mut(cid) else {
-                continue;
-            };
-            let gone = match c.stream.read(&mut buf) {
-                Ok(0) | Err(_) => true,
-                Ok(n) => {
-                    c.buf.extend_from_slice(&buf[..n]);
-                    false
-                }
-            };
-            while let Some(nl) = clients[cid].buf.iter().position(|&b| b == b'\n') {
-                let line: Vec<u8> = clients.get_mut(cid).unwrap().buf.drain(..=nl).collect();
-                let req: Value = serde_json::from_slice(&line).unwrap_or(Value::Null);
-                handle(&req, *cid, &mut clients, &mut terms, &mut next_term);
-            }
-            if gone {
-                // Let go: the holder reads its PTY again.
-                if let Some(c) = clients.remove(cid)
-                    && let Some(t) = c.term.and_then(|id| terms.get_mut(&id))
-                    && t.client == Some(*cid)
-                {
-                    t.client = None;
-                }
-            }
-        }
-
-        let base = 1 + client_ids.len();
-        for (i, id) in term_ids.iter().enumerate() {
-            if !ready(base + i) {
-                continue;
-            }
-            let Some(t) = terms.get_mut(id) else { continue };
-            let Some(fd) = t.master.as_raw_fd() else {
-                continue;
-            };
-            // SAFETY: reads into `buf`, which is valid for its length.
-            let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
-            if n < 0
-                && matches!(
-                    io::Error::last_os_error().kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-                )
-            {
-                continue; // abromux left it non-blocking; nothing after all
-            }
-            if n <= 0 {
-                t.eof = true;
-                continue;
-            }
-            t.backlog.extend_from_slice(&buf[..n as usize]);
-            if t.backlog.len() > BACKLOG_MAX {
-                let cut = t.backlog.len() - BACKLOG_MAX;
-                t.backlog.drain(..cut);
-            }
-        }
-    }
-}
-
-fn pollfd(fd: RawFd) -> libc::pollfd {
-    libc::pollfd {
-        fd,
-        events: libc::POLLIN,
-        revents: 0,
-    }
-}
-
-fn handle(
-    req: &Value,
-    cid: u64,
-    clients: &mut HashMap<u64, Client>,
-    terms: &mut HashMap<String, Term>,
-    next_term: &mut u64,
-) {
-    let c = clients.get_mut(&cid).unwrap();
-    let fail = |c: &mut Client, e: String| {
-        let _ = writeln!(c.stream, "{}", json!({ "ok": false, "error": e }));
-    };
-    match req["op"].as_str() {
-        Some("spawn") if c.term.is_none() => match spawn(req) {
-            Ok(t) => {
-                *next_term += 1;
-                let id = format!("{}-{}", std::process::id(), next_term);
-                let reply = json!({ "ok": true, "id": id, "pid": t.pid });
-                let fd = t.master.as_raw_fd().unwrap_or(-1);
-                if send_with_fd(&c.stream, format!("{reply}\n").as_bytes(), fd).is_ok() {
-                    c.term = Some(id.clone());
-                    terms.insert(
-                        id,
-                        Term {
-                            client: Some(cid),
-                            ..t
-                        },
-                    );
-                }
-            }
-            Err(e) => fail(c, e),
-        },
-        Some("attach") if c.term.is_none() => {
-            let id = req["id"].as_str().unwrap_or_default().to_string();
-            let Some(t) = terms.get_mut(&id) else {
-                return fail(c, format!("no terminal {id}"));
-            };
-            let busy = t
-                .client
-                .is_some_and(|other| other != cid && clients.contains_key(&other));
-            let c = clients.get_mut(&cid).unwrap();
-            if busy {
-                return fail(c, format!("{id} is attached elsewhere"));
-            }
-            if t.eof {
-                return fail(c, format!("{id} has ended"));
-            }
-            let backlog = std::mem::take(&mut t.backlog);
-            let reply = json!({ "ok": true, "pid": t.pid, "backlog": backlog.len() });
-            let fd = t.master.as_raw_fd().unwrap_or(-1);
-            if send_with_fd(&c.stream, format!("{reply}\n").as_bytes(), fd).is_ok()
-                && c.stream.write_all(&backlog).is_ok()
-            {
-                c.term = Some(id);
-                t.client = Some(cid);
-            } else {
-                t.backlog = backlog;
-            }
-        }
-        Some("status") => {
-            let t = c.term.as_ref().and_then(|id| terms.get_mut(id));
-            let mut code = None;
-            if let Some(t) = t {
-                // Its output ended; give the process a moment to be reaped.
-                for _ in 0..30 {
-                    if let Ok(Some(s)) = t.child.try_wait() {
-                        code = s.signal().is_none().then(|| s.exit_code() as i32);
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-            }
-            let c = clients.get_mut(&cid).unwrap();
-            let _ = writeln!(c.stream, "{}", json!({ "ok": true, "code": code }));
-        }
-        Some("kill") => {
-            if let Some(t) = c.term.take().and_then(|id| terms.remove(&id)) {
-                hang_up(t);
-            }
-            let _ = writeln!(c.stream, "{}", json!({ "ok": true }));
-        }
-        _ => fail(c, "bad request".into()),
-    }
-}
-
-/// End a terminal the way closing a terminal window does: SIGHUP to its
-/// process group, SIGKILL if that's ignored. Reaped off the holder's loop.
-fn hang_up(t: Term) {
-    let Term {
-        master,
-        mut child,
-        pid,
-        ..
-    } = t;
-    drop(master);
-    let pid = pid as i32;
-    if pid > 0 {
-        // SAFETY: plain signals to the shell and its process group.
-        unsafe {
-            libc::kill(-pid, libc::SIGHUP);
-            libc::kill(pid, libc::SIGHUP);
-        }
-    }
-    std::thread::spawn(move || {
-        for _ in 0..40 {
-            if matches!(child.try_wait(), Ok(Some(_))) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let _ = child.kill();
-        let _ = child.wait();
-    });
-}
-
-fn spawn(req: &Value) -> Result<Term, String> {
-    let argv: Vec<&str> = req["argv"]
-        .as_array()
-        .map(|a| a.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
-    let (prog, args) = argv.split_first().ok_or("no program")?;
-    let size = PtySize {
-        rows: req["rows"].as_u64().unwrap_or(24) as u16,
-        cols: req["cols"].as_u64().unwrap_or(80) as u16,
-        pixel_width: 0,
-        pixel_height: 0,
-    };
-    let pty = native_pty_system()
-        .openpty(size)
-        .map_err(|e| e.to_string())?;
-    let mut cmd = CommandBuilder::new(prog);
-    cmd.args(args);
-    // The app's environment, not the holder's (which is whatever it started with).
-    cmd.env_clear();
-    for kv in req["env"].as_array().into_iter().flatten() {
-        if let (Some(k), Some(v)) = (kv[0].as_str(), kv[1].as_str()) {
-            cmd.env(k, v);
-        }
-    }
-    if let Some(cwd) = req["cwd"].as_str() {
-        cmd.cwd(cwd);
-    }
-    let child = pty.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-    drop(pty.slave);
-    Ok(Term {
-        pid: child.process_id().unwrap_or(0),
-        master: pty.master,
-        child,
-        backlog: Vec::new(),
-        client: None,
-        eof: false,
-    })
+/// The state a terminal left for this launch: [`snapshot_path`], or where an
+/// older app's holder kept it.
+pub fn take_snapshot(id: &str) -> Option<Vec<u8>> {
+    let legacy = legacy_socket_path().map(|p| p.with_file_name("held").join(format!("{id}.snap")));
+    [Some(snapshot_path(id)), legacy]
+        .into_iter()
+        .flatten()
+        .find_map(|path| {
+            let snap = std::fs::read(&path).ok()?;
+            let _ = std::fs::remove_file(path);
+            Some(snap)
+        })
 }
 
 // ---- abromux's side ------------------------------------------------------
 
-/// A terminal in the holder, handed to us.
+/// A terminal the server keeps, handed to us.
 pub struct Held {
     pub id: String,
     pub pid: u32,
@@ -403,7 +113,7 @@ pub struct Held {
     pub fd: OwnedFd,
     /// What it printed while nobody was attached.
     pub backlog: Vec<u8>,
-    /// Closing it gives the PTY back to the holder.
+    /// Closing it gives the PTY back to the server.
     conn: UnixStream,
 }
 
@@ -417,7 +127,7 @@ impl Held {
     ) -> Result<Self, String> {
         let env: Vec<[&str; 2]> = env.iter().map(|(k, v)| [k.as_str(), v.as_str()]).collect();
         let req = json!({ "op": "spawn", "argv": argv, "cwd": cwd, "env": env, "cols": cols, "rows": rows });
-        let (reply, fd, conn, _) = request(&req)?;
+        let (reply, fd, conn, _) = request(&req, connect())?;
         Ok(Self {
             id: reply["id"].as_str().ok_or("no id")?.to_string(),
             pid: reply["pid"].as_u64().unwrap_or(0) as u32,
@@ -427,9 +137,17 @@ impl Held {
         })
     }
 
-    /// Take a terminal back from the holder, with what it printed meanwhile.
+    /// Take a terminal back from the server, with what it printed meanwhile:
+    /// or from an older app's holder, after an update.
     pub fn attach(id: &str) -> Result<Self, String> {
-        let (reply, fd, conn, backlog) = request(&json!({ "op": "attach", "id": id }))?;
+        let req = json!({ "op": "attach", "id": id });
+        let (reply, fd, conn, backlog) = match request(&req, connect()) {
+            Err(e) if e.starts_with("no terminal") => match legacy_socket_path() {
+                Some(old) => request(&req, UnixStream::connect(old).map_err(|e| e.to_string()))?,
+                None => return Err(e),
+            },
+            other => other?,
+        };
         Ok(Self {
             id: id.to_string(),
             pid: reply["pid"].as_u64().unwrap_or(0) as u32,
@@ -459,10 +177,13 @@ impl Held {
     }
 }
 
-/// Connect (starting the holder if needed), send `req`, and read the reply
-/// with its descriptor and any backlog.
-fn request(req: &Value) -> Result<(Value, OwnedFd, UnixStream, Vec<u8>), String> {
-    let mut conn = connect()?;
+/// Send `req` on `conn`, and read the reply with its descriptor and any
+/// backlog.
+fn request(
+    req: &Value,
+    conn: Result<UnixStream, String>,
+) -> Result<(Value, OwnedFd, UnixStream, Vec<u8>), String> {
+    let mut conn = conn?;
     writeln!(conn, "{req}").map_err(|e| e.to_string())?;
     let mut data = Vec::new();
     let mut fd = None;
@@ -470,7 +191,7 @@ fn request(req: &Value) -> Result<(Value, OwnedFd, UnixStream, Vec<u8>), String>
     let nl = loop {
         let (n, got) = recv_with_fd(&conn, &mut buf).map_err(|e| e.to_string())?;
         if n == 0 {
-            return Err("the holder hung up".into());
+            return Err("the server hung up".into());
         }
         fd = fd.or(got);
         data.extend_from_slice(&buf[..n]);
@@ -482,7 +203,7 @@ fn request(req: &Value) -> Result<(Value, OwnedFd, UnixStream, Vec<u8>), String>
     if reply["ok"] != true {
         return Err(reply["error"].as_str().unwrap_or("refused").to_string());
     }
-    let fd = fd.ok_or("the holder sent no PTY")?;
+    let fd = fd.ok_or("the server sent no PTY")?;
     let mut backlog = data[nl + 1..].to_vec();
     let want = reply["backlog"].as_u64().unwrap_or(0) as usize;
     if backlog.len() < want {
@@ -494,75 +215,15 @@ fn request(req: &Value) -> Result<(Value, OwnedFd, UnixStream, Vec<u8>), String>
     Ok((reply, fd, conn, backlog))
 }
 
+/// Connect to the server, starting it (`abromux server`, detached) if needed.
 fn connect() -> Result<UnixStream, String> {
     let path = socket_path();
-    if let Ok(s) = UnixStream::connect(&path) {
-        return Ok(s);
-    }
-    start_holder().map_err(|e| format!("can't start abromux hold: {e}"))?;
-    let end = Instant::now() + Duration::from_secs(3);
-    loop {
-        match UnixStream::connect(&path) {
-            Ok(s) => return Ok(s),
-            Err(e) if Instant::now() > end => return Err(format!("{}: {e}", path.display())),
-            Err(_) => std::thread::sleep(Duration::from_millis(10)),
-        }
-    }
-}
-
-/// `abromux hold`, detached: its own session, no terminal, no output.
-fn start_holder() -> io::Result<()> {
-    use std::os::unix::process::CommandExt;
-    let exe = std::env::current_exe()?;
-    let mut cmd = std::process::Command::new(exe);
-    cmd.arg("hold")
-        .env("ABROMUX_HOLD_SOCKET", socket_path())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    // SAFETY: setsid is async-signal-safe.
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
-    let mut child = cmd.spawn()?;
-    // Reap it once it has served; it's its own session, not ours to wait on.
-    std::thread::spawn(move || child.wait());
-    Ok(())
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    abromux_server::connect_or_start(&path, &exe, &server_args())
+        .map_err(|e| format!("can't start abromux server: {e}"))
 }
 
 // ---- descriptors over the socket -----------------------------------------
-
-fn send_with_fd(sock: &UnixStream, data: &[u8], fd: RawFd) -> io::Result<()> {
-    let fd_len = std::mem::size_of::<RawFd>() as u32;
-    // SAFETY: the message, its iovec and its control buffer all outlive
-    // sendmsg, and the control buffer is sized by CMSG_SPACE.
-    unsafe {
-        let space = libc::CMSG_SPACE(fd_len) as usize;
-        let mut control = vec![0u8; space];
-        let mut iov = libc::iovec {
-            iov_base: data.as_ptr() as *mut _,
-            iov_len: data.len(),
-        };
-        let mut msg: libc::msghdr = std::mem::zeroed();
-        msg.msg_iov = &mut iov;
-        msg.msg_iovlen = 1;
-        msg.msg_control = control.as_mut_ptr().cast();
-        msg.msg_controllen = space as _;
-        let cmsg = libc::CMSG_FIRSTHDR(&msg);
-        (*cmsg).cmsg_level = libc::SOL_SOCKET;
-        (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-        (*cmsg).cmsg_len = libc::CMSG_LEN(fd_len) as _;
-        std::ptr::write_unaligned(libc::CMSG_DATA(cmsg).cast::<RawFd>(), fd);
-        let n = libc::sendmsg(sock.as_raw_fd(), &msg, 0);
-        if n < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        (&*sock).write_all(&data[n as usize..])
-    }
-}
 
 fn recv_with_fd(sock: &UnixStream, buf: &mut [u8]) -> io::Result<(usize, Option<OwnedFd>)> {
     let fd_len = std::mem::size_of::<RawFd>() as u32;
@@ -599,18 +260,23 @@ fn recv_with_fd(sock: &UnixStream, buf: &mut [u8]) -> io::Result<(usize, Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
-    /// A real holder (in a thread, on a socket of its own): a shell gets the
+    /// A real server (in a thread, on a socket of its own): a shell gets the
     /// env it was given, keeps running with nobody attached, what it prints
     /// meanwhile comes back as backlog, and kill ends it.
     #[test]
     fn holds_a_shell() {
         let dir = std::env::temp_dir().join(format!("abromux-hold-test-{}", std::process::id()));
-        let sock = dir.join("hold.sock");
+        let sock = dir.join("server.sock");
         // SAFETY: no other test reads it.
-        unsafe { std::env::set_var("ABROMUX_HOLD_SOCKET", &sock) };
+        unsafe { std::env::set_var("ABROMUX_SERVER_SOCKET", &sock) };
         let s = sock.clone();
-        std::thread::spawn(move || serve(&s));
+        let opts = abromux_server::Options {
+            version: "test".into(),
+            ..Default::default()
+        };
+        std::thread::spawn(move || abromux_server::serve(&s, &opts));
         while UnixStream::connect(&sock).is_err() {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -642,20 +308,26 @@ mod tests {
         };
         write(&h.fd, "echo $PROBE-$((40+2))\n");
         read_until(&h.fd, "held-42");
-        // Let go (quit): it keeps running and the holder reads it meanwhile.
+        // Let go (quit): it keeps running and the server reads it meanwhile.
         write(&h.fd, "sleep 0.3; echo later-$((1+1))\n");
         let id = h.id.clone();
         drop(h);
         std::thread::sleep(Duration::from_millis(800));
         let mut h = Held::attach(&id).unwrap();
+        // What it printed meanwhile: in the backlog, or (the server parsed
+        // it) in the screen the server left where the app looks for its own.
+        let screen = take_snapshot(&id)
+            .and_then(|s| crate::ghostty::Terminal::from_snapshot(&s, true).ok())
+            .map(|t| t.screen_text())
+            .unwrap_or_default();
+        let backlog = String::from_utf8_lossy(&h.backlog);
         assert!(
-            String::from_utf8_lossy(&h.backlog).contains("later-2"),
-            "{:?}",
-            String::from_utf8_lossy(&h.backlog)
+            backlog.contains("later-2") || screen.contains("later-2"),
+            "backlog {backlog:?}, screen {screen:?}"
         );
         write(&h.fd, "echo again\n");
         read_until(&h.fd, "again");
-        assert!(Held::attach(&id).is_err(), "only one holder of a terminal");
+        assert!(Held::attach(&id).is_err(), "one app per terminal");
         h.kill();
         drop(h);
         assert!(Held::attach(&id).is_err(), "gone after kill");

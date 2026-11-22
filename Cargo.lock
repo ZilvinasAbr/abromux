@@ -9,8 +9,10 @@ dependencies = [
  "abromux-browser",
  "abromux-core",
  "abromux-gitlab",
+ "abromux-model",
  "abromux-platform",
  "abromux-plugin",
+ "abromux-server",
  "abromux-term",
  "aes-gcm",
  "anyhow",
@@ -81,6 +83,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "abromux-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "abromux-platform"
 version = "0.1.0"
 dependencies = [
@@ -109,17 +119,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "abromux-server"
+version = "0.1.0"
+dependencies = [
+ "abromux-core",
+ "abromux-model",
+ "abromux-vt",
+ "anyhow",
+ "base64",
+ "libc",
+ "portable-pty",
+ "serde_json",
+ "sha1_smol",
+]
+
+[[package]]
 name = "abromux-term"
 version = "0.1.0"
 dependencies = [
  "abromux-core",
+ "abromux-server",
+ "abromux-vt",
  "anyhow",
- "bindgen 0.72.1",
  "futures",
- "image",
  "libc",
  "portable-pty",
  "serde_json",
+]
+
+[[package]]
+name = "abromux-vt"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bindgen 0.72.1",
+ "image",
  "smol_str",
 ]
 

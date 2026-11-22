@@ -161,7 +161,62 @@ fn commands(project: Option<&Path>, cx: &App) -> Vec<Cmd> {
             }
             cmds
         });
-    let builtin = builtin.chain(plugins);
+    // Each server of Settings › Servers: a workspace or a tab there.
+    let servers = crate::servers::load()
+        .into_iter()
+        .flat_map(|s| -> Vec<Cmd> {
+            let words = || {
+                vec![
+                    "server".into(),
+                    "remote".into(),
+                    "ssh".into(),
+                    s.address.clone(),
+                ]
+            };
+            let on = |tab| -> Box<dyn Action> {
+                Box::new(keymap::OnServer {
+                    address: s.address.clone(),
+                    tab,
+                })
+            };
+            vec![
+                (
+                    format!("Open Workspaces from {}", s.name),
+                    Some("its workspaces that aren't open here".into()),
+                    words(),
+                    Box::new(keymap::OpenFromServer {
+                        address: s.address.clone(),
+                    }),
+                ),
+                (
+                    format!("New Workspace on {}", s.name),
+                    Some(s.address.clone()),
+                    words(),
+                    on(false),
+                ),
+                (
+                    format!("New Tab on {}", s.name),
+                    Some(s.address.clone()),
+                    words(),
+                    on(true),
+                ),
+            ]
+        });
+    // Dev servers that started on a host: forward them.
+    let offers = crate::forward::offers()
+        .into_iter()
+        .map(|(host, port)| -> Cmd {
+            (
+                format!("Forward Port {port} of {}", crate::servers::label(&host)),
+                Some(format!("127.0.0.1 here reaches {port} on {host}")),
+                vec!["forward".into(), "port".into(), port.to_string()],
+                Box::new(keymap::ForwardOffer {
+                    address: host.clone(),
+                    port,
+                }),
+            )
+        });
+    let builtin = builtin.chain(plugins).chain(servers).chain(offers);
     // A project file that doesn't parse shows its error as a command.
     let local = project.map(|p| (p, settings::read_project(p)));
     let local_titles: Vec<String> = match &local {
@@ -703,15 +758,26 @@ impl AbroMux {
         self.workspaces
             .iter()
             .enumerate()
-            .map(|(i, ws)| Entry {
-                keywords: vec![],
-                title: ws.name(cx).into(),
-                subtitle: ws.cwd(cx).map(|c| tilde(&c).into()),
-                keys: shortcut_digit(i, n)
-                    .map(|d| crate::keymap::default_label(&format!("workspace{d}")).into()),
-                target: Target::Workspace(ws.id),
-                icon: Some(("folder", None)),
-                current: i == self.active,
+            .map(|(i, ws)| {
+                // A workspace on another machine says which, and is found
+                // by its server's name too.
+                let server = ws.host.as_deref().map(crate::servers::label);
+                let cwd = ws.cwd(cx).map(|c| tilde(&c));
+                let subtitle = match (&server, cwd) {
+                    (Some(s), Some(c)) => Some(format!("on {s} · {c}")),
+                    (Some(s), None) => Some(format!("on {s}")),
+                    (None, c) => c,
+                };
+                Entry {
+                    keywords: server.into_iter().chain(ws.host.clone()).collect(),
+                    title: ws.name(cx).into(),
+                    subtitle: subtitle.map(Into::into),
+                    keys: shortcut_digit(i, n)
+                        .map(|d| crate::keymap::default_label(&format!("workspace{d}")).into()),
+                    target: Target::Workspace(ws.id),
+                    icon: Some((if ws.host.is_some() { "globe" } else { "folder" }, None)),
+                    current: i == self.active,
+                }
             })
             .collect()
     }

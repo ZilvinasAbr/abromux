@@ -285,6 +285,9 @@ pub struct TerminalView {
     pub app: Option<Box<dyn TerminalApp>>,
     /// Kept to start the shell again the same way (`respawn-pane`).
     env: Vec<(String, String)>,
+    /// The server on another machine its program runs on
+    /// (`ssh://host`), None for this machine's.
+    pub host: Option<String>,
     /// Bumped on respawn so the old shell's output and exit are ignored.
     generation: usize,
     /// A task will repaint once the program's hold on the screen times out.
@@ -305,19 +308,29 @@ impl Focusable for TerminalView {
 
 impl TerminalView {
     /// A login shell in `cwd`; with a `command`, the shell runs it and the
-    /// terminal closes when it ends. With `attach`, the holder's terminal
+    /// terminal closes when it ends. With `attach`, the server's terminal
     /// from the last session, if it's still running (a new shell if not).
+    /// With `host`, on that machine's server instead of this one's.
     pub fn new(
         cwd: Option<String>,
         env: Vec<(String, String)>,
         command: Option<String>,
         attach: Option<&str>,
+        host: Option<String>,
         cx: &mut Context<Self>,
     ) -> Self {
         let (cols, rows) = (80, 24);
         let cwd = cwd.unwrap_or_else(|| crate::paths::home().to_string_lossy().into_owned());
-        let (opened, feed) =
-            spawn_shell(&cwd, &env, command.as_deref(), (cols, rows), 0, attach, cx);
+        let (opened, feed) = spawn_shell(
+            &cwd,
+            &env,
+            command.as_deref(),
+            (cols, rows),
+            0,
+            attach,
+            host.as_deref(),
+            cx,
+        );
         let (opened, failed) = match opened {
             Ok(o) => (o, None),
             Err(e) => (Opened::failed(), Some(e)),
@@ -400,6 +413,7 @@ impl TerminalView {
             command,
             app: None,
             env,
+            host,
             generation: 0,
             hold_timer: false,
             scrolled_at: None,
@@ -474,6 +488,7 @@ impl TerminalView {
             self.grid,
             self.generation,
             None,
+            self.host.as_deref(),
             cx,
         );
         let (opened, failed) = match opened {
@@ -751,9 +766,92 @@ impl TerminalView {
         self.pty.kill();
     }
 
-    /// The holder's id for this terminal, to take it back next launch.
-    pub fn held_id(&self) -> Option<&str> {
+    /// The server's id for this terminal, to take it back next launch.
+    pub fn held_id(&self) -> Option<String> {
         self.pty.held_id()
+    }
+
+    /// Start over from a whole screen (libghostty-vt's snapshot): the
+    /// server's, for a terminal this view had no screen of.
+    fn load_snapshot(&mut self, snap: &[u8], cx: &mut Context<Self>) {
+        let Ok(t) = ghostty::Terminal::from_snapshot(snap, crate::theme::is_dark()) else {
+            return;
+        };
+        let (cols, rows) = self.grid;
+        self.term = configure(t, &self.config);
+        self.term.resize(cols, rows, self.cell_px.0, self.cell_px.1);
+        self.dirty = true;
+        cx.notify();
+    }
+
+    /// Another app wants this terminal too (its server asked,
+    /// crate::control_link): let go of the PTY, leaving the screen for the
+    /// server, and stream it from the server from here on, which reads it
+    /// for both. Only a terminal this view holds.
+    pub fn restream(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.pty, Pty::Held { .. }) {
+            return;
+        }
+        let Some(id) = self.pty.held_id() else {
+            return;
+        };
+        self.freeze();
+        self.frozen = false;
+        self.generation += 1;
+        let (feed, wake) = Feed::new();
+        self.pty = crate::pty::stream_local(&id, self.grid, false, &feed);
+        self.feed = feed.clone();
+        drain(feed, wake, self.generation, cx);
+        self.pty.resize(PtySize {
+            rows: self.grid.1,
+            cols: self.grid.0,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+        cx.notify();
+    }
+
+    /// Nobody else streams this terminal now (its server says): hold its PTY
+    /// again, so the server is out of the way as before. Only one streamed
+    /// from this machine's server.
+    pub fn reclaim(&mut self, cx: &mut Context<Self>) {
+        let local = crate::hold::socket_path();
+        let ours = matches!(&self.pty, Pty::Remote(r) if std::path::Path::new(r.host()) == local);
+        let Some(id) = self.pty.held_id().filter(|_| ours) else {
+            return;
+        };
+        self.freeze();
+        let (feed, wake) = Feed::new();
+        let Some(opened) = crate::pty::reattach(&id, &feed) else {
+            // Still shared after all: stream it again.
+            self.frozen = false;
+            self.restream_from_server(&id, cx);
+            return;
+        };
+        self.frozen = false;
+        self.generation += 1;
+        if let Some(snap) = &opened.snapshot {
+            self.load_snapshot(snap, cx);
+        }
+        self.process(&opened.backlog, cx);
+        self.pty = opened.pty;
+        self.feed = feed.clone();
+        drain(feed, wake, self.generation, cx);
+        self.pty.resize(PtySize {
+            rows: self.grid.1,
+            cols: self.grid.0,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+        cx.notify();
+    }
+
+    fn restream_from_server(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.generation += 1;
+        let (feed, wake) = Feed::new();
+        self.pty = crate::pty::stream_local(id, self.grid, false, &feed);
+        self.feed = feed.clone();
+        drain(feed, wake, self.generation, cx);
     }
 
     /// Quitting: a held terminal stops reading, takes in what was already
@@ -2733,18 +2831,60 @@ fn sprite_char(c: &ghostty::Cell) -> Option<char> {
 
 /// Start the user's login shell at `size` (running `command` if there is
 /// one), or take back `attach`, and drain its output into the view on the
-/// main thread. Output and the exit of a shell from an older `generation`
-/// (one `respawn` replaced) are dropped. When nothing could be started,
-/// the error, for the view to show in place of the shell.
+/// main thread. With `host`, on that machine's server. Output and the exit
+/// of a shell from an older `generation` (one `respawn` replaced) are
+/// dropped. When nothing could be started, the error, for the view to show
+/// in place of the shell.
+#[allow(clippy::too_many_arguments)]
 fn spawn_shell(
     cwd: &str,
-    env: &[(String, String)],
+    env_in: &[(String, String)],
     command: Option<&str>,
     size: (u16, u16),
     generation: usize,
     attach: Option<&str>,
+    host: Option<&str>,
     cx: &mut Context<TerminalView>,
 ) -> (anyhow::Result<Opened>, Feed) {
+    if let Some(host) = host {
+        // The host's own shell and environment: only what describes this
+        // terminal goes along. Its socket and CLI are the host's server's
+        // (which sets ABROMUX_SOCKET_PATH and ABROMUX_BIN there and hands
+        // what comes in to this app), so agent hooks there report to it.
+        let mut env: Vec<(String, String)> = [
+            ("TERM", "xterm-256color"),
+            ("COLORTERM", "truecolor"),
+            ("TERM_PROGRAM", "abromux"),
+        ]
+        .map(|(k, v)| (k.into(), v.into()))
+        .into();
+        env.extend(
+            env_in
+                .iter()
+                .filter(|(k, _)| {
+                    matches!(
+                        k.as_str(),
+                        "COMPOSE_PROJECT_NAME"
+                            | "ABROMUX_SURFACE_ID"
+                            | "ABROMUX_WORKSPACE_ID"
+                            | "ABROMUX_WORKSPACE_DIR"
+                    )
+                })
+                .cloned(),
+        );
+        let spec = abromux_term::remote::SpawnSpec {
+            command: command.map(String::from),
+            cwd: cwd.to_string(),
+            env,
+        };
+        let (feed, wake) = Feed::new();
+        let opened = crate::pty::open_remote(host, attach, spec, size, &feed);
+        if let Err(e) = &opened {
+            eprintln!("abromux: terminal on {host}: {e:#}");
+        }
+        drain(feed.clone(), wake, generation, cx);
+        return (opened, feed);
+    }
     let shell = abromux_core::paths::user_shell();
     let mut argv = vec![shell, "-l".into()];
     if let Some(c) = command {
@@ -2757,12 +2897,12 @@ fn spawn_shell(
     ]
     .map(|(k, v)| (k.into(), v.into()))
     .into();
-    vars.extend(env.iter().cloned());
+    vars.extend(env_in.iter().cloned());
     if cx
         .try_global::<Config>()
         .is_none_or(|c| c.shell_integration)
     {
-        vars.extend(crate::shell::inject(&mut argv, env));
+        vars.extend(crate::shell::inject(&mut argv, env_in));
     }
     // Held shells are for taking back next launch; a run that won't restore
     // a session (ABROMUX_NO_RESTORE, demos, scripted tests) would only leave
@@ -2800,10 +2940,13 @@ fn drain(
         loop {
             let woke = wake.next().await.is_some();
             let q = feed.take();
-            if !q.bytes.is_empty() {
+            if !q.bytes.is_empty() || q.reset.is_some() {
                 let live = this.update(cx, |this, cx| {
                     let live = this.generation == generation;
                     if live {
+                        if let Some(snap) = &q.reset {
+                            this.load_snapshot(snap, cx);
+                        }
                         this.process(&q.bytes, cx);
                     }
                     live

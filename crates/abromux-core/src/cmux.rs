@@ -112,6 +112,8 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
         group: None,
         home: None,
         env: Default::default(),
+        host: None,
+        forwards: vec![],
         links: vec![],
         hidden_links: vec![],
         pinned: vec![],
@@ -194,6 +196,7 @@ fn tab(p: &Value, dir: &str) -> Option<TabState> {
                 name,
                 cwd,
                 held: None,
+                host: None,
                 surface: None,
                 edit: None,
             })

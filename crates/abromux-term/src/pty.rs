@@ -5,6 +5,8 @@
 //!   directly, like a local one.
 //! - `Local` (`"cmux-like"`): a PTY of abromux's own (`portable-pty`); the
 //!   shell ends with the app.
+//! - `Remote`: a terminal on another machine's server, streamed
+//!   (`crate::remote`); it runs on there whatever this app does.
 //!
 //! Output from either goes into a `Feed`, which the view drains on the main
 //! thread.
@@ -14,6 +16,7 @@ use futures::channel::mpsc;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
+use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Called on each read of a terminal's output (see [`on_output`]).
@@ -30,6 +33,9 @@ pub fn on_output(f: fn()) {
 pub struct Queue {
     pub bytes: Vec<u8>,
     pub closed: bool,
+    /// The whole screen to start from (libghostty-vt's snapshot), before
+    /// `bytes`: what the server parsed, for a view with no screen of its own.
+    pub reset: Option<Vec<u8>>,
 }
 
 /// Where readers put a program's output: appended to one buffer, with a wake
@@ -53,7 +59,7 @@ impl Feed {
     }
 
     /// False once the view is gone.
-    fn push(&mut self, bytes: &[u8]) -> bool {
+    pub(crate) fn push(&mut self, bytes: &[u8]) -> bool {
         if let Some(on_output) = ON_OUTPUT.get() {
             on_output();
         }
@@ -61,7 +67,17 @@ impl Feed {
         !matches!(self.wake.try_send(()), Err(e) if e.is_disconnected())
     }
 
-    fn close(&mut self) {
+    /// Start over from `snapshot`: what came before it is in it.
+    pub(crate) fn reset(&mut self, snapshot: Vec<u8>) -> bool {
+        {
+            let mut q = self.queue.lock().unwrap();
+            q.bytes.clear();
+            q.reset = Some(snapshot);
+        }
+        !matches!(self.wake.try_send(()), Err(e) if e.is_disconnected())
+    }
+
+    pub(crate) fn close(&mut self) {
         self.queue.lock().unwrap().closed = true;
         let _ = self.wake.try_send(());
     }
@@ -83,6 +99,8 @@ pub enum Pty {
         /// Stops its reader (`freeze`).
         stop: Option<Stop>,
     },
+    /// On another machine's server, streamed.
+    Remote(crate::remote::Remote),
     /// Nothing runs: the program couldn't be started (`open` failed). The
     /// view keeps one so it can show why instead of a shell.
     Failed,
@@ -123,6 +141,7 @@ impl Pty {
             Pty::Held { file, .. } => {
                 let _ = file.write_all(bytes);
             }
+            Pty::Remote(r) => r.write(bytes),
             Pty::Failed => {}
         }
     }
@@ -142,16 +161,23 @@ impl Pty {
                 // SAFETY: TIOCSWINSZ reads the winsize it's given.
                 unsafe { libc::ioctl(held.fd.as_raw_fd(), libc::TIOCSWINSZ, &ws) };
             }
+            Pty::Remote(r) => r.resize(abromux_core::wire::Size {
+                cols: size.cols,
+                rows: size.rows,
+                width: size.pixel_width,
+                height: size.pixel_height,
+            }),
             Pty::Failed => {}
         }
     }
 
-    /// The shell's pid (the holder's run on this machine too).
+    /// The shell's pid, if it runs on this machine (the server's do too,
+    /// a remote one's don't).
     pub fn pid(&self) -> Option<u32> {
         match self {
             Pty::Local { child, .. } => child.process_id(),
             Pty::Held { held, .. } => Some(held.pid),
-            Pty::Failed => None,
+            Pty::Remote(_) | Pty::Failed => None,
         }
     }
 
@@ -170,6 +196,7 @@ impl Pty {
                 None
             }
             Pty::Held { held, .. } => held.status(),
+            Pty::Remote(r) => r.exit_status(),
             Pty::Failed => None,
         }
     }
@@ -185,6 +212,7 @@ impl Pty {
                 stop_reader(stop);
                 held.kill();
             }
+            Pty::Remote(r) => r.kill(),
             Pty::Failed => {}
         }
     }
@@ -201,7 +229,7 @@ impl Pty {
                     std::path::PathBuf::from(s.to_string_lossy().into_owned())
                 })
             }
-            Pty::Failed => None,
+            Pty::Remote(_) | Pty::Failed => None,
         }
     }
 
@@ -209,26 +237,45 @@ impl Pty {
         match self {
             Pty::Local { master, .. } => master.as_raw_fd(),
             Pty::Held { held, .. } => Some(held.fd.as_raw_fd()),
-            Pty::Failed => None,
+            Pty::Remote(_) | Pty::Failed => None,
         }
     }
 
-    /// The holder's id for it, to take it back next launch.
-    pub fn held_id(&self) -> Option<&str> {
+    /// The server's id for it, to take it back next launch.
+    pub fn held_id(&self) -> Option<String> {
         match self {
             Pty::Local { .. } | Pty::Failed => None,
-            Pty::Held { held, .. } => Some(&held.id),
+            Pty::Held { held, .. } => Some(held.id.clone()),
+            Pty::Remote(r) => r.id(),
+        }
+    }
+
+    /// The server it's on, when that's another machine's.
+    pub fn host(&self) -> Option<String> {
+        match self {
+            Pty::Remote(r) => Some(r.host().to_string()),
+            _ => None,
         }
     }
 
     /// Quitting with a held terminal: stop reading it, so what the view has
-    /// processed is all it printed until the holder takes over. Returns its
-    /// id; the caller snapshots the screen there.
+    /// processed is all it printed until the server takes over. Returns
+    /// where the caller saves the screen for next launch
+    /// (`hold::snapshot_path`).
     pub fn freeze(&mut self) -> Option<String> {
         match self {
             Pty::Held { held, stop, .. } => {
                 stop_reader(stop);
                 Some(held.id.clone())
+            }
+            Pty::Remote(r) => {
+                let id = r.freeze()?;
+                // One of this machine's, streamed while shared: kept as a
+                // held one is, for the next launch to take back by id.
+                if Path::new(r.host()) == crate::hold::socket_path() {
+                    return Some(id);
+                }
+                Some(crate::remote::snapshot_key(r.host(), &id))
             }
             _ => None,
         }
@@ -236,18 +283,24 @@ impl Pty {
 }
 
 fn stop_reader(stop: &mut Option<Stop>) {
-    use std::os::unix::thread::JoinHandleExt;
     if let Some((stopped, reader)) = stop.take() {
         stopped.store(true, std::sync::atomic::Ordering::Release);
-        // Interrupt its blocking read (EINTR). Again until it's out: the
-        // signal can land just before it enters read.
-        while !reader.is_finished() {
-            // SAFETY: the thread is alive (not finished) and the handler is set.
-            unsafe { libc::pthread_kill(reader.as_pthread_t(), WAKE) };
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        let _ = reader.join();
+        interrupt(reader);
     }
+}
+
+/// Get a reader thread that has been told to stop out of its blocking read
+/// (EINTR), and wait for it. Again until it's out: the signal can land just
+/// before it enters read.
+pub(crate) fn interrupt(reader: std::thread::JoinHandle<()>) {
+    use std::os::unix::thread::JoinHandleExt;
+    install_wake();
+    while !reader.is_finished() {
+        // SAFETY: the thread is alive (not finished) and the handler is set.
+        unsafe { libc::pthread_kill(reader.as_pthread_t(), WAKE) };
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let _ = reader.join();
 }
 
 /// How `freeze` stops a held PTY's reader: a flag it checks after each read,
@@ -261,7 +314,7 @@ type Stop = (
 /// nothing and is installed without SA_RESTART, so read returns EINTR.
 const WAKE: libc::c_int = libc::SIGUSR2;
 
-fn install_wake() {
+pub(crate) fn install_wake() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     extern "C" fn nothing(_: libc::c_int) {}
     ONCE.call_once(|| {
@@ -297,9 +350,7 @@ pub fn open(
     if let Some(id) = attach {
         match crate::hold::Held::attach(id) {
             Ok(mut held) => {
-                let path = crate::hold::snapshot_path(id);
-                let snapshot = std::fs::read(&path).ok();
-                let _ = std::fs::remove_file(path);
+                let snapshot = crate::hold::take_snapshot(id);
                 let backlog = std::mem::take(&mut held.backlog);
                 if let Some(pty) = held_pty(held, feed) {
                     return Ok(Opened {
@@ -309,6 +360,18 @@ pub fn open(
                         backlog,
                     });
                 }
+            }
+            // Another app streams it from this machine's server (it asked
+            // to share it): this one streams it too, from the same server.
+            Err(e) if e.ends_with("is streamed") => {
+                let snapshot = crate::hold::take_snapshot(id);
+                let fresh = snapshot.is_none();
+                return Ok(Opened {
+                    pty: stream_local(id, size, fresh, feed),
+                    attached: true,
+                    snapshot,
+                    backlog: Vec::new(),
+                });
             }
             Err(e) => eprintln!("abromux: held terminal {id}: {e}"),
         }
@@ -332,6 +395,88 @@ pub fn open(
         }
     }
     Ok(opened(local(cwd, argv, vars, size, feed)?))
+}
+
+/// A terminal on the server at `host` (another machine's): `attach`'s if
+/// it's still running there, else a new one. Returns at once; connecting
+/// happens on the reader thread. Fails only for a host that isn't one.
+pub fn open_remote(
+    host: &str,
+    attach: Option<&str>,
+    spawn: crate::remote::SpawnSpec,
+    (cols, rows): (u16, u16),
+    feed: &Feed,
+) -> anyhow::Result<Opened> {
+    let endpoint = crate::remote::Endpoint::parse(host).map_err(anyhow::Error::msg)?;
+    // The screen this app saved when it quit; the backlog comes once
+    // connected.
+    let snapshot =
+        attach.and_then(|id| crate::hold::take_snapshot(&crate::remote::snapshot_key(host, id)));
+    let size = abromux_core::wire::Size {
+        cols,
+        rows,
+        width: 0,
+        height: 0,
+    };
+    // Taken back with no screen of its own: the server's, if it parsed it.
+    let fresh = attach.is_some() && snapshot.is_none();
+    let remote = crate::remote::Remote::start(
+        host.to_string(),
+        endpoint,
+        attach.map(String::from),
+        spawn,
+        size,
+        fresh,
+        feed,
+    );
+    Ok(Opened {
+        pty: Pty::Remote(remote),
+        attached: attach.is_some(),
+        snapshot,
+        backlog: Vec::new(),
+    })
+}
+
+/// Take terminal `id` of this machine's server back as held (its PTY here),
+/// with the screen the server left and what came after. None if it can't
+/// be (it ended, or it's still shared).
+pub fn reattach(id: &str, feed: &Feed) -> Option<Opened> {
+    let mut held = crate::hold::Held::attach(id).ok()?;
+    let snapshot = crate::hold::take_snapshot(id);
+    let backlog = std::mem::take(&mut held.backlog);
+    Some(Opened {
+        pty: held_pty(held, feed)?,
+        attached: true,
+        snapshot,
+        backlog,
+    })
+}
+
+/// Terminal `id` of this machine's server, streamed rather than held: while
+/// another app shares it (docs/server-plan.md, phase 4). The server reads
+/// the PTY for both.
+pub fn stream_local(id: &str, (cols, rows): (u16, u16), fresh: bool, feed: &Feed) -> Pty {
+    let path = crate::hold::socket_path();
+    let size = abromux_core::wire::Size {
+        cols,
+        rows,
+        width: 0,
+        height: 0,
+    };
+    let spec = crate::remote::SpawnSpec {
+        command: None,
+        cwd: String::new(),
+        env: vec![],
+    };
+    Pty::Remote(crate::remote::Remote::start(
+        path.to_string_lossy().into_owned(),
+        crate::remote::Endpoint::Unix(path),
+        Some(id.to_string()),
+        spec,
+        size,
+        fresh,
+        feed,
+    ))
 }
 
 fn local(

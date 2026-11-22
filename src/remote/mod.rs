@@ -32,11 +32,12 @@
 //! push keys and the phones that subscribed are `push.json` in the support
 //! folder.
 
-mod http;
+// HTTP and WebSocket, shared with the server's web client (abromux_server).
+use abromux_server::http;
 mod push;
 pub mod tailscale;
 mod web;
-mod ws;
+use abromux_server::ws;
 
 use crate::ipc;
 use crate::settings::RemoteSettings;

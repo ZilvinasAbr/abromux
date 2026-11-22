@@ -1,0 +1,45 @@
+# Maintainer: Zilvinas Abromavicius
+# abromux-server alone, built from source (plain cargo: no Zig, no Wayland),
+# for a machine without the app. After a release: set pkgver, reset pkgrel,
+# `updpkgsums`, `makepkg --printsrcinfo > .SRCINFO`, push (see ../README.md).
+pkgname=abromux-server
+pkgver=0.42.0
+pkgrel=1
+pkgdesc="abromux server: keeps abromux terminals (and coding agents) running for the app on another machine"
+arch=('x86_64' 'aarch64')
+url="https://github.com/ZilvinasAbr/abromux"
+license=('MIT')
+depends=('glibc' 'gcc-libs')
+makedepends=('cargo')
+optdepends=('openssh: how the app reaches it'
+            'tailscale: --tailnet, and the web client for a phone')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "abromux-$pkgver"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "abromux-$pkgver"
+  cargo build --frozen --release -p abromux-server
+}
+
+package() {
+  cd "abromux-$pkgver"
+  install -Dm755 target/release/abromux-server "$pkgdir/usr/bin/abromux-server"
+  install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/user/abromux-server.service" <<UNIT
+[Unit]
+Description=abromux server: keeps abromux terminals running
+
+[Service]
+ExecStart=/usr/bin/abromux-server serve --socket %h/.local/state/abromux/server.sock --no-idle-exit
+Restart=on-failure
+KillMode=control-group
+
+[Install]
+WantedBy=default.target
+UNIT
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,30 @@
+[package]
+name = "abromux-server"
+version = "0.1.0"
+edition = "2024"
+description = "The abromux server: keeps terminals running, for the app on this machine or another (docs/server-plan.md). No UI, no libghostty: builds headless."
+license = "MIT"
+publish = false
+
+[features]
+vt = ["dep:abromux-vt"]
+
+[[bin]]
+name = "abromux-server"
+path = "src/main.rs"
+
+[dependencies]
+abromux-core = { path = "../abromux-core" }
+abromux-model = { path = "../abromux-model" }
+anyhow = "1"
+base64 = "0.22"
+sha1_smol = "1"
+# Parsing terminals (feature vt): libghostty-vt, which needs
+# scripts/build-libghostty.sh first. The app's server has it; a headless one
+# builds with plain cargo without it.
+abromux-vt = { path = "../abromux-vt", optional = true }
+libc = "0.2"
+portable-pty = "0.9"
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[dev-dependencies]

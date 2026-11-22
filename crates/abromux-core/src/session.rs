@@ -102,6 +102,13 @@ pub struct WorkspaceState {
     /// `env`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub env: std::collections::BTreeMap<String, String>,
+    /// The server on another machine its terminals run on (`ssh://host`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// Its forwarded ports (`abromux forward`): a port on its host, and the
+    /// port here it was reached at.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forwards: Vec<ForwardState>,
     /// Its tracked links (`crate::links`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<crate::links::Link>,
@@ -110,6 +117,14 @@ pub struct WorkspaceState {
     /// Its pinned tabs, in the sidebar's order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pinned: Vec<PinState>,
+}
+
+/// A forwarded port of a workspace.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ForwardState {
+    pub host: String,
+    pub port: u16,
+    pub local: u16,
 }
 
 /// A pinned tab: one in the layout, or a hidden one, saved whole.
@@ -173,9 +188,13 @@ pub enum TabState {
         /// The tab's name from `rename-tab`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
-        /// Its terminal in abromux's holder, still running (`abromux_term::hold`).
+        /// Its terminal in abromux's server, still running (`abromux_term::hold`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         held: Option<String>,
+        /// The server on another machine that `held` is on
+        /// (`abromux_term::remote`); None for this machine's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
         /// Its surface number, which that terminal's shell has in
         /// `ABROMUX_SURFACE_ID`; only kept with `held`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -207,6 +226,24 @@ pub enum TabState {
 }
 
 impl NodeState {
+    /// The server ids of the terminals in it that are kept running (`held`).
+    pub fn held_ids(&self) -> Vec<String> {
+        match self {
+            NodeState::Pane { tabs, .. } => tabs
+                .iter()
+                .filter_map(|t| match t {
+                    TabState::Terminal { held, .. } => held.clone(),
+                    _ => None,
+                })
+                .collect(),
+            NodeState::Split { children, .. } => {
+                let mut v = children[0].held_ids();
+                v.extend(children[1].held_ids());
+                v
+            }
+        }
+    }
+
     /// The highest surface number a terminal in it keeps.
     pub fn max_surface(&self) -> usize {
         match self {
@@ -318,6 +355,12 @@ mod tests {
                 group: Some(0),
                 home: Some("/tmp/ws".into()),
                 env: Default::default(),
+                host: Some("ssh://box".into()),
+                forwards: vec![ForwardState {
+                    host: "ssh://box".into(),
+                    port: 3000,
+                    local: 53000,
+                }],
                 links: vec![crate::links::Link {
                     kind: crate::links::Kind::Jira,
                     key: "PAY-1".into(),
@@ -371,6 +414,7 @@ mod tests {
                                 }),
                                 name: Some("server".into()),
                                 held: Some("4242-3".into()),
+                                host: Some("ssh://box".into()),
                                 surface: Some(7),
                                 edit: Some("/tmp/main.rs".into()),
                             }],

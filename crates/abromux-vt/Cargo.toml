@@ -1,0 +1,16 @@
+[package]
+name = "abromux-vt"
+version = "0.1.0"
+edition = "2024"
+description = "libghostty-vt bindings and a safe wrapper: terminal emulation without UI, for the app and the server"
+license = "MIT"
+publish = false
+
+[dependencies]
+anyhow = "1"
+image = "0.25"
+# inline terminal cell text (already a gpui dependency)
+smol_str = "0.2"
+
+[build-dependencies]
+bindgen = "0.72"

@@ -452,6 +452,71 @@ impl AbroMux {
         made
     }
 
+    /// A new workspace on another machine joins its server's group (one
+    /// with a workspace of that server in it, else a new one named after
+    /// it), unless it's in a group already: the sidebar groups by host.
+    pub(crate) fn join_server_group(&mut self, wi: usize, cx: &mut Context<Self>) {
+        let Some(host) = self.workspaces.get(wi).and_then(|w| w.host.clone()) else {
+            return;
+        };
+        if self.workspaces[wi].group.is_some() {
+            return;
+        }
+        let group = self
+            .workspaces
+            .iter()
+            .filter(|w| w.host.as_deref() == Some(host.as_str()))
+            .find_map(|w| w.group)
+            .unwrap_or_else(|| {
+                self.next_group += 1;
+                self.groups.push(Group {
+                    id: self.next_group,
+                    name: crate::servers::label(&host),
+                    color: None,
+                    collapsed: false,
+                    cleanup: false,
+                });
+                self.next_group
+            });
+        self.set_group(wi, Some(group), cx);
+    }
+
+    /// Group the workspaces on other machines that aren't in a group yet,
+    /// one group per server, named after it. Returns how many it made.
+    pub(crate) fn group_by_server(&mut self, cx: &mut Context<Self>) -> usize {
+        let mut made = 0;
+        let hosts: Vec<String> = self
+            .workspaces
+            .iter()
+            .filter(|w| w.group.is_none())
+            .filter_map(|w| w.host.clone())
+            .fold(vec![], |mut v, h| {
+                if !v.contains(&h) {
+                    v.push(h);
+                }
+                v
+            });
+        for h in hosts {
+            self.next_group += 1;
+            let id = self.next_group;
+            self.groups.push(Group {
+                id,
+                name: crate::servers::label(&h),
+                color: None,
+                collapsed: false,
+                cleanup: false,
+            });
+            for w in self.workspaces.iter_mut() {
+                if w.group.is_none() && w.host.as_deref() == Some(&h) {
+                    w.group = Some(id);
+                }
+            }
+            made += 1;
+        }
+        self.rearrange(cx, |_, _| ());
+        made
+    }
+
     pub(crate) fn toggle_group(&mut self, group: usize, cx: &mut Context<Self>) {
         if let Some(g) = self.groups.iter_mut().find(|g| g.id == group) {
             g.collapsed = !g.collapsed;
@@ -1173,7 +1238,8 @@ impl AbroMux {
             .map(|s| s.title(cx))
             .unwrap_or_default();
         let cwd = ws.cwd(cx);
-        let branch = cwd.as_deref().and_then(|c| self.branch(c));
+        // Only a folder on this machine has a branch to look up here.
+        let branch = ws.local_cwd(cx).as_deref().and_then(|c| self.branch(c));
         let path = cwd
             .as_deref()
             .map(|c| short_path(c, sb.path_last_segment_only));
@@ -1245,6 +1311,14 @@ impl AbroMux {
         let status = details
             .then(|| self.render_ws_status(ws, filled, &sb))
             .flatten();
+        // A workspace on another machine says which.
+        let host = ws.host.as_deref().map(crate::servers::label);
+        // Its server can't be reached now: it shows faded, until it can.
+        let away = ws
+            .host
+            .as_deref()
+            .and_then(crate::control_link::host_up)
+            .is_some_and(|up| !up);
         let description: Vec<String> = ws
             .description
             .as_deref()
@@ -1270,6 +1344,7 @@ impl AbroMux {
             .id(("ws", ws.id))
             .group(group.clone())
             .relative()
+            .when(away, |s| s.opacity(0.5))
             .mx(px(8.))
             // A group's workspaces sit in from its header.
             .when(ws.group.is_some(), |s| s.ml(px(GROUP_INDENT)))
@@ -1499,6 +1574,23 @@ impl AbroMux {
                                 .into_iter()
                                 .map(|l| div().min_w_0().line_clamp(2).child(l)),
                         ),
+                )
+            })
+            .when_some(host, |s, host| {
+                s.child(
+                    div()
+                        .mt(px(2.))
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .text_size(px(11. * z))
+                        .text_color(sub)
+                        .child(icon("globe").size(px(10. * z)).text_color(sub))
+                        .child(div().min_w_0().truncate().child(if away {
+                            format!("{host} · can't reach it")
+                        } else {
+                            host
+                        })),
                 )
             })
             .when(

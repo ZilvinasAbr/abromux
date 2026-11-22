@@ -23,6 +23,14 @@ Then commit `PKGBUILD` and `.SRCINFO` to the AUR's git repository
 The installed app doesn't update itself (pacman owns its files); it says
 when a new version is out and to update with the AUR helper.
 
+## AUR: `abromux-server`
+
+`abromux-server/PKGBUILD` builds the server alone from a release's source
+(plain cargo), for a machine without the app: `/usr/bin/abromux-server` and
+a systemd user unit (`systemctl --user enable --now abromux-server`). The
+same steps as above after a release. `scripts/package-server.sh` makes its
+tarball and a `.deb` (`--deb`, on Debian/Ubuntu).
+
 ## AppImage and tarball
 
 Both come from `scripts/package-linux.sh --dist` and go on the GitHub

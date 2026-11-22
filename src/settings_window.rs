@@ -116,6 +116,8 @@ struct SettingsView {
     text_fields: Vec<(Key, Entity<InputState>)>,
     /// Phone Access: a Tailscale login to let in, added on Enter.
     allow_input: Entity<InputState>,
+    /// Servers: a new server's name and address, added on Enter.
+    server_inputs: (Entity<InputState>, Entity<InputState>),
     _subscriptions: Vec<Subscription>,
 }
 
@@ -182,15 +184,31 @@ impl SettingsView {
                 }
             },
         ));
+        let server_name = cx.new(|cx| InputState::new(window, cx).placeholder("Name, like vps"));
+        let server_address =
+            cx.new(|cx| InputState::new(window, cx).placeholder("ssh://me@host, then Return"));
+        for input in [&server_name, &server_address] {
+            let (name, address) = (server_name.clone(), server_address.clone());
+            _subscriptions.push(cx.subscribe_in(
+                input,
+                window,
+                move |_, _, ev: &InputEvent, window, cx| {
+                    if let InputEvent::PressEnter { .. } = ev {
+                        add_server(&name, &address, window, cx);
+                    }
+                },
+            ));
+        }
         // Phone access changes on its own (Tailscale answering, phones
-        // coming and going): redraw when it does.
+        // coming and going), and so do servers' checks: redraw when they do.
         cx.spawn(async move |this, cx| {
-            let mut seen = crate::remote::changes();
+            let changes = || (crate::remote::changes(), crate::servers::changes());
+            let mut seen = changes();
             loop {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(700))
                     .await;
-                let now = crate::remote::changes();
+                let now = changes();
                 if now != seen {
                     seen = now;
                     if this.update(cx, |_, cx| cx.notify()).is_err() {
@@ -237,6 +255,7 @@ impl SettingsView {
             needs_modifier: false,
             text_fields,
             allow_input,
+            server_inputs: (server_name, server_address),
             _subscriptions,
         }
     }
@@ -796,6 +815,7 @@ fn pages(
     needs_modifier: bool,
     text_fields: &[(Key, Entity<InputState>)],
     allow_input: &Entity<InputState>,
+    server_inputs: &(Entity<InputState>, Entity<InputState>),
     cx: &App,
 ) -> Vec<Page> {
     vec![
@@ -807,7 +827,149 @@ fn pages(
         commands_page(cx),
         gitlab_page(text_fields),
         phone_page(allow_input, cx),
+        servers_page(server_inputs),
     ]
+}
+
+/// Add the server the Servers page's fields describe, and clear them.
+fn add_server(
+    name: &Entity<InputState>,
+    address: &Entity<InputState>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let n = name.read(cx).value().trim().to_string();
+    let a = address.read(cx).value().trim().to_string();
+    if n.is_empty() && a.is_empty() {
+        return;
+    }
+    // A name alone: the host is the name (`vps` → ssh://vps).
+    let a = if a.is_empty() { n.clone() } else { a };
+    let n = if n.is_empty() {
+        abromux_term::remote::Endpoint::parse(&a).map_or(a.clone(), |e| e.label())
+    } else {
+        n
+    };
+    match crate::servers::add(&n, &a) {
+        Ok(s) => {
+            crate::servers::check(&s.address);
+            name.update(cx, |i, cx| i.set_value("", window, cx));
+            address.update(cx, |i, cx| i.set_value("", window, cx));
+            cx.refresh_windows();
+        }
+        Err(e) => window.push_notification(
+            Notification::error(e)
+                .id::<SettingsView>()
+                .title("Server not added"),
+            cx,
+        ),
+    }
+}
+
+/// A text field as the settings rows draw them.
+fn field(input: &Entity<InputState>, width: f32) -> AnyElement {
+    div()
+        .w(px(width))
+        .h(px(26.))
+        .px(px(8.))
+        .flex()
+        .items_center()
+        .rounded(px(6.))
+        .border_1()
+        .border_color(rgb(pal().border))
+        .bg(rgb(pal().input_bg))
+        .child(
+            Input::new(input)
+                .appearance(false)
+                .text_size(px(12.))
+                .h_full()
+                .px_0()
+                .py_0(),
+        )
+        .into_any_element()
+}
+
+fn servers_page(inputs: &(Entity<InputState>, Entity<InputState>)) -> Page {
+    use crate::servers::Status;
+    let list = crate::servers::load();
+    let rows = list.into_iter().map(|s| {
+        let status = match crate::servers::status(&s.address) {
+            None => String::new(),
+            Some(Status::Checking) => " · checking…".into(),
+            Some(Status::Up(about)) => format!(" · up: {about}"),
+            Some(Status::Down(e)) => format!(" · can't reach it: {e}"),
+            Some(Status::Moved(e)) => format!(" · {e}"),
+        };
+        let (check, remove) = (s.address.clone(), s.name.clone());
+        info_row(
+            s.name.clone(),
+            format!("{}{status}", s.address),
+            move |_, _| {
+                let (check, remove) = (check.clone(), remove.clone());
+                div()
+                    .flex()
+                    .gap(px(6.))
+                    .items_center()
+                    .child(button("check-server", "Check").on_click(move |_, _, cx| {
+                        crate::servers::check(&check);
+                        cx.refresh_windows();
+                    }))
+                    .child(
+                        icon_button("remove-server", "icons/x.svg", "Remove").on_click(
+                            move |_, window, cx| {
+                                if let Err(e) = crate::servers::remove(&remove) {
+                                    window.push_notification(Notification::error(e), cx);
+                                }
+                                cx.refresh_windows();
+                            },
+                        ),
+                    )
+                    .into_any_element()
+            },
+        )
+    });
+    let (name, address) = inputs.clone();
+    let add = info_row(
+        "Add a server",
+        "Its name, and how ssh reaches it: ssh://user@host[:port], or a name from ~/.ssh/config.",
+        move |_, _| {
+            let (n, a) = (name.clone(), address.clone());
+            div()
+                .flex()
+                .gap(px(6.))
+                .items_center()
+                .child(field(&name, 110.))
+                .child(field(&address, 200.))
+                .child(
+                    button("add-server", "Add")
+                        .on_click(move |_, window, cx| add_server(&n, &a, window, cx)),
+                )
+                .into_any_element()
+        },
+    );
+    let path = crate::servers::path();
+    Page {
+        title: "Servers",
+        icon: "icons/globe.svg",
+        description: Some(
+            "Other machines' abromux servers, such as a Linux VPS: workspaces and tabs \
+             there keep running whether or not this app is open. ⌘⇧P → New Workspace on … \
+             or New Tab on … opens one. The server needs abromux-server installed and ssh \
+             that logs in without asking (a key in your agent, or Tailscale SSH).",
+        ),
+        groups: vec![
+            group("Servers", rows.chain([add])),
+            group(
+                "Where They're Kept",
+                [info_row(
+                    crate::workspace::tilde(&path.to_string_lossy()),
+                    "Not in config.json, so other versions of the app sharing it don't \
+                     trip on them. `abromux servers` changes it too.",
+                    |_, _| div().into_any_element(),
+                )],
+            ),
+        ],
+    }
 }
 
 fn general_page() -> Page {
@@ -2128,6 +2290,7 @@ impl Render for SettingsView {
             self.needs_modifier,
             &self.text_fields,
             &self.allow_input,
+            &self.server_inputs,
             cx,
         );
         self.page = self.page.min(pages.len() - 1);

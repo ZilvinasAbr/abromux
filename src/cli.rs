@@ -31,6 +31,8 @@ Commands:
   list-workspaces
   current-workspace
   new-workspace [--name <title>] [--description <text>] [--cwd <path>] [--command <text>] [--focus <true|false>]
+                [--host ssh://[user@]host[:port]]                (its terminals run on that machine's abromux-server)
+                [--host <server> --folder <name>]                (in a workspace folder made there)
                 [--group <ref>] [--layout <json>|@<file>]  (build a cmux-style layout: splits, panes, tabs)
   select-workspace --workspace <id|ref|index>
   close-workspace --workspace <id|ref|index>
@@ -46,6 +48,7 @@ Commands:
   group remove [--workspace <ref>]
   group rename|color|collapse|expand|ungroup [--group <ref>] [<title>|<color>]   (default: the workspace's group)
   group by-folder                                            (group ungrouped workspaces that share a repo/folder)
+  group by-server                                            (group ungrouped workspaces on other machines, one per server)
   restore-session [--from <stable|nightly|nightly-<name>|cmux|path>]
                                                              (reopen the session this launch restored, or another one,
                                                              cmux's included; only workspaces not already open)
@@ -56,9 +59,9 @@ Commands:
   last-pane [--workspace <id|ref|index>]                     (focus the pane focused before this one)
   swap-pane [--pane <id|ref|index>] [--workspace <id|ref|index>] [-L|-R|-U|-D]   (swap tabs with the pane that way; default -R)
   resize-pane [--pane <id|ref|index>] [--workspace <id|ref|index>] [-L|-R|-U|-D] [--amount <px>]   (default -R, panes.resizeStep: 20px)
-  new-pane [--type <terminal|browser>] [--direction <left|right|up|down>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>]
-  new-split <left|right|up|down> [--surface <ref>] [--workspace <ref>] [--type <terminal|browser>] [--url <url>] [--command <text>] [--focus <true|false>]
-  new-surface [--type <terminal|browser>] [--pane <ref>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>]
+  new-pane [--type <terminal|browser>] [--direction <left|right|up|down>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>] [--host <ssh://host|local>]
+  new-split <left|right|up|down> [--surface <ref>] [--workspace <ref>] [--type <terminal|browser>] [--url <url>] [--command <text>] [--focus <true|false>] [--host <ssh://host|local>]
+  new-surface [--type <terminal|browser>] [--pane <ref>] [--workspace <ref>] [--url <url>] [--command <text>] [--focus <true|false>] [--host <ssh://host|local>]
                                                              (new-pane, new-split and new-surface also take --label <name>,
                                                              to target the tab by that name, and --wait [--timeout <s>]:
                                                              wait for --command to finish and exit with its status)
@@ -137,6 +140,16 @@ Commands:
                                                              with the workspace folders script, `folder add <path>`,
                                                              `folder list|all|repos|resources|remove`)
   wait-for [-S|--signal] <name> [--timeout <seconds>]        (wait until another script signals <name>; default 30s)
+  forward <port> [--local <port>] [--workspace <ref>] [--host <server>]
+                                                             (a port here that reaches <port> on the workspace's host)
+  forward list | remove <port> | ports [--host <server>]     (forwards; what listens on the host)
+  servers [list]                                             (other machines' abromux servers, for --host <name>)
+  servers add <name> <ssh://[user@]host[:port]> [<other address>...]
+                                                             (one more, its other addresses tried in order; Settings › Servers too)
+  servers remove <name>
+  servers check [<name>...]                                  (ask each whether it's there: its machine and version)
+  --server <name> <command>...                               (run the command against that server: its app, or the
+                                                             server itself while the app is closed)
   remote [status]                                            (phone access over Tailscale: its URL, phones connected)
   remote enable [--https-port <443|8443|10000>] [--port <n>] (serve the phone app on this Mac's tailnet address with
                                                              `tailscale serve`, for its Tailscale user; prints a QR code)
@@ -323,6 +336,24 @@ pub fn run(argv: Vec<String>) -> i32 {
         // SAFETY: single-threaded at this point; read back by ipc::socket_path.
         unsafe { std::env::set_var("ABROMUX_SOCKET_PATH", s) };
     }
+    // `--server NAME`: the command goes to that server's control socket,
+    // over ssh (and from there to the app, or the server answers itself).
+    let _proxy = match opts.remove("server") {
+        Some(Value::String(name)) => match crate::servers::resolve(&name) {
+            Ok(Some(host)) => match server_proxy(&host) {
+                Ok(p) => {
+                    // SAFETY: single-threaded still; the proxy's thread
+                    // doesn't read the environment.
+                    unsafe { std::env::set_var("ABROMUX_SOCKET_PATH", p.path()) };
+                    Some(p)
+                }
+                Err(e) => return fail(format!("--server {name}: {e}")),
+            },
+            Ok(None) => None,
+            Err(e) => return fail(format!("--server: {e}")),
+        },
+        _ => None,
+    };
     let as_json = opts.remove("json").is_some();
     if pos.is_empty() || opts.contains_key("help") || pos[0] == "help" {
         print!("{}", help());
@@ -723,6 +754,10 @@ fn dispatch(
     mut opts: Map<String, Value>,
     as_json: bool,
 ) -> Result<(), String> {
+    // A file, not the app: works with the app closed.
+    if cmd == "servers" {
+        return servers_cmd(pos, as_json);
+    }
     // `link <sub> [arg]`, as `mr`.
     let mut link_sub = String::new();
     if cmd == "link" {
@@ -779,11 +814,37 @@ fn dispatch(
             {
                 *l = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
             }
-            // The app runs elsewhere: make the directory absolute here.
-            if let Some(Value::String(c)) = opts.get_mut("cwd")
+            // The app runs elsewhere: make the directory absolute here
+            // (unless it's on another host, where it means that host's).
+            if !opts.contains_key("host")
+                && let Some(Value::String(c)) = opts.get_mut("cwd")
                 && let Ok(abs) = std::path::absolute(&*c)
             {
                 *c = abs.to_string_lossy().into_owned();
+            }
+            // `--host H --folder NAME`: a workspace folder made on H (its
+            // server's `folder new`), the workspace's terminals in it.
+            if let Some(Value::String(name)) = opts.remove("folder") {
+                let host = match opts.get("host") {
+                    Some(Value::String(h)) => crate::servers::resolve(h)?.ok_or(
+                        "--folder with --host local: make it with New Workspace Folder… (⇧⌘I)",
+                    )?,
+                    _ => return Err("--folder needs --host (a folder here is ⇧⌘I)".into()),
+                };
+                let dir = remote_folder(&host, &name)?;
+                let tag = abromux_server::folder::slug(
+                    std::path::Path::new(&dir)
+                        .file_name()
+                        .map(|n| n.to_string_lossy())
+                        .unwrap_or_default()
+                        .as_ref(),
+                );
+                opts.insert("cwd".into(), json!(dir));
+                opts.entry("name").or_insert(json!(name));
+                opts.insert(
+                    "env".into(),
+                    json!({ "ABROMUX_WORKSPACE_DIR": dir, "COMPOSE_PROJECT_NAME": tag }),
+                );
             }
             ("workspace.create", |v| format!("OK {}", s(&v["ref"])))
         }
@@ -822,6 +883,51 @@ fn dispatch(
         "reorder-workspaces" => ("workspace.reorder_all", |v| {
             format!("OK {}", lines(v, s).replace('\n', ","))
         }),
+        "forward" => {
+            // `forward 3000` is `forward add 3000`.
+            let sub = match pos.first() {
+                None => "list".to_string(),
+                Some(p) if p.parse::<u16>().is_ok() => "add".to_string(),
+                Some(_) => pos.remove(0),
+            };
+            if matches!(sub.as_str(), "add" | "remove") {
+                let port = pos
+                    .first()
+                    .and_then(|p| p.parse::<u16>().ok())
+                    .ok_or(format!("forward {sub}: missing <port>"))?;
+                opts.insert("port".into(), json!(port));
+            }
+            if let Some(Value::String(l)) = opts.get("local").cloned() {
+                let l: u16 = l.parse().map_err(|_| "--local: a port".to_string())?;
+                opts.insert("local".into(), json!(l));
+            }
+            match sub.as_str() {
+                "add" => ("forward.add", |v| {
+                    format!(
+                        "OK {}  ->  {} port {}",
+                        s(&v["url"]),
+                        s(&v["server"]),
+                        v["port"]
+                    )
+                }),
+                "list" => ("forward.list", |v| {
+                    lines(v, |f| {
+                        format!(
+                            "{}  ->  {} port {}  ({})",
+                            s(&f["url"]),
+                            s(&f["server"]),
+                            f["port"],
+                            s(&f["workspace"])
+                        )
+                    })
+                }),
+                "remove" => ("forward.remove", |v| format!("OK removed {}", v["removed"])),
+                "ports" => ("forward.ports", |v| {
+                    lines(v, |p| format!("{:<6} {}", p["port"], s(&p["address"])))
+                }),
+                other => return Err(format!("forward: unknown subcommand {other:?}")),
+            }
+        }
         "group" => {
             let sub = if pos.is_empty() {
                 "list".to_string()
@@ -834,6 +940,7 @@ fn dispatch(
                 "add" => "group.add",
                 "remove" => "group.remove",
                 "by-folder" => "group.by_folder",
+                "by-server" => "group.by_server",
                 "rename" | "color" | "collapse" | "expand" | "ungroup" => {
                     let key = match sub.as_str() {
                         "rename" => Some("title"),
@@ -1067,6 +1174,7 @@ fn dispatch(
             }
             ("notification.create", |v| match v["id"].as_u64() {
                 Some(id) => format!("OK notification:{id} {}", s(&v["surface"])),
+                None if v["queued"] == true => "OK (kept until abromux is open)".into(),
                 None => "OK (you were looking at it)".into(),
             })
         }
@@ -1129,7 +1237,14 @@ fn dispatch(
                 return Err("set-status: missing <value>".into());
             }
             opts.insert("value".into(), json!(pos.join(" ")));
-            ("status.set", |v| format!("OK {}", s(&v["workspace"])))
+            ("status.set", |v| {
+                let kept = if v["queued"] == true {
+                    " (kept until abromux is open)"
+                } else {
+                    ""
+                };
+                format!("OK {}{kept}", s(&v["workspace"]))
+            })
         }
         "clear-status" => {
             first("key", &mut opts)?;
@@ -2268,7 +2383,11 @@ fn markdown(mut pos: Vec<String>, opts: Map<String, Value>) -> Result<(), String
 /// checked here so a typo fails before a tab opens.
 fn claude(mut pos: Vec<String>, mut opts: Map<String, Value>) -> Result<(), String> {
     use crate::claude_chat::{effort_name, is_model_name, mode_name};
-    let dir = if pos.is_empty() { ".".to_string() } else { pos.remove(0) };
+    let dir = if pos.is_empty() {
+        ".".to_string()
+    } else {
+        pos.remove(0)
+    };
     let dir = absolute(&dir);
     if !Path::new(&dir).is_dir() {
         return Err(format!("claude: no such folder: {dir}"));
@@ -2286,8 +2405,9 @@ fn claude(mut pos: Vec<String>, mut opts: Map<String, Value>) -> Result<(), Stri
         p.insert("model".into(), json!(m));
     }
     if let Some(e) = take(&mut opts, "effort") {
-        let e = effort_name(&e)
-            .ok_or_else(|| format!("claude: unknown effort {e:?} (low, medium, high, xhigh, max)"))?;
+        let e = effort_name(&e).ok_or_else(|| {
+            format!("claude: unknown effort {e:?} (low, medium, high, xhigh, max)")
+        })?;
         p.insert("effort".into(), json!(e));
     }
     if let Some(m) = take(&mut opts, "mode").or_else(|| take(&mut opts, "permission_mode")) {
@@ -2318,7 +2438,10 @@ fn claude(mut pos: Vec<String>, mut opts: Map<String, Value>) -> Result<(), Stri
         }
         None => call("surface.create", p)?,
     };
-    let r = v.get("surface").and_then(|s| s.get("ref")).unwrap_or(&v["ref"]);
+    let r = v
+        .get("surface")
+        .and_then(|s| s.get("ref"))
+        .unwrap_or(&v["ref"]);
     println!("OK {}", s(r));
     Ok(())
 }
@@ -2532,6 +2655,160 @@ fn created(v: &Value) -> String {
         s(&v["pane"]),
         s(&v["workspace"])
     )
+}
+
+/// Make workspace folder `name` on the server at `host`: its path there.
+fn remote_folder(host: &str, name: &str) -> Result<String, String> {
+    use std::io::BufRead;
+    let req = json!({ "op": "folder", "args": ["new", name] });
+    let (s, _) = abromux_term::remote::open_stream(host, Some(&req))?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(20)))
+        .ok();
+    let mut line = String::new();
+    std::io::BufReader::new(s)
+        .read_line(&mut line)
+        .map_err(|e| e.to_string())?;
+    let v: Value = serde_json::from_str(&line).map_err(|e| format!("{e}: {line:?}"))?;
+    if v["ok"] != true {
+        return Err(format!(
+            "{host}: {}",
+            v["error"].as_str().unwrap_or("refused")
+        ));
+    }
+    v["out"][0]
+        .as_str()
+        .map(String::from)
+        .ok_or_else(|| "the server said nothing".into())
+}
+
+/// A socket here whose connections go to the control socket of the server
+/// at `host` (`{"op":"control"}`, over ssh): what `--server` points the
+/// CLI at. Removed when dropped.
+struct ServerProxy {
+    dir: std::path::PathBuf,
+}
+
+impl ServerProxy {
+    fn path(&self) -> std::path::PathBuf {
+        self.dir.join("control.sock")
+    }
+}
+
+impl Drop for ServerProxy {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn server_proxy(host: &str) -> Result<ServerProxy, String> {
+    use std::os::unix::net::{UnixListener, UnixStream};
+    let dir = std::env::temp_dir().join(format!("abromux-cli-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let proxy = ServerProxy { dir };
+    let listener = UnixListener::bind(proxy.path()).map_err(|e| e.to_string())?;
+    // The first connection is made here, so a host that can't be reached
+    // fails the command at once with ssh's reason.
+    let first = abromux_term::remote::open_stream(host, Some(&json!({ "op": "control" })))?.0;
+    let host = host.to_string();
+    std::thread::spawn(move || {
+        let mut first = Some(first);
+        for conn in listener.incoming().flatten() {
+            let remote = match first.take() {
+                Some(r) => r,
+                None => match abromux_term::remote::open_stream(
+                    &host,
+                    Some(&json!({ "op": "control" })),
+                ) {
+                    Ok((r, _)) => r,
+                    Err(_) => continue,
+                },
+            };
+            let pump = |mut from: UnixStream, mut to: UnixStream| {
+                std::thread::spawn(move || {
+                    let _ = std::io::copy(&mut from, &mut to);
+                    let _ = to.shutdown(std::net::Shutdown::Write);
+                });
+            };
+            if let (Ok(a), Ok(b)) = (conn.try_clone(), remote.try_clone()) {
+                pump(a, remote);
+                pump(b, conn);
+            }
+        }
+    });
+    Ok(proxy)
+}
+
+/// `abromux servers [list|add|remove|check]` (src/servers.rs).
+fn servers_cmd(mut pos: Vec<String>, as_json: bool) -> Result<(), String> {
+    use crate::servers;
+    let sub = if pos.is_empty() {
+        "list".to_string()
+    } else {
+        pos.remove(0)
+    };
+    match (sub.as_str(), pos.as_slice()) {
+        ("list" | "ls", []) => {
+            let list = servers::load();
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&list).unwrap());
+            } else if list.is_empty() {
+                println!("No servers. Add one: abromux servers add <name> ssh://user@host");
+            } else {
+                let w = list.iter().map(|s| s.name.len()).max().unwrap_or(0);
+                for s in list {
+                    let also = if s.also.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  (then {})", s.also.join(", "))
+                    };
+                    println!("{:w$}  {}{also}", s.name, s.address);
+                }
+            }
+            Ok(())
+        }
+        ("add", [name, addresses @ ..]) if !addresses.is_empty() => {
+            let s = servers::add(name, &addresses.join(" "))?;
+            let also = if s.also.is_empty() {
+                String::new()
+            } else {
+                format!(" (then {})", s.also.join(", "))
+            };
+            println!("OK {} {}{also}", s.name, s.address);
+            Ok(())
+        }
+        ("remove" | "rm", [name]) => {
+            servers::remove(name)?;
+            println!("OK");
+            Ok(())
+        }
+        ("check", names) => {
+            let list: Vec<_> = servers::load()
+                .into_iter()
+                .filter(|s| names.is_empty() || names.iter().any(|n| n.eq_ignore_ascii_case(&s.name)))
+                .collect();
+            if list.is_empty() {
+                return Err("no such server".into());
+            }
+            // All at once: each may take ssh's timeout.
+            let checks: Vec<_> = list
+                .into_iter()
+                .map(|s| std::thread::spawn(move || (s.name.clone(), servers::check_now(&s.address))))
+                .collect();
+            let mut down = false;
+            for c in checks {
+                let (name, r) = c.join().unwrap();
+                match r {
+                    Ok(about) => println!("{name}: up ({about})"),
+                    Err(e) => {
+                        down = true;
+                        println!("{name}: can't reach it: {e}");
+                    }
+                }
+            }
+            if down { Err("some servers can't be reached".into()) } else { Ok(()) }
+        }
+        _ => Err("usage: abromux servers [list | add <name> <address> | remove <name> | check [<name>...]]".into()),
+    }
 }
 
 #[cfg(test)]

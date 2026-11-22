@@ -23,6 +23,26 @@ pub struct Method {
     pub params: &'static str,
 }
 
+/// What a method needs (docs/server-plan.md, phase 2): the workspaces'
+/// state (**model**: workspaces, panes, tabs, status, notifications, links,
+/// forwards), or the app's views (**view**: browser automation, input,
+/// focus, reading a screen, questions to a person). A server answering for
+/// an app that's away can only ever take model methods
+/// (abromux_server::control::RECORDED, ANSWERED).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Model,
+    View,
+}
+
+pub fn kind(method: &str) -> Kind {
+    if abromux_server::owned::is_model_method(method) {
+        Kind::Model
+    } else {
+        Kind::View
+    }
+}
+
 const fn m(
     name: &'static str,
     cli: &'static str,
@@ -65,6 +85,7 @@ const NEW_TAB: &str = "type?:string terminal (default), browser, markdown, claud
     path?:string For a markdown tab: the absolute path of the file;\
     command?:string For a terminal: typed into its shell, then Return;\
     cwd?:string For a terminal or Claude tab: where it runs;\
+    host?:string For a terminal: the abromux server it runs on, ssh://[user@]host[:port], or local for this machine (default: the workspace's);\
     session?:string For a Claude tab: the conversation to resume;\
     continue?:boolean For a Claude tab: resume the folder's latest conversation;\
     model?:string For a Claude tab: opus, sonnet, haiku, fable, default, or a full model name;\
@@ -123,6 +144,7 @@ pub const METHODS: &[Method] = &[
         "new-workspace",
         "Open a workspace, with one terminal or a cmux-style layout.",
         "name?:string Its name;description?:string A description under the name;cwd?:string Where its terminals start;\
+         host?:string Run its terminals on another machine's abromux server (ssh://[user@]host[:port]);\
          command?:string Typed into its first terminal;focus?:boolean Select it (default true);group?:ref A sidebar group to put it in;\
          layout?:string A layout as JSON: splits, panes and tabs;\
          folder?:string Its own folder (absolute): $ABROMUX_WORKSPACE_DIR in its terminals, and kept with it (default cwd);\
@@ -200,6 +222,78 @@ pub const METHODS: &[Method] = &[
         "group.by_folder",
         "group by-folder",
         "Group the ungrouped workspaces that share a repository or folder.",
+        "",
+    ),
+    m(
+        "forward.add",
+        "forward",
+        "A port here that reaches a port on the workspace's host, through its abromux server. The result has its url.",
+        "port:number The port on the host;local?:number The port here (default: a free one);@workspace;host?:string Another server (a name or ssh:// address)",
+    ),
+    m(
+        "forward.offer",
+        "",
+        "Internal: ports something started listening on, on a host (its server watches): offered to forward.",
+        "link:string The host;ports:array {port, address} each",
+    ),
+    m(
+        "forward.list",
+        "forward list",
+        "The forwarded ports, with their workspaces.",
+        "",
+    ),
+    m(
+        "forward.remove",
+        "forward remove",
+        "Stop forwarding a port (the host's or the local one).",
+        "port:number The port;@workspace",
+    ),
+    m(
+        "forward.ports",
+        "forward ports",
+        "What listens on the workspace's host: ports to forward.",
+        "@workspace;host?:string Another server",
+    ),
+    m(
+        "model.exec",
+        "",
+        "Internal: a model method the server has the app carry out (it makes or closes views); the app reports the result and the model's change.",
+        "link:string The server;exec:object token, method and params",
+    ),
+    m(
+        "model.snapshot",
+        "",
+        "Internal: a server's model, which the app's replica of it starts from.",
+        "link:string The server: local, or a host;model:object The model",
+    ),
+    m(
+        "model.applied",
+        "",
+        "Internal: changes a server applied to its model, for the app's replica.",
+        "link:string The server;events:array Stamped events",
+    ),
+    m(
+        "model.mirror",
+        "",
+        "Internal: a change a server made itself (status, progress, a name), for the app to show; then its replica follows.",
+        "link:string The server;call:object The method and params;events:array Stamped events",
+    ),
+    m(
+        "surface.reclaim",
+        "",
+        "Internal: hold again a terminal of this app's server it streamed while another app shared it.",
+        "held:string The server's id for it",
+    ),
+    m(
+        "surface.restream",
+        "",
+        "Internal: stream a terminal this app holds from its server, which another app shares.",
+        "held:string The server's id for it",
+    ),
+    m(
+        "group.by_server",
+        "group by-server",
+        "Group the ungrouped workspaces on other machines, one group per server.",
         "",
     ),
     m(
@@ -990,6 +1084,10 @@ pub fn describe(m: &Method) -> Value {
         "name": m.name,
         "description": m.doc,
         "cli": (!m.cli.is_empty()).then(|| format!("abromux {}", m.cli)),
+        "kind": match kind(m.name) {
+            Kind::Model => "model",
+            Kind::View => "view",
+        },
         "input_schema": {
             "type": "object",
             "properties": props,
@@ -1097,6 +1195,48 @@ mod tests {
                 m.name
             );
         }
+    }
+
+    /// What the server takes while the app is away is model methods only,
+    /// and real ones; the views' methods are the app's.
+    #[test]
+    fn methods_are_model_or_view() {
+        for m in abromux_server::control::RECORDED
+            .iter()
+            .chain(abromux_server::control::ANSWERED)
+            .chain(abromux_server::owned::OWNED)
+            .chain(abromux_server::owned::READS)
+        {
+            assert!(find(m).is_some(), "{m} isn't a method");
+            assert_eq!(kind(m), Kind::Model, "{m}");
+        }
+        for v in [
+            "browser.click",
+            "window.focus",
+            "surface.send_text",
+            "surface.read_text",
+            "ui.prompt",
+        ] {
+            assert_eq!(kind(v), Kind::View, "{v}");
+        }
+        for m in [
+            "workspace.create",
+            "surface.split",
+            "pane.create",
+            "forward.add",
+        ] {
+            assert_eq!(kind(m), Kind::Model, "{m}");
+        }
+        let models = METHODS
+            .iter()
+            .filter(|m| kind(m.name) == Kind::Model)
+            .count();
+        assert!(
+            models > 40 && models < METHODS.len() - 30,
+            "{models} of {}",
+            METHODS.len()
+        );
+        assert_eq!(describe(find("browser.click").unwrap())["kind"], "view");
     }
 
     #[test]

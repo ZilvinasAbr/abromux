@@ -20,6 +20,8 @@ gitlab = ["dep:abromux-gitlab"]
 abromux-plugin = { path = "crates/abromux-plugin" }
 abromux-core = { path = "crates/abromux-core" }
 abromux-term = { path = "crates/abromux-term" }
+abromux-server = { path = "crates/abromux-server" }
+abromux-model = { path = "crates/abromux-model" }
 abromux-platform = { path = "crates/abromux-platform" }
 abromux-browser = { path = "crates/abromux-browser" }
 abromux-gitlab = { path = "crates/abromux-gitlab", optional = true }

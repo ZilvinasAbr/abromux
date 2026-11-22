@@ -73,6 +73,15 @@ pub fn round_trip(
         serde_json::from_str(&reply).map_err(|e| anyhow::anyhow!("bad reply from abromux: {e}"))?;
     if reply["ok"].as_bool() == Some(true) {
         Ok((reply["result"].clone(), stream))
+    } else if reply["code"] == "app_closed" {
+        // The server answered for the app, which isn't open.
+        Err(CallError::NotRunning(
+            reply["error"]
+                .as_str()
+                .unwrap_or("abromux is not running")
+                .to_string(),
+        )
+        .into())
     } else {
         Err(CallError::Refused {
             message: reply["error"]

@@ -58,7 +58,7 @@ sudo apt install build-essential clang libclang-dev pkg-config libwayland-dev li
   libxkbcommon-x11-dev libfontconfig-dev libfreetype-dev libvulkan-dev libx11-dev libx11-xcb-dev libxcb1-dev
 ```
 
-Then the same `./scripts/build-libghostty.sh` (it fetches the Zig for this machine) and `cargo run --release`. The app needs a Vulkan driver (Mesa's, or `lavapipe` for software rendering) and finds Wayland through `WAYLAND_DISPLAY`. The window has no title bar of its own where the compositor draws none (Hyprland, sway); on GNOME, which leaves decorations to apps, it draws resize edges and minimize, maximize and close buttons at its top right (`ABROMUX_CLIENT_DECORATIONS=1` asks for them on any compositor). Its files follow the XDG folders: the session, history and caches in `$XDG_DATA_HOME/abromux` (`~/.local/share/abromux`), the control and holder sockets in `$XDG_RUNTIME_DIR/abromux`, prefs and logs in `$XDG_STATE_HOME/abromux` (`~/.local/state/abromux`), and the config in `$XDG_CONFIG_HOME/abromux` as on macOS. A nightly is a build with `ABROMUX_CHANNEL=nightly` (or `nightly-<name>`) set, and uses `abromux-nightly` (`abromux-nightly-<name>`) folders.
+Then the same `./scripts/build-libghostty.sh` (it fetches the Zig for this machine) and `cargo run --release`. The app needs a Vulkan driver (Mesa's, or `lavapipe` for software rendering) and finds Wayland through `WAYLAND_DISPLAY`. The window has no title bar of its own where the compositor draws none (Hyprland, sway); on GNOME, which leaves decorations to apps, it draws resize edges and minimize, maximize and close buttons at its top right (`ABROMUX_CLIENT_DECORATIONS=1` asks for them on any compositor). Its files follow the XDG folders: the session, history and caches in `$XDG_DATA_HOME/abromux` (`~/.local/share/abromux`), the control socket in `$XDG_RUNTIME_DIR/abromux`, prefs, logs and the server's socket in `$XDG_STATE_HOME/abromux` (`~/.local/state/abromux`), and the config in `$XDG_CONFIG_HOME/abromux` as on macOS. A nightly is a build with `ABROMUX_CHANNEL=nightly` (or `nightly-<name>`) set, and uses `abromux-nightly` (`abromux-nightly-<name>`) folders.
 
 To install it as a desktop app, `scripts/package-linux.sh` builds a release binary and installs it into `~/.local` (`--prefix` for another): `bin/abromux`, the desktop entry `dev.abromux.app.desktop` (named after the window's Wayland `app_id`, so docks and launchers match them) and the icons. `scripts/nightly.sh` does the same for `abromux-nightly`, with its own app id, icon and folders. `scripts/package-linux.sh --dist`, from a release tag, makes the tarball and AppImage for the GitHub release, and `packaging/aur/` has the AUR package.
 
@@ -183,6 +183,46 @@ Reopen Previous Session (⌘⇧O, File menu, or `abromux restore-session`) bring
 ### Importing from cmux
 
 File › Import cmux Session (also in the command palette, or `abromux restore-session --from cmux`) adds cmux's workspaces. It reads the file cmux restores itself from, `~/Library/Application Support/cmux/session-com.cmuxterm.app.json`, which cmux saves every few seconds while it runs and again on quit, so it works with cmux open or closed. `--from <file>` takes any cmux session file too, such as one under `cmux/session-history/`. What comes over: every cmux window's workspaces and their names (one an agent gave is replaced as abromux renames workspaces), the splits and their ratios, each pane's tabs and selected tab, the focused pane, each terminal's directory, font size and output, browser pages with their back/forward lists, and coding agents, which resume in their terminal (`claude --resume <id>` and so on) as on any restore. cmux's own extras (markdown panes, pinned workspaces, status pills, notifications) don't. As with Reopen Previous Session, a workspace already open here as it is in cmux is skipped, so importing twice adds nothing new. Shells start fresh in abromux; the programs running in cmux's terminals keep running there. An agent still working in cmux is resumed here as well, so quit it in cmux (or quit cmux) first if you don't want both on the same session.
+
+## Remote workspaces
+
+A workspace can run its terminals on another machine, such as a Linux VPS, which keeps them (and the agents in them) going whether or not the app is open:
+
+**Servers** (Settings › Servers) are those machines by name: add one with its name and address (`ssh://me@box`, `box:2222`, a Tailscale name, a host from `~/.ssh/config`, or `tailnet://box` for a server on the tailnet, below), see whether it's up with Check, remove it with ×. More addresses after the first, separated by commas, are tried in order when it doesn't answer (its LAN name, then its Tailscale name). The first Check remembers which machine answered, and says so if another one answers there later. Each server gets **New Workspace on …**, **New Tab on …** and **Open Workspaces from …** (its workspaces that aren't open here: after losing the session, or on another Mac) in ⌘⇧P. They're kept in `~/.config/abromux/servers.json`, beside `config.json` rather than in it, so other versions of the app that share the config file aren't upset by a key they don't know. From a shell, the app open or not:
+
+```bash
+abromux servers add vps ssh://me@box       # list, remove <name>, check [<name>...]
+abromux new-workspace --host vps --name "VPS"
+abromux new-surface --host vps             # one tab there, in any workspace (--host local: this Mac)
+```
+
+`--host` takes a server's name or an address, on `new-workspace`, `new-surface`, `new-pane` and `new-split`. A workspace or tab keeps the address, so renaming or removing the server later doesn't strand it.
+
+Its terminals, and every tab or split opened in it later, start there in the host user's login shell, in `--cwd` if that folder exists there (else the home folder). The sidebar shows the host under the name. Quitting the app leaves them running; the next launch takes them back with the screen as it was and what they printed meanwhile, as with local terminals. A broken connection is retried in the background (a dim line in the terminal says so), and the terminal picks up where it was. Closing a tab or the workspace ends its shell there.
+
+On the host, install the server, which needs only Rust (no Zig, no Wayland):
+
+```bash
+cargo install --git https://github.com/ZilvinasAbr/abromux abromux-server   # into ~/.cargo/bin
+```
+
+Or a package: `scripts/package-server.sh [--deb] [--vt]` makes a tarball (with an `abromux` link and a systemd unit) and a `.deb`; there's an AUR `abromux-server` too. `abromux-server install [--tailnet]` runs it as a systemd user service, so it's up from boot (with `loginctl enable-linger`).
+
+The app reaches it with `ssh HOST abromux-server --stdio`, which starts the server when it isn't running. That needs ssh to log in without asking anything: a key in your agent, or Tailscale SSH. One ssh connection per host is shared by all its terminals (`ControlMaster`, sockets in `/tmp/abromux-ssh-<uid>`). `$ABROMUX_SSH` runs another ssh program, and `$ABROMUX_REMOTE_COMMAND` replaces what runs on the host. The server keeps its socket in `~/.local/state/abromux/server.sock`; it ends with its last terminal, so a reboot of the host ends them too. If your host ends a user's processes when they log out (`KillUserProcesses`), run `loginctl enable-linger` there.
+
+**Agents there report here.** The shells there get the server's control socket (`ABROMUX_SOCKET_PATH`), and the app keeps a link to each server it has something on. Run `abromux-server hooks install` on the host once (or link `abromux-server` as `abromux` on its PATH, and `abromux hooks install`): Claude Code, Codex and the others show Running or Needs input, notify, and name the workspace as they do here. `abromux notify`, `set-status`, `set-progress`, `log` and `call <method>` work there too. While the app is closed, the server keeps those reports, and a notification a terminal prints, and the app shows them when it's back. A server the app can't reach fades its workspaces in the sidebar. A new workspace on a server goes into that server's group (⌘⇧P **Group Workspaces by Server** groups older ones), and ⌘P shows which server each workspace is on and finds them by its name. `abromux --server vps <command>` runs any command through that server.
+
+**This Mac's server is the same.** It keeps a copy of the session too, and the app starts from it when it's newer than its own `session.json` (or that's gone). It also owns the control socket now, so `abromux` commands and agent hooks keep working while the app is closed: it answers `list-workspaces`, keeps status, progress, the log, notifications and agent reports, and the app shows them at its next launch. Another app (another Mac, or the web client) can open a terminal this app has: the app shares it, and holds it alone again once the other is gone.
+
+**Workspace folders there.** `abromux new-workspace --host vps --folder "fix login"` makes a workspace folder on the host (as ⇧⌘I does here: `AGENTS.md`, `CLAUDE.md`, `.abromux/workspace.json`) and opens the workspace in it; `abromux folder add ~/repos/x` in its terminals makes a worktree there, and `abromux-server folder list|all|remove` the rest.
+
+**The model.** Each server keeps the model of the app's workspaces (theirs, for a remote one) and is its source: it numbers every change, the app's included, and sets status pills, progress and workspace names itself (the app shows them), so they're right whether or not the app is open. `{"op":"model"}` on its socket gives it, and `{"op":"subscribe"}` gives it and then every change, for scripts and other clients.
+
+**Ports.** A dev server on the host isn't on this machine: `abromux forward 3000` (in the workspace) makes `http://127.0.0.1:<port>` here reach port 3000 there, through the server. `forward list`, `forward remove 3000`, and `forward ports` (what listens there). Forwards are the workspace's: saved with it, on the same port next time, and closed with it. When something starts listening on a host (a dev server), the app says so, and ⌘⇧P **Forward Port N of <server>** forwards it.
+
+**Tailscale and a phone.** `abromux-server --tailnet` (or `install --tailnet`) also listens on the host's Tailscale addresses, port 7297, letting in only its Tailscale user (and `--tailnet-allow` logins). An app reaches it at `tailnet://host`, no ssh needed, and a phone's browser at `http://host:7297/`: the terminals there, each in a terminal with the keys a phone keyboard lacks (`#term=<id>` opens one directly, for the Home Screen). Server-side parsing (`--vt` packages, or the app's own server) gives it the screen as it is; without it, what was printed since the last app left.
+
+[server-plan.md](server-plan.md) has how it's built and what's left.
 
 ## Sidebar
 
@@ -386,16 +426,16 @@ abromux's own settings live in `~/.config/abromux/config.json` (or `$XDG_CONFIG_
 `"persistence"` picks what keeps terminals going when abromux quits:
 
 - `"abromux"` (the default): shells keep running after abromux quits, like a tmux session you detached from, and the next launch takes them back. A dev server keeps serving and an agent keeps working.
-  - **The holder:** shells run in `abromux hold`, a small background process. The app starts it on demand, one for the release and one for the nightly. It exits once it has no terminals left, and nothing needs installing.
-  - **While abromux runs**, the holder passes each PTY to the app, which reads and writes it directly. Speed, latency and CPU are the same as with `"cmux-like"`.
-  - **On quit**, each terminal's exact state is saved with libghostty-vt's snapshot format, in `held/` next to the session. The holder then keeps reading the shells.
+  - **The server:** shells run in `abromux server` (it used to be `abromux hold`), a small background process. The app starts it on demand, one for the release and one for each nightly. It exits once it has no terminals left, and nothing needs installing. It's the same program that runs on another machine for [remote workspaces](#remote-workspaces).
+  - **While abromux runs**, the server passes each PTY to the app, which reads and writes it directly. Speed, latency and CPU are the same as with `"cmux-like"`.
+  - **On quit**, each terminal's exact state is saved with libghostty-vt's snapshot format, in `held/` next to the session. The server then keeps reading the shells.
   - **On the next launch**, you get the same shell back: the screen as you left it, then whatever it printed while abromux was closed (up to 16 MB per terminal).
   - **After a crash** there's no snapshot, so only the output since the crash comes back. A full-screen program redraws when the pane is resized.
-  - **Closing a tab or workspace** ends its shells; quitting doesn't. `pkill -f "abromux hold"` ends every held shell without opening abromux.
-  - **After a reboot**, abromux falls back to the `"cmux-like"` restore. So do runs that don't restore a session (`ABROMUX_NO_RESTORE`, `ABROMUX_DEMO`, `ABROMUX_SCRIPT`), whose shells are never held. `$ABROMUX_HOLD_SOCKET` moves the holder's socket.
+  - **Closing a tab or workspace** ends its shells; quitting doesn't. `pkill -f "abromux server"` ends every held shell without opening abromux.
+  - **After a reboot**, abromux falls back to the `"cmux-like"` restore. So do runs that don't restore a session (`ABROMUX_NO_RESTORE`, `ABROMUX_DEMO`, `ABROMUX_SCRIPT`), whose shells are never held. `$ABROMUX_SERVER_SOCKET` (or the old `$ABROMUX_HOLD_SOCKET`) moves the server's socket. After an update from a version that had `abromux hold`, its shells are still taken back from it.
 - `"cmux-like"`: shells end with the app, as in cmux, and the next launch restores them as described in [Session restore](#session-restore).
 
-The palette (⌘⇧P) has **Persistence: abromux** and **Persistence: cmux-like** to switch without editing the file. They write the key into `config.json` (the rest of the file stays as you wrote it) and reload. It applies to terminals opened after the change, and a reload is enough. A terminal already running in the holder is taken back at the next launch, whatever the setting says.
+The palette (⌘⇧P) has **Persistence: abromux** and **Persistence: cmux-like** to switch without editing the file. They write the key into `config.json` (the rest of the file stays as you wrote it) and reload. It applies to terminals opened after the change, and a reload is enough. A terminal already running in the server is taken back at the next launch, whatever the setting says.
 
 ### Browser engine
 
@@ -896,7 +936,8 @@ History lives in `<git common dir>/abromux-perf/history.jsonl`, outside the tree
 ## Layout
 
 - `crates/abromux-core`: logic with no UI and no OS calls (paths, the OSC 99 scanner, the control-socket protocol, the settings model as it moves there)
-- `crates/abromux-term`: `ghostty/`, the libghostty-vt bindings and a safe wrapper (`Terminal`, `Frame` snapshots, key encoding, selection); `pty.rs` and `hold.rs`, the PTYs and the holder that keeps shells running
+- `crates/abromux-term`: `ghostty/`, the libghostty-vt bindings and a safe wrapper (`Terminal`, `Frame` snapshots, key encoding, selection); `pty.rs` and `hold.rs`, the PTYs and the app's side of the server that keeps shells running; `remote.rs`, terminals streamed from another machine's server
+- `crates/abromux-server`: `abromux server` / `abromux-server`, which keeps terminals running (no UI, no libghostty: it builds on a headless Linux box); its wire format is in `abromux-core`'s `wire.rs`. The plan it's part of is [server-plan.md](server-plan.md)
 - `crates/abromux-platform`: every OS service the app uses (notifications, the menu-bar bell, App Nap, appearance, the dock, window drags, prefs, the channel and its folders), with the Objective-C parts in `src/macos/`
 - `crates/abromux-browser`: the browser page behind `PageBackend` (`backend/wkwebview.rs` on macOS), plus automation, find, history and downloads
 - `src/terminal.rs`: PTY plumbing plus a custom GPUI `Element` that paints the grid
