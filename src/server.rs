@@ -34,7 +34,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-type Request = (Value, oneshot::Sender<Value>, Hangup);
+pub(crate) type Request = (Value, oneshot::Sender<Value>, Hangup);
 
 /// Resolves once the connection a request came on has closed.
 pub(crate) type Hangup = futures::future::Shared<oneshot::Receiver<()>>;
@@ -157,10 +157,16 @@ fn log_entries(list: &std::collections::VecDeque<Value>, p: &Value) -> anyhow::R
     Ok(out)
 }
 
-/// Bind the socket and start serving. Returns the path, or None if another
-/// abromux already owns it.
+/// Start serving the control socket: through the server, which owns it
+/// (crate::control_link), else by binding it here. Returns the path, or
+/// None if another abromux already owns it.
 pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> {
     let path = ipc::socket_path();
+    let (tx, rx) = mpsc::unbounded::<Request>();
+    if crate::control_link::attach(&path, tx.clone()).is_some() {
+        serve_requests(rx, window, cx);
+        return Some(path);
+    }
     if path.exists() {
         if UnixStream::connect(&path).is_ok() {
             eprintln!(
@@ -182,14 +188,28 @@ pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> 
         }
     };
 
-    let (tx, mut rx) = mpsc::unbounded::<Request>();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let tx = tx.clone();
             std::thread::spawn(move || serve(stream, tx));
         }
     });
+    serve_requests(rx, window, cx);
+    let stale = path.clone();
+    cx.on_app_quit(move |_, _| {
+        let _ = std::fs::remove_file(&stale);
+        async {}
+    })
+    .detach();
+    Some(path)
+}
 
+/// Answer the control socket's requests on the main thread, as they come.
+fn serve_requests(
+    mut rx: mpsc::UnboundedReceiver<Request>,
+    window: &mut Window,
+    cx: &mut Context<AbroMux>,
+) {
     cx.spawn_in(window, async move |this, cx| {
         while let Some((req, reply, gone)) = rx.next().await {
             let id = req.get("id").cloned().unwrap_or(Value::Null);
@@ -222,16 +242,9 @@ pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> 
         }
     })
     .detach();
-    let stale = path.clone();
-    cx.on_app_quit(move |_, _| {
-        let _ = std::fs::remove_file(&stale);
-        async {}
-    })
-    .detach();
-    Some(path)
 }
 
-fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
+pub(crate) fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
@@ -3868,6 +3881,32 @@ impl AbroMux {
             None => json!(null),
         };
         Ok(Reply::Now(v))
+    }
+
+    /// What the server answers from while the app is closed
+    /// (crate::control_link): each workspace as `workspace.list` has it,
+    /// with its host and its tabs' refs, so it can tell whose an agent's
+    /// report is.
+    pub(crate) fn control_state(&self, cx: &App) -> Value {
+        json!(
+            (0..self.workspaces.len())
+                .map(|i| {
+                    let ws = &self.workspaces[i];
+                    let mut v = self.describe_ws(i, false, cx);
+                    let ids = ws
+                        .panes()
+                        .flat_map(|p| p.tabs.iter().map(|s| s.entity_id()))
+                        .chain(ws.hidden.iter().map(|h| h.surface.entity_id()));
+                    v["surfaces"] = json!(
+                        ids.filter_map(|id| self.surface_refs.get(&id))
+                            .map(|n| format!("surface:{n}"))
+                            .collect::<Vec<_>>()
+                    );
+                    v["host"] = json!(ws.host);
+                    v
+                })
+                .collect::<Vec<_>>()
+        )
     }
 
     fn describe_ws(&self, wi: usize, panes: bool, cx: &App) -> Value {

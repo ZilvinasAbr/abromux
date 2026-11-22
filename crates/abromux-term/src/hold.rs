@@ -43,6 +43,23 @@ pub fn set_dir(dir: PathBuf, legacy: PathBuf) {
     let _ = DIRS.set((dir, legacy));
 }
 
+/// The app's control socket (`abromux.sock`), which a server this app
+/// starts serves (abromux_server::control). Set once at launch.
+static CONTROL: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+pub fn set_control(path: PathBuf) {
+    let _ = CONTROL.set(path);
+}
+
+/// How this app starts its server: `abromux server --socket .. --control ..`.
+pub fn server_args() -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec!["server".into(), "--socket".into(), socket_path().into()];
+    if let Some(c) = CONTROL.get() {
+        args.extend(["--control".into(), c.clone().into()]);
+    }
+    args
+}
+
 fn dirs() -> &'static (PathBuf, PathBuf) {
     DIRS.get().expect("hold::set_dir before using the server")
 }
@@ -202,8 +219,7 @@ fn request(
 fn connect() -> Result<UnixStream, String> {
     let path = socket_path();
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let args: Vec<OsString> = vec!["server".into(), "--socket".into(), path.clone().into()];
-    abromux_server::connect_or_start(&path, &exe, &args)
+    abromux_server::connect_or_start(&path, &exe, &server_args())
         .map_err(|e| format!("can't start abromux server: {e}"))
 }
 
@@ -258,6 +274,7 @@ mod tests {
         let s = sock.clone();
         let opts = abromux_server::Options {
             version: "test".into(),
+            ..Default::default()
         };
         std::thread::spawn(move || abromux_server::serve(&s, &opts));
         while UnixStream::connect(&sock).is_err() {

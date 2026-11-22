@@ -1078,6 +1078,7 @@ fn dispatch(
             }
             ("notification.create", |v| match v["id"].as_u64() {
                 Some(id) => format!("OK notification:{id} {}", s(&v["surface"])),
+                None if v["queued"] == true => "OK (kept until abromux is open)".into(),
                 None => "OK (you were looking at it)".into(),
             })
         }
@@ -1140,7 +1141,14 @@ fn dispatch(
                 return Err("set-status: missing <value>".into());
             }
             opts.insert("value".into(), json!(pos.join(" ")));
-            ("status.set", |v| format!("OK {}", s(&v["workspace"])))
+            ("status.set", |v| {
+                let kept = if v["queued"] == true {
+                    " (kept until abromux is open)"
+                } else {
+                    ""
+                };
+                format!("OK {}{kept}", s(&v["workspace"]))
+            })
         }
         "clear-status" => {
             first("key", &mut opts)?;

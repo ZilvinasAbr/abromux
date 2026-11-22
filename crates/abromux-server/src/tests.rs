@@ -9,6 +9,7 @@ fn server(name: &str) -> PathBuf {
     let s = sock.clone();
     let opts = Options {
         version: "test".into(),
+        ..Default::default()
     };
     std::thread::spawn(move || serve(&s, &opts));
     while UnixStream::connect(&sock).is_err() {
@@ -219,4 +220,163 @@ fn bad_requests_are_refused() {
         json!({ "op": "attach", "id": "1-1", "stream": true }),
     );
     assert_eq!(reply["ok"], false);
+}
+
+// ---- the control socket -------------------------------------------------
+
+/// A server with a control socket, in a thread.
+fn server_with_control(name: &str) -> (PathBuf, PathBuf) {
+    let dir = std::env::temp_dir().join(format!("abx-c-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let sock = dir.join("s.sock");
+    let control = dir.join("c.sock");
+    let (s, c) = (sock.clone(), control.clone());
+    std::thread::spawn(move || {
+        let opts = Options {
+            version: "test".into(),
+            control: Some(c),
+            ..Default::default()
+        };
+        serve(&s, &opts)
+    });
+    while UnixStream::connect(&control).is_err() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    (sock, control)
+}
+
+/// One control call: `abromux`'s round trip.
+fn ctl(control: &Path, method: &str, params: Value) -> Value {
+    let mut conn = UnixStream::connect(control).unwrap();
+    conn.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    writeln!(
+        conn,
+        "{}",
+        json!({ "id": 7, "method": method, "params": params })
+    )
+    .unwrap();
+    let mut line = String::new();
+    BufReader::new(conn).read_line(&mut line).unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+/// The app's link: its reader, and a function that answers each control
+/// connection the server hands it with `answer`.
+fn app_link(sock: &Path) -> (BufReader<UnixStream>, UnixStream) {
+    let (reply, r, w) = request(sock, json!({ "op": "app" }));
+    assert_eq!(reply["ok"], true, "{reply}");
+    (r, w)
+}
+
+/// Take the next `{"open":N}` from the link, open the app's side and
+/// answer one request on it the way `f` says.
+fn serve_one(sock: &Path, link: &mut BufReader<UnixStream>, f: impl Fn(&Value) -> Value) -> u64 {
+    let mut line = String::new();
+    link.read_line(&mut line).unwrap();
+    let open: Value = serde_json::from_str(&line).unwrap();
+    let n = open["open"].as_u64().expect("an open");
+    let mut side = UnixStream::connect(sock).unwrap();
+    side.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    writeln!(side, "{}", json!({ "op": "control", "conn": n })).unwrap();
+    let mut r = BufReader::new(side.try_clone().unwrap());
+    let mut req = String::new();
+    r.read_line(&mut req).unwrap();
+    let req: Value = serde_json::from_str(&req).unwrap();
+    let out = f(&req);
+    writeln!(side, "{out}").unwrap();
+    n
+}
+
+#[test]
+fn without_the_app_the_server_answers_and_keeps() {
+    let (sock, control) = server_with_control("away");
+    assert_eq!(ctl(&control, "system.ping", json!({}))["result"], "pong");
+    let r = ctl(&control, "status.set", json!({ "key": "k", "value": "v" }));
+    assert_eq!(r["result"]["queued"], true, "{r}");
+    let r = ctl(&control, "window.focus", json!({}));
+    assert_eq!(r["code"], "app_closed");
+    let (hello, ..) = request(&sock, json!({ "op": "hello" }));
+    assert_eq!(hello["protocol"], 3);
+    assert_eq!(hello["app"], false);
+    assert_eq!(hello["control"], json!(control));
+}
+
+#[test]
+fn with_the_app_calls_go_to_it_and_kept_ones_are_replayed() {
+    let (sock, control) = server_with_control("app");
+    // Kept while away.
+    ctl(
+        &control,
+        "notification.create",
+        json!({ "body": "while away" }),
+    );
+
+    let (mut link, _w) = app_link(&sock);
+    let (second, ..) = request(&sock, json!({ "op": "app" }));
+    assert_eq!(second["ok"], false, "one app at a time");
+    // First the replay of what was kept.
+    let n = serve_one(&sock, &mut link, |req| {
+        assert_eq!(req["method"], "notification.create");
+        assert_eq!(req["params"]["body"], "while away");
+        json!({ "id": req["id"], "ok": true, "result": {} })
+    });
+    assert_eq!(n, 0, "the replay is connection 0");
+
+    // Then a live call, answered by the app.
+    let c = control.clone();
+    let caller = std::thread::spawn(move || ctl(&c, "window.focus", json!({})));
+    serve_one(&sock, &mut link, |req| {
+        assert_eq!(req["method"], "window.focus");
+        json!({ "id": req["id"], "ok": true, "result": "focused by the app" })
+    });
+    let r = caller.join().unwrap();
+    assert_eq!(r["result"], "focused by the app");
+
+    // State the app sends is what the server answers with once it's gone.
+    writeln!(
+        &_w,
+        "{}",
+        json!({ "op": "state", "workspaces": [{ "ref": "workspace:3", "name": "VPS", "selected": true, "surfaces": [] }] })
+    )
+    .unwrap();
+    drop((link, _w));
+    std::thread::sleep(Duration::from_millis(100));
+    let r = ctl(&control, "workspace.list", json!({}));
+    assert_eq!(r["result"][0]["name"], "VPS", "{r}");
+    let r = ctl(&control, "status.set", json!({ "key": "k", "value": "v" }));
+    assert_eq!(r["result"]["workspace"], "workspace:3");
+}
+
+/// A call waiting for the app when its link drops is answered by the server.
+#[test]
+fn a_call_waiting_on_a_gone_app_is_answered_by_the_server() {
+    let (sock, control) = server_with_control("gone");
+    let (mut link, w) = app_link(&sock);
+    let c = control.clone();
+    let caller = std::thread::spawn(move || ctl(&c, "system.ping", json!({})));
+    let mut line = String::new();
+    link.read_line(&mut line).unwrap();
+    assert!(line.contains("open"));
+    drop((link, w));
+    let r = caller.join().unwrap();
+    assert_eq!(r["result"], "pong");
+}
+
+/// `{"op":"control"}` on the server's own socket is a control connection
+/// (what `--server` sends over ssh).
+#[test]
+fn control_over_the_server_socket() {
+    let (sock, _control) = server_with_control("direct");
+    let mut conn = UnixStream::connect(&sock).unwrap();
+    conn.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    write!(
+        conn,
+        "{}\n{}\n",
+        json!({ "op": "control" }),
+        json!({ "id": 1, "method": "system.ping" })
+    )
+    .unwrap();
+    let mut line = String::new();
+    BufReader::new(conn).read_line(&mut line).unwrap();
+    assert!(line.contains("pong"), "{line}");
 }

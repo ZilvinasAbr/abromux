@@ -7,6 +7,7 @@ mod channel;
 mod claude_chat;
 mod cli;
 mod config;
+mod control_link;
 mod crash;
 mod csd;
 mod debug;
@@ -693,9 +694,15 @@ impl AbroMux {
             let mut last = None;
             loop {
                 Timer::after(Duration::from_secs(5)).await;
-                let Ok(s) = this.update(cx, |this, cx| this.snapshot(false, cx)) else {
+                let Ok((s, state)) = this.update(cx, |this, cx| {
+                    (this.snapshot(false, cx), this.control_state(cx))
+                }) else {
                     break;
                 };
+                // The server answers for the app from this while it's closed.
+                if let Some(link) = control_link::current() {
+                    link.push_state(state, serde_json::to_value(&s).unwrap_or_default());
+                }
                 if last.as_ref() != Some(&s) {
                     session::save(&s);
                     last = Some(s);
@@ -705,7 +712,14 @@ impl AbroMux {
         .detach();
         cx.on_app_quit(|this, cx| {
             this.freeze_held(cx);
-            session::save(&this.snapshot(true, cx));
+            let s = this.snapshot(true, cx);
+            if let Some(link) = control_link::current() {
+                link.push_state(
+                    this.control_state(cx),
+                    serde_json::to_value(&s).unwrap_or_default(),
+                );
+            }
+            session::save(&s);
             async {}
         })
         .detach();
@@ -3789,18 +3803,21 @@ fn main() {
     run_app(std::env::var("ABROMUX_CWD").ok());
 }
 
-/// `abromux server [--socket PATH] [--stdio]`: serve, or (`--stdio`) bridge
-/// stdin and stdout to this app's server, starting it if needed.
+/// `abromux server [--socket PATH] [--control PATH] [--stdio]`: serve, or
+/// (`--stdio`) bridge stdin and stdout to this app's server, starting it if
+/// needed.
 fn server_command(args: &[String]) -> i32 {
     let mut socket = None;
+    let mut control = None;
     let mut stdio = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--socket" => socket = it.next().map(std::path::PathBuf::from),
+            "--control" => control = it.next().map(std::path::PathBuf::from),
             "--stdio" => stdio = true,
             _ => {
-                eprintln!("usage: abromux server [--socket PATH] [--stdio]");
+                eprintln!("usage: abromux server [--socket PATH] [--control PATH] [--stdio]");
                 return 2;
             }
         }
@@ -3808,12 +3825,14 @@ fn server_command(args: &[String]) -> i32 {
     let socket = socket.unwrap_or_else(hold::socket_path);
     let res = if stdio {
         let exe = std::env::current_exe().unwrap_or_else(|_| "abromux".into());
-        let args: Vec<std::ffi::OsString> =
-            vec!["server".into(), "--socket".into(), socket.clone().into()];
-        abromux_server::connect_or_start(&socket, &exe, &args).and_then(abromux_server::stdio)
+        hold::set_control(ipc::socket_path());
+        abromux_server::connect_or_start(&socket, &exe, &hold::server_args())
+            .and_then(abromux_server::stdio)
     } else {
         let opts = abromux_server::Options {
             version: env!("ABROMUX_VERSION").into(),
+            control,
+            ..Default::default()
         };
         abromux_server::serve(&socket, &opts)
     };
@@ -3827,6 +3846,8 @@ fn server_command(args: &[String]) -> i32 {
 }
 
 fn run_app(cwd: Option<String>) {
+    // The server this app starts serves its control socket too.
+    hold::set_control(ipc::socket_path());
     let app = Application::new().with_assets(Assets);
     // Files opened from Finder (editor.rs). They can come before the window
     // is up, at launch, so they wait in the channel until it is.

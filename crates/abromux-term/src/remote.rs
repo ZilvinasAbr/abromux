@@ -603,7 +603,7 @@ fn request(conn: &mut Conn, req: &Value) -> Result<Value, String> {
         Err(e) => return Err(conn.error(e)),
     };
     // Revision 1 is a holder, which can't stream.
-    if reply["protocol"].as_u64().unwrap_or(1) < wire::PROTOCOL {
+    if reply["protocol"].as_u64().unwrap_or(1) < wire::STREAMS {
         return Err("the server there is too old to stream terminals; update it".into());
     }
     writeln!(conn.write, "{req}")
@@ -719,6 +719,7 @@ mod tests {
         let s = sock.clone();
         let opts = abromux_server::Options {
             version: "test".into(),
+            ..Default::default()
         };
         std::thread::spawn(move || abromux_server::serve(&s, &opts));
         while UnixStream::connect(&sock).is_err() {
@@ -818,6 +819,7 @@ mod tests {
         wait_for(&feed, "retrying");
         let opts = abromux_server::Options {
             version: "test".into(),
+            ..Default::default()
         };
         let s = sock.clone();
         std::thread::spawn(move || abromux_server::serve(&s, &opts));

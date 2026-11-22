@@ -6,7 +6,12 @@ use std::io::{self, Read, Write};
 
 /// The protocol revision `hello` reports. A server that answers `hello`
 /// with an error is revision 1: the holder before it became the server.
-pub const PROTOCOL: u64 = 2;
+/// 2 streams terminals; 3 adds the control socket (`app`, `control`).
+pub const PROTOCOL: u64 = 3;
+/// The first revision that streams terminals.
+pub const STREAMS: u64 = 2;
+/// The first revision with the control socket.
+pub const CONTROL: u64 = 3;
 
 /// Server → app: the PTY's output.
 pub const OUTPUT: u8 = 1;

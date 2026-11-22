@@ -18,7 +18,16 @@
 //! Protocol: JSON lines, then frames for a streamed terminal. See
 //! docs/server-plan.md, "Wire protocol".
 //!
-//! - `{"op":"hello"}` → `{"ok":true,"server":"abromux","protocol":2,"version":"..","host":".."}`
+//! - `{"op":"hello"}` → `{"ok":true,"server":"abromux","protocol":3,"version":"..","host":"..",
+//!   "control":"/path/abromux.sock"|null,"app":bool}`
+//! - `{"op":"app"}`: this connection is the app's link (the control socket,
+//!   [`control`]): the server sends `{"open":N}` for each control connection
+//!   to hand over, and the app sends `{"op":"state",..}` when its
+//!   workspaces change.
+//! - `{"op":"control","conn":N}`: the app's side of control connection N,
+//!   spliced to it (N 0: the calls kept while it was away, replayed).
+//! - `{"op":"control"}`: this connection is a control connection, as if it
+//!   came in on the control socket (the CLI's `--server`, over ssh).
 //! - `{"op":"spawn","argv":[..],"cwd":"..","env":[[k,v],..],"cols":c,"rows":r}`
 //!   → `{"ok":true,"id":"..","pid":n}` with the PTY's descriptor
 //! - `{"op":"attach","id":".."}` → `{"ok":true,"pid":n,"backlog":len}` with
@@ -33,6 +42,9 @@
 //! - `{"op":"kill"}` (the connection's terminal) → `{"ok":true}`
 //! - `{"op":"status"}` (the connection's terminal, once its output ended)
 //!   → `{"ok":true,"code":n|null}`: its exit status, null if a signal ended it
+
+pub mod control;
+pub mod service;
 
 use abromux_core::wire::{self, Decoder, Size};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -79,11 +91,27 @@ pub fn default_socket() -> PathBuf {
     dir.join("server.sock")
 }
 
-/// What the server says about itself in `hello`.
+/// How the server runs, and what it says about itself in `hello`.
 #[derive(Clone, Debug)]
 pub struct Options {
     /// The version of the program serving, as `abromux version` prints it.
     pub version: String,
+    /// Where to serve the control socket ([`control`]): the app's
+    /// `abromux.sock`. None: no control socket.
+    pub control: Option<PathBuf>,
+    /// Exit once nothing has run and nobody has been connected for a while
+    /// (started on demand); false for a service.
+    pub idle_exit: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            version: String::new(),
+            control: None,
+            idle_exit: true,
+        }
+    }
 }
 
 struct Term {
@@ -104,12 +132,22 @@ struct Term {
     input: Vec<u8>,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 enum Mode {
     /// JSON requests, one per line.
     Lines,
     /// A streamed terminal's frames.
     Frames,
+    /// The app's link ([`control`]).
+    App,
+    /// A control connection the server answers itself (the app is away).
+    Control,
+    /// A control connection waiting for the app to open its side.
+    Pending,
+    /// Bytes go to and from this other connection as they are.
+    Splice(u64),
+    /// The app's side of the replay: this many answers still to come.
+    Replay(usize),
 }
 
 struct Client {
@@ -138,6 +176,7 @@ impl Client {
 /// What a polled descriptor is.
 enum Polled {
     Listener,
+    ControlListener,
     Client(u64),
     Term(String),
 }
@@ -156,13 +195,32 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
-
+    // The control socket, if it's ours to serve: one nothing answers is
+    // stale (a crashed app's), one something answers is left alone.
+    let control = match &opts.control {
+        Some(c) if UnixStream::connect(c).is_err() => {
+            if let Some(dir) = c.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            let _ = std::fs::remove_file(c);
+            let l = UnixListener::bind(c)?;
+            std::fs::set_permissions(c, std::fs::Permissions::from_mode(0o600))?;
+            l.set_nonblocking(true)?;
+            Some(l)
+        }
+        _ => None,
+    };
     let mut s = Server {
         terms: HashMap::new(),
         clients: HashMap::new(),
         next_client: 0,
         next_term: 0,
-        opts: opts.clone(),
+        opts: Options {
+            control: opts.control.clone().filter(|_| control.is_some()),
+            ..opts.clone()
+        },
+        state: control::State::load(control::state_path(path)),
+        app: None,
     };
     let mut idle_since = Instant::now();
     let mut buf = vec![0u8; 1 << 16];
@@ -174,10 +232,13 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
             !(exited && t.client.is_none())
         });
         // Sleep until something happens; only an idle server wakes on a timer.
-        let timeout = if s.terms.is_empty() && s.clients.is_empty() {
+        let timeout = if s.opts.idle_exit && s.terms.is_empty() && s.clients.is_empty() {
             let left = IDLE_EXIT.saturating_sub(idle_since.elapsed());
             if left.is_zero() {
                 let _ = std::fs::remove_file(path);
+                if let Some(c) = &s.opts.control {
+                    let _ = std::fs::remove_file(c);
+                }
                 return Ok(());
             }
             left.as_millis() as i32 + 1
@@ -188,9 +249,18 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
 
         let mut fds = vec![pollfd(listener.as_raw_fd(), libc::POLLIN)];
         let mut what = vec![Polled::Listener];
+        if let Some(l) = &control {
+            fds.push(pollfd(l.as_raw_fd(), libc::POLLIN));
+            what.push(Polled::ControlListener);
+        }
         for (id, c) in &s.clients {
             let mut ev = 0;
-            if !c.closing {
+            // Spliced: read while the other side keeps up.
+            let keeps_up = match c.mode {
+                Mode::Splice(o) => s.clients.get(&o).is_none_or(|o| o.out.len() < HIGH_WATER),
+                _ => true,
+            };
+            if !c.closing && keeps_up {
                 ev |= libc::POLLIN;
             }
             if !c.out.is_empty() {
@@ -240,20 +310,13 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
             match w {
                 Polled::Listener => {
                     while let Ok((stream, _)) = listener.accept() {
-                        let _ = stream.set_nonblocking(true);
-                        s.next_client += 1;
-                        s.clients.insert(
-                            s.next_client,
-                            Client {
-                                stream,
-                                buf: Vec::new(),
-                                decoder: Decoder::default(),
-                                mode: Mode::Lines,
-                                term: None,
-                                out: Vec::new(),
-                                closing: false,
-                            },
-                        );
+                        s.add_client(stream);
+                    }
+                }
+                Polled::ControlListener => {
+                    while let Some(Ok((stream, _))) = control.as_ref().map(|l| l.accept()) {
+                        let cid = s.add_client(stream);
+                        s.accept_control(cid);
                     }
                 }
                 Polled::Client(cid) => {
@@ -294,9 +357,128 @@ struct Server {
     next_client: u64,
     next_term: u64,
     opts: Options,
+    /// What the control socket answers while the app is away.
+    state: control::State,
+    /// The app's link, while it's attached.
+    app: Option<u64>,
 }
 
 impl Server {
+    fn add_client(&mut self, stream: UnixStream) -> u64 {
+        let _ = stream.set_nonblocking(true);
+        self.next_client += 1;
+        self.clients.insert(
+            self.next_client,
+            Client {
+                stream,
+                buf: Vec::new(),
+                decoder: Decoder::default(),
+                mode: Mode::Lines,
+                term: None,
+                out: Vec::new(),
+                closing: false,
+            },
+        );
+        self.next_client
+    }
+
+    /// A control connection: the app's to answer if it's attached (it
+    /// opens its side, `{"op":"control","conn":N}`), else the server's.
+    fn accept_control(&mut self, cid: u64) {
+        match self.app {
+            Some(app) => {
+                if let Some(c) = self.clients.get_mut(&cid) {
+                    c.mode = Mode::Pending;
+                }
+                if let Some(a) = self.clients.get_mut(&app) {
+                    a.reply(json!({ "open": cid }));
+                }
+                self.flush(app);
+            }
+            None => {
+                if let Some(c) = self.clients.get_mut(&cid) {
+                    c.mode = Mode::Control;
+                }
+                self.handle_input(cid);
+            }
+        }
+    }
+
+    /// The app attached (`{"op":"app"}`): connections waiting on an older
+    /// link are offered again, and what was kept meanwhile is replayed.
+    fn attach_app(&mut self, cid: u64) {
+        // One app at a time: a second one (another instance) is refused,
+        // as it was when the app owned the socket.
+        if let Some(other) = self
+            .app
+            .filter(|o| *o != cid && self.clients.contains_key(o))
+        {
+            let _ = other;
+            let c = self.clients.get_mut(&cid).unwrap();
+            c.reply(json!({ "ok": false, "error": "another abromux app is attached" }));
+            c.closing = true;
+            return self.flush(cid);
+        }
+        self.app = Some(cid);
+        let pending: Vec<u64> = self
+            .clients
+            .iter()
+            .filter(|(_, c)| c.mode == Mode::Pending)
+            .map(|(id, _)| *id)
+            .collect();
+        let c = self.clients.get_mut(&cid).unwrap();
+        c.mode = Mode::App;
+        c.reply(json!({ "ok": true }));
+        for p in pending {
+            c.reply(json!({ "open": p }));
+        }
+        if !self.state.kept.is_empty() {
+            c.reply(json!({ "open": 0 }));
+        }
+        self.flush(cid);
+    }
+
+    /// The app's side of control connection `conn`.
+    fn open_control(&mut self, cid: u64, conn: u64) {
+        if conn == 0 {
+            let kept = self.state.take_kept();
+            let c = self.clients.get_mut(&cid).unwrap();
+            for (i, k) in kept.iter().enumerate() {
+                c.reply(json!({ "id": i + 1, "method": k["method"], "params": k["params"] }));
+            }
+            c.mode = Mode::Replay(kept.len());
+            if kept.is_empty() {
+                c.closing = true;
+            }
+            return self.flush(cid);
+        }
+        let ready = self
+            .clients
+            .get(&conn)
+            .is_some_and(|c| c.mode == Mode::Pending);
+        if !ready {
+            // The caller is gone already.
+            if let Some(c) = self.clients.get_mut(&cid) {
+                c.closing = true;
+            }
+            return self.flush(cid);
+        }
+        // What the caller sent while it waited goes over first.
+        let waiting = {
+            let p = self.clients.get_mut(&conn).unwrap();
+            p.mode = Mode::Splice(cid);
+            std::mem::take(&mut p.buf)
+        };
+        let c = self.clients.get_mut(&cid).unwrap();
+        c.mode = Mode::Splice(conn);
+        c.out.extend_from_slice(&waiting);
+        let rest = std::mem::take(&mut c.buf);
+        if let Some(p) = self.clients.get_mut(&conn) {
+            p.out.extend_from_slice(&rest);
+        }
+        self.flush(cid);
+        self.flush(conn);
+    }
     fn read_client(&mut self, cid: u64, buf: &mut [u8]) {
         let gone = loop {
             let Some(c) = self.clients.get_mut(&cid) else {
@@ -305,8 +487,14 @@ impl Server {
             match c.stream.read(buf) {
                 Ok(0) => break true,
                 Ok(n) => match c.mode {
-                    Mode::Lines => c.buf.extend_from_slice(&buf[..n]),
                     Mode::Frames => c.decoder.push(&buf[..n]),
+                    Mode::Splice(o) => {
+                        if let Some(oc) = self.clients.get_mut(&o) {
+                            oc.out.extend_from_slice(&buf[..n]);
+                        }
+                        self.flush(o);
+                    }
+                    _ => c.buf.extend_from_slice(&buf[..n]),
                 },
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break false,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -349,6 +537,43 @@ impl Server {
                     Ok(None) => return,
                     Err(_) => return self.drop_client(cid),
                 },
+                Mode::Control | Mode::App | Mode::Replay(_) => {
+                    let Some(nl) = c.buf.iter().position(|&b| b == b'\n') else {
+                        return;
+                    };
+                    let line: Vec<u8> = c.buf.drain(..=nl).collect();
+                    match c.mode {
+                        Mode::Control => {
+                            if line.iter().all(u8::is_ascii_whitespace) {
+                                continue;
+                            }
+                            let reply = match serde_json::from_slice::<Value>(&line) {
+                                Ok(req) => self.state.handle(&req),
+                                Err(e) => {
+                                    json!({ "ok": false, "error": format!("bad request: {e}") })
+                                }
+                            };
+                            let c = self.clients.get_mut(&cid).unwrap();
+                            c.reply(reply);
+                            self.flush(cid);
+                        }
+                        Mode::App => {
+                            let msg: Value = serde_json::from_slice(&line).unwrap_or(Value::Null);
+                            if msg["op"] == "state" {
+                                self.state.update(&msg);
+                            }
+                        }
+                        Mode::Replay(left) => {
+                            let left = left.saturating_sub(1);
+                            c.mode = Mode::Replay(left);
+                            if left == 0 {
+                                c.closing = true;
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                Mode::Pending | Mode::Splice(_) => return,
             }
         }
     }
@@ -419,41 +644,53 @@ impl Server {
                     "protocol": wire::PROTOCOL,
                     "version": self.opts.version,
                     "host": hostname(),
+                    "control": self.opts.control,
+                    "app": self.app.is_some(),
                 });
                 c.reply(reply);
                 self.flush(cid);
             }
-            Some("spawn") if c.term.is_none() => match spawn(req, stream) {
-                Ok(t) => {
-                    self.next_term += 1;
-                    let id = format!("{}-{}", std::process::id(), self.next_term);
-                    let reply = json!({ "ok": true, "id": id, "pid": t.pid });
-                    let fd = t.master.as_raw_fd().unwrap_or(-1);
-                    let sent = if stream {
-                        set_nonblocking(fd, true);
-                        c.reply(reply);
-                        c.mode = Mode::Frames;
-                        true
-                    } else {
-                        send_with_fd(c, format!("{reply}\n").as_bytes(), fd).is_ok()
-                    };
-                    if sent {
-                        c.term = Some(id.clone());
-                        self.terms.insert(
-                            id,
-                            Term {
-                                client: Some(cid),
-                                ..t
-                            },
-                        );
-                    }
-                    self.flush(cid);
-                }
-                Err(e) => {
-                    fail(c, e);
-                    self.flush(cid);
+            Some("app") => self.attach_app(cid),
+            Some("control") => match req["conn"].as_u64() {
+                Some(conn) => self.open_control(cid, conn),
+                None => {
+                    // What followed the request is the control stream.
+                    self.accept_control(cid);
                 }
             },
+            Some("spawn") if c.term.is_none() => {
+                match spawn(req, stream, self.opts.control.as_deref()) {
+                    Ok(t) => {
+                        self.next_term += 1;
+                        let id = format!("{}-{}", std::process::id(), self.next_term);
+                        let reply = json!({ "ok": true, "id": id, "pid": t.pid });
+                        let fd = t.master.as_raw_fd().unwrap_or(-1);
+                        let sent = if stream {
+                            set_nonblocking(fd, true);
+                            c.reply(reply);
+                            c.mode = Mode::Frames;
+                            true
+                        } else {
+                            send_with_fd(c, format!("{reply}\n").as_bytes(), fd).is_ok()
+                        };
+                        if sent {
+                            c.term = Some(id.clone());
+                            self.terms.insert(
+                                id,
+                                Term {
+                                    client: Some(cid),
+                                    ..t
+                                },
+                            );
+                        }
+                        self.flush(cid);
+                    }
+                    Err(e) => {
+                        fail(c, e);
+                        self.flush(cid);
+                    }
+                }
+            }
             Some("attach") if c.term.is_none() => {
                 let id = req["id"].as_str().unwrap_or_default().to_string();
                 // `take`: a streamed app coming back after its connection
@@ -558,11 +795,36 @@ impl Server {
     /// The connection is gone: its terminal is nobody's until the next
     /// attach, and the server reads it meanwhile.
     fn drop_client(&mut self, cid: u64) {
-        if let Some(c) = self.clients.remove(&cid)
-            && let Some(t) = c.term.and_then(|id| self.terms.get_mut(&id))
+        let Some(c) = self.clients.remove(&cid) else {
+            return;
+        };
+        if let Some(t) = c.term.and_then(|id| self.terms.get_mut(&id))
             && t.client == Some(cid)
         {
             t.client = None;
+        }
+        match c.mode {
+            // One side of a splice gone: the other ends once it has the rest.
+            Mode::Splice(o) => {
+                if let Some(o) = self.clients.get_mut(&o) {
+                    o.closing = true;
+                }
+                self.flush(o);
+            }
+            // The app went away: the server answers what was waiting for it.
+            Mode::App if self.app == Some(cid) => {
+                self.app = None;
+                let pending: Vec<u64> = self
+                    .clients
+                    .iter()
+                    .filter(|(_, c)| c.mode == Mode::Pending)
+                    .map(|(id, _)| *id)
+                    .collect();
+                for p in pending {
+                    self.accept_control(p);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -722,7 +984,7 @@ fn hang_up(t: Term) {
     });
 }
 
-fn spawn(req: &Value, stream: bool) -> Result<Term, String> {
+fn spawn(req: &Value, stream: bool, control: Option<&Path>) -> Result<Term, String> {
     let mut argv: Vec<String> = req["argv"]
         .as_array()
         .map(|a| {
@@ -757,6 +1019,15 @@ fn spawn(req: &Value, stream: bool) -> Result<Term, String> {
     // its programs start from the server's with the app's variables on top.
     if !(stream && req["inherit_env"] != false) {
         cmd.env_clear();
+    }
+    // A streamed app's shells reach the app through this server's control
+    // socket (agent hooks, `abromux notify`), and this machine's abromux is
+    // this binary.
+    if stream && let Some(c) = control {
+        cmd.env("ABROMUX_SOCKET_PATH", c);
+        if let Ok(exe) = std::env::current_exe() {
+            cmd.env("ABROMUX_BIN", exe);
+        }
     }
     for kv in req["env"].as_array().into_iter().flatten() {
         if let (Some(k), Some(v)) = (kv[0].as_str(), kv[1].as_str()) {

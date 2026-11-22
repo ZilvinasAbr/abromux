@@ -114,6 +114,7 @@ name = "abromux-server"
 version = "0.1.0"
 dependencies = [
  "abromux-core",
+ "anyhow",
  "libc",
  "portable-pty",
  "serde_json",
