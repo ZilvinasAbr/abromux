@@ -285,8 +285,16 @@ for a program to be reaped.
 
 What stays in the app is what only it can do: making the views a model
 describes, and the view methods (browser automation, input, focus,
-prompts). A browser or plugin tab the model names but the app doesn't
-have can't be made from the model (it holds no URL or plugin state).
+prompts).
+
+- [x] **Browser and plugin tabs come from the model too.** A model tab
+      carries a browser's `url`, and a plugin's `plugin` and saved `state`
+      (as the session does), so another client can open either: the app
+      makes a page in the built-in browser (whatever `browser.engine` says:
+      a terminal-browser tab arranges its own panes, and this one must be
+      where the model puts it) or opens the plugin with its state. Checked:
+      a client's split with a terminal left and example.com right opened
+      as described.
 
 **Done when:** quitting the app leaves every workspace's state (status pills,
 progress, notifications, agents' state) live in the server, and the app picks

@@ -4442,6 +4442,26 @@ impl AbroMux {
                         out.push(s);
                         continue;
                     }
+                    // A page, or a plugin's tab, from what the model says. The
+                    // built-in browser, whatever `browser.engine` says: a
+                    // terminal-browser tab arranges its own panes, and this
+                    // one has to be where the model puts it.
+                    if t.kind == "browser" {
+                        let url = t.url.as_deref().unwrap_or(DEFAULT_URL);
+                        out.push(self.make_builtin_browser(url, window, cx));
+                        continue;
+                    }
+                    if t.kind == "plugin" {
+                        let Some(id) = t.plugin.as_deref() else {
+                            continue;
+                        };
+                        let state = t.state.clone().unwrap_or_else(|| json!({}));
+                        match self.make_plugin(id, &state, window, cx) {
+                            Ok(s) => out.push(s),
+                            Err(e) => eprintln!("a {id} tab from the model: {e:#}"),
+                        }
+                        continue;
+                    }
                     if t.kind != "terminal" {
                         continue;
                     }
@@ -4515,21 +4535,29 @@ impl AbroMux {
         let surface =
             |s: &Surface| self.surface_refs.get(&s.entity_id()).copied().unwrap_or(0) as u64;
         let tab = |s: &Surface| {
-            let (kind, held, host) = match s {
-                Surface::Terminal(t) => {
-                    let t = t.read(cx);
-                    ("terminal", t.held_id(), t.host.clone())
-                }
-                Surface::Browser(_) => ("browser", None, None),
-                Surface::Plugin(_) => ("plugin", None, None),
-            };
-            m::Tab {
+            let mut t = m::Tab {
                 surface: surface(s),
-                kind: kind.into(),
                 title: s.title(cx),
-                held,
-                host,
+                ..Default::default()
+            };
+            match s {
+                Surface::Terminal(term) => {
+                    let term = term.read(cx);
+                    t.kind = "terminal".into();
+                    t.held = term.held_id();
+                    t.host = term.host.clone();
+                }
+                Surface::Browser(b) => {
+                    t.kind = "browser".into();
+                    t.url = Some(b.read(cx).url.clone()).filter(|u| !u.is_empty());
+                }
+                Surface::Plugin(p) => {
+                    t.kind = "plugin".into();
+                    t.plugin = Some(p.plugin().into());
+                    t.state = Some(p.save(cx));
+                }
             }
+            t
         };
         fn node(n: &crate::workspace::Node, tab: &dyn Fn(&Surface) -> m::Tab) -> m::Node {
             match n {
