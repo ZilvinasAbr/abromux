@@ -123,6 +123,17 @@ impl State {
         self.save();
     }
 
+    /// Keep `method` for the app as if it had been called: the server's
+    /// own reports (a notification a terminal printed while nobody
+    /// watched it).
+    pub fn keep(&mut self, method: &str, params: Value) {
+        let ws = self.target(&params);
+        self.apply(method, &params, ws.as_deref());
+        self.kept
+            .push(json!({ "method": method, "params": params, "at": now() }));
+        self.save();
+    }
+
     /// The calls to replay, as request lines, and forget them.
     pub fn take_kept(&mut self) -> Vec<Value> {
         let kept = std::mem::take(&mut self.kept);
@@ -182,11 +193,15 @@ impl State {
                 self.kept
                     .iter()
                     .filter(|k| k["method"] == "notification.create")
-                    .map(|k| json!({
+                    .enumerate()
+                    .map(|(i, k)| json!({
+                        "id": i + 1,
                         "title": k["params"]["title"],
                         "subtitle": k["params"]["subtitle"],
                         "body": k["params"]["body"],
                         "surface": k["params"]["caller"]["surface"],
+                        "workspace": self.target(&k["params"]),
+                        "age_seconds": now().saturating_sub(k["at"].as_u64().unwrap_or(0)),
                         "unread": true,
                     }))
                     .collect::<Vec<_>>()

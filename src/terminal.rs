@@ -771,6 +771,89 @@ impl TerminalView {
         self.pty.held_id()
     }
 
+    /// Start over from a whole screen (libghostty-vt's snapshot): the
+    /// server's, for a terminal this view had no screen of.
+    fn load_snapshot(&mut self, snap: &[u8], cx: &mut Context<Self>) {
+        let Ok(t) = ghostty::Terminal::from_snapshot(snap, crate::theme::is_dark()) else {
+            return;
+        };
+        let (cols, rows) = self.grid;
+        self.term = configure(t, &self.config);
+        self.term.resize(cols, rows, self.cell_px.0, self.cell_px.1);
+        self.dirty = true;
+        cx.notify();
+    }
+
+    /// Another app wants this terminal too (its server asked,
+    /// crate::control_link): let go of the PTY, leaving the screen for the
+    /// server, and stream it from the server from here on, which reads it
+    /// for both. Only a terminal this view holds.
+    pub fn restream(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.pty, Pty::Held { .. }) {
+            return;
+        }
+        let Some(id) = self.pty.held_id() else {
+            return;
+        };
+        self.freeze();
+        self.frozen = false;
+        self.generation += 1;
+        let (feed, wake) = Feed::new();
+        self.pty = crate::pty::stream_local(&id, self.grid, false, &feed);
+        self.feed = feed.clone();
+        drain(feed, wake, self.generation, cx);
+        self.pty.resize(PtySize {
+            rows: self.grid.1,
+            cols: self.grid.0,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+        cx.notify();
+    }
+
+    /// Nobody else streams this terminal now (its server says): hold its PTY
+    /// again, so the server is out of the way as before. Only one streamed
+    /// from this machine's server.
+    pub fn reclaim(&mut self, cx: &mut Context<Self>) {
+        let local = crate::hold::socket_path();
+        let ours = matches!(&self.pty, Pty::Remote(r) if std::path::Path::new(r.host()) == local);
+        let Some(id) = self.pty.held_id().filter(|_| ours) else {
+            return;
+        };
+        self.freeze();
+        let (feed, wake) = Feed::new();
+        let Some(opened) = crate::pty::reattach(&id, &feed) else {
+            // Still shared after all: stream it again.
+            self.frozen = false;
+            self.restream_from_server(&id, cx);
+            return;
+        };
+        self.frozen = false;
+        self.generation += 1;
+        if let Some(snap) = &opened.snapshot {
+            self.load_snapshot(snap, cx);
+        }
+        self.process(&opened.backlog, cx);
+        self.pty = opened.pty;
+        self.feed = feed.clone();
+        drain(feed, wake, self.generation, cx);
+        self.pty.resize(PtySize {
+            rows: self.grid.1,
+            cols: self.grid.0,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+        cx.notify();
+    }
+
+    fn restream_from_server(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.generation += 1;
+        let (feed, wake) = Feed::new();
+        self.pty = crate::pty::stream_local(id, self.grid, false, &feed);
+        self.feed = feed.clone();
+        drain(feed, wake, self.generation, cx);
+    }
+
     /// Quitting: a held terminal stops reading, takes in what was already
     /// read, and leaves its state for the next launch (`hold::snapshot_path`).
     /// The holder takes the PTY over once the app is gone.
@@ -2854,10 +2937,13 @@ fn drain(
         loop {
             let woke = wake.next().await.is_some();
             let q = feed.take();
-            if !q.bytes.is_empty() {
+            if !q.bytes.is_empty() || q.reset.is_some() {
                 let live = this.update(cx, |this, cx| {
                     let live = this.generation == generation;
                     if live {
+                        if let Some(snap) = &q.reset {
+                            this.load_snapshot(snap, cx);
+                        }
                         this.process(&q.bytes, cx);
                     }
                     live

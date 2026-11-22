@@ -2,21 +2,16 @@
 name = "abromux-term"
 version = "0.1.0"
 edition = "2024"
-description = "Terminals: libghostty-vt, PTYs and the holder that keeps shells running (POSIX)"
+description = "Terminals: PTYs, the app side of the server that keeps shells running, and remote terminals (POSIX); libghostty-vt is abromux-vt"
 license = "MIT"
 publish = false
 
 [dependencies]
 abromux-core = { path = "../abromux-core" }
-abromux-server = { path = "../abromux-server" }
+abromux-server = { path = "../abromux-server", features = ["vt"] }
+abromux-vt = { path = "../abromux-vt" }
 anyhow = "1"
 futures = { version = "0.3", features = ["executor"] }
-image = "0.25"
 libc = "0.2"
 portable-pty = "0.9"
 serde_json = { version = "1", features = ["preserve_order"] }
-# inline terminal cell text (already a gpui dependency)
-smol_str = "0.2"
-
-[build-dependencies]
-bindgen = "0.72"

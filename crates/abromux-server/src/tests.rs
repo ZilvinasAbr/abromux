@@ -102,7 +102,10 @@ fn streams_a_terminal_and_takes_it_back() {
     );
     std::thread::sleep(Duration::from_millis(800));
 
-    let (reply, mut r, _w) = request(&sock, json!({ "op": "attach", "id": id, "stream": true }));
+    let (reply, mut r, _w) = request(
+        &sock,
+        json!({ "op": "attach", "id": id, "stream": true, "owner": "mac-a" }),
+    );
     assert_eq!(reply["ok"], true, "{reply}");
     let mut snap = vec![0u8; reply["snapshot"].as_u64().unwrap() as usize];
     r.read_exact(&mut snap).unwrap();
@@ -112,13 +115,21 @@ fn streams_a_terminal_and_takes_it_back() {
     let backlog = String::from_utf8_lossy(&backlog);
     assert!(backlog.contains("later-2"), "{backlog:?}");
 
-    // One app at a time, unless it takes the terminal (coming back on a new
-    // connection): then the old connection is closed.
-    let (busy, ..) = request(&sock, json!({ "op": "attach", "id": id, "stream": true }));
-    assert_eq!(busy["ok"], false);
+    // Another app streams it too: both see what it prints, either types.
+    let (other, mut ro, mut wo) = request(
+        &sock,
+        json!({ "op": "attach", "id": id, "stream": true, "owner": "mac-b" }),
+    );
+    assert_eq!(other["ok"], true, "{other}");
+    write_frame(&mut wo, wire::INPUT, b"echo both-$((2+2))\n").unwrap();
+    read_until(&mut ro, "both-4");
+    read_until(&mut r, "both-4");
+
+    // The same app coming back on a new connection takes its own over; the
+    // other app's stays.
     let (took, mut r2, mut w2) = request(
         &sock,
-        json!({ "op": "attach", "id": id, "stream": true, "take": true }),
+        json!({ "op": "attach", "id": id, "stream": true, "take": true, "owner": "mac-a" }),
     );
     assert_eq!(took["ok"], true, "{took}");
     assert_eq!(took["backlog"], 0);
@@ -126,6 +137,9 @@ fn streams_a_terminal_and_takes_it_back() {
         assert_eq!(kind, wire::OUTPUT, "the old connection only ends");
     }
     let (r, w) = (&mut r2, &mut w2);
+    write_frame(w, wire::INPUT, b"echo still-b\n").unwrap();
+    read_until(&mut ro, "still-b");
+    drop((ro, wo));
 
     write_frame(w, wire::INPUT, b"echo again\n").unwrap();
     read_until(r, "again");
@@ -418,4 +432,153 @@ fn only_one_server_per_socket() {
     assert_eq!(done, 7, "seven left it to the first");
     let (hello, ..) = request(&sock, json!({ "op": "hello" }));
     assert_eq!(hello["ok"], true);
+}
+
+// ---- several clients, server-side parsing (phase 4) ------------------------
+
+/// What `terms` says about terminal `id`.
+fn term_info(sock: &Path, id: &str) -> Value {
+    let (r, ..) = request(sock, json!({ "op": "terms" }));
+    r["terms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == id)
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+/// A terminal nobody watches keeps being parsed: its title, and a
+/// notification it prints is kept for the app.
+#[cfg(feature = "vt")]
+#[test]
+fn parses_what_nobody_watches() {
+    let (sock, control) = server_with_control("parse");
+    let env = json!([
+        ["ABROMUX_SURFACE_ID", "surface:5"],
+        ["PATH", "/bin:/usr/bin"]
+    ]);
+    let (reply, mut r, mut w) = request(
+        &sock,
+        json!({ "op": "spawn", "stream": true, "argv": sh(), "env": env }),
+    );
+    let id = reply["id"].as_str().unwrap().to_string();
+    write_frame(&mut w, wire::DETACH, b"").unwrap();
+    while read_frame(&mut r).unwrap().is_some() {}
+    // Printed while nobody watches.
+    let (_, mut r2, mut w2) = request(&sock, json!({ "op": "attach", "id": id, "stream": true }));
+    // (attach to type, then let go again)
+    write_frame(
+        &mut w2,
+        wire::INPUT,
+        b"sleep 0.3; printf '\\033]2;building\\007\\033]9;tests passed\\007'\n",
+    )
+    .unwrap();
+    write_frame(&mut w2, wire::DETACH, b"").unwrap();
+    while read_frame(&mut r2).unwrap().is_some() {}
+    std::thread::sleep(Duration::from_millis(900));
+    assert_eq!(term_info(&sock, &id)["title"], "building");
+    let n = ctl(&control, "notification.list", json!({}));
+    let list = n["result"].as_array().unwrap();
+    assert!(
+        list.iter()
+            .any(|x| x["body"] == "tests passed" && x["surface"] == "surface:5"),
+        "{n}"
+    );
+}
+
+/// Another app with no screen of its own gets the server's.
+#[cfg(feature = "vt")]
+#[test]
+fn a_fresh_client_gets_the_parsed_screen() {
+    let sock = server("fresh");
+    let (reply, mut r, mut w) = request(
+        &sock,
+        json!({ "op": "spawn", "stream": true, "argv": sh(), "env": [["PATH", "/bin:/usr/bin"]] }),
+    );
+    let id = reply["id"].as_str().unwrap().to_string();
+    write_frame(&mut w, wire::INPUT, b"echo on-the-screen\n").unwrap();
+    read_until(&mut r, "on-the-screen");
+    let (other, mut ro, _wo) = request(
+        &sock,
+        json!({ "op": "attach", "id": id, "stream": true, "fresh": true }),
+    );
+    assert_eq!(other["parsed"], true, "{other}");
+    let mut snap = vec![0u8; other["snapshot"].as_u64().unwrap() as usize];
+    ro.read_exact(&mut snap).unwrap();
+    let screen = abromux_vt::Terminal::from_snapshot(&snap, true)
+        .unwrap()
+        .screen_text();
+    assert!(screen.contains("on-the-screen"), "{screen}");
+}
+
+/// A streamed attach to a terminal a local app holds asks the app to let
+/// go, and is served once it has.
+#[test]
+fn a_second_client_asks_the_local_app_to_share() {
+    let (sock, _control) = server_with_control("share");
+    // The local app: its link, and a terminal it holds (the descriptor
+    // comes with the reply; this test only needs the connection).
+    let (mut link, _lw) = app_link(&sock);
+    let (reply, hr, holder) = request(
+        &sock,
+        json!({ "op": "spawn", "argv": sh(), "env": [["PATH", "/bin:/usr/bin"]] }),
+    );
+    let id = reply["id"].as_str().unwrap().to_string();
+    assert_eq!(term_info(&sock, &id)["held"], true);
+
+    // Another app wants it.
+    let s = sock.clone();
+    let i = id.clone();
+    let other = std::thread::spawn(move || {
+        let (reply, r, w) = request(
+            &s,
+            json!({ "op": "attach", "id": i, "stream": true, "fresh": true }),
+        );
+        (reply, r, w)
+    });
+    let mut line = String::new();
+    link.read_line(&mut line).unwrap();
+    let msg: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(msg["release"], id.as_str(), "the app is asked to share");
+    // The app lets go (and would stream it itself now).
+    drop((hr, holder));
+    let (reply, mut r, mut w) = other.join().unwrap();
+    assert_eq!(reply["ok"], true, "{reply}");
+    let mut skip = vec![
+        0u8;
+        reply["snapshot"].as_u64().unwrap() as usize
+            + reply["backlog"].as_u64().unwrap() as usize
+    ];
+    r.read_exact(&mut skip).unwrap();
+    write_frame(&mut w, wire::INPUT, b"echo shared-$((3*3))\n").unwrap();
+    read_until(&mut r, "shared-9");
+    assert_eq!(term_info(&sock, &id)["held"], false);
+    assert_eq!(term_info(&sock, &id)["streams"], 1);
+}
+
+/// Once the other app leaves, the local app (streaming it now) is told it
+/// can hold it again.
+#[test]
+fn the_local_app_is_told_to_hold_it_again() {
+    let (sock, _control) = server_with_control("reclaim");
+    let (reply, r, w) = request(&sock, json!({ "op": "app", "owner": "mac-a" }));
+    assert_eq!(reply["ok"], true);
+    let mut link = r;
+    let _lw = w;
+    let (reply, _ra, _wa) = request(
+        &sock,
+        json!({ "op": "spawn", "stream": true, "argv": sh(), "owner": "mac-a" }),
+    );
+    let id = reply["id"].as_str().unwrap().to_string();
+    let (other, rb, wb) = request(
+        &sock,
+        json!({ "op": "attach", "id": id, "stream": true, "owner": "mac-b" }),
+    );
+    assert_eq!(other["ok"], true);
+    drop((rb, wb));
+    let mut line = String::new();
+    link.read_line(&mut line).unwrap();
+    let msg: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(msg["reclaim"], id.as_str(), "{msg}");
 }

@@ -9,11 +9,11 @@ fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let vt = root.join("vendor/ghostty-vt-out");
     let lib = vt.join("lib/libghostty-vt.a");
-    let header = crate_dir.join("src/ghostty/wrapper.h");
+    let header = crate_dir.join("src/wrapper.h");
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=ghostty-vt");
     println!("cargo:rerun-if-changed={}", lib.display());
-    println!("cargo:rerun-if-changed=src/ghostty/wrapper.h");
+    println!("cargo:rerun-if-changed=src/wrapper.h");
 
     // Link the static archive only (the lib dir also has a dylib the linker would prefer).
     fs::copy(&lib, out.join("libghostty-vt.a")).expect("build libghostty-vt first");

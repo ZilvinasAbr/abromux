@@ -314,10 +314,16 @@ mod tests {
         drop(h);
         std::thread::sleep(Duration::from_millis(800));
         let mut h = Held::attach(&id).unwrap();
+        // What it printed meanwhile: in the backlog, or (the server parsed
+        // it) in the screen the server left where the app looks for its own.
+        let screen = take_snapshot(&id)
+            .and_then(|s| crate::ghostty::Terminal::from_snapshot(&s, true).ok())
+            .map(|t| t.screen_text())
+            .unwrap_or_default();
+        let backlog = String::from_utf8_lossy(&h.backlog);
         assert!(
-            String::from_utf8_lossy(&h.backlog).contains("later-2"),
-            "{:?}",
-            String::from_utf8_lossy(&h.backlog)
+            backlog.contains("later-2") || screen.contains("later-2"),
+            "backlog {backlog:?}, screen {screen:?}"
         );
         write(&h.fd, "echo again\n");
         read_until(&h.fd, "again");

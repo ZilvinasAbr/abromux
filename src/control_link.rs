@@ -74,6 +74,22 @@ impl Link {
     pub fn is_up(&self) -> bool {
         self.up.load(Ordering::Relaxed)
     }
+
+    /// Tell the server what the app parses of the terminals it holds
+    /// (titles, folders), if it changed: it lists them for other apps.
+    pub fn push_terms(&self, terms: Value) {
+        let msg = json!({ "op": "terms", "terms": terms });
+        static LAST: Mutex<Option<Value>> = Mutex::new(None);
+        let mut last = LAST.lock().unwrap();
+        if last.as_ref() == Some(&msg) {
+            return;
+        }
+        if let Some(s) = self.writer.lock().unwrap().as_mut()
+            && writeln!(s, "{msg}").is_ok()
+        {
+            *last = Some(msg);
+        }
+    }
 }
 
 /// Where control requests go to be answered (`server::serve_requests`).
@@ -223,7 +239,7 @@ fn connect(target: &Target) -> Result<(BufReader<UnixStream>, UnixStream), Strin
         }
         _ => {}
     }
-    let app = ask(json!({ "op": "app" }))?;
+    let app = ask(json!({ "op": "app", "owner": abromux_term::remote::owner() }))?;
     if app["ok"] != true {
         return Err(app["error"].as_str().unwrap_or("refused").to_string());
     }
@@ -243,6 +259,23 @@ fn run(mut reader: BufReader<UnixStream>, target: Target, link: Link) {
                 if let Some(conn) = msg["open"].as_u64() {
                     let target = target.clone();
                     std::thread::spawn(move || open(&target, conn));
+                }
+                // Another app wants a terminal this one holds: stream it;
+                // and once it's gone again, hold it again.
+                let ask = |method: &str, id: &str| {
+                    if let Some(tx) = TX.get() {
+                        use futures::FutureExt as _;
+                        let (reply, _) = futures::channel::oneshot::channel();
+                        let (_open, gone) = futures::channel::oneshot::channel::<()>();
+                        let req = json!({ "id": 0, "method": method, "params": { "held": id } });
+                        let _ = tx.unbounded_send((req, reply, gone.shared()));
+                    }
+                };
+                if let Some(id) = msg["release"].as_str() {
+                    ask("surface.restream", id);
+                }
+                if let Some(id) = msg["reclaim"].as_str() {
+                    ask("surface.reclaim", id);
                 }
                 continue;
             }

@@ -411,6 +411,29 @@ struct Shared {
     /// How the program ended, once it has: Some(code), code None for a signal.
     exit: Mutex<Option<Option<i32>>>,
     stopped: AtomicBool,
+    /// The view has no screen of its own yet: the server's parsed one, if
+    /// it has it, is where it starts. Cleared once attached.
+    fresh: AtomicBool,
+    /// That screen, from the attach, for the reader to hand the view.
+    reset: Mutex<Option<Vec<u8>>>,
+}
+
+/// Which app this is to a server (`owner`): this machine. A streamed
+/// attach with `take` replaces only its own connections, not another
+/// machine's sharing the terminal.
+pub fn owner() -> String {
+    static OWNER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    OWNER
+        .get_or_init(|| {
+            let mut buf = [0u8; 256];
+            // SAFETY: gethostname writes at most `len` bytes into `buf`.
+            unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+            let end = buf.iter().position(|&b| b == 0).unwrap_or(0);
+            // SAFETY: getuid can't fail.
+            let uid = unsafe { libc::getuid() };
+            format!("{}:{uid}", String::from_utf8_lossy(&buf[..end]))
+        })
+        .clone()
 }
 
 /// A terminal on another machine's server.
@@ -430,12 +453,14 @@ pub struct SpawnSpec {
 impl Remote {
     /// A terminal on `endpoint`: `attach`'s if it's still there, else a new
     /// one from `spawn`. Returns at once; output arrives in `feed`.
+    /// `fresh`: the view has no screen of this terminal to start from.
     pub fn start(
         host: String,
         endpoint: Endpoint,
         attach: Option<String>,
         spawn: SpawnSpec,
         size: Size,
+        fresh: bool,
         feed: &Feed,
     ) -> Self {
         crate::pty::install_wake();
@@ -448,6 +473,8 @@ impl Remote {
             size: Mutex::new(size),
             exit: Mutex::default(),
             stopped: AtomicBool::new(false),
+            fresh: AtomicBool::new(fresh),
+            reset: Mutex::default(),
         });
         let s = shared.clone();
         let feed = feed.clone();
@@ -557,6 +584,12 @@ fn run(s: Arc<Shared>, spawn: SpawnSpec, mut feed: Feed) {
         match connect(&s, &spawn) {
             Ok((read, backlog)) => {
                 delay = Duration::from_millis(500);
+                s.fresh.store(false, Ordering::Relaxed);
+                if let Some(snap) = s.reset.lock().unwrap().take()
+                    && !feed.reset(snap)
+                {
+                    return;
+                }
                 if told.take().is_some() && !note(&mut feed, &format!("connected to {host}")) {
                     return;
                 }
@@ -619,15 +652,22 @@ fn connect(s: &Shared, spawn: &SpawnSpec) -> Result<(OwnedFd, Vec<u8>), Failed> 
     let id = s.id.lock().unwrap().clone();
     let mut backlog = Vec::new();
     if let Some(id) = &id {
-        let req = json!({ "op": "attach", "id": id, "stream": true, "take": true });
+        let fresh = s.fresh.load(Ordering::Relaxed);
+        let req = json!({
+            "op": "attach", "id": id, "stream": true, "take": true,
+            "owner": owner(), "fresh": fresh,
+        });
         let reply = request(&mut conn, &req).map_err(Failed::Retry)?;
         if reply["ok"] == true {
-            // The server's snapshot is for apps without one of their own;
-            // this app restored its own before connecting.
-            let mut skip = vec![0u8; reply["snapshot"].as_u64().unwrap_or(0) as usize];
-            read_exact(&conn.read, &mut skip).map_err(Failed::Retry)?;
+            // The server's snapshot is for a view without a screen of its
+            // own; this app restored its own before connecting otherwise.
+            let mut snap = vec![0u8; reply["snapshot"].as_u64().unwrap_or(0) as usize];
+            read_exact(&conn.read, &mut snap).map_err(Failed::Retry)?;
             backlog.resize(reply["backlog"].as_u64().unwrap_or(0) as usize, 0);
             read_exact(&conn.read, &mut backlog).map_err(Failed::Retry)?;
+            if fresh && reply["parsed"] == true && !snap.is_empty() {
+                *s.reset.lock().unwrap() = Some(snap);
+            }
         } else {
             let e = reply["error"].as_str().unwrap_or("refused").to_string();
             if !(e.starts_with("no terminal") || e.ends_with("has ended")) {
@@ -652,6 +692,7 @@ fn connect(s: &Shared, spawn: &SpawnSpec) -> Result<(OwnedFd, Vec<u8>), Failed> 
         let req = json!({
             "op": "spawn", "stream": true, "argv": [], "command": spawn.command,
             "cwd": spawn.cwd, "env": env, "cols": size.cols, "rows": size.rows,
+            "owner": owner(),
         });
         let reply = request(&mut conn, &req).map_err(Failed::Retry)?;
         if reply["ok"] != true {
@@ -834,7 +875,15 @@ mod tests {
     fn a_remote_terminal_runs_on_while_the_app_is_away() {
         let ep = Endpoint::Unix(server("away"));
         let (feed, _wake) = Feed::new();
-        let mut r = Remote::start(String::new(), ep.clone(), None, spec(), size(), &feed);
+        let mut r = Remote::start(
+            String::new(),
+            ep.clone(),
+            None,
+            spec(),
+            size(),
+            false,
+            &feed,
+        );
         r.write(b"stty size; echo hi-$((40+2))\n");
         wait_for(&feed, "hi-42");
         r.write(b"sleep 0.3; echo later\n");
@@ -849,6 +898,7 @@ mod tests {
             Some(id.clone()),
             spec(),
             size(),
+            false,
             &feed,
         );
         let seen = wait_for(&feed, "later");
@@ -863,7 +913,15 @@ mod tests {
 
         // Gone: a new terminal in its place, on a clean screen.
         let (feed, _wake) = Feed::new();
-        let r = Remote::start(String::new(), ep, Some(id.clone()), spec(), size(), &feed);
+        let r = Remote::start(
+            String::new(),
+            ep,
+            Some(id.clone()),
+            spec(),
+            size(),
+            false,
+            &feed,
+        );
         r.write(b"echo fresh\n");
         wait_for(&feed, "fresh");
         assert_ne!(r.id(), Some(id));
@@ -873,7 +931,7 @@ mod tests {
     fn exit_status_comes_back() {
         let ep = Endpoint::Unix(server("exit"));
         let (feed, _wake) = Feed::new();
-        let r = Remote::start(String::new(), ep, None, spec(), size(), &feed);
+        let r = Remote::start(String::new(), ep, None, spec(), size(), false, &feed);
         r.write(b"exit 7\n");
         let end = Instant::now() + Duration::from_secs(5);
         while !feed.take().closed {
@@ -896,6 +954,7 @@ mod tests {
             None,
             spec(),
             size(),
+            false,
             &feed,
         );
         r.write(b"echo typed-early\n");
@@ -918,7 +977,7 @@ mod tests {
         let host = std::env::var("ABROMUX_E2E_HOST").expect("ABROMUX_E2E_HOST");
         let ep = Endpoint::parse(&host).unwrap();
         let (feed, _wake) = Feed::new();
-        let mut r = Remote::start(host.clone(), ep.clone(), None, spec(), size(), &feed);
+        let mut r = Remote::start(host.clone(), ep.clone(), None, spec(), size(), false, &feed);
         r.write(b"echo \"$(uname -s) $(stty size)\"\n");
         wait_for(&feed, "Linux 30 100");
         r.resize(Size {
@@ -934,7 +993,7 @@ mod tests {
         std::thread::sleep(Duration::from_secs(2));
 
         let (feed, _wake) = Feed::new();
-        let mut r = Remote::start(host, ep, Some(id.clone()), spec(), size(), &feed);
+        let mut r = Remote::start(host, ep, Some(id.clone()), spec(), size(), false, &feed);
         wait_for(&feed, "while-away");
         assert_eq!(r.id(), Some(id));
         r.kill();

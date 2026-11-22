@@ -6,6 +6,9 @@ description = "The abromux server: keeps terminals running, for the app on this 
 license = "MIT"
 publish = false
 
+[features]
+vt = ["dep:abromux-vt"]
+
 [[bin]]
 name = "abromux-server"
 path = "src/main.rs"
@@ -13,6 +16,12 @@ path = "src/main.rs"
 [dependencies]
 abromux-core = { path = "../abromux-core" }
 anyhow = "1"
+# Parsing terminals (feature vt): libghostty-vt, which needs
+# scripts/build-libghostty.sh first. The app's server has it; a headless one
+# builds with plain cargo without it.
+abromux-vt = { path = "../abromux-vt", optional = true }
 libc = "0.2"
 portable-pty = "0.9"
 serde_json = { version = "1", features = ["preserve_order"] }
+
+[dev-dependencies]

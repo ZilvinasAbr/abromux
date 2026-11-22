@@ -205,6 +205,18 @@ pub const METHODS: &[Method] = &[
         "",
     ),
     m(
+        "surface.reclaim",
+        "",
+        "Internal: hold again a terminal of this app's server it streamed while another app shared it.",
+        "held:string The server's id for it",
+    ),
+    m(
+        "surface.restream",
+        "",
+        "Internal: stream a terminal this app holds from its server, which another app shares.",
+        "held:string The server's id for it",
+    ),
+    m(
         "group.by_server",
         "group by-server",
         "Group the ungrouped workspaces on other machines, one group per server.",

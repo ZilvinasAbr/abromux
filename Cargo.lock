@@ -114,6 +114,7 @@ name = "abromux-server"
 version = "0.1.0"
 dependencies = [
  "abromux-core",
+ "abromux-vt",
  "anyhow",
  "libc",
  "portable-pty",
@@ -126,13 +127,21 @@ version = "0.1.0"
 dependencies = [
  "abromux-core",
  "abromux-server",
+ "abromux-vt",
  "anyhow",
- "bindgen 0.72.1",
  "futures",
- "image",
  "libc",
  "portable-pty",
  "serde_json",
+]
+
+[[package]]
+name = "abromux-vt"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bindgen 0.72.1",
+ "image",
  "smol_str",
 ]
 

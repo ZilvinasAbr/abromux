@@ -122,14 +122,107 @@ struct Term {
     /// The screen as a streamed app last saw it ([`wire::SNAPSHOT`]), for
     /// the next streamed attach.
     snapshot: Option<Vec<u8>>,
-    /// The connection it's handed to. While that's a local app holding the
-    /// descriptor, the server leaves the PTY alone; while it's a streamed
-    /// app, the server reads and writes it for it.
-    client: Option<u64>,
+    /// A local app holding the descriptor: while it does, the server
+    /// leaves the PTY alone.
+    holder: Option<u64>,
+    /// Streamed apps (another machine's, or this one's sharing it): each
+    /// gets the output, any may type. The server reads and writes the PTY
+    /// for them.
+    streams: Vec<u64>,
+    /// Streamed attaches waiting for the holder to let go, which the app
+    /// was asked to do (`{"release":id}`).
+    waiting: Vec<u64>,
     /// Its PTY reported end of file: the program is gone.
     eof: bool,
-    /// Input from a streamed app that the PTY hasn't taken yet.
+    /// Input for the PTY it hasn't taken yet: a streamed app's typing, the
+    /// parser's answers to the program's queries.
     input: Vec<u8>,
+    /// Who it is to the app (`ABROMUX_SURFACE_ID` from its spawn): where a
+    /// notification it prints while the app is away goes.
+    surface: Option<String>,
+    /// What its program last said: its title and folder, as the server
+    /// parsed them or the app reported them.
+    title: String,
+    cwd: String,
+    size: (u16, u16),
+    /// The server's own copy of the screen, kept while no local app holds
+    /// the descriptor (`vt`): notifications while the app is away, answers
+    /// to the program's queries, and a snapshot for another client.
+    #[cfg(feature = "vt")]
+    vt: Option<abromux_vt::Terminal>,
+}
+
+impl Term {
+    /// A screen to parse into, from `snapshot` (what the app left) or blank.
+    #[cfg(feature = "vt")]
+    fn start_parsing(&mut self, snapshot: Option<&[u8]>) {
+        if self.vt.is_some() {
+            return;
+        }
+        let t = snapshot
+            .and_then(|s| abromux_vt::Terminal::from_snapshot(s, true).ok())
+            .or_else(|| abromux_vt::Terminal::new(self.size.0, self.size.1, true).ok());
+        self.vt = t.map(|mut t| {
+            t.resize(self.size.0, self.size.1, 0, 0);
+            t.write(&self.backlog);
+            let _ = t.take_effects();
+            t
+        });
+    }
+
+    #[cfg(not(feature = "vt"))]
+    fn start_parsing(&mut self, _snapshot: Option<&[u8]>) {}
+
+    /// The server's snapshot of the screen, if it parses this terminal.
+    fn parsed_snapshot(&mut self) -> Option<Vec<u8>> {
+        #[cfg(feature = "vt")]
+        if let Some(v) = &mut self.vt {
+            return v.snapshot();
+        }
+        None
+    }
+
+    fn parsed_snapshot_available(&self) -> bool {
+        #[cfg(feature = "vt")]
+        return self.vt.is_some();
+        #[cfg(not(feature = "vt"))]
+        false
+    }
+
+    /// A local app holds it again: it parses for itself.
+    fn stop_parsing(&mut self) {
+        #[cfg(feature = "vt")]
+        {
+            self.vt = None;
+        }
+    }
+
+    /// Parse `bytes`; the notifications the program sent, if any.
+    fn parse(&mut self, bytes: &[u8]) -> Vec<(String, String)> {
+        #[cfg(feature = "vt")]
+        if let Some(v) = &mut self.vt {
+            v.write(bytes);
+            let fx = v.take_effects();
+            self.input.extend_from_slice(&fx.pty_response);
+            if fx.title_changed {
+                self.title = v.title();
+            }
+            if fx.pwd_changed {
+                self.cwd = v.pwd();
+            }
+            return fx.notifications;
+        }
+        let _ = bytes;
+        vec![]
+    }
+
+    fn resize_to(&mut self, cols: u16, rows: u16) {
+        self.size = (cols, rows);
+        #[cfg(feature = "vt")]
+        if let Some(v) = &mut self.vt {
+            v.resize(cols, rows, 0, 0);
+        }
+    }
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -148,6 +241,9 @@ enum Mode {
     Splice(u64),
     /// The app's side of the replay: this many answers still to come.
     Replay(usize),
+    /// A streamed attach waiting for a local app to let go of the terminal:
+    /// what it sends meanwhile waits too.
+    Waiting,
 }
 
 struct Client {
@@ -157,6 +253,9 @@ struct Client {
     decoder: Decoder,
     mode: Mode,
     term: Option<String>,
+    /// Which app it is (a streamed attach's `owner`): `take` only takes
+    /// from the same one.
+    owner: Option<String>,
     /// Bytes waiting for the socket to take them.
     out: Vec<u8>,
     /// Close once `out` is flushed.
@@ -232,7 +331,9 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
         },
         state: control::State::load(control::state_path(path)),
         app: None,
+        app_owner: None,
         host_id: host_id(&path.with_file_name("host-id")),
+        held_dir: path.with_file_name("held"),
     };
     let mut idle_since = Instant::now();
     let mut buf = vec![0u8; 1 << 16];
@@ -241,7 +342,7 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
         // Programs that ended while nobody was attached are dropped.
         s.terms.retain(|_, t| {
             let exited = t.eof || matches!(t.child.try_wait(), Ok(Some(_)));
-            !(exited && t.client.is_none())
+            !(exited && t.holder.is_none() && t.streams.is_empty())
         });
         // Sleep until something happens; only an idle server wakes on a timer.
         let timeout = if s.opts.idle_exit && s.terms.is_empty() && s.clients.is_empty() {
@@ -286,21 +387,21 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
                 continue;
             };
             let mut ev = 0;
-            match t.client.and_then(|c| s.clients.get(&c)) {
-                // Nobody attached: read it into the backlog.
-                None if !t.eof => ev |= libc::POLLIN,
-                // Streamed: read it for the app while it keeps up, and write
-                // what it typed.
-                Some(c) if c.streams() => {
-                    if !t.eof && c.out.len() < HIGH_WATER {
-                        ev |= libc::POLLIN;
-                    }
-                    if !t.input.is_empty() {
-                        ev |= libc::POLLOUT;
-                    }
+            // A local app has the descriptor: hands off. Else read it, for
+            // the streamed apps while they keep up, or into the backlog;
+            // and write what they typed (or what the parser answers).
+            if t.holder.is_none_or(|h| !s.clients.contains_key(&h)) {
+                let keeps_up = t
+                    .streams
+                    .iter()
+                    .filter_map(|c| s.clients.get(c))
+                    .all(|c| c.out.len() < HIGH_WATER);
+                if !t.eof && keeps_up {
+                    ev |= libc::POLLIN;
                 }
-                // A local app has the descriptor: hands off.
-                _ => {}
+                if !t.input.is_empty() {
+                    ev |= libc::POLLOUT;
+                }
             }
             if ev != 0 {
                 fds.push(pollfd(fd, ev));
@@ -373,8 +474,13 @@ struct Server {
     state: control::State,
     /// The app's link, while it's attached.
     app: Option<u64>,
+    /// Which app that is (`owner`, as its streams say).
+    app_owner: Option<String>,
     /// This machine, as `hello` says: made once, kept beside the socket.
     host_id: String,
+    /// Where an app leaves a terminal's screen when it lets go
+    /// (abromux_term::hold::snapshot_path), and the server leaves its own.
+    held_dir: PathBuf,
 }
 
 impl Server {
@@ -389,6 +495,7 @@ impl Server {
                 decoder: Decoder::default(),
                 mode: Mode::Lines,
                 term: None,
+                owner: None,
                 out: Vec::new(),
                 closing: false,
             },
@@ -577,6 +684,24 @@ impl Server {
                                 let terms = &self.terms;
                                 self.state
                                     .update(&msg, &|id| terms.get(id).is_some_and(|t| !t.eof));
+                            } else if msg["op"] == "terms" {
+                                // What the app parses of the terminals it
+                                // holds: their titles and folders.
+                                for r in msg["terms"].as_array().into_iter().flatten() {
+                                    if let Some(t) =
+                                        r["id"].as_str().and_then(|id| self.terms.get_mut(id))
+                                    {
+                                        if let Some(v) = r["title"].as_str() {
+                                            t.title = v.to_string();
+                                        }
+                                        if let Some(v) = r["cwd"].as_str() {
+                                            t.cwd = v.to_string();
+                                        }
+                                        if let Some(v) = r["surface"].as_str() {
+                                            t.surface = Some(v.to_string());
+                                        }
+                                    }
+                                }
                             }
                         }
                         Mode::Replay(left) => {
@@ -589,7 +714,7 @@ impl Server {
                         _ => unreachable!(),
                     }
                 }
-                Mode::Pending | Mode::Splice(_) => return,
+                Mode::Pending | Mode::Splice(_) | Mode::Waiting => return,
             }
         }
     }
@@ -606,7 +731,8 @@ impl Server {
                 self.write_input(&id);
             }
             wire::RESIZE => {
-                if let (Some(t), Some(size)) = (self.terms.get(&id), Size::decode(&payload)) {
+                if let (Some(t), Some(size)) = (self.terms.get_mut(&id), Size::decode(&payload)) {
+                    t.resize_to(size.cols, size.rows);
                     let _ = t.master.resize(PtySize {
                         rows: size.rows,
                         cols: size.cols,
@@ -622,6 +748,13 @@ impl Server {
             }
             wire::KILL => {
                 if let Some(t) = self.terms.remove(&id) {
+                    // Everyone streaming it is done with it.
+                    for o in t.streams.iter().chain(&t.waiting) {
+                        if let Some(c) = self.clients.get_mut(o) {
+                            c.term = None;
+                            c.closing = true;
+                        }
+                    }
                     hang_up(t);
                 }
                 if let Some(c) = self.clients.get_mut(&cid) {
@@ -632,11 +765,10 @@ impl Server {
             wire::DETACH => {
                 // The app quits: from here on output goes to the backlog,
                 // and DETACHED marks where its stream ends.
-                if let Some(t) = self.terms.get_mut(&id)
-                    && t.client == Some(cid)
-                {
-                    t.client = None;
+                if let Some(t) = self.terms.get_mut(&id) {
+                    t.streams.retain(|s| *s != cid);
                 }
+                self.maybe_reclaim(&id);
                 if let Some(c) = self.clients.get_mut(&cid) {
                     c.term = None;
                     c.out.extend(wire::frame(wire::DETACHED, b""));
@@ -667,7 +799,33 @@ impl Server {
                 c.reply(reply);
                 self.flush(cid);
             }
-            Some("app") => self.attach_app(cid),
+            Some("app") => {
+                self.app_owner = req["owner"].as_str().map(String::from);
+                self.attach_app(cid)
+            }
+            // The terminals it keeps: who holds or streams each, and what
+            // its program last said (title, folder).
+            Some("terms") => {
+                let list: Vec<Value> = self
+                    .terms
+                    .iter()
+                    .map(|(id, t)| {
+                        json!({
+                            "id": id,
+                            "pid": t.pid,
+                            "surface": t.surface,
+                            "title": t.title,
+                            "cwd": t.cwd,
+                            "held": t.holder.is_some(),
+                            "streams": t.streams.len(),
+                            "parsed": t.parsed_snapshot_available(),
+                        })
+                    })
+                    .collect();
+                let c = self.clients.get_mut(&cid).unwrap();
+                c.reply(json!({ "ok": true, "terms": list }));
+                self.flush(cid);
+            }
             // What the app last said about its workspaces here: another app
             // (or this one, without its session) opens them from it.
             Some("get-state") => {
@@ -692,23 +850,22 @@ impl Server {
                         let id = format!("{}-{}", std::process::id(), self.next_term);
                         let reply = json!({ "ok": true, "id": id, "pid": t.pid });
                         let fd = t.master.as_raw_fd().unwrap_or(-1);
+                        let mut t = t;
                         let sent = if stream {
                             set_nonblocking(fd, true);
                             c.reply(reply);
                             c.mode = Mode::Frames;
+                            c.owner = req["owner"].as_str().map(String::from);
+                            t.streams.push(cid);
+                            t.start_parsing(None);
                             true
                         } else {
+                            t.holder = Some(cid);
                             send_with_fd(c, format!("{reply}\n").as_bytes(), fd).is_ok()
                         };
                         if sent {
                             c.term = Some(id.clone());
-                            self.terms.insert(
-                                id,
-                                Term {
-                                    client: Some(cid),
-                                    ..t
-                                },
-                            );
+                            self.terms.insert(id, t);
                         }
                         self.flush(cid);
                     }
@@ -720,56 +877,87 @@ impl Server {
             }
             Some("attach") if c.term.is_none() => {
                 let id = req["id"].as_str().unwrap_or_default().to_string();
-                // `take`: a streamed app coming back after its connection
-                // broke, before the server noticed: the old one goes.
+                let owner = req["owner"].as_str().map(String::from);
+                // `take`: the same app coming back after its connection
+                // broke, before the server noticed: its old one goes.
                 if stream && req["take"] == true {
-                    let other = self.terms.get(&id).and_then(|t| t.client);
-                    if let Some(other) = other.filter(|o| *o != cid)
-                        && self.clients.get(&other).is_some_and(Client::streams)
-                    {
-                        self.drop_client(other);
+                    let old: Vec<u64> = self
+                        .terms
+                        .get(&id)
+                        .map(|t| t.streams.clone())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|o| *o != cid)
+                        .filter(|o| {
+                            let theirs = self.clients.get(o).and_then(|c| c.owner.clone());
+                            owner.is_none() || theirs.is_none() || theirs == owner
+                        })
+                        .collect();
+                    for o in old {
+                        self.drop_client(o);
                     }
                 }
-                let clients = &self.clients;
                 let Some(t) = self.terms.get_mut(&id) else {
                     let c = self.clients.get_mut(&cid).unwrap();
                     fail(c, format!("no terminal {id}"));
                     return self.flush(cid);
                 };
-                let busy = t
-                    .client
-                    .is_some_and(|other| other != cid && clients.contains_key(&other));
+                let held = t
+                    .holder
+                    .is_some_and(|h| h != cid && self.clients.contains_key(&h));
                 let c = self.clients.get_mut(&cid).unwrap();
-                if busy {
-                    fail(c, format!("{id} is attached elsewhere"));
-                    return self.flush(cid);
-                }
                 if t.eof {
                     fail(c, format!("{id} has ended"));
                     return self.flush(cid);
                 }
-                let backlog = std::mem::take(&mut t.backlog);
-                let fd = t.master.as_raw_fd().unwrap_or(-1);
                 if stream {
-                    let snapshot = t.snapshot.take().unwrap_or_default();
-                    set_nonblocking(fd, true);
-                    c.reply(json!({
-                        "ok": true,
-                        "pid": t.pid,
-                        "snapshot": snapshot.len(),
-                        "backlog": backlog.len(),
-                    }));
-                    c.out.extend_from_slice(&snapshot);
-                    c.out.extend_from_slice(&backlog);
-                    c.mode = Mode::Frames;
-                    c.term = Some(id);
-                    t.client = Some(cid);
+                    c.owner = owner;
+                    c.term = Some(id.clone());
+                    if held {
+                        // A local app holds it: ask it to share (it lets go
+                        // of the descriptor and streams it too), and answer
+                        // once it has.
+                        let Some(app) = self.app else {
+                            c.term = None;
+                            fail(c, format!("{id} is attached elsewhere"));
+                            return self.flush(cid);
+                        };
+                        t.waiting.push(cid);
+                        c.mode = Mode::Waiting;
+                        if let Some(a) = self.clients.get_mut(&app) {
+                            a.reply(json!({ "release": id }));
+                        }
+                        return self.flush(app);
+                    }
+                    let fresh = req["fresh"] == true;
+                    self.stream_to(cid, &id, fresh);
                 } else {
+                    if held {
+                        fail(c, format!("{id} is attached elsewhere"));
+                        return self.flush(cid);
+                    }
+                    if !t.streams.is_empty() {
+                        // Streamed to another app: this one streams it too.
+                        c.reply(json!({ "ok": false, "error": format!("{id} is streamed"), "code": "streamed" }));
+                        return self.flush(cid);
+                    }
+                    // What the server parsed since is the screen to come
+                    // back to; the app reads it where it left its own.
+                    if let Some(snap) = t.parsed_snapshot() {
+                        let path = self.held_dir.join(format!("{id}.snap"));
+                        let _ = std::fs::create_dir_all(&self.held_dir);
+                        if std::fs::write(&path, snap).is_ok() {
+                            t.backlog.clear();
+                        }
+                    }
+                    let backlog = std::mem::take(&mut t.backlog);
+                    let fd = t.master.as_raw_fd().unwrap_or(-1);
                     let reply = json!({ "ok": true, "pid": t.pid, "backlog": backlog.len() });
                     if send_with_fd(c, format!("{reply}\n").as_bytes(), fd).is_ok() {
                         c.out.extend_from_slice(&backlog);
                         c.term = Some(id);
-                        t.client = Some(cid);
+                        t.holder = Some(cid);
+                        t.stop_parsing();
                     } else {
                         t.backlog = backlog;
                     }
@@ -825,10 +1013,28 @@ impl Server {
         let Some(c) = self.clients.remove(&cid) else {
             return;
         };
-        if let Some(t) = c.term.and_then(|id| self.terms.get_mut(&id))
-            && t.client == Some(cid)
+        if let Some(id) = c.term.clone()
+            && let Some(t) = self.terms.get_mut(&id)
         {
-            t.client = None;
+            let was_streamed = t.streams.contains(&cid);
+            t.streams.retain(|s| *s != cid);
+            t.waiting.retain(|s| *s != cid);
+            if was_streamed {
+                self.maybe_reclaim(&id);
+            }
+            let Some(t) = self.terms.get_mut(&id) else {
+                return;
+            };
+            if t.holder == Some(cid) {
+                // The local app let go (quit, or to share it): parse from
+                // the screen it left, and hand it to whoever was waiting.
+                t.holder = None;
+                let snap = std::fs::read(self.held_dir.join(format!("{id}.snap"))).ok();
+                t.start_parsing(snap.as_deref());
+                for w in std::mem::take(&mut t.waiting) {
+                    self.stream_to(w, &id, true);
+                }
+            }
         }
         match c.mode {
             // One side of a splice gone: the other ends once it has the rest.
@@ -872,40 +1078,135 @@ impl Server {
         {
             return; // left non-blocking; nothing after all
         }
-        let streamed = t
-            .client
-            .filter(|c| self.clients.get(c).is_some_and(Client::streams));
+        let streams: Vec<u64> = t
+            .streams
+            .iter()
+            .copied()
+            .filter(|c| self.clients.contains_key(c))
+            .collect();
         if n <= 0 {
             t.eof = true;
-            // Tell a streamed app how it ended, then forget the terminal.
-            if let Some(cid) = streamed {
+            // Tell the streamed apps how it ended, then forget the terminal.
+            if !streams.is_empty() {
                 let code = exit_code(t);
                 self.terms.remove(id);
-                let c = self.clients.get_mut(&cid).unwrap();
-                c.out.extend(wire::frame(
-                    wire::EXIT,
-                    json!({ "code": code }).to_string().as_bytes(),
-                ));
-                c.term = None;
-                c.closing = true;
-                self.flush(cid);
+                let exit = wire::frame(wire::EXIT, json!({ "code": code }).to_string().as_bytes());
+                for cid in streams {
+                    let c = self.clients.get_mut(&cid).unwrap();
+                    c.out.extend_from_slice(&exit);
+                    c.term = None;
+                    c.closing = true;
+                    self.flush(cid);
+                }
             }
             return;
         }
         let bytes = &buf[..n as usize];
-        match streamed {
-            Some(cid) => {
-                let c = self.clients.get_mut(&cid).unwrap();
-                c.out.extend(wire::frame(wire::OUTPUT, bytes));
+        let notes = t.parse(bytes);
+        if streams.is_empty() {
+            t.backlog.extend_from_slice(bytes);
+            if t.backlog.len() > BACKLOG_MAX {
+                let cut = t.backlog.len() - BACKLOG_MAX;
+                t.backlog.drain(..cut);
+            }
+        }
+        // Nobody watching: the server says it for the app (kept until it's
+        // back, or handed over now if it's attached).
+        let surface = t.surface.clone();
+        if !t.input.is_empty() {
+            self.write_input(id);
+        }
+        if streams.is_empty() && !notes.is_empty() {
+            for (title, body) in notes {
+                self.state.keep(
+                    "notification.create",
+                    json!({ "title": title, "body": body, "caller": { "surface": surface } }),
+                );
+            }
+            self.offer_replay();
+        }
+        if !streams.is_empty() {
+            let frame = wire::frame(wire::OUTPUT, bytes);
+            for cid in streams {
+                if let Some(c) = self.clients.get_mut(&cid) {
+                    c.out.extend_from_slice(&frame);
+                }
                 self.flush(cid);
             }
-            None => {
-                t.backlog.extend_from_slice(bytes);
-                if t.backlog.len() > BACKLOG_MAX {
-                    let cut = t.backlog.len() - BACKLOG_MAX;
-                    t.backlog.drain(..cut);
-                }
+        }
+    }
+
+    /// Stream terminal `id` to `cid`: the reply, the screen so far, then
+    /// frames. `fresh`: the app has no screen of its own (another app, or
+    /// one that lost it), so the server's parsed one if it has it.
+    fn stream_to(&mut self, cid: u64, id: &str, fresh: bool) {
+        let Some(t) = self.terms.get_mut(id) else {
+            return;
+        };
+        let Some(c) = self.clients.get_mut(&cid) else {
+            return;
+        };
+        let parsed = if fresh { t.parsed_snapshot() } else { None };
+        let (snapshot, backlog, is_parsed) = match parsed {
+            Some(s) => {
+                t.backlog.clear();
+                (s, vec![], true)
             }
+            None => (
+                t.snapshot.take().unwrap_or_default(),
+                std::mem::take(&mut t.backlog),
+                false,
+            ),
+        };
+        set_nonblocking(t.master.as_raw_fd().unwrap_or(-1), true);
+        c.reply(json!({
+            "ok": true,
+            "pid": t.pid,
+            "snapshot": snapshot.len(),
+            "backlog": backlog.len(),
+            "parsed": is_parsed,
+        }));
+        c.out.extend_from_slice(&snapshot);
+        c.out.extend_from_slice(&backlog);
+        c.mode = Mode::Frames;
+        c.term = Some(id.to_string());
+        if !t.streams.contains(&cid) {
+            t.streams.push(cid);
+        }
+        t.start_parsing(None);
+        // Bytes it sent after its request are its first frames.
+        let rest = std::mem::take(&mut c.buf);
+        c.decoder.push(&rest);
+        self.flush(cid);
+        self.handle_input(cid);
+    }
+
+    /// Only the local app streams terminal `id` now (the one sharing it
+    /// left): it can hold it again, at no cost to the server.
+    fn maybe_reclaim(&mut self, id: &str) {
+        let (Some(app), Some(owner)) = (self.app, self.app_owner.clone()) else {
+            return;
+        };
+        let Some(t) = self.terms.get(id) else { return };
+        let only_ours = t.holder.is_none()
+            && t.streams.len() == 1
+            && self
+                .clients
+                .get(&t.streams[0])
+                .is_some_and(|c| c.owner.as_deref() == Some(&owner));
+        if only_ours && let Some(a) = self.clients.get_mut(&app) {
+            a.reply(json!({ "reclaim": id }));
+            self.flush(app);
+        }
+    }
+
+    /// Tell the attached app there's something kept for it.
+    fn offer_replay(&mut self) {
+        if let Some(app) = self.app
+            && let Some(a) = self.clients.get_mut(&app)
+        {
+            a.reply(json!({ "open": 0 }));
+            self.flush(app);
         }
     }
 
@@ -1108,15 +1409,30 @@ fn spawn(req: &Value, stream: bool, control: Option<&Path>) -> Result<Term, Stri
     cmd.cwd(cwd);
     let child = pty.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pty.slave);
+    let surface = req["env"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|kv| kv[0] == "ABROMUX_SURFACE_ID")
+        .and_then(|kv| kv[1].as_str())
+        .map(String::from);
     Ok(Term {
         pid: child.process_id().unwrap_or(0),
         master: pty.master,
         child,
         backlog: Vec::new(),
         snapshot: None,
-        client: None,
+        holder: None,
+        streams: Vec::new(),
+        waiting: Vec::new(),
         eof: false,
         input: Vec::new(),
+        surface,
+        title: String::new(),
+        cwd: String::new(),
+        size: (size.cols, size.rows),
+        #[cfg(feature = "vt")]
+        vt: None,
     })
 }
 

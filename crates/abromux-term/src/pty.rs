@@ -16,6 +16,7 @@ use futures::channel::mpsc;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
+use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Called on each read of a terminal's output (see [`on_output`]).
@@ -32,6 +33,9 @@ pub fn on_output(f: fn()) {
 pub struct Queue {
     pub bytes: Vec<u8>,
     pub closed: bool,
+    /// The whole screen to start from (libghostty-vt's snapshot), before
+    /// `bytes`: what the server parsed, for a view with no screen of its own.
+    pub reset: Option<Vec<u8>>,
 }
 
 /// Where readers put a program's output: appended to one buffer, with a wake
@@ -60,6 +64,16 @@ impl Feed {
             on_output();
         }
         self.queue.lock().unwrap().bytes.extend_from_slice(bytes);
+        !matches!(self.wake.try_send(()), Err(e) if e.is_disconnected())
+    }
+
+    /// Start over from `snapshot`: what came before it is in it.
+    pub(crate) fn reset(&mut self, snapshot: Vec<u8>) -> bool {
+        {
+            let mut q = self.queue.lock().unwrap();
+            q.bytes.clear();
+            q.reset = Some(snapshot);
+        }
         !matches!(self.wake.try_send(()), Err(e) if e.is_disconnected())
     }
 
@@ -256,6 +270,11 @@ impl Pty {
             }
             Pty::Remote(r) => {
                 let id = r.freeze()?;
+                // One of this machine's, streamed while shared: kept as a
+                // held one is, for the next launch to take back by id.
+                if Path::new(r.host()) == crate::hold::socket_path() {
+                    return Some(id);
+                }
                 Some(crate::remote::snapshot_key(r.host(), &id))
             }
             _ => None,
@@ -342,6 +361,18 @@ pub fn open(
                     });
                 }
             }
+            // Another app streams it from this machine's server (it asked
+            // to share it): this one streams it too, from the same server.
+            Err(e) if e.ends_with("is streamed") => {
+                let snapshot = crate::hold::take_snapshot(id);
+                let fresh = snapshot.is_none();
+                return Ok(Opened {
+                    pty: stream_local(id, size, fresh, feed),
+                    attached: true,
+                    snapshot,
+                    backlog: Vec::new(),
+                });
+            }
             Err(e) => eprintln!("abromux: held terminal {id}: {e}"),
         }
     }
@@ -387,12 +418,15 @@ pub fn open_remote(
         width: 0,
         height: 0,
     };
+    // Taken back with no screen of its own: the server's, if it parsed it.
+    let fresh = attach.is_some() && snapshot.is_none();
     let remote = crate::remote::Remote::start(
         host.to_string(),
         endpoint,
         attach.map(String::from),
         spawn,
         size,
+        fresh,
         feed,
     );
     Ok(Opened {
@@ -401,6 +435,48 @@ pub fn open_remote(
         snapshot,
         backlog: Vec::new(),
     })
+}
+
+/// Take terminal `id` of this machine's server back as held (its PTY here),
+/// with the screen the server left and what came after. None if it can't
+/// be (it ended, or it's still shared).
+pub fn reattach(id: &str, feed: &Feed) -> Option<Opened> {
+    let mut held = crate::hold::Held::attach(id).ok()?;
+    let snapshot = crate::hold::take_snapshot(id);
+    let backlog = std::mem::take(&mut held.backlog);
+    Some(Opened {
+        pty: held_pty(held, feed)?,
+        attached: true,
+        snapshot,
+        backlog,
+    })
+}
+
+/// Terminal `id` of this machine's server, streamed rather than held: while
+/// another app shares it (docs/server-plan.md, phase 4). The server reads
+/// the PTY for both.
+pub fn stream_local(id: &str, (cols, rows): (u16, u16), fresh: bool, feed: &Feed) -> Pty {
+    let path = crate::hold::socket_path();
+    let size = abromux_core::wire::Size {
+        cols,
+        rows,
+        width: 0,
+        height: 0,
+    };
+    let spec = crate::remote::SpawnSpec {
+        command: None,
+        cwd: String::new(),
+        env: vec![],
+    };
+    Pty::Remote(crate::remote::Remote::start(
+        path.to_string_lossy().into_owned(),
+        crate::remote::Endpoint::Unix(path),
+        Some(id.to_string()),
+        spec,
+        size,
+        fresh,
+        feed,
+    ))
 }
 
 fn local(

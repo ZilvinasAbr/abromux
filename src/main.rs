@@ -695,8 +695,12 @@ impl AbroMux {
             let mut last = None;
             loop {
                 Timer::after(Duration::from_secs(5)).await;
-                let Ok((s, state)) = this.update(cx, |this, cx| {
-                    (this.snapshot(false, cx), this.control_state(cx))
+                let Ok((s, state, terms)) = this.update(cx, |this, cx| {
+                    (
+                        this.snapshot(false, cx),
+                        this.control_state(cx),
+                        this.held_terms(cx),
+                    )
                 }) else {
                     break;
                 };
@@ -714,6 +718,7 @@ impl AbroMux {
                 }
                 if let Some(link) = control_link::current() {
                     link.push_state(state, session);
+                    link.push_terms(terms);
                 }
                 if last.as_ref() != Some(&s) {
                     session::save(&s);

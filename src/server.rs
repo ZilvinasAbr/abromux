@@ -967,6 +967,46 @@ impl AbroMux {
             }
             "group.by_folder" => json!({ "created": self.group_by_folder(cx) }),
             "group.by_server" => json!({ "created": self.group_by_server(cx) }),
+            // The server wants a terminal this app holds shared with
+            // another app (crate::control_link): stream it instead.
+            "surface.restream" => {
+                let id = str_param(p, "held").context("missing held")?;
+                let t = self
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.all_surfaces())
+                    .find_map(|s| match s {
+                        Surface::Terminal(t) if t.read(cx).held_id().as_deref() == Some(id) => {
+                            Some(t.clone())
+                        }
+                        _ => None,
+                    });
+                match t {
+                    Some(t) => {
+                        t.update(cx, |t, cx| t.restream(cx));
+                        json!({ "restreamed": true })
+                    }
+                    None => json!({ "restreamed": false }),
+                }
+            }
+            // Nobody else streams it now: hold it again.
+            "surface.reclaim" => {
+                let id = str_param(p, "held").context("missing held")?;
+                let t = self
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.all_surfaces())
+                    .find_map(|s| match s {
+                        Surface::Terminal(t) if t.read(cx).held_id().as_deref() == Some(id) => {
+                            Some(t.clone())
+                        }
+                        _ => None,
+                    });
+                if let Some(t) = &t {
+                    t.update(cx, |t, cx| t.reclaim(cx));
+                }
+                json!({ "reclaimed": t.is_some() })
+            }
             "group.rename" | "group.color" | "group.collapse" | "group.expand"
             | "group.ungroup" => {
                 let g = match str_param(p, "group") {
@@ -3883,6 +3923,30 @@ impl AbroMux {
             None => json!(null),
         };
         Ok(Reply::Now(v))
+    }
+
+    /// The terminals this app holds of its own server, with what it parses
+    /// of them (title, folder), for the server to list to other apps.
+    pub(crate) fn held_terms(&self, cx: &App) -> Value {
+        json!(
+            self.workspaces
+                .iter()
+                .flat_map(|w| w.all_surfaces())
+                .filter_map(|s| match s {
+                    Surface::Terminal(t) => {
+                        let v = t.read(cx);
+                        let id = v.held_id().filter(|_| v.host.is_none())?;
+                        Some(json!({
+                            "id": id,
+                            "title": v.shown_title(),
+                            "cwd": v.live_cwd(),
+                            "surface": self.surface_refs.get(&t.entity_id()).map(|n| format!("surface:{n}")),
+                        }))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        )
     }
 
     /// What the server answers from while the app is closed
