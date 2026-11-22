@@ -196,28 +196,39 @@ Each workspace's row shows its name, a description if it has one, the focused ta
 
 ## Workspace folders
 
-⇧⌘I (File › New Workspace Folder) makes a workspace with a folder of its own, a scoped place for an agent to work in. A dialog asks for its name, showing a made-up one (like `quiet-amber-falcon`) and the folder it will make; Enter with nothing typed takes the made-up name, Esc cancels. The folder goes under `~/.abromux/ws/` (`~/.abromux/ws-nightly[-<name>]/` for a nightly), and a shell opens in it. To put them elsewhere, pick a folder in Settings › New Workspaces › Workspace folders, or set `app.workspaceFoldersDirectory` (`~` works); `$ABROMUX_WORKSPACES_DIR` overrides both. Folders made before a change stay where they are. Renaming the workspace later doesn't move the folder, since shells and worktrees point into it.
+A workspace folder is a workspace with a folder of its own, a scoped place for an agent to work in. The feature is a Lua script that comes with AbroMux, `abromux.workspace_folders` (`src/lua/workspace_folders.lua`), written on the same API as your own [scripts](#lua-scripts); the app itself only knows that a workspace can have a folder and env vars (`workspace.create`'s `folder` and `env`). Turn it on in `init.lua`:
 
-The folder holds `.abromux/workspace.json` (its name and what was checked out) and an `AGENTS.md` (with a `CLAUDE.md` that imports it) telling the agent to bring projects in rather than edit them in place. Shells in the workspace get `$ABROMUX_WORKSPACE_DIR`. The workspace keeps its folder across restarts.
+```lua
+require("abromux.workspace_folders").setup{}
+-- or: setup{ root = "~/work/ws", agent = "codex", key = "cmd-shift-i", cleanup_key = false }
+```
+
+`setup{}` takes `root` (where the folders go), `agent` (the cleanup agent's command), `key` and `cleanup_key` (the two shortcuts, `false` for none), and `agents_md` / `cleanup_md` (your own text for those files). To change more, copy the file next to `init.lua`, `require` your copy, and edit it.
+
+**New Workspace Folder…** (⇧⌘I, in the palette) asks for a name; Enter with nothing typed takes a made-up one (like `quiet-amber-falcon`), which the workspace's first agent then renames ([auto-naming](#sidebar)), and Esc cancels. The folder goes under `~/.abromux/ws/` (`~/.abromux/ws-nightly[-<name>]/` for a nightly), or `root`, or `app.workspaceFoldersDirectory` (Settings › New Workspaces › Workspace folders; `~` works); `$ABROMUX_WORKSPACES_DIR` overrides them all. `abromux new_workspace_folder name=<name>` does the same from a shell. Renaming the workspace later doesn't move the folder, since shells and worktrees point into it.
+
+The folder holds `.abromux/workspace.json` (its name and what was checked out) and an `AGENTS.md` (with a `CLAUDE.md` that imports it) telling the agent to bring projects in rather than edit them in place. Its shells get `$ABROMUX_WORKSPACE_DIR` and `COMPOSE_PROJECT_NAME=<folder>`, and the workspace keeps its folder and those across restarts.
+
+The script's `folder` action is also a command (any `init.lua` action is: `abromux <action> …`), and works from any shell inside a workspace folder:
 
 - `abromux folder add <path> [--branch <name>]` checks a project out into the folder: for a git repo, a worktree of the whole repo on a new branch `ws/<folder>` (or `--branch`, which may already exist if no other worktree has it); anything else is copied.
-- `abromux folder` prints the folder, `folder list` its checkouts, `folder all` every workspace folder, `folder repos` the git repos right under `~/repos`, `~/src`, `~/code`, `~/projects`, `~/dev` and `~/Developer`, and `folder root` where the folders live. They work from any shell inside a workspace folder and don't need the app.
+- `abromux folder` prints the folder, `folder list` its checkouts, `folder all [--closed]` every workspace folder, `folder repos` the git repos right under `~/repos`, `~/src`, `~/code`, `~/projects`, `~/dev` and `~/Developer`, and `folder root` where the folders live.
 
 Closing the workspace keeps its folder.
 
 ### Cleaning up
 
-⇧⌘X (or right-click a workspace with a folder › Clean Up and Delete Folder…) moves the workspace into the **Cleanup** group, which always stays last in the sidebar, and opens a tab in the folder running a cleanup agent: `claude 'Read .abromux/cleanup.md and follow it.'`. It looks for everything the workspace made outside its folder, removes those things without asking, and ends with `abromux folder remove`, which closes the workspace. Workspaces are treated as scratch folders for one task, so it only stops to ask when work would really be lost: uncommitted changes or unpushed, unmerged commits in a worktree, or a changed copy of a folder. Things that were there before or are shared with other projects are kept, and listed at the end. Claude asks before each command as usual. Set `automation.workspaceCleanupAgent` for another agent CLI; the instruction is passed as its one argument.
+**Clean Up and Delete Workspace Folder…** (⇧⌘X, in the palette) moves the workspace into the **Cleanup** group, which always stays last in the sidebar (`workspace.action` `move-to-cleanup`), writes `.abromux/cleanup.md`, and opens a tab in the folder running a cleanup agent: `claude 'Read .abromux/cleanup.md and follow it.'`. It looks for everything the workspace made outside its folder, removes those things without asking, and ends with `abromux folder remove`, which closes the workspace. Workspaces are treated as scratch folders for one task, so it only stops to ask when work would really be lost: uncommitted changes or unpushed, unmerged commits in a worktree, or a changed copy of a folder. Things that were there before or are shared with other projects are kept, and listed at the end. Claude asks before each command as usual. `agent` in `setup{}` (or `automation.workspaceCleanupAgent`) picks another agent CLI; the instruction is passed as its one argument.
 
 To make that findable, each folder's `AGENTS.md` asks agents to keep track of what they make:
 
-- Shells in the workspace get `COMPOSE_PROJECT_NAME=<folder>`, so `docker compose` stacks started there are the workspace's.
+- `docker compose` stacks started in its shells are named after the folder (`$COMPOSE_PROJECT_NAME`).
 - Containers, volumes and networks made with plain `docker` get `--label abromux.workspace=<folder>`.
 - Anything else (a database on a shared server, a cloud bucket, a `brew services` entry, a long-running process) is written down in `.abromux/resources.md`, with the command that removes it.
 
 `abromux folder resources` shows that list and the Docker resources it finds by label or compose project.
 
-`abromux folder remove [<path>] [--force]` does the deleting without an agent: `git worktree remove` for each worktree in its repo, then the folder. It deletes a `ws/<folder>` branch it made if that's merged, and keeps it otherwise (a branch passed to `--branch` that already existed always stays). It refuses while a worktree has uncommitted or untracked files, or Docker resources of the workspace are still there; `--force` goes ahead anyway. If AbroMux has the workspace open, the app closes it first and then deletes the folder, so it works from the workspace's own shell, and a notification says how it went. `abromux folder all --closed` lists folders no open workspace has, to remove by path.
+`abromux folder remove [<path>] [--force]` does the deleting without an agent: `git worktree remove` for each worktree in its repo, then the folder. It deletes a `ws/<folder>` branch it made if that's merged, and keeps it otherwise (a branch passed to `--branch` that already existed always stays). It refuses while a worktree has uncommitted or untracked files, or Docker resources of the workspace are still there; `--force` goes ahead anyway. If AbroMux has the workspace open, it closes it last, so it works from the workspace's own shell. `abromux folder all --closed` lists folders no open workspace has, to remove by path.
 
 ## GitLab merge requests
 
@@ -430,7 +441,7 @@ These use cmux's key names. Shown with their defaults:
 - `keepWorkspaceOpenWhenClosingLastSurface`: ⌘W on a workspace's last tab opens a fresh terminal in the same directory instead of closing the workspace. Only ⌘W: a shell that exits, or the tab's `×`, still closes it.
 - `reorderOnNotification`: a workspace that gets a notification you aren't looking at moves to the top of the sidebar, or to the top of its group if it's in one. `false` (or `"off"`) keeps the order as you left it. cmux's `"notifications"` is the same as `true`; its `"agentActivity"` is taken as `"notifications"` too, since agent turns already notify here.
 - `automaticallyCheckForUpdates`: look for a new release once a day ([Updates](#updates)).
-- `workspaceFoldersDirectory`: where ⇧⌘I makes [workspace folders](#workspace-folders); `null` is `~/.abromux/ws` (per channel for nightlies).
+- `workspaceFoldersDirectory`: where the [workspace folders](#workspace-folders) script makes them; `null` is `~/.abromux/ws` (per channel for nightlies). The app only shows it in Settings; the script reads it.
 - `newWorkspacePlacement`: where a new workspace goes, `top`, `afterCurrent` (after the selected one, or after its group) or `end`. `workspaceGroups.newWorkspacePlacement` is the same inside a group, where `top` means right after the group's first workspace.
 - `fontSize` sizes the workspace names (8–24); the smaller lines scale with it. `hideAllDetails` shows names only. `wrapWorkspaceTitles` lets long names wrap.
 - `showWorkspaceDescription`, `showNotificationMessage`, `showBranchDirectory`, `showProgress`, `showLog` and `showCustomMetadata` (status pills) hide those lines when `false`. `stackBranchDirectory` puts the branch and the directory on lines of their own, and `pathLastSegmentOnly` shows `…/api` instead of `~/code/api`.
@@ -463,7 +474,7 @@ These use cmux's key names. Shown with their defaults:
 - `when` binds it only in a key context: `Terminal`, `Browser`, `Browser > Input` (the address bar and find field), or a gpui context expression. By default an action keeps the contexts its defaults had (find works in terminals and browsers), and a command's shortcut works everywhere.
 - Shift with punctuation is written either way: `cmd-shift-]` and `cmd-}` are the same key.
 
-`"commands"` adds your own entries to the command palette (⌘⇧P), each with an optional `shortcut`. `run` types the text into the focused terminal and presses Return; with `"newTab": true`, or when a browser has focus, it runs in a new terminal tab instead. `url` opens a page in a new browser tab. `description` shows under the title in the palette, `keywords` are more words it finds the command by, and `"confirm": true` asks before every run.
+`"commands"` adds your own entries to the command palette (⌘⇧P), each with an optional `shortcut`. `script` runs a Lua script (see [Lua scripts](#lua-scripts)). `run` types the text into the focused terminal and presses Return; with `"newTab": true`, or when a browser has focus, it runs in a new terminal tab instead. `url` opens a page in a new browser tab. `description` shows under the title in the palette, `keywords` are more words it finds the command by, and `"confirm": true` asks before every run.
 
 `workspace` opens a new workspace built from a layout, in cmux's format:
 
@@ -655,16 +666,85 @@ Coding agents running in abromux can learn this CLI from two agent skills in [`s
 
 Targets are refs (`workspace:2`, `pane:5`, `surface:3`) or 0-based indexes. Each shell gets `ABROMUX_SOCKET_PATH`, `ABROMUX_WORKSPACE_ID` and `ABROMUX_SURFACE_ID`, so `abromux` run inside a pane acts on that pane by default (otherwise on what's focused). The wire format is one JSON object per line (`{"id":1,"method":"workspace.list","params":{}}`); `abromux rpc <method> [json]` sends one directly.
 
+## Lua scripts
+
+`abromux do` runs a [Lua](https://www.lua.org) 5.4 script against the app, after [Rex's `rex do`](https://www.superlogical.com/rex/docs/automate/lua-scripts). A script can do anything the CLI can, keep state in tables instead of parsing text, react to events, and ask you things in the palette. `~/.config/abromux/init.lua` adds your own palette commands written in Lua.
+
+```lua
+-- tests.lua: run a command in a split beside you; zoom it if it fails
+local cmd = abromux.args.cmd or "cargo test"
+local split, err = abromux.surface.split{
+  direction = "right", focus = false, label = "tests",
+  command = cmd,
+}
+if err then error(err, 0) end
+local ev = abromux.wait("command.finished", { surface = split.surface.ref }, 600)
+if ev == nil then error("timed out waiting for: " .. cmd, 0) end
+if ev.exit_code ~= 0 then abromux.pane.zoom{ surface = split.surface.ref, state = "on" } end
+return { surface = split.surface.ref, exit_code = ev.exit_code }
+```
+
+```bash
+abromux do tests.lua cmd='go test ./...'     # prints {"exit_code":1,"surface":"surface:12"}
+abromux do -e 'return abromux.workspace.current{}.name'
+abromux do - < layout.lua                    # from stdin
+abromux do greet.lua --args '{"name": "true"}'   # arguments as JSON (or --args @file.json)
+```
+
+- **Arguments** come after the script as `key=value` and are in `abromux.args`: `n=2` is a number, `on=true` a boolean, anything else a string.
+- **The result:** what the script returns is printed as JSON (`--json` indents it). `error(msg, 0)` prints `abromux: msg` and exits 1; `abromux.stop(code)` ends at once with that status. `print` writes to stdout, `abromux.log([level,] text)` to stderr.
+- **Calling the app:** every socket method is `abromux.<namespace>.<method>{...}` with the parameters `abromux rpc describe <method>` lists (`abromux.surface.split{...}`, `abromux.status.set{...}`, `abromux.browser.snapshot{...}`), and `abromux.call(method, params)` calls one by name. A failed call doesn't raise: it returns `nil` and the error, so check the second value when it matters. A script run in an abromux terminal acts on that terminal by default, like the CLI; `abromux.surface_id` and `abromux.workspace_id` say which.
+- **Commands:** `abromux.exec(argv[, opts])` runs a program with its arguments as a list, no shell (`{ "sh", "-c", line }` for one), and returns `code`, `ok`, `stdout`, `stderr`, `signal` and `timed_out`. A non-zero exit is still a result; `nil, err` means it couldn't start. Options: `cwd`, `env` (`false` removes a variable), `clear_env`, `stdin` (text to send), `timeout` (seconds, then SIGTERM, and SIGKILL 2 s later), `stdout`/`stderr` (`false` discards it), and `detach` (start it and return its `pid` at once).
+- **Waiting:** `abromux.sleep(seconds)`, and `abromux.wait(event[, filter][, timeout])`, which returns the first such event (and a `ctx` with its `workspace` and `surface`), or `nil, "timeout"`. `filter` is a table of fields the event must have, or a function given the event that returns `true`. Events are the ones `abromux events` prints; the script hears them from the moment it starts, so one that happened before `wait` was called still counts.
+- **Handlers and timers:** `abromux.on(event, fn)` calls `fn(ctx, ev)` for each such event (a name, a prefix ending in `.` or `*`, or `*` for all) while the script keeps running. `abromux.every(seconds, fn)` and `abromux.after(seconds, fn)` call `fn` later and return a timer with `cancel()` and `active()`. A script with handlers or timers keeps running after its last line until it calls `abromux.stop`, `--for 10m` passes, abromux quits, or you press ⌃C. Calls inside a handler act on the event's tab. Only one runs at a time, and an error in one is printed and the script carries on (`--fail-fast` ends it instead). Handlers hear the script's own workspace; `--all` hears every one. At most 1,024 timers at once.
+- **Questions:** `abromux.ui.input{ title = "New branch", value = "feature/", placeholder = "…", confirm = "Create" }` shows a text field in the command palette and returns what was typed. `abromux.ui.pick{ title = "Open project", items = { … } }` shows a list and returns the chosen item's `id`; an item is a string or `{ id, title?, subtitle?, detail? }`, and with `allow_other = true` typed text that matches none comes back as `{ text = "…" }`. Both return `nil` and a reason when there's no answer: `cancelled`, `timeout` (`timeout`, default 300 s), `busy` (another question is showing) or `no_client`. Any client can ask the same way, with the socket method `ui.prompt`.
+- **JSON:** `abromux.json.encode(value[, { indent = true }])` and `abromux.json.decode(text)`. A table with keys 1…n is an array, any other (an empty one too) an object; `null` becomes `nil`.
+- `require` loads Lua files next to the script.
+
+### Actions in init.lua
+
+`~/.config/abromux/init.lua` (next to `config.json`) defines actions: each one is a command in the palette, gets a shortcut with `key`, and runs from the CLI with `abromux do <name>`.
+
+```lua
+abromux.action{
+  name  = "new_branch",                -- lowercase letters, digits and _
+  title = "Git: New Branch…",          -- the palette's entry
+  key   = "cmd-alt-b",                 -- optional; as a shortcut in config.json
+  description = "Make a branch from the focused terminal's directory",
+  keywords = { "git", "switch" },
+  args  = { name = "string?" },        -- string, number, integer, boolean, object, array, any; ? for optional
+  run   = function(ctx, args)
+    local name = args.name or abromux.ui.input{ title = "New branch", value = "feature/" }
+    if name == nil then return end
+    abromux.surface.send_text{ text = "git switch -c " .. name .. "\n" }
+  end,
+}
+```
+
+```bash
+abromux do new_branch name=fix-login      # without the question
+abromux do --list                         # the actions it defines
+abromux do ~/draft.lua --action new_branch   # try one from another file
+```
+
+The app reads init.lua when it starts and on Reload Config (⌘⇧,), with nothing able to call out yet (calls return an error, `exec` and `os.exit` aren't there) and two seconds to finish; an error in it shows like one in `config.json`. Choosing an action runs `abromux do init.lua --action <name>` in the background, acting on the focused tab: `ctx` has its `surface` and `workspace` and `origin` (`palette`, or `cli`). If it fails, a toast shows the error. `abromux.invoke(name, args)` runs another action and returns its result, or `nil` and the error.
+
+An action is also a command of its own: `abromux <name> [words…] [key=value…] [--key value]`, for a name the CLI doesn't have, runs it with the words as `args[1]`, `args[2]`… and `--key value` (or a bare `--flag`, as `true`) as named args; `abromux do <name>` takes words the same way. `palette = false` keeps such a command out of the palette. That's how [workspace folders](#workspace-folders)' `abromux folder add <path>` works.
+
+Modules that come with AbroMux load with `require` too: `require("abromux.workspace_folders").setup{}` turns on [workspace folders](#workspace-folders). Scripts also get `abromux.config_path`, `abromux.workspaces_dir` (the channel's default for workspace folders) and `abromux.json.array(t)` (a table that encodes as an array even when empty).
+
+A command in `config.json` (or a project's file) can run any script: `{ "title": "Start Ticket", "script": "scripts/ticket.lua", "args": { "board": "PAY" } }`, with `"action"` to pick one of its actions. A relative path is the config folder's, or the project's for a project command, which asks before it runs as other project commands do.
+
 ## Keyboard and mouse
 
 | | Mouse | Keys |
 |---|---|---|
 | New workspace | `+` in sidebar header / footer | ⌘N |
-| New workspace folder | File › New Workspace Folder | ⇧⌘I |
+| New workspace folder ([the script](#workspace-folders) in `init.lua`) | ⌘⇧P → New Workspace Folder… | ⇧⌘I |
 | Review every repository of the workspace in [hunk](https://hunk.dev/): a column right of the focused pane, one pane per repository (its folder's checkouts and those its tabs are in) running `hunk diff --watch` against where the branch forked from the default branch, as ⌥⌘D compares | File › Review Changes in Hunk | ⌘⇧P → Review Changes in Hunk (`reviewInHunk` in `"shortcuts"`) |
 | Open the workspace in Neovim: a new terminal tab in its folder (else the focused tab's directory) running `nvim .` | File › Open Workspace in Neovim | ⌘⇧P → Open Workspace in Neovim (`openInNeovim` in `"shortcuts"`) |
 | Open the workspace's folder in the editor `editor.program` names (nvim or tode), in a new tab | File › Open Workspace in Editor, or a workspace's right-click menu › Open in Editor | ⌘⇧P → Open Workspace in Editor (`openInEditor` in `"shortcuts"`) |
-| Clean up and delete workspace folder | right-click → Clean Up and Delete Folder… | ⇧⌘X |
+| Clean up and delete workspace folder ([the script](#workspace-folders)) | ⌘⇧P → Clean Up and Delete Workspace Folder… | ⇧⌘X |
 | Rename workspace | double-click its name (Enter saves, Esc cancels) | ⌘⇧R |
 | Workspace description | right-click → Add Description… (Return saves, ⇧↩ new line) | ⌥⌘E |
 | Workspace color, group, move, close others | right-click the row | |

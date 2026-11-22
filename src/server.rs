@@ -262,11 +262,19 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
             }
             Ok(req) => {
                 let (reply_tx, reply_rx) = oneshot::channel();
-                if tx.unbounded_send((req, reply_tx, gone.clone())).is_err() {
+                // A question waits on a person, as long as it takes: notice
+                // the asker going away meanwhile, to take it down.
+                let watch = (req["method"] == "ui.prompt").then(|| watch_hangup(peer));
+                let req_gone = watch.as_ref().map_or_else(|| gone.clone(), |w| w.1.clone());
+                if tx.unbounded_send((req, reply_tx, req_gone)).is_err() {
                     return;
                 }
-                futures::executor::block_on(reply_rx)
-                    .unwrap_or_else(|_| ipc::err(&Value::Null, "app closed"))
+                let resp = futures::executor::block_on(reply_rx)
+                    .unwrap_or_else(|_| ipc::err(&Value::Null, "app closed"));
+                if let Some((done, _)) = watch {
+                    done.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                resp
             }
             Err(e) => ipc::err(&Value::Null, format!("bad request: {e}")),
         };
@@ -276,6 +284,49 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
             return;
         }
     }
+}
+
+/// A `Hangup` for one request whose answer may take long: a thread watches
+/// `peer` until the flag is set, and resolves it if the caller hangs up
+/// first (`serve` reads nothing while it waits for an answer, so it wouldn't
+/// see that).
+fn watch_hangup(
+    peer: std::os::fd::RawFd,
+) -> (std::sync::Arc<std::sync::atomic::AtomicBool>, Hangup) {
+    use std::sync::atomic::Ordering;
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (hup, gone) = oneshot::channel::<()>();
+    let stop = done.clone();
+    std::thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            let mut fd = libc::pollfd {
+                fd: peer,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: polls one descriptor, for at most 200 ms.
+            if unsafe { libc::poll(&mut fd, 1, 200) } <= 0 {
+                continue;
+            }
+            let mut b = 0u8;
+            // SAFETY: peeks at most one byte into `b`, without blocking.
+            let n = unsafe {
+                libc::recv(
+                    peer,
+                    (&raw mut b).cast(),
+                    1,
+                    libc::MSG_PEEK | libc::MSG_DONTWAIT,
+                )
+            };
+            if n == 0 || (n < 0 && fd.revents & (libc::POLLHUP | libc::POLLERR) != 0) {
+                drop(hup);
+                return;
+            }
+            // More requests queued behind this one: not a hangup.
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+    (done, gone.shared())
 }
 
 /// Write each event that passes `filter` to `writer` until the caller hangs up.
@@ -580,7 +631,25 @@ impl AbroMux {
                 self.describe_ws(wi, false, cx)
             }
             "workspace.create" => {
-                let cwd = str_param(p, "cwd").map(String::from);
+                let folder = str_param(p, "folder").map(std::path::PathBuf::from);
+                if let Some(f) = &folder {
+                    anyhow::ensure!(f.is_absolute(), "folder must be absolute: {}", f.display());
+                    anyhow::ensure!(f.is_dir(), "no such folder: {}", f.display());
+                }
+                let env: std::collections::BTreeMap<String, String> = match p.get("env") {
+                    None | Some(Value::Null) => Default::default(),
+                    Some(Value::Object(m)) => m
+                        .iter()
+                        .map(|(k, v)| match v {
+                            Value::String(s) => Ok((k.clone(), s.clone())),
+                            _ => Err(anyhow::anyhow!("env {k}: expected a string")),
+                        })
+                        .collect::<anyhow::Result<_>>()?,
+                    Some(_) => bail!("env: expected an object of strings"),
+                };
+                let cwd = str_param(p, "cwd")
+                    .map(String::from)
+                    .or_else(|| folder.as_ref().map(|f| f.to_string_lossy().into_owned()));
                 let group = str_param(p, "group")
                     .map(|g| self.find_group(g))
                     .transpose()?;
@@ -590,12 +659,26 @@ impl AbroMux {
                     self.active = start;
                 }
                 let focus = bool_param(p, "focus", true);
+                // Its first terminal gets the folder and env too.
+                self.building_home = folder.clone();
+                self.building_env = env.clone();
                 let wi = self.create_workspace(cwd, focus, window, cx);
+                self.building_home = None;
+                self.building_env.clear();
                 if !focus {
                     self.active = prev.and_then(|id| self.ws_index(id)).unwrap_or(0);
                 }
+                let ws = &mut self.workspaces[wi];
+                ws.home = folder;
+                ws.env = env;
                 if let Some(name) = str_param(p, "name") {
-                    self.workspaces[wi].custom_name = Some(name.into());
+                    // A stand-in name (a made-up one) is the agents' to replace
+                    // (`naming`), until you name it yourself.
+                    if bool_param(p, "provisional", false) {
+                        ws.auto_title = Some(name.into());
+                    } else {
+                        ws.custom_name = Some(name.into());
+                    }
                 }
                 self.workspaces[wi].description =
                     str_param(p, "description").and_then(crate::sidebar::clean_description);
@@ -617,37 +700,6 @@ impl AbroMux {
                 let r = self.ws_ref(wi);
                 self.close_workspace(wi, window, cx);
                 json!({ "closed": r })
-            }
-            // `abromux folder remove`, which has checked for lost work: if a
-            // workspace has that folder, close it, then delete the folder.
-            "folder.remove" => {
-                let path = std::path::PathBuf::from(str_param(p, "path").context("missing path")?);
-                let same = |h: &std::path::Path| {
-                    h == path
-                        || h.canonicalize()
-                            .is_ok_and(|h| path.canonicalize().is_ok_and(|p| h == p))
-                };
-                match self
-                    .workspaces
-                    .iter()
-                    .position(|w| w.home.as_deref().is_some_and(same))
-                {
-                    Some(wi) => {
-                        let r = self.ws_ref(wi);
-                        let id = self.workspaces[wi].id;
-                        let gone = gone.clone();
-                        self.remove_folder_later(
-                            id,
-                            path,
-                            bool_param(p, "force", false),
-                            gone,
-                            window,
-                            cx,
-                        );
-                        json!({ "workspace": r })
-                    }
-                    None => json!({ "workspace": null }),
-                }
             }
             "workspace.rename" => {
                 let wi = self.workspace_target(p)?;
@@ -1160,6 +1212,7 @@ impl AbroMux {
 
             // The connection becomes a stream of events (`serve` does the
             // streaming); this resolves its filters.
+            "ui.prompt" => return self.ui_prompt(p, gone, window, cx),
             "events.subscribe" => {
                 let workspace = str_param(p, "workspace")
                     .map(|w| self.find_workspace(w).map(|wi| self.ws_ref(wi)))
@@ -2334,6 +2387,108 @@ impl AbroMux {
     /// shell integration's marks; without them, until it closes), or with
     /// `close` until it closes. `after` waits for a command after that many
     /// had finished (`new-split --command … --wait`), not one already done.
+    /// `ui.prompt`: ask in the palette and answer once the person does,
+    /// cancels, the time runs out or the asker hangs up.
+    fn ui_prompt(
+        &mut self,
+        p: &Value,
+        gone: &Hangup,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Reply> {
+        let pick = match str_param(p, "kind") {
+            Some("input") => false,
+            Some("pick") => true,
+            _ => bail!("ui.prompt: kind must be input or pick"),
+        };
+        let title = str_param(p, "title")
+            .context("ui.prompt: title is required")?
+            .to_string();
+        let mut items: Vec<crate::palette::PromptItem> = vec![];
+        for it in p["items"].as_array().into_iter().flatten() {
+            let text = |v: &Value| match v {
+                Value::String(s) => Some(s.clone()),
+                Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            };
+            let item = match it {
+                Value::Object(o) => {
+                    let id = o
+                        .get("id")
+                        .and_then(text)
+                        .context("ui.prompt: each item needs an id")?;
+                    let title = o.get("title").and_then(text).unwrap_or_else(|| id.clone());
+                    let sub = o.get("subtitle").and_then(text);
+                    (id, title, sub, o.get("detail").and_then(text))
+                }
+                v => {
+                    let id =
+                        text(v).context("ui.prompt: an item is a string or a table with an id")?;
+                    (id.clone(), id, None, None)
+                }
+            };
+            if items.iter().any(|(id, ..)| *id == item.0) {
+                bail!("ui.prompt: two items have the id {:?}", item.0);
+            }
+            items.push(item);
+        }
+        if items.len() > 2000 {
+            bail!("ui.prompt: at most 2000 items");
+        }
+        if self
+            .palette
+            .as_ref()
+            .is_some_and(|q| q.mode == crate::palette::Mode::Prompt)
+        {
+            return Ok(Reply::Now(json!({ "reason": "busy" })));
+        }
+        let timeout = match p.get("timeout") {
+            None | Some(Value::Null) => 300.,
+            Some(v) => v.as_f64().context("ui.prompt: bad timeout")?,
+        }
+        .clamp(0., 3600.);
+        let (tx, rx) = oneshot::channel::<Value>();
+        let prompt = crate::palette::Prompt {
+            id: 0,
+            title,
+            pick,
+            allow_other: bool_param(p, "allow_other", false),
+            confirm: str_param(p, "confirm").map(String::from),
+            answer: Some(tx),
+        };
+        let id = self.open_prompt(
+            prompt,
+            items,
+            str_param(p, "placeholder").map(String::from),
+            str_param(p, "value").map(String::from),
+            window,
+            cx,
+        );
+        window.activate_window();
+        let this = cx.weak_entity();
+        let handle = window.window_handle();
+        let mut acx = cx.to_async();
+        let gone = gone.clone();
+        Ok(Reply::Later(
+            async move {
+                let limit = Timer::after(Duration::from_secs_f64(timeout));
+                let (reason, close) = match select(rx, select(limit, gone)).await {
+                    Either::Left((Ok(v), _)) => return Ok(v),
+                    Either::Left((Err(_), _)) => ("cancelled", false),
+                    Either::Right((Either::Left(_), _)) => ("timeout", true),
+                    Either::Right((Either::Right(_), _)) => ("cancelled", true),
+                };
+                if close {
+                    let _ = gpui::AppContext::update_window(&mut acx, handle, |_, window, cx| {
+                        this.update(cx, |this, cx| this.close_prompt(id, window, cx))
+                    });
+                }
+                Ok(json!({ "reason": reason }))
+            }
+            .boxed_local(),
+        ))
+    }
+
     fn wait_surface(&mut self, p: &Value, cx: &mut Context<Self>) -> anyhow::Result<Reply> {
         let (_, _, s) = self.surface_target(p)?;
         let close = bool_param(p, "close", false);
@@ -2591,11 +2746,11 @@ impl AbroMux {
 
     // ---- targets --------------------------------------------------------
 
-    fn ws_ref(&self, wi: usize) -> String {
+    pub(crate) fn ws_ref(&self, wi: usize) -> String {
         format!("workspace:{}", self.workspaces[wi].id)
     }
 
-    fn sref(&self, s: &Surface) -> String {
+    pub(crate) fn sref(&self, s: &Surface) -> String {
         format!(
             "surface:{}",
             self.surface_refs.get(&s.entity_id()).copied().unwrap_or(0)
@@ -3280,6 +3435,9 @@ impl AbroMux {
             "move-down" => self.nudge_workspace(wi, true, cx),
             "move-top" => self.workspace_to_top(wi, cx),
             "move-bottom" => self.workspace_to_bottom(wi, cx),
+            "move-to-cleanup" => {
+                self.move_to_cleanup(wi, cx);
+            }
             "close-others" => self.close_others(wi, window, cx),
             "close-above" | "close-below" => {
                 let ids: Vec<usize> = match action {
@@ -3312,8 +3470,8 @@ impl AbroMux {
             "pin" | "unpin" => bail!("abromux has no {action:?} yet"),
             a => bail!(
                 "unknown action {a:?}; expected rename, clear-name, set-description, clear-description, \
-                 set-color, clear-color, move-up, move-down, move-top, move-bottom, close-others, close-above, \
-                 close-below, mark-read or mark-unread"
+                 set-color, clear-color, move-up, move-down, move-top, move-bottom, move-to-cleanup, close-others, \
+                 close-above, close-below, mark-read or mark-unread"
             ),
         }
         cx.notify();

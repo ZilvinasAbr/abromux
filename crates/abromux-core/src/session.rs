@@ -95,9 +95,13 @@ pub struct WorkspaceState {
     /// Index into the session's `groups`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<usize>,
-    /// Its workspace folder (⇧⌘I).
+    /// Its folder (`workspace.create`'s `folder`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<String>,
+    /// Environment variables its new terminals get (`workspace.create`'s
+    /// `env`).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub env: std::collections::BTreeMap<String, String>,
     /// Its tracked links (`crate::links`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<crate::links::Link>,
@@ -313,6 +317,7 @@ mod tests {
                 color: Some(0x1565c0),
                 group: Some(0),
                 home: Some("/tmp/ws".into()),
+                env: Default::default(),
                 links: vec![crate::links::Link {
                     kind: crate::links::Kind::Jira,
                     key: "PAY-1".into(),

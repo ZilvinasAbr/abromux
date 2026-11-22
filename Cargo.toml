@@ -38,6 +38,8 @@ libc = "0.2"
 image = "0.25"
 # Markdown tabs (src/markdown.rs); already a gpui-component dependency
 markdown = "=1.0.0"
+# Lua scripts and init.lua actions (src/lua.rs), Lua 5.4 built in
+mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui-component = { version = "=0.5.1", features = ["webview"] }

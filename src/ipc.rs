@@ -96,13 +96,6 @@ pub fn call(method: &str, params: Value) -> anyhow::Result<Value> {
     round_trip(method, params).map(|(v, _)| v)
 }
 
-/// `call`, keeping the connection open until the returned stream is
-/// dropped: the app can wait for that to know the caller is done (has
-/// printed what it got) before doing something that would end it.
-pub fn call_held(method: &str, params: Value) -> anyhow::Result<(Value, UnixStream)> {
-    round_trip(method, params)
-}
-
 fn round_trip(method: &str, params: Value) -> anyhow::Result<(Value, UnixStream)> {
     abromux_core::ipc::round_trip(&socket_path(), method, params, None).inspect_err(|e| {
         match e.downcast_ref::<CallError>() {
