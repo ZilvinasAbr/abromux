@@ -4094,6 +4094,21 @@ fn run_app(cwd: Option<String>) {
     hold::set_control(ipc::socket_path());
     // A server's other addresses, for remote terminals and links.
     abromux_term::remote::set_alternates(servers::alternates);
+    // A copy of a home server's list (`abromux servers home`): up to date
+    // at launch and every few minutes after, off the main thread.
+    std::thread::spawn(|| {
+        loop {
+            if let Err(e) = servers::sync_home() {
+                eprintln!("servers: {e}");
+            }
+            if servers::home().is_none() {
+                // None now: looked at again when one is set (the CLI writes
+                // it, and the next launch picks it up), not polled.
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(600));
+        }
+    });
     let app = Application::new().with_assets(Assets);
     // Files opened from Finder (editor.rs). They can come before the window
     // is up, at launch, so they wait in the channel until it is.

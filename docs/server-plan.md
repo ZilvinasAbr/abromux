@@ -15,13 +15,13 @@ list of hosts.
 
 | Question | Decision |
 |---|---|
-| Where the state lives | **In the server** (option B). Workspaces, layouts, terminals, agent status, notifications, pins and folders belong to the server; the app shows them and sends requests. *As built (phase 2):* the server owns the terminals, the control socket and a copy of the workspaces' state; the app still runs the handlers while it's attached, and the server stands in while it's away. |
+| Where the state lives | **In the server** (option B). Workspaces, layouts, terminals, agent status, notifications, pins and folders belong to the server; the app shows them and sends requests. *As built:* the server owns the terminals, the control socket and the workspaces' model; every change, from the app or any other client, is ordered and merged there, and the app's windows are a copy of it (phase 2). The app runs only what needs its views. |
 | The holder | **Grows into the server.** `abromux hold` becomes `abromux server`: the same long-lived process per machine, on the Mac and on a VPS. `abromux hold` stays as an alias. |
 | Local terminals | **The server stays out of the data path.** An app on the same machine gets the PTY's descriptor (`SCM_RIGHTS`), exactly as from the holder today, and reads and writes it itself. |
 | Remote terminals | Streamed over the connection, in frames. The app parses them with libghostty-vt as it does local ones, so scrollback, find and selection stay local. |
 | Headless build | `crates/abromux-server`, a crate and a binary (`abromux-server`) with no gpui, no Wayland, no libghostty: it builds on any Linux box with just cargo. The app's `abromux server` runs the same code. |
 | Transport | **SSH first**: `ssh HOST abromux-server --stdio` bridges to the server's socket there. Auth is SSH's (keys, agent, Tailscale SSH), one connection per host with `ControlMaster`. A Tailscale listener (`tailnet://`, callers identified with tailscaled's whois) comes later, for clients that can't run ssh (a phone). No embedded tsnet. |
-| Several servers | Independent. A workspace belongs to exactly one server and can't move (its processes run there). The app groups workspaces by host. Hosts are a label and endpoints tried in order; the list lives in the app's settings first, a shared "home" list later. |
+| Several servers | Independent. A workspace belongs to exactly one server and can't move (its processes run there). The app groups workspaces by host. Hosts are a label and endpoints tried in order; the list lives in the app's settings first, a shared "home" list later. *As built:* `servers.json` (Settings › Servers, `abromux servers`), and the shared list: `abromux servers home <name>` (or **Keep the List Here** in Settings) keeps it on that server, for every app whose home it is. |
 | Version skew | Every connection starts with `hello`, which reports the protocol revision. An older server answers `bad request`, which means revision 1 (the holder). Features check the revision. |
 | Upgrades | A server from an older app keeps running its terminals until they end; the new app takes those terminals back over the old protocol, which revision 2 still speaks. |
 
@@ -330,6 +330,14 @@ replica followed a rename live on a VPS's server (`subscribe`).
       put in another; ⌘⇧P Group Workspaces by Server (`group by-server`)
       for older ones. ⌘P lists every host's workspaces, says which server
       each is on, and finds them by the server's name or address.
+- [x] **The shared "home" list.** `abromux servers home <name>` (Settings ›
+      Servers: Keep the List Here) keeps the servers on that server
+      (`{"op":"servers"}`, its `servers.json`); every app with that home
+      has the same list. Adding or removing one goes to the home first; the
+      app's copy is brought up to date at launch (every 10 minutes after)
+      and before `servers list`. The first app to make a server its home
+      puts its list there; the next takes it. Checked: two configurations
+      with the Docker VPS as home saw each other's additions and removals.
 - [x] `abromux --server NAME …`; agents' hooks on a host reach the app
       through that host's control socket (remote shells get
       `ABROMUX_SOCKET_PATH`, `ABROMUX_BIN`, `ABROMUX_SURFACE_ID`). On a

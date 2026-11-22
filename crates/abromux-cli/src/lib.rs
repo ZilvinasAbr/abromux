@@ -158,6 +158,8 @@ Commands:
                                                              (one more, its other addresses tried in order; Settings › Servers too)
   servers remove <name>
   servers check [<name>...]                                  (ask each whether it's there: its machine and version)
+  servers home [<name> | none]                               (keep the list on that server, shared by every app whose home
+                                                             it is; none: this app's own again)
   --server <name> <command>...                               (run the command against that server: its app, or the
                                                              server itself while the app is closed)
   remote [status]                                            (phone access over Tailscale: its URL, phones connected)
@@ -2364,6 +2366,10 @@ fn servers_cmd(mut pos: Vec<String>, as_json: bool) -> Result<(), String> {
     };
     match (sub.as_str(), pos.as_slice()) {
         ("list" | "ls", []) => {
+            // A copy of a home's list: as the home has it now.
+            if let Err(e) = servers::sync_home() {
+                eprintln!("abromux: servers: {e} (the list as last copied)");
+            }
             let list = servers::load();
             if as_json {
                 println!("{}", serde_json::to_string_pretty(&list).unwrap());
@@ -2423,7 +2429,25 @@ fn servers_cmd(mut pos: Vec<String>, as_json: bool) -> Result<(), String> {
             }
             if down { Err("some servers can't be reached".into()) } else { Ok(()) }
         }
-        _ => Err("usage: abromux servers [list | add <name> <address> | remove <name> | check [<name>...]]".into()),
+        // The shared list: kept on a server every app of yours points at.
+        ("home", []) => {
+            match servers::home() {
+                Some(h) => println!("{h} (this list is its)"),
+                None => println!("none: the list is this app's own (abromux servers home <name> shares it)"),
+            }
+            Ok(())
+        }
+        ("home", [n]) if matches!(n.as_str(), "none" | "off") => {
+            servers::set_home(None)?;
+            println!("OK the list is this app's own again");
+            Ok(())
+        }
+        ("home", [n]) => {
+            let home = servers::set_home(Some(n))?.unwrap_or_default();
+            println!("OK {home} keeps the list: {} servers", servers::load().len());
+            Ok(())
+        }
+        _ => Err("usage: abromux servers [list | add <name> <address> | remove <name> | check [<name>...] | home [<name> | none]]".into()),
     }
 }
 

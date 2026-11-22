@@ -1115,6 +1115,37 @@ impl Server {
             }
             // Workspace folders here (`abromux-server folder ...`): what the
             // app asks of a host for a workspace there.
+            // The servers its apps share, when it's their home
+            // (abromux_cli::servers): `{"op":"servers"}` reads the list,
+            // with `set` it's replaced.
+            Some("servers") => {
+                let Some(path) = self.state.dir().map(|d| d.join("servers.json")) else {
+                    fail(c, "this server keeps no files".into());
+                    return self.flush(cid);
+                };
+                if let Some(list) = req.get("set") {
+                    if !list.is_array() {
+                        fail(c, "servers: set takes a list".into());
+                        return self.flush(cid);
+                    }
+                    let text =
+                        serde_json::to_string_pretty(&json!({ "servers": list })).unwrap() + "\n";
+                    let tmp = path.with_extension("json.tmp");
+                    match std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &path)) {
+                        Ok(()) => c.reply(json!({ "ok": true })),
+                        Err(e) => fail(c, format!("{}: {e}", path.display())),
+                    }
+                } else {
+                    let list = std::fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+                        .map(|v| v["servers"].clone())
+                        .filter(Value::is_array)
+                        .unwrap_or_else(|| json!([]));
+                    c.reply(json!({ "ok": true, "servers": list }));
+                }
+                self.flush(cid);
+            }
             Some("folder") => {
                 let args: Vec<String> = req["args"]
                     .as_array()

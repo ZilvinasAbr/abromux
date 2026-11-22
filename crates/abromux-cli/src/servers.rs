@@ -35,6 +35,11 @@ pub struct Server {
 struct File {
     #[serde(default)]
     servers: Vec<Server>,
+    /// The server whose list this one is a copy of (docs/server-plan.md:
+    /// the shared "home" list): every app with the same home has the same
+    /// servers. None: this list is this app's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    home: Option<String>,
 }
 
 pub fn path() -> PathBuf {
@@ -61,30 +66,120 @@ pub fn load() -> Vec<Server> {
 }
 
 fn read() -> Result<Vec<Server>, String> {
+    read_file().map(|f| f.servers)
+}
+
+fn read_file() -> Result<File, String> {
     match std::fs::read_to_string(path()) {
-        Ok(text) => serde_json::from_str::<File>(&text)
-            .map(|f| f.servers)
-            .map_err(|e| format!("{}: {e}", path().display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
+        Ok(text) => {
+            serde_json::from_str::<File>(&text).map_err(|e| format!("{}: {e}", path().display()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(File::default()),
         Err(e) => Err(format!("{}: {e}", path().display())),
     }
 }
 
-/// Change the list and write it back.
-fn edit(f: impl FnOnce(&mut Vec<Server>) -> Result<(), String>) -> Result<(), String> {
-    let mut list = read()?;
-    f(&mut list)?;
+fn write_file(file: &File) -> Result<(), String> {
     let p = path();
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    let text = serde_json::to_string_pretty(&File { servers: list }).unwrap() + "\n";
+    let text = serde_json::to_string_pretty(file).unwrap() + "\n";
     let tmp = p.with_extension("json.tmp");
     std::fs::write(&tmp, text)
         .and_then(|_| std::fs::rename(&tmp, &p))
         .map_err(|e| format!("{}: {e}", p.display()))?;
     CHANGES.fetch_add(1, Ordering::Relaxed);
     Ok(())
+}
+
+/// Change the list and write it back: on the home server first when there
+/// is one (every app with that home sees the change), then here.
+fn edit(f: impl FnOnce(&mut Vec<Server>) -> Result<(), String>) -> Result<(), String> {
+    let mut file = read_file()?;
+    match &file.home {
+        Some(home) => {
+            let mut list = home_list(home)?;
+            f(&mut list)?;
+            set_home_list(home, &list)?;
+            file.servers = list;
+        }
+        None => f(&mut file.servers)?,
+    }
+    write_file(&file)
+}
+
+/// A request to the server at `home` (`{"op":"servers"}`) and its answer.
+fn ask_home(home: &str, req: &serde_json::Value) -> Result<serde_json::Value, String> {
+    use std::io::BufRead;
+    let (s, _) = abromux_core::dial::open_stream(home, Some(req))?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .ok();
+    let mut line = String::new();
+    std::io::BufReader::new(s)
+        .read_line(&mut line)
+        .map_err(|e| format!("home {home}: {e}"))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&line).map_err(|e| format!("home {home}: {e}: {line:?}"))?;
+    if v["ok"] != true {
+        return Err(format!(
+            "home {home}: {}",
+            v["error"].as_str().unwrap_or("refused")
+        ));
+    }
+    Ok(v)
+}
+
+fn home_list(home: &str) -> Result<Vec<Server>, String> {
+    let v = ask_home(home, &serde_json::json!({ "op": "servers" }))?;
+    serde_json::from_value(v["servers"].clone()).map_err(|e| format!("home {home}: {e}"))
+}
+
+fn set_home_list(home: &str, list: &[Server]) -> Result<(), String> {
+    ask_home(home, &serde_json::json!({ "op": "servers", "set": list })).map(|_| ())
+}
+
+/// The home server's address, if this list is a copy of one.
+pub fn home() -> Option<String> {
+    read_file().ok().and_then(|f| f.home)
+}
+
+/// Keep this app's servers on `home` (a server's name or address), shared
+/// with every app whose home it is; or, with None, here only again. The
+/// first time a home's list is empty, this app's servers go into it;
+/// otherwise this app takes the home's list.
+pub fn set_home(home: Option<&str>) -> Result<Option<String>, String> {
+    let mut file = read_file()?;
+    let Some(h) = home else {
+        file.home = None;
+        write_file(&file)?;
+        return Ok(None);
+    };
+    let address = resolve(h)?.ok_or("this machine can't be its own home: name a server")?;
+    let theirs = home_list(&address)?;
+    if theirs.is_empty() {
+        set_home_list(&address, &file.servers)?;
+    } else {
+        file.servers = theirs;
+    }
+    file.home = Some(address.clone());
+    write_file(&file)?;
+    Ok(Some(address))
+}
+
+/// Bring this copy up to date with its home's list (at launch, and before
+/// `servers list`). Ok(false): there's no home.
+pub fn sync_home() -> Result<bool, String> {
+    let mut file = read_file()?;
+    let Some(home) = file.home.clone() else {
+        return Ok(false);
+    };
+    let list = home_list(&home)?;
+    if list != file.servers {
+        file.servers = list;
+        write_file(&file)?;
+    }
+    Ok(true)
 }
 
 /// `box`, `me@box:2222` or `ssh://me@box` as an address: `ssh://` unless
