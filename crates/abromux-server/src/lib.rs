@@ -520,6 +520,9 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
             s.settle_endings();
         }
         if n <= 0 {
+            // Woken by a timer (an ended program reaped meanwhile, say):
+            // what that finished goes too.
+            s.drop_done();
             continue;
         }
 
@@ -560,16 +563,7 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
             }
         }
 
-        // Connections that are done: let go of their terminals.
-        let done: Vec<u64> = s
-            .clients
-            .iter()
-            .filter(|(_, c)| c.closing && c.out.is_empty())
-            .map(|(id, _)| *id)
-            .collect();
-        for cid in done {
-            s.drop_client(cid);
-        }
+        s.drop_done();
     }
 }
 
@@ -1663,6 +1657,20 @@ impl Server {
             c.mode = Mode::Sniff;
             self.flush(cid);
             self.handle_input(cid);
+        }
+    }
+
+    /// Connections that are done (closing, with nothing left to send): let
+    /// go of their terminals.
+    fn drop_done(&mut self) {
+        let done: Vec<u64> = self
+            .clients
+            .iter()
+            .filter(|(_, c)| c.closing && c.out.is_empty())
+            .map(|(id, _)| *id)
+            .collect();
+        for cid in done {
+            self.drop_client(cid);
         }
     }
 
