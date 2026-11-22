@@ -202,7 +202,21 @@ fn commands(project: Option<&Path>, cx: &App) -> Vec<Cmd> {
                 ),
             ]
         });
-    let builtin = builtin.chain(plugins).chain(servers);
+    // Dev servers that started on a host: forward them.
+    let offers = crate::forward::offers()
+        .into_iter()
+        .map(|(host, port)| -> Cmd {
+            (
+                format!("Forward Port {port} of {}", crate::servers::label(&host)),
+                Some(format!("127.0.0.1 here reaches {port} on {host}")),
+                vec!["forward".into(), "port".into(), port.to_string()],
+                Box::new(keymap::ForwardOffer {
+                    address: host.clone(),
+                    port,
+                }),
+            )
+        });
+    let builtin = builtin.chain(plugins).chain(servers).chain(offers);
     // A project file that doesn't parse shows its error as a command.
     let local = project.map(|p| (p, settings::read_project(p)));
     let local_titles: Vec<String> = match &local {

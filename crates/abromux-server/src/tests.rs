@@ -791,3 +791,26 @@ fn the_server_owns_the_model() {
     });
     assert_eq!(n, 0, "the replay");
 }
+
+/// A dev server starting while the app watches is offered to it.
+#[test]
+fn tells_the_app_about_new_ports() {
+    let (sock, _control) = server_with_control("ports");
+    let (mut link, mut lw) = app_link(&sock);
+    writeln!(lw, "{}", json!({ "op": "watch-ports" })).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    let dev = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = dev.local_addr().unwrap().port();
+    link.get_ref()
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let msg = next_msg(&mut link, "ports_new");
+    assert!(
+        msg["ports_new"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["port"] == port),
+        "{msg}"
+    );
+}

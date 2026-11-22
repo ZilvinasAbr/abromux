@@ -66,6 +66,8 @@ use std::time::{Duration, Instant};
 /// Output kept per terminal while nobody is attached; past it, the oldest
 /// goes (and the screen may come back slightly wrong).
 pub const BACKLOG_MAX: usize = 16 << 20;
+/// How often listening ports are looked at while the app watches them.
+const PORT_SCAN: Duration = Duration::from_secs(3);
 /// With no terminals and no connections for this long, the server exits.
 const IDLE_EXIT: Duration = Duration::from_secs(10);
 /// Output queued for a streamed app past which the server stops reading the
@@ -411,6 +413,8 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
         app_owner: None,
         host_id: host_id(&path.with_file_name("host-id")),
         held_dir: path.with_file_name("held"),
+        ports: None,
+        ports_at: Instant::now(),
     };
     let mut idle_since = Instant::now();
     let mut buf = vec![0u8; 1 << 16];
@@ -434,7 +438,13 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
             left.as_millis() as i32 + 1
         } else {
             idle_since = Instant::now();
-            -1
+            // Watching ports for the app (`watch-ports`): a look every few
+            // seconds, only while asked and the app is there.
+            if s.ports.is_some() && s.app.is_some() {
+                PORT_SCAN.saturating_sub(s.ports_at.elapsed()).as_millis() as i32 + 1
+            } else {
+                -1
+            }
         };
 
         let mut fds = vec![pollfd(listener.as_raw_fd(), libc::POLLIN)];
@@ -487,6 +497,9 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
         }
         // SAFETY: `fds` is a valid array of pollfd for its length.
         let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, timeout) };
+        if s.ports.is_some() && s.app.is_some() && s.ports_at.elapsed() >= PORT_SCAN {
+            s.scan_ports();
+        }
         if n <= 0 {
             continue;
         }
@@ -555,6 +568,10 @@ struct Server {
     app_owner: Option<String>,
     /// This machine, as `hello` says: made once, kept beside the socket.
     host_id: String,
+    /// The listening ports seen since the app asked to watch them
+    /// (`watch-ports`), and when they were last looked at.
+    ports: Option<std::collections::BTreeSet<u16>>,
+    ports_at: Instant,
     /// Where an app leaves a terminal's screen when it lets go
     /// (abromux_term::hold::snapshot_path), and the server leaves its own.
     held_dir: PathBuf,
@@ -804,6 +821,16 @@ impl Server {
                                 let c = self.clients.get_mut(&cid).unwrap();
                                 c.reply(json!({ "applied": stamped, "from": "app" }));
                                 self.flush(cid);
+                            } else if msg["op"] == "watch-ports" {
+                                // A dev server starting here is worth offering to forward:
+                                // what listens now is the baseline.
+                                let now = listening_ports()
+                                    .iter()
+                                    .filter_map(|p| p["port"].as_u64())
+                                    .map(|p| p as u16)
+                                    .collect();
+                                self.ports = Some(now);
+                                self.ports_at = Instant::now();
                             } else if msg["op"] == "sync" {
                                 let model = json!({ "model": self.state.model });
                                 let c = self.clients.get_mut(&cid).unwrap();
@@ -1431,43 +1458,60 @@ impl Server {
     /// the server's model doesn't have (the app answers those).
     fn own(&mut self, req: &Value) -> Option<Value> {
         let method = req["method"].as_str()?;
-        if !owned::OWNED.contains(&method) {
+        if !owned::OWNED.contains(&method) && !owned::READS.contains(&method) {
             return None;
         }
         let id = req.get("id").cloned().unwrap_or(Value::Null);
         let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
-        self.state.model.target(&params)?;
         let mut model = self.state.model.clone();
-        let done = match owned::call(&mut model, method, &params) {
-            Ok(d) => d,
+        let (result, events, mirror) = match owned::call(&mut model, method, &params) {
+            Ok(None) => return None,
             Err(e) => return Some(json!({ "id": id, "ok": false, "error": e })),
+            Ok(Some(owned::Outcome::Read(v))) => {
+                return Some(json!({ "id": id, "ok": true, "result": v }));
+            }
+            Ok(Some(owned::Outcome::Changed {
+                result,
+                events,
+                mirror,
+            })) => (result, events, mirror),
         };
-        let index = model
-            .workspaces
-            .iter()
-            .position(|w| w.id == done.workspace)?;
-        let ws = model.workspaces[index].clone();
-        let events = abromux_model::stamp(
-            self.state.model.seq,
-            vec![abromux_model::Event::Workspace {
-                index,
-                workspace: Box::new(ws),
-            }],
-        );
-        let applied = self.state.apply_events(&events).unwrap_or_default();
+        let stamped = abromux_model::stamp(self.state.model.seq, events);
+        let applied = self.state.apply_events(&stamped).unwrap_or_default();
         self.publish(&applied);
         match self
             .app
             .and_then(|a| self.clients.get_mut(&a).map(|c| (a, c)))
         {
             Some((app, a)) => {
-                a.reply(json!({ "mirror": done.mirror, "applied": events }));
+                a.reply(json!({ "mirror": mirror, "applied": stamped }));
                 self.flush(app);
             }
             // Away: the app mirrors it when it's back (the replay).
-            None => self.state.keep(method, done.mirror["params"].clone()),
+            None => self.state.keep(method, mirror["params"].clone()),
         }
-        Some(json!({ "id": id, "ok": true, "result": done.result }))
+        Some(json!({ "id": id, "ok": true, "result": result }))
+    }
+
+    /// Look at what listens here; tell the app about ports new since it
+    /// asked (`{"ports_new":[..]}`).
+    fn scan_ports(&mut self) {
+        self.ports_at = Instant::now();
+        let list = listening_ports();
+        let Some(seen) = &mut self.ports else { return };
+        let new: Vec<Value> = list
+            .into_iter()
+            .filter(|p| p["port"].as_u64().is_some_and(|n| seen.insert(n as u16)))
+            .collect();
+        if new.is_empty() {
+            return;
+        }
+        if let Some(app) = self.app
+            && let Some(a) = self.clients.get_mut(&app)
+        {
+            a.reply(json!({ "ports_new": new }));
+            self.flush(app);
+        }
     }
 
     /// Events the replica applied, to every subscriber.

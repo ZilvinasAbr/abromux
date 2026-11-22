@@ -338,6 +338,14 @@ pub struct OnServer {
     pub tab: bool,
 }
 
+/// Forward `port` of the server at `address` (an offer: crate::forward).
+#[derive(Clone, PartialEq, serde::Deserialize, gpui::Action)]
+#[action(namespace = abromux, no_json)]
+pub struct ForwardOffer {
+    pub address: String,
+    pub port: u16,
+}
+
 /// Opens the workspaces the server at `address` keeps for this app that
 /// aren't open here (src/servers.rs).
 #[derive(Clone, PartialEq, serde::Deserialize, gpui::Action)]

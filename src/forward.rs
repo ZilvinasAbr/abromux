@@ -124,6 +124,28 @@ fn copy_unix(from: &mut UnixStream, to: &mut TcpStream) -> std::io::Result<()> {
     }
 }
 
+/// Ports something started listening on, on a workspace's host: offered
+/// to forward (⌘⇧P "Forward Port N of <server>"), until taken or forwarded.
+static OFFERS: std::sync::Mutex<Vec<(String, u16)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn offer(host: &str, port: u16) {
+    let mut o = OFFERS.lock().unwrap();
+    if !o.iter().any(|(h, p)| h == host && *p == port) {
+        o.push((host.to_string(), port));
+    }
+}
+
+pub fn offers() -> Vec<(String, u16)> {
+    OFFERS.lock().unwrap().clone()
+}
+
+pub fn withdraw(host: &str, port: u16) {
+    OFFERS
+        .lock()
+        .unwrap()
+        .retain(|(h, p)| !(h == host && *p == port));
+}
+
 /// What listens on `host` (its server's `ports`). Blocks on the network.
 pub fn ports(host: &str) -> Result<Value, String> {
     let (s, _) = abromux_term::remote::open_stream(host, Some(&json!({ "op": "ports" })))?;

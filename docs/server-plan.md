@@ -188,7 +188,11 @@ for a program to be reaped.
       events), on its main thread together with its views. Remote servers
       have a replica of the workspaces with something on them.
 - [x] **The server runs the model methods it owns itself**
-      (`abromux_server::owned`: status, progress, a workspace's name),
+      (`abromux_server::owned`): it answers `workspace.list`,
+      `workspace.current`, `status.list` and `log.list` from its model,
+      and changes it for status, progress, the log, a workspace's name,
+      description and colour (`workspace.action`), the selection, the
+      order (`workspace.reorder`) and a tab's name (`surface.rename`),
       whether or not the app is attached: it reads the first request on each
       control connection, changes its model, answers the caller, and has the
       app mirror the change in its views (`{"mirror":..}`, with the stamped
@@ -215,11 +219,11 @@ for a program to be reaped.
       all|path|remove`, and `abromux new-workspace --host H --folder NAME`
       makes the folder on H and puts the workspace's terminals in it.
 
-What stays in the app: the handlers that change its views directly
-(splits, tabs, browsers, terminals: ~130 of them), which propose their
-changes to the server rather than make them in its model; moving them would
-put a round trip on every keystroke-driven action. Which methods the server
-owns is a list (`owned::OWNED`) that can grow one method at a time.
+What stays in the app: the methods that make or close views (a workspace,
+a split, a tab, a terminal, a browser, and browser automation, input and
+focus): the app does them and proposes the change, and the server stamps it.
+A view can only be made where it's shown. Which methods the server owns is
+a list (`owned::OWNED`, `owned::READS`); a test keeps them model methods.
 
 **Done when:** quitting the app leaves every workspace's state (status pills,
 progress, notifications, agents' state) live in the server, and the app picks
@@ -273,6 +277,11 @@ replica followed a rename live on a VPS's server (`subscribe`).
       workspace's host through its server (`{"op":"connect"}`); per
       workspace, saved with the session (same local port), closed with it.
 - [x] `abromux forward ports`: what listens on the host.
+- [x] A dev server starting on a host is offered: the app has each remote
+      server watch its listening ports (`watch-ports`, a look every 3 s,
+      only while asked), and a new one shows a notification and ⌘⇧P
+      "Forward Port N of <server>", which forwards it in that server's
+      workspace.
 
 ### Phase 6: Tailscale and other clients
 

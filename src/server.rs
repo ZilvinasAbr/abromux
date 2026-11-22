@@ -997,6 +997,26 @@ impl AbroMux {
                 list.push(f);
                 out
             }
+            // A server says something started listening there.
+            "forward.offer" => {
+                let host = str_param(p, "link").context("missing link")?.to_string();
+                for port in p["ports"].as_array().into_iter().flatten() {
+                    let Some(n) = port["port"].as_u64().and_then(|n| u16::try_from(n).ok()) else {
+                        continue;
+                    };
+                    crate::forward::offer(&host, n);
+                    gpui_component::WindowExt::push_notification(
+                        window,
+                        gpui_component::notification::Notification::info(format!(
+                            "Something listens on port {n} there: ⌘⇧P Forward Port {n} of {} (or `abromux forward {n}`).",
+                            crate::servers::label(&host)
+                        ))
+                        .title(format!("{}: port {n}", crate::servers::label(&host))),
+                        cx,
+                    );
+                }
+                json!(null)
+            }
             "forward.list" => json!(
                 self.workspaces
                     .iter()
@@ -4118,9 +4138,62 @@ impl AbroMux {
                         label: p.label.clone(),
                     }),
                     unread: self.ws_unread(w) as u32,
+                    color: w.color.map(|c| format!("#{c:06x}")),
+                    branch: w.cwd(cx).as_deref().and_then(git_branch),
+                    log: w
+                        .log
+                        .iter()
+                        .map(|l| m::LogEntry {
+                            level: l.level.as_str().into(),
+                            source: l.source.clone(),
+                            message: l.message.clone(),
+                            at: l
+                                .at
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(0, |d| d.as_secs()),
+                        })
+                        .collect(),
                 })
                 .collect(),
         }
+    }
+
+    /// Take an offer (crate::forward::offers): forward `port` of `host` in
+    /// its workspace there (the selected one if it's on that host).
+    pub(crate) fn forward_offer(
+        &mut self,
+        p: &Value,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Value> {
+        let host = str_param(p, "host").context("missing host")?.to_string();
+        let port = p["port"]
+            .as_u64()
+            .and_then(|n| u16::try_from(n).ok())
+            .context("missing port")?;
+        let on = |w: &crate::workspace::Workspace| w.host.as_deref() == Some(host.as_str());
+        let wi = if self.workspaces.get(self.active).is_some_and(on) {
+            self.active
+        } else {
+            self.workspaces
+                .iter()
+                .position(on)
+                .context("no workspace there any more")?
+        };
+        let id = self.workspaces[wi].id;
+        let list = self.forwards.entry(id).or_default();
+        let out = match list.iter().find(|f| f.port == port && f.host == host) {
+            Some(f) => f.json(),
+            None => {
+                let f =
+                    crate::forward::Forward::start(&host, port, None).map_err(|e| anyhow!(e))?;
+                let out = f.json();
+                list.push(f);
+                out
+            }
+        };
+        crate::forward::withdraw(&host, port);
+        cx.notify();
+        Ok(out)
     }
 
     /// The terminals this app holds of its own server, with what it parses

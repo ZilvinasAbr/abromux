@@ -3565,6 +3565,22 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, a: &keymap::OnServer, window, cx| {
                 this.on_server(a.address.clone(), a.tab, window, cx)
             }))
+            .on_action(cx.listener(|this, a: &keymap::ForwardOffer, window, cx| {
+                let p = serde_json::json!({ "host": a.address, "port": a.port });
+                match this.forward_offer(&p, cx) {
+                    Ok(v) => window.push_notification(
+                        Notification::info(format!(
+                            "{} reaches port {} on {}",
+                            v["url"].as_str().unwrap_or_default(),
+                            a.port,
+                            servers::label(&a.address)
+                        ))
+                        .title("Port forwarded"),
+                        cx,
+                    ),
+                    Err(e) => window.push_notification(Notification::error(format!("{e:#}")), cx),
+                }
+            }))
             .on_action(cx.listener(|this, a: &keymap::OpenFromServer, window, cx| {
                 this.open_from_server(a.address.clone(), window, cx)
             }))

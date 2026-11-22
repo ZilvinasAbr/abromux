@@ -253,6 +253,12 @@ pub const METHODS: &[Method] = &[
         "port:number The port on the host;local?:number The port here (default: a free one);@workspace;host?:string Another server (a name or ssh:// address)",
     ),
     m(
+        "forward.offer",
+        "",
+        "Internal: ports something started listening on, on a host (its server watches): offered to forward.",
+        "link:string The host;ports:array {port, address} each",
+    ),
+    m(
         "forward.list",
         "forward list",
         "The forwarded ports, with their workspaces.",
@@ -1214,6 +1220,8 @@ mod tests {
         for m in abromux_server::control::RECORDED
             .iter()
             .chain(abromux_server::control::ANSWERED)
+            .chain(abromux_server::owned::OWNED)
+            .chain(abromux_server::owned::READS)
         {
             assert!(find(m).is_some(), "{m} isn't a method");
             assert_eq!(kind(m), Kind::Model, "{m}");

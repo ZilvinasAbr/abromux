@@ -308,6 +308,11 @@ fn connect(target: &Target) -> Result<(BufReader<UnixStream>, UnixStream), Strin
     if app["ok"] != true {
         return Err(app["error"].as_str().unwrap_or("refused").to_string());
     }
+    // On another machine, a dev server starting is worth forwarding: have
+    // the server say when one does.
+    if let Target::Remote(_) = target {
+        writeln!(w, "{}", json!({ "op": "watch-ports" })).map_err(|e| e.to_string())?;
+    }
     r.get_ref().set_read_timeout(None).ok();
     Ok((r, w))
 }
@@ -371,6 +376,12 @@ fn run(mut reader: BufReader<UnixStream>, target: Target, link: Link) {
                 }
                 if msg["resync"] == true {
                     link.resync.store(true, Ordering::Relaxed);
+                }
+                if msg["ports_new"].is_array() {
+                    inject(
+                        "forward.offer",
+                        json!({ "link": name, "ports": msg["ports_new"] }),
+                    );
                 }
                 if let Some(id) = msg["release"].as_str() {
                     ask("surface.restream", id);

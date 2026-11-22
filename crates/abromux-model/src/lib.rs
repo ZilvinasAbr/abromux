@@ -53,6 +53,26 @@ pub struct Workspace {
     /// Unread notifications in it.
     #[serde(default)]
     pub unread: u32,
+    /// `#rrggbb`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// The git branch of its folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// `abromux log` lines, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub log: Vec<LogEntry>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LogEntry {
+    /// info, progress, success, warning or error.
+    pub level: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    pub message: String,
+    /// Seconds since the epoch.
+    pub at: u64,
 }
 
 /// Its panes: a tree of splits.
