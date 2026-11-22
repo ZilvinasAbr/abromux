@@ -3511,15 +3511,29 @@ impl AbroMux {
     ) -> anyhow::Result<Surface> {
         Ok(match str_param(p, "type").unwrap_or("terminal") {
             "terminal" => {
-                let cwd = str_param(p, "cwd")
-                    .map(String::from)
-                    .or_else(|| self.workspaces[wi].cwd(cx));
-                let s = self.make_terminal(
-                    self.workspaces[wi].id,
-                    crate::TerminalOpts::cwd(cwd),
-                    window,
-                    cx,
-                );
+                // `host`: another machine's server, or `local` for this one,
+                // whatever the workspace's is.
+                let host = match str_param(p, "host") {
+                    Some("local") => Some(String::new()),
+                    Some(h) => {
+                        abromux_term::remote::Endpoint::parse(h).map_err(|e| anyhow!(e))?;
+                        Some(h.to_string())
+                    }
+                    None => None,
+                };
+                // The workspace's folder is this machine's; elsewhere the
+                // terminal starts in the host's home unless told.
+                let cwd = str_param(p, "cwd").map(String::from).or_else(|| {
+                    host.as_ref()
+                        .is_none_or(String::is_empty)
+                        .then(|| self.workspaces[wi].cwd(cx))
+                        .flatten()
+                });
+                let opts = crate::TerminalOpts {
+                    host,
+                    ..crate::TerminalOpts::cwd(cwd)
+                };
+                let s = self.make_terminal(self.workspaces[wi].id, opts, window, cx);
                 if let (Some(cmd), Surface::Terminal(t)) = (str_param(p, "command"), &s) {
                     t.update(cx, |t, _| t.send(format!("{cmd}\r").as_bytes()));
                 }

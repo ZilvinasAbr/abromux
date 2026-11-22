@@ -285,7 +285,8 @@ struct TerminalOpts {
     /// surface number and the server's id.
     attach: Option<(usize, String)>,
     /// The server on another machine to start it on (or that `attach` is
-    /// on). None: the workspace's, if it has one, else this machine's.
+    /// on). None: the workspace's, if it has one, else this machine's;
+    /// empty: this machine's, whatever the workspace's is.
     host: Option<String>,
 }
 
@@ -808,15 +809,17 @@ impl AbroMux {
         };
         // A new terminal in a workspace on another machine starts there; one
         // taken back is wherever it was.
-        let host = host.or_else(|| {
-            attach.is_none().then(|| {
-                self.workspaces
-                    .iter()
-                    .find(|w| w.id == ws)
-                    .and_then(|w| w.host.clone())
-                    .or_else(|| self.building_host.clone())
-            })?
-        });
+        let host = host
+            .or_else(|| {
+                attach.is_none().then(|| {
+                    self.workspaces
+                        .iter()
+                        .find(|w| w.id == ws)
+                        .and_then(|w| w.host.clone())
+                        .or_else(|| self.building_host.clone())
+                })?
+            })
+            .filter(|h| !h.is_empty());
         if let Some(home) = home {
             env.push((
                 "ABROMUX_WORKSPACE_DIR".into(),
