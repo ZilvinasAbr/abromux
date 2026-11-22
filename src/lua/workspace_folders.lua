@@ -14,7 +14,9 @@
 --   app's New Workspace runs it; args.focus = false doesn't select it.
 -- * Clean Up and Delete Workspace Folder… (⇧⌘X): moves the workspace to the
 --   Cleanup group and starts an agent on `.abromux/cleanup.md`, which ends
---   with `abromux folder remove`.
+--   with `abromux folder remove`. args.workspace picks the workspace
+--   (default: the caller's, else the selected one); args.focus = false
+--   leaves the Mac's selection alone, as the phone app's Clean Up runs it.
 -- * `abromux folder [path|root|add|list|all|repos|resources|remove]`, from
 --   any shell (abromux runs this file's `folder` action for it).
 --
@@ -583,7 +585,9 @@ local function clean_up(ctx, args)
     agent = "claude"
   end
   A.workspace.action{ workspace = w.ref, action = "move-to-cleanup" }
-  A.workspace.select{ workspace = w.ref }
+  if args.focus ~= false then
+    A.workspace.select{ workspace = w.ref }
+  end
   local params = {
     workspace = w.ref,
     cwd = w.home,
@@ -597,7 +601,7 @@ local function clean_up(ctx, args)
   if not tab then
     fail(err)
   end
-  return { workspace = w.ref, folder = w.home }
+  return { workspace = w.ref, folder = w.home, surface = tab.ref }
 end
 
 local function out(line)
@@ -725,7 +729,7 @@ function M.setup(o)
     description = "An agent removes what the workspace made, then the folder",
     keywords = "delete remove folder",
     key = opts.cleanup_key == nil and "cmd-shift-x" or opts.cleanup_key or nil,
-    args = { workspace = "string?" },
+    args = { workspace = "string?", focus = "boolean?" },
     run = clean_up,
   }
   A.action{
