@@ -705,6 +705,19 @@ impl AbroMux {
                 })
             }
 
+            "action.list" => {
+                let init = crate::lua::init_path();
+                let actions = crate::lua::collect_cached(&init).map_err(anyhow::Error::msg)?;
+                json!(
+                    actions
+                        .iter()
+                        .map(|a| json!({ "name": a.name, "title": a.title,
+                                         "description": a.description, "palette": a.palette }))
+                        .collect::<Vec<_>>()
+                )
+            }
+            "action.run" => return self.run_action(p),
+
             "workspace.list" => json!(
                 (0..self.workspaces.len())
                     .map(|i| self.describe_ws(i, false, cx))
@@ -2127,6 +2140,67 @@ impl AbroMux {
             _ => return Err(MethodNotFound(method.to_string()).into()),
         };
         Ok(Reply::Now(v))
+    }
+
+    /// `action.run`: an init.lua action, run as the palette runs one
+    /// (`abromux do <init.lua> --action`, in the background), but answered
+    /// with what it returned, or why it failed. Not on any tab: there's no
+    /// caller, so it acts on what's selected.
+    fn run_action(&self, p: &Value) -> anyhow::Result<Reply> {
+        let name = str_param(p, "action").context("missing action")?;
+        let init = crate::lua::init_path();
+        let actions = crate::lua::collect_cached(&init).map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            actions.iter().any(|a| a.name == name),
+            "init.lua has no action {name:?}"
+        );
+        let args = match p.get("args") {
+            None | Some(Value::Null) => serde_json::Map::new(),
+            Some(Value::Object(m)) => m.clone(),
+            Some(_) => bail!("args: expected an object"),
+        };
+        let mut cmd = std::process::Command::new(std::env::current_exe()?);
+        cmd.arg("do")
+            .arg(&init)
+            .args(["--action", name, "--args"])
+            .arg(Value::Object(args).to_string())
+            .env("ABROMUX_ACTION_ORIGIN", str_param(p, "origin").unwrap_or("api"))
+            .env_remove("ABROMUX_SURFACE_ID")
+            .env_remove("ABROMUX_WORKSPACE_ID")
+            .current_dir(crate::paths::home())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if let Some(sock) = &self.socket {
+            cmd.env("ABROMUX_SOCKET_PATH", sock);
+        }
+        let child = cmd.spawn().with_context(|| format!("{name}: couldn't start it"))?;
+        let (tx, rx) = oneshot::channel();
+        let name = name.to_string();
+        // Off the main thread: the action calls back into this socket.
+        std::thread::spawn(move || {
+            let r = match child.wait_with_output() {
+                Err(e) => Err(anyhow!("{name}: {e}")),
+                Ok(out) if !out.status.success() => {
+                    let err = String::from_utf8_lossy(&out.stderr);
+                    let err = err.trim().trim_start_matches("abromux: ");
+                    Err(anyhow!(
+                        "{}",
+                        if err.is_empty() { format!("{name} failed") } else { err.to_string() }
+                    ))
+                }
+                Ok(out) => {
+                    // What it returned is the last line `abromux do` printed.
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    let last = text.trim().lines().last().unwrap_or_default();
+                    Ok(serde_json::from_str(last).unwrap_or_else(|_| {
+                        if last.is_empty() { Value::Null } else { json!(text.trim()) }
+                    }))
+                }
+            };
+            let _ = tx.send(r);
+        });
+        Ok(later(rx, Duration::from_secs(120), "action.run"))
     }
 
     /// `browser wait`: poll the page until the condition holds.

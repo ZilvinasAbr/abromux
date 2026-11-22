@@ -94,6 +94,19 @@ pub const METHODS: &[Method] = &[
         "method?:string Just this one",
     ),
     m(
+        "action.list",
+        "do --list",
+        "The actions init.lua defines: name, title, description, and whether the palette lists it.",
+        "",
+    ),
+    m(
+        "action.run",
+        "",
+        "Run an init.lua action as the palette does, in the background; answers with what it returned.",
+        "action:string Its name;args?:object Its arguments (abromux.args);\
+         origin?:string Its ctx.origin (default api)",
+    ),
+    m(
         "workspace.list",
         "list-workspaces",
         "Every workspace: ref, name, cwd, git branch, status pills, progress, group.",
