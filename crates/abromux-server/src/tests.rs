@@ -663,11 +663,11 @@ fn keeps_a_replica_of_the_apps_model() {
         vec![
             Event::Workspace {
                 index: 0,
-                workspace: ws(1, "home"),
+                workspace: Box::new(ws(1, "home")),
             },
             Event::Workspace {
                 index: 1,
-                workspace: ws(2, "vps"),
+                workspace: Box::new(ws(2, "vps")),
             },
             Event::Selected { id: Some(2) },
         ],

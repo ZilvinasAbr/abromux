@@ -775,7 +775,7 @@ impl Server {
                                     self.state.set_model(m);
                                     // Subscribers start over from it.
                                     let snap = json!({ "model": self.state.model });
-                                    self.to_subscribers(&snap);
+                                    self.send_subscribers(&snap);
                                 }
                             } else if msg["op"] == "terms" {
                                 // What the app parses of the terminals it
@@ -1376,11 +1376,11 @@ impl Server {
     /// Events the replica applied, to every subscriber.
     fn publish(&mut self, events: &[abromux_model::Stamped]) {
         for e in events {
-            self.to_subscribers(&json!(e));
+            self.send_subscribers(&json!(e));
         }
     }
 
-    fn to_subscribers(&mut self, v: &Value) {
+    fn send_subscribers(&mut self, v: &Value) {
         let subs: Vec<u64> = self
             .clients
             .iter()

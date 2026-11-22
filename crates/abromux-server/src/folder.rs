@@ -339,7 +339,7 @@ pub fn command(args: &[String]) -> Result<Vec<String>, String> {
         "root" => Ok(vec![root().display().to_string()]),
         "remove" => {
             let ws = match words.get(1) {
-                Some(p) => PathBuf::from(abromux_core::paths::expand_tilde(p)),
+                Some(p) => abromux_core::paths::expand_tilde(p),
                 None => current()?,
             };
             remove(&ws, flag("--force").is_some())

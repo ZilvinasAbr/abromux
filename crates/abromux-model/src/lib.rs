@@ -134,7 +134,7 @@ pub enum Event {
     /// Inserted at `index` (or changed, if one with its id is there).
     Workspace {
         index: usize,
-        workspace: Workspace,
+        workspace: Box<Workspace>,
     },
     Removed {
         id: u64,
@@ -189,7 +189,7 @@ impl Model {
                     self.workspaces.remove(at);
                 }
                 let i = (*index).min(self.workspaces.len());
-                self.workspaces.insert(i, workspace.clone());
+                self.workspaces.insert(i, (**workspace).clone());
             }
             Event::Removed { id } => self.workspaces.retain(|w| w.id != *id),
             Event::Selected { id } => self.selected = *id,
@@ -227,7 +227,7 @@ pub fn diff(old: &Model, new: &Model) -> Vec<Event> {
         if !same_place {
             out.push(Event::Workspace {
                 index: i,
-                workspace: w.clone(),
+                workspace: Box::new(w.clone()),
             });
             cur.retain(|x| x.id != w.id);
             cur.insert(i.min(cur.len()), w);
