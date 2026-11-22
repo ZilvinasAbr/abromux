@@ -102,6 +102,9 @@ pub struct WorkspaceState {
     /// `env`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub env: std::collections::BTreeMap<String, String>,
+    /// The server on another machine its terminals run on (`ssh://host`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     /// Its tracked links (`crate::links`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<crate::links::Link>,
@@ -173,9 +176,13 @@ pub enum TabState {
         /// The tab's name from `rename-tab`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
-        /// Its terminal in abromux's holder, still running (`abromux_term::hold`).
+        /// Its terminal in abromux's server, still running (`abromux_term::hold`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         held: Option<String>,
+        /// The server on another machine that `held` is on
+        /// (`abromux_term::remote`); None for this machine's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
         /// Its surface number, which that terminal's shell has in
         /// `ABROMUX_SURFACE_ID`; only kept with `held`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -318,6 +325,7 @@ mod tests {
                 group: Some(0),
                 home: Some("/tmp/ws".into()),
                 env: Default::default(),
+                host: Some("ssh://box".into()),
                 links: vec![crate::links::Link {
                     kind: crate::links::Kind::Jira,
                     key: "PAY-1".into(),
@@ -371,6 +379,7 @@ mod tests {
                                 }),
                                 name: Some("server".into()),
                                 held: Some("4242-3".into()),
+                                host: Some("ssh://box".into()),
                                 surface: Some(7),
                                 edit: Some("/tmp/main.rs".into()),
                             }],

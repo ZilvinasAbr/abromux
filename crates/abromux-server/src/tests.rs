@@ -101,7 +101,7 @@ fn streams_a_terminal_and_takes_it_back() {
     );
     std::thread::sleep(Duration::from_millis(800));
 
-    let (reply, mut r, mut w) = request(&sock, json!({ "op": "attach", "id": id, "stream": true }));
+    let (reply, mut r, _w) = request(&sock, json!({ "op": "attach", "id": id, "stream": true }));
     assert_eq!(reply["ok"], true, "{reply}");
     let mut snap = vec![0u8; reply["snapshot"].as_u64().unwrap() as usize];
     r.read_exact(&mut snap).unwrap();
@@ -111,14 +111,25 @@ fn streams_a_terminal_and_takes_it_back() {
     let backlog = String::from_utf8_lossy(&backlog);
     assert!(backlog.contains("later-2"), "{backlog:?}");
 
-    // One app at a time.
+    // One app at a time, unless it takes the terminal (coming back on a new
+    // connection): then the old connection is closed.
     let (busy, ..) = request(&sock, json!({ "op": "attach", "id": id, "stream": true }));
     assert_eq!(busy["ok"], false);
+    let (took, mut r2, mut w2) = request(
+        &sock,
+        json!({ "op": "attach", "id": id, "stream": true, "take": true }),
+    );
+    assert_eq!(took["ok"], true, "{took}");
+    assert_eq!(took["backlog"], 0);
+    while let Some((kind, _)) = read_frame(&mut r).unwrap() {
+        assert_eq!(kind, wire::OUTPUT, "the old connection only ends");
+    }
+    let (r, w) = (&mut r2, &mut w2);
 
-    write_frame(&mut w, wire::INPUT, b"echo again\n").unwrap();
-    read_until(&mut r, "again");
-    write_frame(&mut w, wire::KILL, b"").unwrap();
-    drop(w);
+    write_frame(w, wire::INPUT, b"echo again\n").unwrap();
+    read_until(r, "again");
+    write_frame(w, wire::KILL, b"").unwrap();
+    drop(w2);
     std::thread::sleep(Duration::from_millis(100));
     let (gone, ..) = request(&sock, json!({ "op": "attach", "id": id, "stream": true }));
     assert_eq!(gone["ok"], false, "gone after KILL");

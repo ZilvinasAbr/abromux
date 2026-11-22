@@ -1245,6 +1245,10 @@ impl AbroMux {
         let status = details
             .then(|| self.render_ws_status(ws, filled, &sb))
             .flatten();
+        // A workspace on another machine says which.
+        let host = ws.host.as_deref().map(|h| {
+            abromux_term::remote::Endpoint::parse(h).map_or_else(|_| h.to_string(), |e| e.label())
+        });
         let description: Vec<String> = ws
             .description
             .as_deref()
@@ -1499,6 +1503,19 @@ impl AbroMux {
                                 .into_iter()
                                 .map(|l| div().min_w_0().line_clamp(2).child(l)),
                         ),
+                )
+            })
+            .when_some(host, |s, host| {
+                s.child(
+                    div()
+                        .mt(px(2.))
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .text_size(px(11. * z))
+                        .text_color(sub)
+                        .child(icon("globe").size(px(10. * z)).text_color(sub))
+                        .child(div().min_w_0().truncate().child(host)),
                 )
             })
             .when(

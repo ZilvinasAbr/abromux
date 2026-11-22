@@ -27,7 +27,9 @@
 //!   `{"ok":true,"pid":n,"snapshot":len,"backlog":len}` and sends both; then
 //!   frames. `spawn` with `"stream":true` also takes `"command"` (run with the
 //!   user's shell) and an empty `argv` (the user's login shell), and starts
-//!   from the server's environment with `env` on top.
+//!   from the server's environment with `env` on top. A streamed `attach`
+//!   with `"take":true` takes the terminal from another streamed connection
+//!   (the app's own, broken, that the server hasn't noticed yet).
 //! - `{"op":"kill"}` (the connection's terminal) → `{"ok":true}`
 //! - `{"op":"status"}` (the connection's terminal, once its output ended)
 //!   → `{"ok":true,"code":n|null}`: its exit status, null if a signal ended it
@@ -454,6 +456,16 @@ impl Server {
             },
             Some("attach") if c.term.is_none() => {
                 let id = req["id"].as_str().unwrap_or_default().to_string();
+                // `take`: a streamed app coming back after its connection
+                // broke, before the server noticed: the old one goes.
+                if stream && req["take"] == true {
+                    let other = self.terms.get(&id).and_then(|t| t.client);
+                    if let Some(other) = other.filter(|o| *o != cid)
+                        && self.clients.get(&other).is_some_and(Client::streams)
+                    {
+                        self.drop_client(other);
+                    }
+                }
                 let clients = &self.clients;
                 let Some(t) = self.terms.get_mut(&id) else {
                     let c = self.clients.get_mut(&cid).unwrap();
@@ -859,22 +871,49 @@ pub fn start_detached(exe: &Path, args: &[OsString]) -> io::Result<()> {
 /// until either side ends. How an app on another machine reaches this one's
 /// server (`ssh HOST abromux-server --stdio`).
 pub fn stdio(sock: UnixStream) -> io::Result<()> {
-    use std::os::fd::FromRawFd;
-    let mut up = sock.try_clone()?;
+    let up = sock.try_clone()?;
     std::thread::spawn(move || {
-        // SAFETY: fd 0 is ours for the life of the process; ManuallyDrop
-        // keeps it open.
-        let mut stdin = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(0) });
-        let _ = io::copy(&mut *stdin, &mut up);
+        let _ = pump(0, up.as_raw_fd());
         let _ = up.shutdown(std::net::Shutdown::Write);
     });
-    // Raw fd 1, not io::stdout(): that buffers by line, which would hold
-    // frames back.
-    // SAFETY: as above, for fd 1.
-    let mut stdout = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(1) });
-    let mut down = sock;
-    io::copy(&mut down, &mut *stdout)?;
-    Ok(())
+    pump(sock.as_raw_fd(), 1)
+}
+
+/// Copy `from` to `to` until `from` ends, a read at a time. Not io::copy:
+/// on Linux that splices when one side is a pipe (ssh's stdin and stdout),
+/// and a splice from a pipe into a Unix socket can sit on bytes that have
+/// arrived, which here means a request that never reaches the server. Raw
+/// descriptors also skip io::stdout()'s line buffering, which would hold
+/// frames back.
+fn pump(from: RawFd, to: RawFd) -> io::Result<()> {
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        // SAFETY: reads into `buf`, valid for its length.
+        let n = unsafe { libc::read(from, buf.as_mut_ptr().cast(), buf.len()) };
+        if n < 0 {
+            let e = io::Error::last_os_error();
+            if e.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(e);
+        }
+        if n == 0 {
+            return Ok(());
+        }
+        let mut out = &buf[..n as usize];
+        while !out.is_empty() {
+            // SAFETY: writes from `out`, valid for its length.
+            let w = unsafe { libc::write(to, out.as_ptr().cast(), out.len()) };
+            if w < 0 {
+                let e = io::Error::last_os_error();
+                if e.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(e);
+            }
+            out = &out[w as usize..];
+        }
+    }
 }
 
 #[cfg(test)]

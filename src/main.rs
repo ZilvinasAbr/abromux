@@ -281,9 +281,12 @@ struct TerminalOpts {
     env: Vec<(String, String)>,
     /// Run this instead of a shell session.
     command: Option<String>,
-    /// Take back a terminal the holder kept from the last session: its
-    /// surface number and holder id.
+    /// Take back a terminal the server kept from the last session: its
+    /// surface number and the server's id.
     attach: Option<(usize, String)>,
+    /// The server on another machine to start it on (or that `attach` is
+    /// on). None: the workspace's, if it has one, else this machine's.
+    host: Option<String>,
 }
 
 impl TerminalOpts {
@@ -305,6 +308,8 @@ struct AbroMux {
     building_home: Option<std::path::PathBuf>,
     /// The same for its `env`.
     building_env: std::collections::BTreeMap<String, String>,
+    /// The same for its host (`Workspace::host`).
+    building_host: Option<String>,
     next_pane: usize,
     next_surface: usize,
     /// Stable `surface:N` numbers handed out to the control socket.
@@ -404,6 +409,7 @@ impl AbroMux {
             next_ws: 0,
             building_home: None,
             building_env: Default::default(),
+            building_host: None,
             next_pane: 0,
             next_surface: 0,
             surface_refs: Default::default(),
@@ -793,12 +799,24 @@ impl AbroMux {
             mut env,
             command,
             attach,
+            host,
         } = opts;
         let surface = attach.as_ref().map_or(self.next_surface + 1, |(n, _)| *n);
         let (home, ws_env) = match self.workspaces.iter().find(|w| w.id == ws) {
             Some(w) => (w.home.clone(), w.env.clone()),
             None => (self.building_home.clone(), self.building_env.clone()),
         };
+        // A new terminal in a workspace on another machine starts there; one
+        // taken back is wherever it was.
+        let host = host.or_else(|| {
+            attach.is_none().then(|| {
+                self.workspaces
+                    .iter()
+                    .find(|w| w.id == ws)
+                    .and_then(|w| w.host.clone())
+                    .or_else(|| self.building_host.clone())
+            })?
+        });
         if let Some(home) = home {
             env.push((
                 "ABROMUX_WORKSPACE_DIR".into(),
@@ -824,7 +842,7 @@ impl AbroMux {
             ));
         }
         let held = attach.as_ref().map(|(_, a)| a.as_str());
-        let term = cx.new(|cx| TerminalView::new(cwd, env, command, held, cx));
+        let term = cx.new(|cx| TerminalView::new(cwd, env, command, held, host, cx));
         // Its env names `surface` even when the shell is a new one; restore
         // reserved the numbers the last session used, so it's free.
         self.surface_refs.insert(term.entity_id(), surface);

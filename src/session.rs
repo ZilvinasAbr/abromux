@@ -134,6 +134,7 @@ impl AbroMux {
                 color: ws.color,
                 home: ws.home.as_ref().map(|h| h.to_string_lossy().into_owned()),
                 env: ws.env.clone(),
+                host: ws.host.clone(),
                 links: ws.links.clone(),
                 hidden_links: ws.hidden_links.clone(),
                 pinned: pin_states(ws, scrollback, &self.surface_refs, cx),
@@ -382,9 +383,11 @@ impl AbroMux {
             let home = state.home.map(std::path::PathBuf::from);
             self.building_home = home.clone();
             self.building_env = state.env.clone();
+            self.building_host = state.host.clone();
             let root = self.build_node(state.root, id, window, cx);
             self.building_home = None;
             self.building_env.clear();
+            self.building_host = None;
             let Some(root) = root else {
                 ids.push(None);
                 continue;
@@ -402,6 +405,7 @@ impl AbroMux {
             ws.color = state.color;
             ws.home = home;
             ws.env = state.env;
+            ws.host = state.host;
             ws.links = state.links;
             ws.hidden_links = state.hidden_links;
             for pin in state.pinned {
@@ -493,10 +497,13 @@ impl AbroMux {
                 agent,
                 name,
                 held,
+                host,
                 surface,
                 edit,
             } => {
-                let cwd = std::path::Path::new(&cwd).is_dir().then_some(cwd);
+                // A remote terminal's folder is on its host: the server
+                // checks it there.
+                let cwd = (host.is_some() || std::path::Path::new(&cwd).is_dir()).then_some(cwd);
                 // An editor whose file is still there; else a shell, as the
                 // editor exiting would have left nothing to come back to.
                 let editor = edit
@@ -516,6 +523,7 @@ impl AbroMux {
                 let opts = crate::TerminalOpts {
                     cwd,
                     attach,
+                    host,
                     ..Default::default()
                 };
                 let s = self.make_terminal(ws, opts, window, cx);
@@ -680,7 +688,7 @@ fn tab_state(s: &Surface, scrollback: bool, refs: &Refs, cx: &App) -> TabState {
                     zoom: None,
                 };
             }
-            let held = t.held_id().map(str::to_string);
+            let held = t.held_id();
             let edit = t
                 .app
                 .as_ref()
@@ -689,6 +697,7 @@ fn tab_state(s: &Surface, scrollback: bool, refs: &Refs, cx: &App) -> TabState {
             TabState::Terminal {
                 surface: surface.filter(|_| held.is_some()),
                 held,
+                host: t.host.clone(),
                 cwd: t.live_cwd(),
                 font_size: Some(t.font_size()),
                 // An editor draws its screen again; its old one would only
