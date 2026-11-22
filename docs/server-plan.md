@@ -15,7 +15,7 @@ list of hosts.
 
 | Question | Decision |
 |---|---|
-| Where the state lives | **In the server** (option B). Workspaces, layouts, terminals, agent status, notifications, pins and folders belong to the server; the app shows them and sends requests. |
+| Where the state lives | **In the server** (option B). Workspaces, layouts, terminals, agent status, notifications, pins and folders belong to the server; the app shows them and sends requests. *As built (phase 2):* the server owns the terminals, the control socket and a copy of the workspaces' state; the app still runs the handlers while it's attached, and the server stands in while it's away. |
 | The holder | **Grows into the server.** `abromux hold` becomes `abromux server`: the same long-lived process per machine, on the Mac and on a VPS. `abromux hold` stays as an alias. |
 | Local terminals | **The server stays out of the data path.** An app on the same machine gets the PTY's descriptor (`SCM_RIGHTS`), exactly as from the holder today, and reads and writes it itself. |
 | Remote terminals | Streamed over the connection, in frames. The app parses them with libghostty-vt as it does local ones, so scrollback, find and selection stay local. |
@@ -79,7 +79,7 @@ crates/
                     ids instead of gpui entities
 ```
 
-## Wire protocol (revision 2)
+## Wire protocol (revision 3)
 
 A connection to the server's socket starts in **line mode**: one JSON request
 per line, one JSON reply per line.
@@ -115,6 +115,20 @@ broke, before the server noticed.
 `abromux-server --stdio` connects to the local server's socket (starting it if
 needed) and copies stdin and stdout to it, so any byte pipe (`ssh`) can reach
 it. Descriptors can't cross it, which is why remote terminals use `stream`.
+
+Revision 3 adds (`abromux_server`'s module docs have the details):
+
+- `hello` reports `host_id`, `control` (the control socket) and `app`.
+- `app` (the app's link: `{"open":N}`, `{"release":id}`, `{"reclaim":id}`
+  from the server; `{"op":"state"}`, `{"op":"terms"}` from the app),
+  `control` (`conn` N: the app's side of a control connection; none: this
+  connection is one), `get-state`, `terms`, `connect` (a TCP port there,
+  spliced), `ports`.
+- A streamed `attach` takes `owner` (which machine), `fresh`, and `vt` (the
+  screen as VT text); its reply adds `screen` and `parsed` (the snapshot is
+  the server's own).
+- Several streamed clients per terminal; a streamed attach to a terminal a
+  local app holds waits while the app is asked to share it.
 
 ## Phases
 
@@ -155,31 +169,40 @@ replays only what the server had kept, so a full-screen program may need a
 resize to redraw; the server's `exit_code` waits up to 300 ms on its loop
 for a program to be reaped.
 
-### Phase 2: the model leaves GPUI
+### Phase 2: the server owns the control socket
 
-- [ ] `crates/abromux-model`: `Workspace`, `Node`/`Pane`, groups, status,
-      progress, log, links and pins, keyed by surface ids instead of
-      `EntityId`. Unit-tested without a window.
-- [ ] Split `src/server.rs`'s 131 methods into **model methods** (workspaces,
-      panes, tabs, status, notifications, folders, links: they change the
-      model) and **view methods** (browser automation, screenshots, focus,
-      key input: they need the app's views).
-- [ ] The app keeps the model in-process first (no behaviour change; perf
-      neutral), driving it through the same apply-event path a replica uses.
-- [ ] Events with a gapless `seq`; snapshot + events = state. Coalesced into
-      one redraw per frame in the app.
-- [ ] Then the model moves into `abromux server`. The app connects,
-      bootstraps from a snapshot, and keeps a replica. The control socket
-      (`abromux.sock`) moves to the server; view methods are forwarded to the
-      app that shows the surface (Rex's "client actions").
-- [ ] The server saves the session (layouts, held ids). After a reboot it
-      restores layouts; programs start fresh (agents resume as today).
-- [ ] Server-side folders: `folder add`, cleanup and Docker resources run
-      where the workspace lives.
+**Built differently from the plan.** The plan moved the workspace model out
+of GPUI into the server, the app keeping a replica. That's a rewrite of
+`src/server.rs`'s ~140 handlers and of how the app holds its state, with
+perf risk at every step. What was built gets the same outcome (the done-when
+below) with the app's handlers untouched:
+
+- [x] `abromux server --control PATH` serves the control socket
+      (`abromux.sock`, `abromux_server::control`). The app attaches
+      (`{"op":"app"}`); for each control connection the server says
+      `{"open":N}`, the app opens its side (`{"op":"control","conn":N}`) and
+      serves it with its existing code (`server::serve`), the server
+      splicing bytes. CLI, hooks and the phone app work as before.
+- [x] **Model methods vs view methods**, as the split the server can act on:
+      while the app is away the server answers `ping`, `list-workspaces`,
+      status/log/notification lists from what the app last pushed
+      (`{"op":"state"}`), *keeps* status, progress, log, notifications and
+      agent reports, and *replays* them when the app attaches (connection
+      0). Everything else is refused (`app_closed`, the CLI's exit 4).
+- [x] The server saves its state and the kept calls (`server-state.json`),
+      including the app's session.
+- [x] One app at a time; an older server (protocol 2), or one serving
+      another socket, leaves the app binding the socket itself.
+- [x] One server per socket (a lock file): several starting at once (the
+      app's terminals and its link) don't split the terminals.
+- [ ] Not built: the `abromux-model` crate and a replica in the app;
+      server-side `folder add`/cleanup (workspace folders became a Lua
+      module on `main`; they run where the app is).
 
 **Done when:** quitting the app leaves every workspace's state (status pills,
 progress, notifications, agents' state) live in the server, and the app picks
-it back up at launch; perf numbers as before, startup measured.
+it back up at launch. *Met:* checked in the app (status, notification and log
+reported while it was closed came back on the right workspace and tab).
 
 ### Phase 3: the app as a client of several servers
 
@@ -187,51 +210,64 @@ it back up at launch; perf numbers as before, startup measured.
       Workspace on …" / "New Tab on …", `abromux servers`, `--host NAME`.
       In `servers.json`, not `config.json` (app versions share that file and
       refuse keys they don't know).
-- [ ] Several endpoints per server tried in order; host id from `hello` to
-      warn when an address leads to another machine.
-- [ ] One connection per host (ssh `ControlMaster`); reconnect with backoff;
-      a host's workspaces go grey while it's away and come back on reconnect.
-- [ ] Sidebar: workspaces grouped by host; "New workspace on…"; ⌘P searches
-      all hosts.
-- [ ] CLI: `abromux --server LABEL …`; agents' hooks on a host talk to that
-      host's server through `ABROMUX_SOCKET_PATH` as they do locally.
-- [ ] Phase 1's app-owned remote workspaces become the remote server's.
+- [x] Several addresses per server (`also`), tried in order by terminals,
+      links and checks; the first answer's host id is kept, a different
+      machine at the address is reported.
+- [x] A control link to every host with something of the app's on it
+      (`control_link`, over ssh `ControlMaster`), reconnecting with backoff;
+      a host's workspaces fade while it's away.
+- [x] Group Workspaces by Server; ⌘P lists every host's workspaces (they're
+      the app's).
+- [x] `abromux --server NAME …`; agents' hooks on a host reach the app
+      through that host's control socket (remote shells get
+      `ABROMUX_SOCKET_PATH`, `ABROMUX_BIN`, `ABROMUX_SURFACE_ID`). On a
+      host without the app, `abromux-server` is the `abromux` they call
+      (`hooks install`, `notify`, `set-status`, ..., `call`).
+- [x] The remote server keeps the app's workspaces there (also ones the app
+      lost, while their terminals run): ⌘⇧P Open Workspaces from <server>.
 
 ### Phase 4: several clients per terminal; server-side parsing
 
-- [ ] The server parses a terminal (libghostty-vt) whenever no local app
-      holds its descriptor: notifications (OSC 9/99/777), titles, cwd and
-      agent state keep updating while the app is closed, and the server can
-      make a snapshot itself.
-- [ ] A second client on a terminal a local app holds: the server takes the
-      descriptor back (the app hands over its snapshot) and streams to both.
-      Only that terminal pays for it, only while both are attached.
-- [ ] While the local app holds a terminal, it reports what it parses
-      (notifications, bell, title, cwd, program status) to the server as
-      small events.
+- [x] `abromux-vt` (libghostty-vt in its own crate); the server parses a
+      terminal whenever no local app holds it (feature `vt`, on in the app's
+      server): titles, folders, answers to the program's queries, and
+      notifications printed while nobody watches, kept for the app. Clients
+      coming back get the server's whole screen.
+- [x] A streamed attach to a terminal a local app holds: the app is asked
+      (`{"release":id}`) and streams it from its own server; the waiting
+      client is served; once it leaves, the app holds it again
+      (`{"reclaim":id}`). Several streamed clients each get the output, any
+      may type; `take` replaces only the same machine's connection.
+- [x] The app reports the titles and folders of the terminals it holds
+      (`{"op":"terms"}`), which the server lists.
 
 ### Phase 5: browser panes and ports
 
-- [ ] `abromux forward` (Rex's tunnel blocks): a local port that connects to
-      a port on the host, per workspace, removed with the workspace.
-- [ ] Optionally detect a dev server listening in a remote workspace and
-      offer to forward it; or open `http://host:port` directly on a tailnet.
+- [x] `abromux forward <port>`: 127.0.0.1:<local> here reaches <port> on the
+      workspace's host through its server (`{"op":"connect"}`); per
+      workspace, saved with the session (same local port), closed with it.
+- [x] `abromux forward ports`: what listens on the host.
 
 ### Phase 6: Tailscale and other clients
 
-- [ ] `tailnet://:7297` listener: plain HTTP/WebSocket on the tailnet
-      addresses, callers identified by tailscaled's LocalAPI whois; only the
-      machine's owner by default.
-- [ ] systemd user unit (`abromux-server install`), `loginctl enable-linger`.
-- [ ] Packages for the server alone (AUR, deb).
-- [ ] A phone or web client on the same protocol.
+- [x] `--tailnet [PORT]` (7297): on the tailnet addresses, callers
+      identified by `tailscale whois`; the owner, plus `--tailnet-allow`
+      logins or tags. Apps use `tailnet://host`. (The CLI rather than the
+      LocalAPI socket: one less thing to get right per OS.)
+- [x] `abromux-server install [--tailnet ..]`: a systemd user unit;
+      `loginctl enable-linger` reminder.
+- [x] `scripts/package-server.sh` (tarball, `.deb`), AUR `abromux-server`.
+- [x] A web client on the tailnet listener for a phone's browser: the
+      terminals, each in xterm.js over a WebSocket streaming it.
 
 ## Open questions
 
 - Remote terminals use `TERM=xterm-256color`; installing the `xterm-ghostty`
   terminfo on the host would be better.
-- Agent hooks and `abromux` inside a remote shell can't reach the app until
-  phase 2/3 move the control socket into the server: in phase 1 they find no
-  socket and do nothing.
+- Commands that need the app's views (`browser ...`, `new-split`, ...) run
+  from a remote shell only through `abromux-server call <method>`: the full
+  CLI is the app's binary, which needs a desktop.
+- The phone app of the Mac's phone access and the server's web client are
+  separate pages; one page for both would be better.
 - Multi-user servers (Rex's login server) are out of scope: one server per
   user account.

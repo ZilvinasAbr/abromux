@@ -188,7 +188,7 @@ File › Import cmux Session (also in the command palette, or `abromux restore-s
 
 A workspace can run its terminals on another machine, such as a Linux VPS, which keeps them (and the agents in them) going whether or not the app is open:
 
-**Servers** (Settings › Servers) are those machines by name: add one with its name and address (`ssh://me@box`, `box:2222`, a Tailscale name, or a host from `~/.ssh/config`), see whether it's up with Check, remove it with ×. Each one gets **New Workspace on …** and **New Tab on …** in ⌘⇧P. They're kept in `~/.config/abromux/servers.json`, beside `config.json` rather than in it, so other versions of the app that share the config file aren't upset by a key they don't know. From a shell, the app open or not:
+**Servers** (Settings › Servers) are those machines by name: add one with its name and address (`ssh://me@box`, `box:2222`, a Tailscale name, a host from `~/.ssh/config`, or `tailnet://box` for a server on the tailnet, below), see whether it's up with Check, remove it with ×. More addresses after the first, separated by commas, are tried in order when it doesn't answer (its LAN name, then its Tailscale name). The first Check remembers which machine answered, and says so if another one answers there later. Each server gets **New Workspace on …**, **New Tab on …** and **Open Workspaces from …** (its workspaces that aren't open here: after losing the session, or on another Mac) in ⌘⇧P. They're kept in `~/.config/abromux/servers.json`, beside `config.json` rather than in it, so other versions of the app that share the config file aren't upset by a key they don't know. From a shell, the app open or not:
 
 ```bash
 abromux servers add vps ssh://me@box       # list, remove <name>, check [<name>...]
@@ -206,9 +206,19 @@ On the host, install the server, which needs only Rust (no Zig, no Wayland):
 cargo install --git https://github.com/ZilvinasAbr/abromux abromux-server   # into ~/.cargo/bin
 ```
 
+Or a package: `scripts/package-server.sh [--deb] [--vt]` makes a tarball (with an `abromux` link and a systemd unit) and a `.deb`; there's an AUR `abromux-server` too. `abromux-server install [--tailnet]` runs it as a systemd user service, so it's up from boot (with `loginctl enable-linger`).
+
 The app reaches it with `ssh HOST abromux-server --stdio`, which starts the server when it isn't running. That needs ssh to log in without asking anything: a key in your agent, or Tailscale SSH. One ssh connection per host is shared by all its terminals (`ControlMaster`, sockets in `/tmp/abromux-ssh-<uid>`). `$ABROMUX_SSH` runs another ssh program, and `$ABROMUX_REMOTE_COMMAND` replaces what runs on the host. The server keeps its socket in `~/.local/state/abromux/server.sock`; it ends with its last terminal, so a reboot of the host ends them too. If your host ends a user's processes when they log out (`KillUserProcesses`), run `loginctl enable-linger` there.
 
-For now the shells there are plain: `abromux` commands and agent hooks inside them don't reach the app, and browser tabs open on this machine. [server-plan.md](server-plan.md) has what comes next.
+**Agents there report here.** The shells there get the server's control socket (`ABROMUX_SOCKET_PATH`), and the app keeps a link to each server it has something on. Run `abromux-server hooks install` on the host once (or link `abromux-server` as `abromux` on its PATH, and `abromux hooks install`): Claude Code, Codex and the others show Running or Needs input, notify, and name the workspace as they do here. `abromux notify`, `set-status`, `set-progress`, `log` and `call <method>` work there too. While the app is closed, the server keeps those reports, and a notification a terminal prints, and the app shows them when it's back. A server the app can't reach fades its workspaces in the sidebar; ⌘⇧P **Group Workspaces by Server** groups them. `abromux --server vps <command>` runs any command through that server.
+
+**This Mac's server is the same.** It owns the control socket now, so `abromux` commands and agent hooks keep working while the app is closed: it answers `list-workspaces`, keeps status, progress, the log, notifications and agent reports, and the app shows them at its next launch. Another app (another Mac, or the web client) can open a terminal this app has: the app shares it, and holds it alone again once the other is gone.
+
+**Ports.** A dev server on the host isn't on this machine: `abromux forward 3000` (in the workspace) makes `http://127.0.0.1:<port>` here reach port 3000 there, through the server. `forward list`, `forward remove 3000`, and `forward ports` (what listens there). Forwards are the workspace's: saved with it, on the same port next time, and closed with it.
+
+**Tailscale and a phone.** `abromux-server --tailnet` (or `install --tailnet`) also listens on the host's Tailscale addresses, port 7297, letting in only its Tailscale user (and `--tailnet-allow` logins). An app reaches it at `tailnet://host`, no ssh needed, and a phone's browser at `http://host:7297/`: the terminals there, each in a terminal with the keys a phone keyboard lacks (`#term=<id>` opens one directly, for the Home Screen). Server-side parsing (`--vt` packages, or the app's own server) gives it the screen as it is; without it, what was printed since the last app left.
+
+[server-plan.md](server-plan.md) has how it's built and what's left.
 
 ## Sidebar
 
