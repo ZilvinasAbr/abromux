@@ -319,6 +319,8 @@ struct AbroMux {
     next_surface: usize,
     /// Stable `surface:N` numbers handed out to the control socket.
     surface_refs: HashMap<EntityId, usize>,
+    /// A proposal to the servers is on its way (`propose_soon`).
+    proposing: bool,
     /// Forwarded ports, by workspace id (crate::forward): closed with it.
     forwards: HashMap<usize, Vec<forward::Forward>>,
     /// How closed terminals' programs exited, by surface number (`abromux
@@ -421,6 +423,7 @@ impl AbroMux {
             next_surface: 0,
             surface_refs: Default::default(),
             forwards: Default::default(),
+            proposing: false,
             exits: Default::default(),
             events: Default::default(),
             socket: None,
@@ -685,6 +688,38 @@ impl AbroMux {
                     break;
                 }
             }
+        })
+        .detach();
+    }
+
+    /// Something on screen changed (a render): propose what changed in the
+    /// model to the servers (crate::control_link) a moment later, once for
+    /// a burst of renders. The server is the model's source; the app's own
+    /// changes reach it at once rather than with the next save.
+    fn propose_soon(&mut self, cx: &mut Context<Self>) {
+        if self.proposing || control_link::current().is_none() {
+            return;
+        }
+        self.proposing = true;
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_millis(50)).await;
+            let _ = this.update(cx, |this, cx| {
+                this.proposing = false;
+                let model = this.model(cx);
+                if let Some(link) = control_link::current() {
+                    link.push_model(model.clone());
+                }
+                for h in control_link::remote_hosts() {
+                    if let Some(link) = control_link::remote(&h) {
+                        let mut m = model.clone();
+                        m.workspaces.retain(|w| {
+                            w.host.as_deref() == Some(h.as_str())
+                                || w.layout.tabs().iter().any(|t| t.host.as_deref() == Some(h.as_str()))
+                        });
+                        link.push_model(m);
+                    }
+                }
+            });
         })
         .detach();
     }
@@ -3242,6 +3277,7 @@ impl Render for AbroMux {
         }
         self.window_bounds = Some(window.window_bounds().get_bounds());
         self.mark_viewed(window, cx);
+        self.propose_soon(cx);
         for ws in &mut self.workspaces {
             ws.zoomed();
         }

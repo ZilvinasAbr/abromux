@@ -257,6 +257,16 @@ pub fn by_name(name: &str) -> Option<Link> {
     remote(name)
 }
 
+/// The hosts the app keeps links to.
+pub fn remote_hosts() -> Vec<String> {
+    REMOTES
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
 /// The link to the server at `host`, if the app keeps one.
 pub fn remote(host: &str) -> Option<Link> {
     REMOTES.lock().unwrap().as_ref()?.get(host).cloned()

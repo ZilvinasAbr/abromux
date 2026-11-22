@@ -228,8 +228,10 @@ for a program to be reaped.
       answers the caller, whose next request waits its turn. The server
       answers the ones it owns itself, as above. So a caller never hears back
       before the server's model has the change. The app's own UI changes
-      (keyboard, mouse) are proposed to the server as they happen to be
-      noticed (`change`, every few seconds).
+      (keyboard, mouse) are proposed to the server right after they're drawn
+      (`change`, within ~50 ms, one diff for a burst of renders: a
+      keyboard-driven move was in the server's model 0.3 s later; no events
+      while idle or while a terminal prints 300k lines).
 - [x] Costs measured: through the server, `surface.create` takes 3.3 ms and
       `surface.close` 1.9 ms on the control socket, against 3.0 and 1.5 ms
       straight to the app. (A first version took 105 ms: building the model
