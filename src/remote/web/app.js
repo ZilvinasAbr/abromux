@@ -628,6 +628,76 @@ function newTabSheet() {
 }
 $("add-btn").onclick = newTabSheet;
 
+// New Workspace: a plain one, or (with init.lua's workspace folders turned
+// on) a workspace folder, as ⇧⌘I makes on the Mac. Neither takes the Mac's
+// selection away from whoever's at it.
+const FOLDER_ACTION = "new_workspace_folder";
+
+function newWorkspaceSheet() {
+  openSheet((body) => {
+    const head = el("div", "sheet-head");
+    head.append(el("h3", "", "New Workspace"));
+    const name = el("input", "name-field");
+    Object.assign(name, { type: "text", placeholder: "Name (optional)", autocapitalize: "off", autocomplete: "off", spellcheck: false, enterKeyHint: "go" });
+    name.setAttribute("autocorrect", "off");
+    const wrap = el("div", "actions");
+    const g = el("div", "action-group");
+    const choices = [];
+    const choice = (ic, label, desc, run) => {
+      const b = el("button", "action");
+      b.append(icon(ic));
+      const t = el("div");
+      t.append(el("div", "", label));
+      const small = el("small", "", desc);
+      t.append(small);
+      b.append(t);
+      b.onclick = async () => {
+        if (choices.some((c) => c.disabled)) return;
+        choices.forEach((c) => { c.disabled = true; });
+        small.textContent = "Creating…";
+        try {
+          const ref = await run(name.value.trim());
+          closeSheet();
+          await refresh();
+          if (ref) { go(ref, null); setSidebar(false); }
+        } catch (e) {
+          toast(e.message, 4000);
+          choices.forEach((c) => { c.disabled = false; });
+          small.textContent = desc;
+        }
+      };
+      choices.push(b);
+      g.append(b);
+      return b;
+    };
+    const folder = choice("folder", "Workspace folder", "A folder of its own, for an agent (⇧⌘I)", async (n) => {
+      const r = await call("action.run", { action: FOLDER_ACTION, args: { name: n, focus: false }, origin: "phone" });
+      return r && r.workspace;
+    });
+    folder.hidden = true;
+    choice("terminal", "Workspace", "A terminal in your home folder", async (n) => {
+      const r = await call("workspace.create", n ? { name: n, focus: false } : { focus: false });
+      return r && r.ref;
+    });
+    // Offered only when init.lua has the action (an older Mac app has no action.list).
+    call("action.list").then((list) => {
+      folder.hidden = !(list || []).some((a) => a.name === FOLDER_ACTION);
+    }).catch(() => {});
+    name.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.isComposing) return;
+      e.preventDefault();
+      choices.find((c) => !c.hidden).click();
+    });
+    const cancel = el("div", "action-group");
+    const c = el("button", "action cancel", "Cancel");
+    c.onclick = closeSheet;
+    cancel.append(c);
+    wrap.append(g, cancel);
+    body.append(head, name, wrap);
+  });
+}
+$("new-ws").onclick = newWorkspaceSheet;
+
 function age(s) {
   if (s < 60) return "now";
   if (s < 3600) return Math.floor(s / 60) + "m";

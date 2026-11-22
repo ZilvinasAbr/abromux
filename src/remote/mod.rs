@@ -488,6 +488,10 @@ pub fn allowed(method: &str, all: bool) -> bool {
         "status.list",
         "link.list",
         "log.list",
+        // init.lua's actions (New Workspace Folder…): a phone can already
+        // type into terminals, which is as much as an action can do.
+        "action.list",
+        "action.run",
     ];
     PREFIXES.iter().any(|p| method.starts_with(p)) || METHODS.contains(&method)
 }
@@ -1028,6 +1032,8 @@ mod tests {
             "surface.stream",
             "events.subscribe",
             "notification.list",
+            "action.list",
+            "action.run",
         ] {
             assert!(allowed(m, false), "{m}");
         }

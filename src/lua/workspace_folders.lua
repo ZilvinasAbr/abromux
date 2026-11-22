@@ -10,6 +10,8 @@
 --   made-up one), makes `<root>/<name>/` with `.abromux/workspace.json`, an
 --   `AGENTS.md` and a `CLAUDE.md` importing it, and opens a workspace there.
 --   Its terminals get `$ABROMUX_WORKSPACE_DIR` and `$COMPOSE_PROJECT_NAME`.
+--   With args.name it doesn't ask (an empty one is made up), as the phone
+--   app's New Workspace runs it; args.focus = false doesn't select it.
 -- * Clean Up and Delete Workspace Folder… (⇧⌘X): moves the workspace to the
 --   Cleanup group and starts an agent on `.abromux/cleanup.md`, which ends
 --   with `abromux folder remove`.
@@ -524,8 +526,12 @@ end
 
 local function new_folder(ctx, args)
   local root = M.root()
-  local name, named = args.name, args.name ~= nil
-  if not name then
+  local name = type(args.name) == "string" and args.name:gsub("%s+", " "):match("^%s*(.-)%s*$") or nil
+  -- An empty name (from the phone app, say) takes a made-up one.
+  local named = name ~= nil and name ~= ""
+  if name == "" then
+    name = M.random_name()
+  elseif not name then
     local suggested = M.random_name()
     local typed = A.ui.input{
       title = "New workspace folder in " .. tildify(root),
@@ -545,6 +551,8 @@ local function new_folder(ctx, args)
     folder = dir,
     -- A made-up name is a stand-in: its agent names it (auto-naming).
     provisional = not named,
+    -- false leaves the Mac's selection alone (the phone app's).
+    focus = args.focus,
     -- Compose stacks started there are the workspace's, for cleanup.
     env = { COMPOSE_PROJECT_NAME = M.tag(dir) },
   }
@@ -708,7 +716,7 @@ function M.setup(o)
     description = "A workspace with a folder of its own, for an agent to work in",
     keywords = "folder agent scoped",
     key = opts.key == nil and "cmd-shift-i" or opts.key or nil,
-    args = { name = "string?" },
+    args = { name = "string?", focus = "boolean?" },
     run = new_folder,
   }
   A.action{

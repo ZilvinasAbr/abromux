@@ -202,6 +202,23 @@ button, .tab, .ws, .group-head { -webkit-user-select: none; user-select: none; -
 }
 .foot-btn:active { background: var(--press); }
 .foot-btn .ic { width: 18px; height: 18px; color: var(--muted); }
+.foot-btn.icon-only { flex: 0 0 44px; padding: 0; justify-content: center; }
+.foot-btn.icon-only .ic { color: var(--accent-bright); }
+.name-field {
+  display: block;
+  width: calc(100% - 32px);
+  margin: 0 16px 12px;
+  height: 44px;
+  padding: 0 14px;
+  border: 0.5px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 17px;
+}
+.name-field::placeholder { color: var(--faint); }
+.action[disabled] { opacity: 0.5; }
 .count { margin-left: auto; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 11px; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; display: grid; place-items: center; }
 .bell-btn { margin-right: 10px; font-size: 15px; }
 .bell-btn.on { color: var(--muted); }
