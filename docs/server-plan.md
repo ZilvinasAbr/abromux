@@ -330,6 +330,12 @@ replica followed a rename live on a VPS's server (`subscribe`).
       silicon crashes Zig. 0.44.0 shipped both, needing glibc 2.34.
 - [x] A web client on the tailnet listener for a phone's browser: the
       terminals, each in xterm.js over a WebSocket streaming it.
+- [x] Tried on a real tailnet (this Mac's own Tailscale node, 1.x): the
+      listener came up on its 100.x and fd7a: addresses; `hello` and the web
+      page answered over the MagicDNS name, with the real `tailscale whois`
+      letting the owner in; the nightly app, with the server added as
+      `tailnet://<name>:7397`, opened a workspace whose shell ran under it.
+      Not yet from a second device (a phone or another machine).
 
 ## Decided along the way
 
