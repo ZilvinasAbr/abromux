@@ -3712,10 +3712,13 @@ fn main() {
     // First, so any panic after it says what and where (crash.rs).
     crash::install();
     // Before any pty: a Finder-launched app may only have 256 files open,
-    // a few dozen tabs' worth (abromux_platform::files). The holder too.
+    // a few dozen tabs' worth (abromux_platform::files). The server too.
     abromux_platform::files::raise_open_files_limit();
-    // Before anything can reach the holder or read a terminal.
-    hold::set_dir(channel::runtime_dir());
+    // Before anything can reach the server or read a terminal. Its socket
+    // is in the state folder (the support folder on macOS), which outlives a
+    // login session on Linux; the holder before it kept `hold.sock` in the
+    // runtime folder.
+    hold::set_dir(channel::state_dir(), channel::runtime_dir());
     pty::on_output(abromux_platform::power::output);
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "bench-vt") {
@@ -3724,13 +3727,10 @@ fn main() {
     if args.first().is_some_and(|a| a == "bench-kitty") {
         std::process::exit(bench::kitty(&args[1..]));
     }
-    // The background process that keeps shells running (`"persistence": "abromux"`, abromux_term::hold).
-    if args.first().is_some_and(|a| a == "hold") {
-        if let Err(e) = hold::serve(&hold::socket_path()) {
-            eprintln!("abromux hold: {e}");
-            std::process::exit(1);
-        }
-        std::process::exit(0);
+    // The background process that keeps shells running (`"persistence":
+    // "abromux"`, abromux_server; `hold` is its old name).
+    if args.first().is_some_and(|a| a == "server" || a == "hold") {
+        std::process::exit(server_command(&args[1..]));
     }
     // Started from a shell of another channel's app (the release starting
     // a nightly, or running its CLI): that app's socket and surface aren't this one's.
@@ -3742,6 +3742,43 @@ fn main() {
         std::process::exit(code);
     }
     run_app(std::env::var("ABROMUX_CWD").ok());
+}
+
+/// `abromux server [--socket PATH] [--stdio]`: serve, or (`--stdio`) bridge
+/// stdin and stdout to this app's server, starting it if needed.
+fn server_command(args: &[String]) -> i32 {
+    let mut socket = None;
+    let mut stdio = false;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--socket" => socket = it.next().map(std::path::PathBuf::from),
+            "--stdio" => stdio = true,
+            _ => {
+                eprintln!("usage: abromux server [--socket PATH] [--stdio]");
+                return 2;
+            }
+        }
+    }
+    let socket = socket.unwrap_or_else(hold::socket_path);
+    let res = if stdio {
+        let exe = std::env::current_exe().unwrap_or_else(|_| "abromux".into());
+        let args: Vec<std::ffi::OsString> =
+            vec!["server".into(), "--socket".into(), socket.clone().into()];
+        abromux_server::connect_or_start(&socket, &exe, &args).and_then(abromux_server::stdio)
+    } else {
+        let opts = abromux_server::Options {
+            version: env!("ABROMUX_VERSION").into(),
+        };
+        abromux_server::serve(&socket, &opts)
+    };
+    match res {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("abromux server: {e}");
+            1
+        }
+    }
 }
 
 fn run_app(cwd: Option<String>) {

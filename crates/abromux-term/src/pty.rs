@@ -297,9 +297,7 @@ pub fn open(
     if let Some(id) = attach {
         match crate::hold::Held::attach(id) {
             Ok(mut held) => {
-                let path = crate::hold::snapshot_path(id);
-                let snapshot = std::fs::read(&path).ok();
-                let _ = std::fs::remove_file(path);
+                let snapshot = crate::hold::take_snapshot(id);
                 let backlog = std::mem::take(&mut held.backlog);
                 if let Some(pty) = held_pty(held, feed) {
                     return Ok(Opened {

@@ -1,0 +1,17 @@
+[package]
+name = "abromux-server"
+version = "0.1.0"
+edition = "2024"
+description = "The abromux server: keeps terminals running, for the app on this machine or another (docs/server-plan.md). No UI, no libghostty: builds headless."
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "abromux-server"
+path = "src/main.rs"
+
+[dependencies]
+abromux-core = { path = "../abromux-core" }
+libc = "0.2"
+portable-pty = "0.9"
+serde_json = { version = "1", features = ["preserve_order"] }

@@ -11,6 +11,7 @@ dependencies = [
  "abromux-gitlab",
  "abromux-platform",
  "abromux-plugin",
+ "abromux-server",
  "abromux-term",
  "aes-gcm",
  "anyhow",
@@ -109,10 +110,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "abromux-server"
+version = "0.1.0"
+dependencies = [
+ "abromux-core",
+ "libc",
+ "portable-pty",
+ "serde_json",
+]
+
+[[package]]
 name = "abromux-term"
 version = "0.1.0"
 dependencies = [
  "abromux-core",
+ "abromux-server",
  "anyhow",
  "bindgen 0.72.1",
  "futures",
