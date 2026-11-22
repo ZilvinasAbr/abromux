@@ -298,6 +298,11 @@ Two things left at first, both done since:
       client's change to the same workspace (within ~50 ms) is dropped, as
       in any optimistic editor.
 
+- [x] Costs: on the control socket, against `main` (98bac30), each
+      action costs the same within 0.1 ms (new tab 4.30 vs 4.34 ms, split
+      4.12 vs 4.05, new workspace 4.02 vs 4.07, select 0.06 both), and the
+      CLI as a process the same (9.96 vs 10.00 ms for `abromux ping`).
+
 What stays in the app is what only it can do: making the views a model
 describes, and the view methods (browser automation, input, focus,
 prompts).
