@@ -339,7 +339,8 @@ pub const METHODS: &[Method] = &[
         "surface.send_text",
         "send",
         "Type text into a terminal. \\n presses Return; also \\t, \\e and \\\\.",
-        "@surface;text:string What to type;raw?:boolean Exactly these characters, no backslash escapes",
+        "@surface;text:string What to type;raw?:boolean Exactly these characters, no backslash escapes;\
+         submit?:boolean As one message to an agent: pasted, then Return",
     ),
     m(
         "remote.status",

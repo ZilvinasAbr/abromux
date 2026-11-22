@@ -69,3 +69,10 @@ textarea { font-size: 16px; line-height: 1.4; padding: 7px 2px; max-height: 30vh
 .slash { left: 10px; right: 10px; max-height: 45vh; }
 .slash-row { padding: 10px; font-size: 15px; }
 .slash-row small { white-space: nowrap; }
+
+/* A terminal's Claude Code session: model, mode and rewinding are the
+   terminal's to change; room at the top for the Chat/Terminal switch. */
+:root[data-terminal] #model,
+:root[data-terminal] #mode,
+:root[data-terminal] .act[title^="Rewind"] { display: none; }
+:root[data-terminal] .thread { padding-top: 48px; }

@@ -20,7 +20,7 @@ use std::{
     fmt::Write as _,
     sync::{
         Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
 };
@@ -73,6 +73,20 @@ pub fn open(term: u64) -> u64 {
         t.pending.insert(t.next, rx);
         t.next
     })
+}
+
+/// A key for a stream no view owns: a terminal's Claude Code session
+/// followed from its transcript (`claude_chat::follow`), one per
+/// subscriber. Far above any view's entity id.
+pub fn private_key() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1 << 62);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Someone still follows `key`: its subscriber hasn't hung up or fallen
+/// behind (noticed on the next push).
+pub fn tapped(key: u64) -> bool {
+    with(|t| t.by_term.contains_key(&key))
 }
 
 /// The receiver `open` made under `token`.
