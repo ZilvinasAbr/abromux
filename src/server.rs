@@ -866,6 +866,12 @@ impl AbroMux {
                 ) {
                     t.update(cx, |t, _| t.send(format!("{cmd}\r").as_bytes()));
                 }
+                // On another machine: in its server's group (it may move).
+                let id = self.workspaces[wi].id;
+                if str_param(p, "group").is_none() {
+                    self.join_server_group(wi, cx);
+                }
+                let wi = self.ws_index(id).unwrap_or(wi);
                 self.describe_ws(wi, false, cx)
             }
             "workspace.select" => {

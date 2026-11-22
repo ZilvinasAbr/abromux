@@ -452,6 +452,35 @@ impl AbroMux {
         made
     }
 
+    /// A new workspace on another machine joins its server's group (one
+    /// with a workspace of that server in it, else a new one named after
+    /// it), unless it's in a group already: the sidebar groups by host.
+    pub(crate) fn join_server_group(&mut self, wi: usize, cx: &mut Context<Self>) {
+        let Some(host) = self.workspaces.get(wi).and_then(|w| w.host.clone()) else {
+            return;
+        };
+        if self.workspaces[wi].group.is_some() {
+            return;
+        }
+        let group = self
+            .workspaces
+            .iter()
+            .filter(|w| w.host.as_deref() == Some(host.as_str()))
+            .find_map(|w| w.group)
+            .unwrap_or_else(|| {
+                self.next_group += 1;
+                self.groups.push(Group {
+                    id: self.next_group,
+                    name: crate::servers::label(&host),
+                    color: None,
+                    collapsed: false,
+                    cleanup: false,
+                });
+                self.next_group
+            });
+        self.set_group(wi, Some(group), cx);
+    }
+
     /// Group the workspaces on other machines that aren't in a group yet,
     /// one group per server, named after it. Returns how many it made.
     pub(crate) fn group_by_server(&mut self, cx: &mut Context<Self>) -> usize {

@@ -56,6 +56,9 @@ pub struct State {
     pub workspaces: Vec<Value>,
     /// The app's session as it last saved it (layouts, held ids, hosts).
     pub session: Value,
+    /// When the app last sent it (ms since the epoch): at launch, the app
+    /// starts from this one if it's newer than its own file.
+    pub session_at: u64,
     /// Calls kept for the app: `{"method","params","at"}`.
     pub kept: Vec<Value>,
     /// The replica of the app's model (abromux_model), from the events it
@@ -74,6 +77,7 @@ impl State {
         if let Ok(v) = std::fs::read(&path).and_then(|b| Ok(serde_json::from_slice::<Value>(&b)?)) {
             s.workspaces = v["workspaces"].as_array().cloned().unwrap_or_default();
             s.session = v["session"].clone();
+            s.session_at = v["session_at"].as_u64().unwrap_or(0);
             s.kept = v["kept"].as_array().cloned().unwrap_or_default();
             s.model = serde_json::from_value(v["model"].clone()).unwrap_or_default();
         }
@@ -82,7 +86,13 @@ impl State {
 
     pub fn save(&self) {
         let Some(path) = &self.path else { return };
-        let v = json!({ "workspaces": self.workspaces, "session": self.session, "kept": self.kept, "model": self.model });
+        let v = json!({
+            "workspaces": self.workspaces,
+            "session": self.session,
+            "session_at": self.session_at,
+            "kept": self.kept,
+            "model": self.model,
+        });
         let tmp = path.with_extension("tmp");
         if std::fs::write(&tmp, v.to_string()).is_ok() {
             use std::os::unix::fs::PermissionsExt;
@@ -122,6 +132,9 @@ impl State {
                 list.extend(orphans);
             }
             self.session = session;
+            self.session_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as u64);
         }
         self.save();
     }

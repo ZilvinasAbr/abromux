@@ -744,15 +744,26 @@ impl AbroMux {
         self.workspaces
             .iter()
             .enumerate()
-            .map(|(i, ws)| Entry {
-                keywords: vec![],
-                title: ws.name(cx).into(),
-                subtitle: ws.cwd(cx).map(|c| tilde(&c).into()),
-                keys: shortcut_digit(i, n)
-                    .map(|d| crate::keymap::default_label(&format!("workspace{d}")).into()),
-                target: Target::Workspace(ws.id),
-                icon: Some(("folder", None)),
-                current: i == self.active,
+            .map(|(i, ws)| {
+                // A workspace on another machine says which, and is found
+                // by its server's name too.
+                let server = ws.host.as_deref().map(crate::servers::label);
+                let cwd = ws.cwd(cx).map(|c| tilde(&c));
+                let subtitle = match (&server, cwd) {
+                    (Some(s), Some(c)) => Some(format!("on {s} · {c}")),
+                    (Some(s), None) => Some(format!("on {s}")),
+                    (None, c) => c,
+                };
+                Entry {
+                    keywords: server.into_iter().chain(ws.host.clone()).collect(),
+                    title: ws.name(cx).into(),
+                    subtitle: subtitle.map(Into::into),
+                    keys: shortcut_digit(i, n)
+                        .map(|d| crate::keymap::default_label(&format!("workspace{d}")).into()),
+                    target: Target::Workspace(ws.id),
+                    icon: Some((if ws.host.is_some() { "globe" } else { "folder" }, None)),
+                    current: i == self.active,
+                }
             })
             .collect()
     }

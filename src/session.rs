@@ -39,17 +39,46 @@ pub fn path() -> Option<PathBuf> {
 
 pub fn load() -> Option<Session> {
     let path = path()?;
-    if !path.exists() {
-        return None;
-    }
-    match read(&path) {
-        Ok(s) if !s.workspaces.is_empty() => Some(s),
-        Ok(_) => None,
-        Err(e) => {
-            eprintln!("abromux: ignoring unreadable session: {e}");
-            None
+    let local = if path.exists() {
+        match read(&path) {
+            Ok(s) if !s.workspaces.is_empty() => Some(s),
+            Ok(_) => None,
+            Err(e) => {
+                eprintln!("abromux: ignoring unreadable session: {e}");
+                None
+            }
         }
+    } else {
+        None
+    };
+    // The server keeps the session the app last sent it (abromux_server::
+    // control): the app starts from that snapshot when it's newer than its
+    // own file, or the file is gone (docs/server-plan.md, phase 2).
+    let local_at = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis() as u64);
+    match server_session() {
+        Some((s, at)) if local.is_none() || at > local_at + 2000 => {
+            eprintln!(
+                "abromux: starting from the server's session (newer than {})",
+                path.display()
+            );
+            Some(s)
+        }
+        _ => local,
     }
+}
+
+/// The session this machine's server keeps, and when the app sent it: read
+/// from its saved state, so it's there before the server is (a reboot).
+fn server_session() -> Option<(Session, u64)> {
+    let state = abromux_server::control::state_path(&abromux_term::hold::socket_path());
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(state).ok()?).ok()?;
+    let at = v["session_at"].as_u64()?;
+    let s: Session = serde_json::from_value(v["session"].clone()).ok()?;
+    (s.version == VERSION && !s.workspaces.is_empty()).then_some((s, at))
 }
 
 /// A session file, or why it couldn't be read. cmux's session files are

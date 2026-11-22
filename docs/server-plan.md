@@ -198,18 +198,23 @@ for a program to be reaped.
       refused (`app_closed`). One app at a time; a server without a control
       socket leaves the app binding it itself.
 - [x] The server saves its state, the replica and the app's session
-      (`server-state.json`); a lost workspace is opened again from it
-      (phase 3).
+      (`server-state.json`). The app bootstraps from that snapshot at
+      launch when it's newer than its own session file or the file is gone
+      (checked: deleting `session.json` and relaunching brought every
+      workspace back from the server, terminals and all); a lost workspace
+      is opened again from a remote server too (phase 3).
 - [x] Server-side folders (`abromux_server::folder`, the same files and
       rules as the app's Lua module): `abromux-server folder new|add|list|
       all|path|remove`, and `abromux new-workspace --host H --folder NAME`
       makes the folder on H and puts the workspace's terminals in it.
 
-As built, the app stays the source of the model while it runs (its GPUI
-views draw from its own state, not from a replica of the server's): moving
-the handlers themselves into the server would rewrite ~140 of them, with perf
-risk at each, for no change anyone sees. The server is the source while the
-app is away, and for every other client.
+Who is the source: the server, for every client and for the app at launch
+(it bootstraps from the server's snapshot when that's newer). While the app
+runs, it changes the model and the server follows its events: the app's GPUI
+views hold the live state (terminals, browsers), so the ~140 handlers that
+change it stay in the app, which is what keeps every change as fast as
+before. The server's replica is what everyone else, and the app's next
+launch, starts from.
 
 **Done when:** quitting the app leaves every workspace's state (status pills,
 progress, notifications, agents' state) live in the server, and the app picks
@@ -229,8 +234,11 @@ replica followed a rename live on a VPS's server (`subscribe`).
 - [x] A control link to every host with something of the app's on it
       (`control_link`, over ssh `ControlMaster`), reconnecting with backoff;
       a host's workspaces fade while it's away.
-- [x] Group Workspaces by Server; ⌘P lists every host's workspaces (they're
-      the app's).
+- [x] The sidebar groups by host: a new workspace on a server joins that
+      server's group (made, named after it, if there's none), unless it's
+      put in another; ⌘⇧P Group Workspaces by Server (`group by-server`)
+      for older ones. ⌘P lists every host's workspaces, says which server
+      each is on, and finds them by the server's name or address.
 - [x] `abromux --server NAME …`; agents' hooks on a host reach the app
       through that host's control socket (remote shells get
       `ABROMUX_SOCKET_PATH`, `ABROMUX_BIN`, `ABROMUX_SURFACE_ID`). On a
@@ -273,14 +281,17 @@ replica followed a rename live on a VPS's server (`subscribe`).
 - [x] A web client on the tailnet listener for a phone's browser: the
       terminals, each in xterm.js over a WebSocket streaming it.
 
-## Open questions
+## Decided along the way
 
-- Remote terminals use `TERM=xterm-256color`; installing the `xterm-ghostty`
-  terminfo on the host would be better.
-- Commands that need the app's views (`browser ...`, `new-split`, ...) run
-  from a remote shell only through `abromux-server call <method>`: the full
-  CLI is the app's binary, which needs a desktop.
-- The phone app of the Mac's phone access and the server's web client are
-  separate pages; one page for both would be better.
-- Multi-user servers (Rex's login server) are out of scope: one server per
-  user account.
+- **TERM on hosts:** `xterm-256color`, the same as local terminals (the
+  app's shells use it too); nothing to install on a host.
+- **The `abromux` CLI on a host without the app:** `abromux-server` takes
+  what agents and scripts use there (hooks, `notify`, `set-status`,
+  `set-progress`, `log`, `list-workspaces`, `folder`, `ping`), and `call
+  <method> [json]` for any other method; the full CLI is the app's binary,
+  which needs a desktop.
+- **The phone:** the Mac's phone access (main's) and the server's web client
+  serve different machines; the web client is for a host without a Mac in
+  front of it. They share the HTTP and WebSocket code.
+- **Multi-user servers** (Rex's login server): out of scope; one server per
+  user account, which is what ssh and Tailscale identity give.

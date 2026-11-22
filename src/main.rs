@@ -1813,6 +1813,7 @@ impl AbroMux {
             let wi = self.create_workspace(None, true, window, cx);
             self.building_host = None;
             self.workspaces[wi].host = Some(host);
+            self.join_server_group(wi, cx);
         }
         cx.notify();
     }
