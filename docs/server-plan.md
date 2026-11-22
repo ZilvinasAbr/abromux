@@ -239,6 +239,21 @@ for a program to be reaped.
       wakes the `/home` automounter; the sidebar did the same every 3 s.
       Folders on another machine are no longer looked up here.)
 
+- [x] **Other clients change the model; the app's views follow.** Any
+      client sends `{"op":"change","events":[..]}` (events against the model
+      it has, `abromux_model::diff`): the server stamps and applies them,
+      publishes them and answers with the new `seq`, and the app
+      (`follow_model`) makes its views match what another client changed:
+      workspaces come, go, move and are renamed; terminal tabs open
+      (attached to the server's terminal when the event names one) and
+      close; the selection moves. A workspace keeps the id the client gave
+      it when it's free. Browser and plugin tabs only the app makes. Views
+      need the app, so with no app attached a change is refused
+      (`app_closed`).
+- [x] The app's proposals are throttled while it keeps redrawing: the first
+      change after a quiet spell within 50 ms, then at most every 250 ms;
+      building the model uses the sidebar's cached git-branch lookup.
+
 What stays in the app is only what needs its views: making them, and the
 view methods (browser automation, input, focus, prompts).
 
@@ -309,8 +324,18 @@ replica followed a rename live on a VPS's server (`subscribe`).
 - [x] `abromux-server install [--tailnet ..]`: a systemd user unit;
       `loginctl enable-linger` reminder.
 - [x] `scripts/package-server.sh` (tarball, `.deb`), AUR `abromux-server`.
+      `--target x86_64-unknown-linux-gnu` (with `GHOSTTY_TARGET` for
+      `scripts/build-libghostty.sh`) cross-compiles, so one arm64 Linux box
+      (or container) builds both: Docker's x86_64 emulation on Apple
+      silicon crashes Zig. 0.44.0 shipped both, needing glibc 2.34.
 - [x] A web client on the tailnet listener for a phone's browser: the
       terminals, each in xterm.js over a WebSocket streaming it.
+- [x] Tried on a real tailnet (this Mac's own Tailscale node, 1.x): the
+      listener came up on its 100.x and fd7a: addresses; `hello` and the web
+      page answered over the MagicDNS name, with the real `tailscale whois`
+      letting the owner in; the nightly app, with the server added as
+      `tailnet://<name>:7397`, opened a workspace whose shell ran under it.
+      Not yet from a second device (a phone or another machine).
 
 ## Decided along the way
 

@@ -319,8 +319,10 @@ struct AbroMux {
     next_surface: usize,
     /// Stable `surface:N` numbers handed out to the control socket.
     surface_refs: HashMap<EntityId, usize>,
-    /// A proposal to the servers is on its way (`propose_soon`).
+    /// A proposal to the servers is on its way (`propose_soon`), and when
+    /// the last one went.
     proposing: bool,
+    proposed_at: Instant,
     /// Forwarded ports, by workspace id (crate::forward): closed with it.
     forwards: HashMap<usize, Vec<forward::Forward>>,
     /// How closed terminals' programs exited, by surface number (`abromux
@@ -424,6 +426,7 @@ impl AbroMux {
             surface_refs: Default::default(),
             forwards: Default::default(),
             proposing: false,
+            proposed_at: Instant::now(),
             exits: Default::default(),
             events: Default::default(),
             socket: None,
@@ -701,10 +704,16 @@ impl AbroMux {
             return;
         }
         self.proposing = true;
+        // The first change after a quiet spell goes out within 50 ms; while
+        // things keep redrawing (output, animation), at most every 250 ms.
+        let wait = Duration::from_millis(250)
+            .saturating_sub(self.proposed_at.elapsed())
+            .max(Duration::from_millis(50));
         cx.spawn(async move |this, cx| {
-            Timer::after(Duration::from_millis(50)).await;
+            Timer::after(wait).await;
             let _ = this.update(cx, |this, cx| {
                 this.proposing = false;
+                this.proposed_at = Instant::now();
                 let model = this.model(cx);
                 if let Some(link) = control_link::current() {
                     link.push_model(model.clone());
@@ -714,7 +723,10 @@ impl AbroMux {
                         let mut m = model.clone();
                         m.workspaces.retain(|w| {
                             w.host.as_deref() == Some(h.as_str())
-                                || w.layout.tabs().iter().any(|t| t.host.as_deref() == Some(h.as_str()))
+                                || w.layout
+                                    .tabs()
+                                    .iter()
+                                    .any(|t| t.host.as_deref() == Some(h.as_str()))
                         });
                         link.push_model(m);
                     }

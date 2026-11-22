@@ -1019,6 +1019,39 @@ impl Server {
                 c.reply(json!({ "ok": true, "model": self.state.model }));
                 self.flush(cid);
             }
+            // Another client changes the model (events against the model it
+            // has, abromux_model::diff): the server stamps and applies them,
+            // tells every subscriber, and has the app's views follow. The
+            // app makes views, so it has to be there.
+            Some("change") => {
+                let Some(app) = self.app else {
+                    let c = self.clients.get_mut(&cid).unwrap();
+                    c.reply(json!({ "ok": false, "error": "the abromux app isn't running", "code": "app_closed" }));
+                    return self.flush(cid);
+                };
+                let events: Vec<abromux_model::Event> =
+                    match serde_json::from_value(req["events"].clone()) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            fail(c, format!("change: {e}"));
+                            return self.flush(cid);
+                        }
+                    };
+                let stamped = abromux_model::stamp(self.state.model.seq, events);
+                if let Err(e) = self.state.apply_events(&stamped) {
+                    let c = self.clients.get_mut(&cid).unwrap();
+                    fail(c, format!("change: {e:?}"));
+                    return self.flush(cid);
+                }
+                self.publish(&stamped);
+                if let Some(a) = self.clients.get_mut(&app) {
+                    a.reply(json!({ "applied": stamped, "from": "client" }));
+                }
+                self.flush(app);
+                let c = self.clients.get_mut(&cid).unwrap();
+                c.reply(json!({ "ok": true, "seq": self.state.model.seq }));
+                self.flush(cid);
+            }
             // The model, then each event after it, as they come.
             Some("subscribe") => {
                 c.reply(json!({ "ok": true, "model": self.state.model }));

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Builds libghostty-vt (static) into vendor/ghostty-vt-out using a local Zig.
+# GHOSTTY_TARGET=x86_64-linux-gnu builds it for another machine (Zig
+# cross-compiles; scripts/package-server.sh --target).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 GHOSTTY_REV=${GHOSTTY_REV:-vt-1.0.0}
@@ -24,5 +26,7 @@ fi
 git -C vendor/ghostty rev-parse -q --verify "$GHOSTTY_REV^{commit}" >/dev/null ||
   git -C vendor/ghostty fetch -q --tags origin
 git -C vendor/ghostty checkout -q "$GHOSTTY_REV"
-(cd vendor/ghostty && ../zig/zig build -Demit-lib-vt -Doptimize=ReleaseFast -Demit-xcframework=false --prefix ../ghostty-vt-out)
+target=()
+[ -n "${GHOSTTY_TARGET:-}" ] && target=("-Dtarget=$GHOSTTY_TARGET")
+(cd vendor/ghostty && ../zig/zig build -Demit-lib-vt -Doptimize=ReleaseFast -Demit-xcframework=false "${target[@]}" --prefix ../ghostty-vt-out)
 ls -la vendor/ghostty-vt-out/lib/libghostty-vt.a
