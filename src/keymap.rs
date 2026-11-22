@@ -148,6 +148,7 @@ pub const ACTIONS: &[Act] = {
             PersistenceCmuxLike, [(None, [])];
         "openSettings", Some("Settings…"), OpenSettings, [(None, ["cmd-,"])];
         "openConfig", Some("Open Config File"), OpenConfig, [(None, [])];
+        "openInitLua", Some("Open init.lua"), OpenInitLua, [(None, [])];
         "copy", Some("Copy"), terminal::Copy, [(T, ["cmd-c"])];
         "paste", Some("Paste"), terminal::Paste, [(T, ["cmd-v"])];
         "find", Some("Find…"), terminal::Find, [(T, ["cmd-f"]), (B, ["cmd-f"]), (BI, ["cmd-f"])];

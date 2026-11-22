@@ -705,6 +705,8 @@ abromux do greet.lua --args '{"name": "true"}'   # arguments as JSON (or --args 
 
 `~/.config/abromux/init.lua` (next to `config.json`) defines actions: each one is a command in the palette, gets a shortcut with `key`, and runs from the CLI with `abromux do <name>`.
 
+⌘⇧P → Open init.lua (also in the AbroMux menu) opens it in your editor (General › Editor: nvim or tode) in a pane to the right, first making one with a commented-out starter if there's none. Give it a shortcut with `openInitLua` in `shortcuts`.
+
 ```lua
 abromux.action{
   name  = "new_branch",                -- lowercase letters, digits and _
