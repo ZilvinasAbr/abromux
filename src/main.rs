@@ -5,7 +5,7 @@ mod bench;
 mod browser;
 mod channel;
 mod claude_chat;
-mod cli;
+mod cli_app;
 mod config;
 mod control_link;
 mod crash;
@@ -41,7 +41,6 @@ mod settings_window;
 mod shell;
 mod sidebar;
 mod size_owner;
-mod skills;
 mod sprite;
 mod status;
 mod stream;
@@ -3952,9 +3951,9 @@ fn main() {
     // a nightly, or running its CLI): that app's socket and surface aren't this one's.
     ipc::forget_foreign_env();
     if !args.is_empty() {
-        std::process::exit(cli::run(args));
+        std::process::exit(cli_app::run(args));
     }
-    if let Some(code) = cli::launch() {
+    if let Some(code) = cli_app::launch() {
         std::process::exit(code);
     }
     run_app(std::env::var("ABROMUX_CWD").ok());

@@ -192,7 +192,7 @@ pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> 
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let tx = tx.clone();
-            std::thread::spawn(move || serve(stream, tx));
+            std::thread::spawn(move || serve(stream, tx, None));
         }
     });
     serve_requests(rx, window, cx);
@@ -245,7 +245,15 @@ fn serve_requests(
     .detach();
 }
 
-pub(crate) fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
+/// `origin`: the server on another machine the connection came through
+/// (its link): a command run there means that machine, so a new workspace
+/// with no host of its own opens there (`abromux new-workspace` or
+/// `abromux open <dir>` on a VPS makes a workspace on the VPS).
+pub(crate) fn serve(
+    stream: UnixStream,
+    tx: mpsc::UnboundedSender<Request>,
+    origin: Option<String>,
+) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
@@ -292,7 +300,16 @@ pub(crate) fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
                 }
                 return;
             }
-            Ok(req) => {
+            Ok(mut req) => {
+                if let Some(o) = &origin
+                    && req["method"] == "workspace.create"
+                    && req["params"].get("host").is_none_or(Value::is_null)
+                {
+                    if !req["params"].is_object() {
+                        req["params"] = json!({});
+                    }
+                    req["params"]["host"] = json!(o);
+                }
                 let (reply_tx, reply_rx) = oneshot::channel();
                 // A question waits on a person, as long as it takes: notice
                 // the asker going away meanwhile, to take it down.
@@ -1065,10 +1082,22 @@ impl AbroMux {
             // closes views): the app's handler does it, and the server gets
             // the result with the model change, to commit before answering.
             "model.exec" => {
-                let link = crate::control_link::by_name(str_param(p, "link").unwrap_or("local"));
-                let exec = p["exec"].clone();
+                let link_name = str_param(p, "link").unwrap_or("local").to_string();
+                let link = crate::control_link::by_name(&link_name);
+                let mut exec = p["exec"].clone();
                 let method = exec["method"].as_str().unwrap_or_default().to_string();
                 let token = exec["token"].clone();
+                // Asked on another machine's server: a new workspace with no
+                // host of its own opens there (as `serve`'s `origin`).
+                if link_name != "local"
+                    && method == "workspace.create"
+                    && exec["params"].get("host").is_none_or(Value::is_null)
+                {
+                    if !exec["params"].is_object() {
+                        exec["params"] = json!({});
+                    }
+                    exec["params"]["host"] = json!(link_name);
+                }
                 let error = |e: &anyhow::Error| format!("{e:#}");
                 match self.handle(&method, &exec["params"], gone, window, cx) {
                     Ok(Reply::Now(v)) => {
@@ -4732,7 +4761,7 @@ mod tests {
     fn hangup_waits_for_the_caller_to_close() {
         let (app_end, caller) = UnixStream::pair().unwrap();
         let (tx, mut rx) = mpsc::unbounded();
-        let served = std::thread::spawn(move || serve(app_end, tx));
+        let served = std::thread::spawn(move || serve(app_end, tx, None));
         let mut w = caller.try_clone().unwrap();
         w.write_all(b"{\"id\":1,\"method\":\"system.ping\"}\n")
             .unwrap();

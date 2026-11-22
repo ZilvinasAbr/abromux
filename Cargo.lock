@@ -7,6 +7,7 @@ name = "abromux"
 version = "0.44.0"
 dependencies = [
  "abromux-browser",
+ "abromux-cli",
  "abromux-core",
  "abromux-gitlab",
  "abromux-model",
@@ -49,6 +50,17 @@ dependencies = [
  "http",
  "lb-wry",
  "objc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "abromux-cli"
+version = "0.1.0"
+dependencies = [
+ "abromux-core",
+ "anyhow",
+ "libc",
  "serde",
  "serde_json",
 ]
@@ -122,6 +134,7 @@ dependencies = [
 name = "abromux-server"
 version = "0.1.0"
 dependencies = [
+ "abromux-cli",
  "abromux-core",
  "abromux-model",
  "abromux-vt",

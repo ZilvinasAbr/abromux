@@ -7,22 +7,10 @@ use serde_json::Value;
 use std::{
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicI32, Ordering},
 };
 
-/// The CLI's exit status when a command fails (see `cli::EXIT_STATUS`):
-/// set by a call that failed in a way that has its own status.
-static FAILED_WITH: AtomicI32 = AtomicI32::new(1);
-
-/// The exit status for the failure so far: 3 for a target that wasn't
-/// found or was ambiguous, 4 when abromux isn't running, else 1.
-pub fn failure_status() -> i32 {
-    FAILED_WITH.load(Ordering::Relaxed)
-}
-
-pub fn set_failure_status(status: i32) {
-    FAILED_WITH.store(status, Ordering::Relaxed);
-}
+/// The CLI's exit status for a failed call: one, shared with abromux_cli.
+pub use abromux_cli::ipc::set_failure_status;
 
 /// `$ABROMUX_SOCKET_PATH`, else `abromux.sock` in the runtime folder:
 /// `~/Library/Application Support/abromux/` on macOS,

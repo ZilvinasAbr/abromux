@@ -315,6 +315,7 @@ replica followed a rename live on a VPS's server (`subscribe`).
       through that host's control socket (remote shells get
       `ABROMUX_SOCKET_PATH`, `ABROMUX_BIN`, `ABROMUX_SURFACE_ID`). On a
       host without the app, `abromux-server` is the `abromux` they call
+      (the whole CLI, below)
       (`hooks install`, `notify`, `set-status`, ..., `call`).
 - [x] The remote server keeps the app's workspaces there (also ones the app
       lost, while their terminals run): ⌘⇧P Open Workspaces from <server>.
@@ -372,11 +373,30 @@ replica followed a rename live on a VPS's server (`subscribe`).
 
 - **TERM on hosts:** `xterm-256color`, the same as local terminals (the
   app's shells use it too); nothing to install on a host.
-- **The `abromux` CLI on a host without the app:** `abromux-server` takes
-  what agents and scripts use there (hooks, `notify`, `set-status`,
-  `set-progress`, `log`, `list-workspaces`, `folder`, `ping`), and `call
-  <method> [json]` for any other method; the full CLI is the app's binary,
-  which needs a desktop.
+- **The `abromux` CLI on a host without the app: the whole of it.** The CLI
+  is its own crate (`crates/abromux-cli`), which the app and
+  `abromux-server` both run; the binary adds a `Host` (its control socket,
+  and commands of its own). On a host, `abromux` (`abromux-server` linked
+  as it) talks to the server's control socket. The server answers the
+  model's methods and passes the rest to the app over its link, so
+  `new-split`, `send`, `read-screen`, `browser open`, `tree` and the rest
+  work as they do on the Mac, and act on the app's windows wherever it is.
+  A command run there means that machine: a new workspace with no host
+  opens on it (`serve`'s `origin`, and the same for an `exec`).
+  - What needs the app on the same machine says so instead of being
+    unknown: `edit`, `config`, `markdown`, `do` (Lua), `remote`,
+    `default-app`, local `diff`.
+  - The server's own commands: `folder`, `install`, `serve`, `--stdio`.
+    `call <method> [json]` stays as `rpc`.
+  - What that took: dialing a server (`Endpoint`, ssh, the tailnet) moved
+    from abromux-term to `abromux_core::dial`, which the CLI's `--server`
+    and `--host --folder` use; the method table (`api`), `servers` and
+    `skills` moved into the CLI crate; `is_model_method` and the folder
+    `slug` moved to abromux-core.
+  - Checked on the Docker VPS against the nightly: `version`, `ping`,
+    `identify`, `list-workspaces`, `tree`, `new-split`, `new-workspace`
+    (its shell on the VPS), `browser open`, `notify`, `set-status`,
+    `log`, `folder`, `call`, `rpc`; `edit` said it needs the app.
 - **The phone:** the Mac's phone access (main's) and the server's web client
   serve different machines; the web client is for a host without a Mac in
   front of it. They share the HTTP and WebSocket code.
