@@ -173,13 +173,13 @@ impl SettingsView {
             }),
             // A reload (⌘⇧,) or a change made here.
             cx.observe_global_in::<Settings>(window, |this, _, cx| {
-                this.error = settings::load().err();
+                this.error = settings::app_error();
                 cx.notify();
             }),
             // Back from editing the file by hand.
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
-                    this.error = settings::load().err();
+                    this.error = settings::app_error();
                 } else {
                     this.stop_recording(cx);
                 }
@@ -196,7 +196,7 @@ impl SettingsView {
             search,
             scroll: ScrollHandle::new(),
             page: 0,
-            error: settings::load().err(),
+            error: settings::app_error(),
             recording: None,
             needs_modifier: false,
             text_fields,
@@ -261,7 +261,12 @@ fn restore_keymap(cx: &mut App) {
 /// result, or say why it wasn't saved.
 fn save(key: &[&str], value: Option<Value>, window: &mut Window, cx: &mut App) {
     match settings::edit(key, value) {
-        Ok(s) => apply(s, cx),
+        Ok(mut s) => {
+            // init.lua's actions, as the last load had them.
+            s.commands
+                .extend(settings::lua_commands(&crate::lua::init_path()).unwrap_or_default());
+            apply(s, cx)
+        }
         Err(e) => window.push_notification(
             Notification::error(e)
                 .id::<SettingsView>()
@@ -399,6 +404,18 @@ fn row<T: PartialEq + 'static>(
     }
 }
 
+/// Where the workspace folders script (`abromux.workspace_folders`) puts
+/// them: `$ABROMUX_WORKSPACES_DIR`, else `app.workspaceFoldersDirectory`,
+/// else the channel's `~/.abromux/ws`. The script reads them the same way.
+fn workspaces_dir(s: &Settings) -> std::path::PathBuf {
+    std::env::var("ABROMUX_WORKSPACES_DIR")
+        .ok()
+        .or_else(|| s.app.workspace_folders_directory.clone())
+        .filter(|d| !d.trim().is_empty())
+        .map(|d| crate::paths::expand_tilde(d.trim()))
+        .unwrap_or_else(crate::channel::workspaces_dir)
+}
+
 /// A folder setting: the folder it comes to, and Choose… for the Finder's
 /// folder picker. The reset arrow goes back to the default.
 fn folder_row(title: &'static str, description: impl Into<SharedString>, key: Key) -> Row {
@@ -408,7 +425,7 @@ fn folder_row(title: &'static str, description: impl Into<SharedString>, key: Ke
         key,
         |s| s.app.workspace_folders_directory.clone(),
         move |_, _, _, cx| {
-            let shown = crate::folder::root(cx.global::<Settings>());
+            let shown = workspaces_dir(cx.global::<Settings>());
             div()
                 .flex()
                 .items_center()
@@ -820,10 +837,8 @@ fn general_page() -> Page {
                     ),
                     folder_row(
                         "Workspace folders",
-                        format!(
-                            "Where {} makes a workspace's own folder.",
-                            crate::keymap::default_label("newFolderWorkspace")
-                        ),
+                        "Where New Workspace Folder… (the workspace folders script in \
+                         init.lua) makes a workspace's own folder.",
                         &["app", "workspaceFoldersDirectory"],
                     ),
                 ],

@@ -111,6 +111,7 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
         color: str_of(ws, "customColor").and_then(crate::color::parse_rgb),
         group: None,
         home: None,
+        env: Default::default(),
         links: vec![],
         hidden_links: vec![],
         pinned: vec![],

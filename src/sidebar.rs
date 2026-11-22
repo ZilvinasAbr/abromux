@@ -627,7 +627,6 @@ impl AbroMux {
         let ws = &app.workspaces[index];
         let (color, group, described) = (ws.color, ws.group, ws.description.is_some());
         let unread = app.ws_unread(ws);
-        let has_folder = ws.home.is_some();
         let n = app.workspaces.len();
         let groups: Vec<(usize, String)> =
             app.groups.iter().map(|g| (g.id, g.name.clone())).collect();
@@ -757,12 +756,6 @@ impl AbroMux {
                 .on_click(act(|t, i, _, cx| t.workspace_to_bottom(i, cx))),
         )
         .separator()
-        .when(has_folder, |m| {
-            m.item(
-                PopupMenuItem::new("Clean Up and Delete Folder…")
-                    .on_click(act(|t, i, w, cx| t.clean_up_folder(i, w, cx))),
-            )
-        })
         .item(
             PopupMenuItem::new("Close Workspace")
                 .on_click(act(|t, i, w, cx| t.request_close_workspace(i, w, cx))),

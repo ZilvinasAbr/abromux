@@ -46,15 +46,6 @@ Commands:
   group remove [--workspace <ref>]
   group rename|color|collapse|expand|ungroup [--group <ref>] [<title>|<color>]   (default: the workspace's group)
   group by-folder                                            (group ungrouped workspaces that share a repo/folder)
-  folder [path]                                              (the workspace folder this shell is in; {key:newFolderWorkspace} makes one)
-  folder add <path> [--branch <name>]                        (check a project out into it: a git worktree on ws/<folder>, else a copy)
-  folder list | all [--closed] | repos | root                (its checkouts; every workspace folder, or those no open
-                                                             workspace has; git repos found under ~/repos, ~/src,
-                                                             ~/code...; where the folders live)
-  folder resources                                           (what it made outside the folder: recorded in
-                                                             .abromux/resources.md, and its labelled Docker resources)
-  folder remove [<path>] [--force]                           (remove its worktrees, delete the folder, close the workspace;
-                                                             refuses while there are changes or Docker leftovers)
   restore-session [--from <stable|nightly|nightly-<name>|cmux|path>]
                                                              (reopen the session this launch restored, or another one,
                                                              cmux's included; only workspaces not already open)
@@ -135,6 +126,16 @@ Commands:
                                                              JSON object per line. Events: workspace.created|closed|renamed|
                                                              selected, surface.created|closed|moved|title|cwd|focused,
                                                              command.finished, program.status, agent, notification, bell)
+  do <script.lua> [key=value...] [--args <json>|@<file>] [--all] [--for <dur>] [--fail-fast]
+                                                             (run a Lua script against the app: every socket method as
+                                                             abromux.<namespace>.<method>{...}, plus exec, wait, on, every,
+                                                             ui.input/ui.pick; prints what it returns as JSON. -e <code>
+                                                             runs code, - reads stdin)
+  do <action> [key=value...] | do <file.lua> --action <name> (an action from init.lua beside config.json, or that file)
+  do --list [<file.lua>]                                     (the actions init.lua defines; the palette lists them too)
+  <action> [<word>...] [key=value...] [--key value]          (an init.lua action as a command: words are args[1], args[2]...;
+                                                             with the workspace folders script, `folder add <path>`,
+                                                             `folder list|all|repos|resources|remove`)
   wait-for [-S|--signal] <name> [--timeout <seconds>]        (wait until another script signals <name>; default 30s)
   completion <zsh|bash|fish>                                 (a shell completion script: eval \"$(abromux completion zsh)\")
   open <path-or-url>...                                      (directories open workspaces, Markdown files and images the viewer,
@@ -255,6 +256,7 @@ const SWITCHES: &[&str] = &[
     "clear",
     "secure",
     "http-only",
+    "list",
 ];
 
 struct Args {
@@ -684,186 +686,6 @@ fn diff_cmd(mut pos: Vec<String>, opts: Map<String, Value>, as_json: bool) -> Re
     Ok(())
 }
 
-/// `abromux folder …`: workspace folders (⇧⌘I). Works on files and git only,
-/// so it runs without the app.
-fn folder_cmd(mut pos: Vec<String>, opts: &Map<String, Value>) -> Result<(), String> {
-    use crate::folder;
-    // The workspace the shell is in, else the one the current folder is in.
-    let current = || -> Result<std::path::PathBuf, String> {
-        std::env::var("ABROMUX_WORKSPACE_DIR")
-            .ok()
-            .filter(|d| !d.is_empty())
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::current_dir().ok().and_then(|d| folder::find(&d)))
-            .ok_or_else(|| {
-                format!(
-                    "not in a workspace folder (make one with {})",
-                    crate::keymap::default_label("newFolderWorkspace")
-                )
-            })
-    };
-    let sub = if pos.is_empty() {
-        "path".to_string()
-    } else {
-        pos.remove(0)
-    };
-    match sub.as_str() {
-        "path" => println!("{}", current()?.display()),
-        "root" => println!(
-            "{}",
-            folder::root(&settings::load().unwrap_or_default()).display()
-        ),
-        "add" => {
-            let src = pos.first().ok_or("folder add: missing <path>")?;
-            let ws = current()?;
-            let branch = opts.get("branch").and_then(Value::as_str);
-            let c = folder::add(&ws, Path::new(src), branch)?;
-            match &c.branch {
-                Some(b) => println!(
-                    "OK {} (worktree of {} on {b})",
-                    ws.join(&c.path).display(),
-                    c.source
-                ),
-                None => println!("OK {} (copy of {})", ws.join(&c.path).display(), c.source),
-            }
-        }
-        "list" => {
-            let ws = current()?;
-            let meta = folder::read_meta(&ws).unwrap_or_default();
-            for c in meta.checkouts {
-                let how = c
-                    .branch
-                    .map_or("copy".to_string(), |b| format!("worktree {b}"));
-                println!("{}  {how}  from {}", c.path, c.source);
-            }
-        }
-        "resources" => {
-            let ws = current()?;
-            match std::fs::read_to_string(ws.join(folder::LEDGER)) {
-                Ok(text) if !text.trim().is_empty() => {
-                    println!("Recorded in {}:", folder::LEDGER);
-                    println!("{}", text.trim_end());
-                }
-                _ => println!("Nothing recorded in {}.", folder::LEDGER),
-            }
-            let tag = folder::tag(&ws);
-            match folder::docker_resources(&ws) {
-                Ok(found) if found.is_empty() => {
-                    println!(
-                        "No Docker resources labelled abromux.workspace={tag} or in compose project {tag}."
-                    )
-                }
-                Ok(found) => {
-                    println!(
-                        "Docker (labelled abromux.workspace={tag} or in compose project {tag}):"
-                    );
-                    for line in found {
-                        println!("  {line}");
-                    }
-                }
-                Err(e) => println!("Docker not checked: {e}"),
-            }
-        }
-        "remove" => {
-            // A folder given by path (one whose workspace is closed), else this one.
-            let ws = match pos.first() {
-                Some(p) => {
-                    let p = Path::new(p)
-                        .canonicalize()
-                        .map_err(|e| format!("{p}: {e}"))?;
-                    folder::read_meta(&p)
-                        .map(|_| p.clone())
-                        .ok_or_else(|| format!("{}: not a workspace folder", p.display()))?
-                }
-                None => current()?,
-            };
-            let force = opts.get("force").is_some_and(|v| v != &Value::Bool(false));
-            if !force {
-                let mut problems = folder::blockers(&ws);
-                match folder::docker_resources(&ws) {
-                    Ok(left) if !left.is_empty() => problems.push(format!(
-                        "Docker resources are still there: {} (`abromux folder resources`)",
-                        left.join(", ")
-                    )),
-                    Ok(_) => {}
-                    Err(e) => eprintln!("abromux: Docker not checked for leftovers: {e}"),
-                }
-                if !problems.is_empty() {
-                    return Err(format!(
-                        "not removing {}; clean these up first, or --force:\n  {}",
-                        ws.display(),
-                        problems.join("\n  ")
-                    ));
-                }
-            }
-            // If the app has it open, the app closes the workspace and then
-            // deletes the folder: this shell (and an agent in it) may be
-            // one of its terminals.
-            // The app waits for this connection to close before closing the
-            // workspace, so this is printed before the shell goes.
-            if let Ok((r, conn)) = ipc::call_held(
-                "folder.remove",
-                json!({ "path": ws.to_string_lossy(), "force": force }),
-            ) && let Some(w) = r["workspace"].as_str()
-            {
-                println!(
-                    "OK closing {w}; {} then deletes {} (a toast says if it can't)",
-                    crate::channel::app_name(),
-                    ws.display()
-                );
-                let _ = std::io::Write::flush(&mut std::io::stdout());
-                drop(conn);
-                return Ok(());
-            }
-            for line in folder::remove(&ws, force)? {
-                println!("{line}");
-            }
-            if std::env::current_dir().map_or(true, |d| d.starts_with(&ws)) {
-                println!("(this shell's folder is gone: cd elsewhere)");
-            }
-        }
-        "all" => {
-            // Mark which ones the app has open, when it's running.
-            let open: Option<Vec<String>> = ipc::call("workspace.list", json!({})).ok().map(|v| {
-                v.as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|w| w["home"].as_str().map(String::from))
-                    .collect()
-            });
-            let closed_only = opts.contains_key("closed");
-            for (dir, meta) in folder::list(&folder::root(&settings::load().unwrap_or_default())) {
-                let is_open = open.as_ref().map(|o| o.iter().any(|h| Path::new(h) == dir));
-                if closed_only && is_open != Some(false) {
-                    continue;
-                }
-                let mark = match is_open {
-                    Some(true) => "  open",
-                    Some(false) => "  closed",
-                    None => "",
-                };
-                println!(
-                    "{}  {}  ({} checked out){mark}",
-                    dir.display(),
-                    meta.name,
-                    meta.checkouts.len()
-                );
-            }
-        }
-        "repos" => {
-            for r in folder::known_repos() {
-                println!("{}", r.display());
-            }
-        }
-        s => {
-            return Err(format!(
-                "folder: unknown subcommand {s:?} (path, root, add, list, all, repos, resources, remove)"
-            ));
-        }
-    }
-    Ok(())
-}
-
 /// Report a failure; its status is 1, or 2 for a bad command line, 3 for a
 /// target that wasn't found or was ambiguous, 4 when abromux isn't running.
 fn fail(e: impl std::fmt::Display) -> i32 {
@@ -939,7 +761,6 @@ fn dispatch(
             println!("abromux {}", env!("ABROMUX_VERSION"));
             return Ok(());
         }
-        "folder" => return folder_cmd(pos, &opts),
         "diff" => return diff_cmd(pos, opts, as_json),
         "ping" => ("system.ping", |v| v.as_str().unwrap_or_default().into()),
         "identify" => ("system.identify", pretty),
@@ -1509,7 +1330,19 @@ fn dispatch(
             return wait_surface(opts, as_json);
         }
         "events" => return events(opts, as_json),
+        "do" => {
+            let status = crate::lua::run_do(pos, &opts, as_json)?;
+            EXIT_STATUS.store(status, std::sync::atomic::Ordering::Relaxed);
+            return Ok(());
+        }
         _ => {
+            // An action of init.lua: `abromux folder add ~/repos/x --branch y`
+            // runs action `folder` with args { "add", "~/repos/x", branch = "y" }.
+            opts.remove("caller");
+            if let Some(status) = crate::lua::run_cli_action(cmd, pos, &opts, as_json) {
+                EXIT_STATUS.store(status?, std::sync::atomic::Ordering::Relaxed);
+                return Ok(());
+            }
             ipc::set_failure_status(2);
             return Err(format!("unknown command {cmd:?} (see `abromux --help`)"));
         }
@@ -1653,7 +1486,7 @@ fn command_tree() -> Vec<(String, Vec<String>)> {
             Some(subs)
                 if matches!(
                     first,
-                    "group" | "folder" | "config" | "hooks" | "skills" | "browser" | "sidebar"
+                    "group" | "config" | "hooks" | "skills" | "browser" | "sidebar"
                 ) =>
             {
                 for sub in subs.split('|').filter(|w| word(w)) {

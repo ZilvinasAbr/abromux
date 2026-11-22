@@ -66,10 +66,6 @@ pub const ACTIONS: &[Act] = {
     use crate::*;
     acts![
         "newWorkspace", Some("New Workspace"), NewWorkspace, [(None, ["cmd-n"])];
-        "newFolderWorkspace", Some("New Workspace Folder"), NewFolderWorkspace,
-            [(None, ["cmd-shift-i"])];
-        "cleanUpWorkspaceFolder", Some("Clean Up and Delete Workspace Folder…"), CleanUpWorkspaceFolder,
-            [(None, ["cmd-shift-x"])];
         "renameWorkspace", Some("Rename Workspace…"), RenameWorkspace, [(None, ["cmd-shift-r"])];
         "editWorkspaceDescription", Some("Edit Workspace Description…"), EditDescription,
             [(None, ["alt-cmd-e"])];
@@ -226,8 +222,6 @@ pub const ACTIONS: &[Act] = {
 #[rustfmt::skip]
 pub const LINUX: &[(&str, Keys)] = &[
     ("newWorkspace", &[(None, &["ctrl-shift-n"])]),
-    ("newFolderWorkspace", &[(None, &["ctrl-alt-n"])]),
-    ("cleanUpWorkspaceFolder", &[(None, &["ctrl-alt-x"])]),
     ("renameWorkspace", &[(None, &["ctrl-alt-r"])]),
     ("editWorkspaceDescription", &[(None, &["ctrl-alt-e"])]),
     ("reopenPreviousSession", &[(None, &["ctrl-alt-o"])]),

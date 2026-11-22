@@ -39,15 +39,34 @@ const MAX_ROWS_HEIGHT: f32 = 360.;
 pub enum Mode {
     Commands,
     Workspaces,
-    /// ⇧⌘I: name a new workspace folder. No rows; Enter makes it.
-    NewFolder,
     /// A plugin's "Open … link": paste a link it opens. No rows; Enter
     /// opens it in a new tab.
     OpenLink(&'static str),
     /// ⇧⌘M: the cached GitLab merge requests. A pasted link or
     /// `group/project!12` that isn't cached opens too.
     MergeRequests,
+    /// A question a script asked (`ui.prompt`): a line of text, or a
+    /// choice from its items.
+    Prompt,
 }
+
+/// The question `Mode::Prompt` shows, and where its answer goes.
+pub(crate) struct Prompt {
+    pub id: u64,
+    pub title: String,
+    /// A list to choose from, not a line of text.
+    pub pick: bool,
+    /// Pick: typed text that matches no item answers too.
+    pub allow_other: bool,
+    /// What Enter does, said under the field.
+    pub confirm: Option<String>,
+    /// Dropped unanswered (Esc, a click outside, another palette), the
+    /// asker hears it was cancelled.
+    pub answer: Option<futures::channel::oneshot::Sender<serde_json::Value>>,
+}
+
+/// One item of a pick: id, title, subtitle, detail.
+pub(crate) type PromptItem = (String, String, Option<String>, Option<String>);
 
 enum Target {
     Action(Box<dyn Action>),
@@ -57,6 +76,8 @@ enum Target {
     /// A suggested link of workspace `.0` (by id), opened in a pinned tab.
     Link(usize, crate::links::Link),
     Mr(crate::gitlab::model::MrKey),
+    /// A prompt's item, by id.
+    Choice(String),
 }
 
 struct Entry {
@@ -92,13 +113,15 @@ pub struct Palette {
     /// Where focus goes back to, and where commands are dispatched.
     prev_focus: Option<FocusHandle>,
     scroll: ScrollHandle,
-    /// NewFolder: the made-up name an empty input stands for.
-    suggested: String,
     /// Workspaces (⌘P): the selected workspace's tabs, beside the
     /// workspaces.
     tabs: Option<Column>,
     /// Workspaces: the tabs column has the selection (Tab switches).
     on_tabs: bool,
+    /// Prompt: the question.
+    pub(crate) prompt: Option<Prompt>,
+    /// What `filter` last matched against.
+    query: String,
 }
 
 /// A palette command: its title, subtitle, extra search words and action.
@@ -244,16 +267,15 @@ impl AbroMux {
         let entries = match mode {
             Mode::Commands => self.command_entries(window, cx),
             Mode::Workspaces => self.workspace_entries(cx),
-            Mode::NewFolder | Mode::OpenLink(_) => vec![],
+            Mode::OpenLink(_) | Mode::Prompt => vec![],
             Mode::MergeRequests => mr_entries(cx),
         };
-        let suggested = crate::folder::random_name();
         let placeholder = match mode {
             Mode::Commands => "Type a command".to_string(),
             Mode::Workspaces => "Search workspaces and tabs".to_string(),
-            Mode::NewFolder => suggested.clone(),
             Mode::OpenLink(_) => "Paste a link".to_string(),
             Mode::MergeRequests => "Search merge requests, or paste a link".to_string(),
+            Mode::Prompt => String::new(),
         };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         // A link of that kind on the clipboard is there to start with,
@@ -277,7 +299,7 @@ impl AbroMux {
                     if this
                         .palette
                         .as_ref()
-                        .is_some_and(|p| matches!(p.mode, Mode::NewFolder | Mode::OpenLink(_))) =>
+                        .is_some_and(|p| matches!(p.mode, Mode::OpenLink(_))) =>
                 {
                     // The line under the input follows what's typed.
                     cx.notify()
@@ -317,13 +339,88 @@ impl AbroMux {
             selected: 0,
             prev_focus,
             scroll: ScrollHandle::new(),
-            suggested,
             tabs,
             on_tabs: false,
+            prompt: None,
+            query: String::new(),
         };
         palette.filter("");
         self.palette = Some(palette);
         cx.notify();
+    }
+
+    /// Show a script's question in the palette, in place of whatever it
+    /// showed. Returns the prompt's id, for `close_prompt`.
+    pub(crate) fn open_prompt(
+        &mut self,
+        mut prompt: Prompt,
+        items: Vec<PromptItem>,
+        placeholder: Option<String>,
+        value: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> u64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        prompt.id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let id = prompt.id;
+        if self
+            .palette
+            .as_ref()
+            .is_some_and(|p| p.mode == Mode::Prompt)
+        {
+            // Toggling would only close it.
+            self.palette = None;
+        }
+        self.toggle_palette(Mode::Prompt, window, cx);
+        let Some(p) = &mut self.palette else {
+            return id;
+        };
+        p.entries = items
+            .into_iter()
+            .map(|(id, title, subtitle, detail)| Entry {
+                title: title.into(),
+                subtitle: subtitle.map(Into::into),
+                keywords: vec![id.clone()],
+                keys: detail.map(Into::into),
+                target: Target::Choice(id),
+                icon: None,
+                current: false,
+            })
+            .collect();
+        let input = p.input.clone();
+        // The title shows above the field, so the hint doesn't repeat it.
+        let hint = placeholder.unwrap_or_else(|| {
+            if prompt.pick {
+                "Type to filter".into()
+            } else {
+                String::new()
+            }
+        });
+        input.update(cx, |i, cx| {
+            i.set_placeholder(hint, window, cx);
+            if let Some(v) = &value {
+                i.set_value(v.clone(), window, cx);
+            }
+        });
+        p.prompt = Some(prompt);
+        let typed = input.read(cx).value().to_string();
+        p.filter(&typed);
+        cx.notify();
+        id
+    }
+
+    /// Close prompt `id` if it's still showing (its time ran out, or the
+    /// script went away); the asker hears it was cancelled.
+    pub(crate) fn close_prompt(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .palette
+            .as_ref()
+            .and_then(|p| p.prompt.as_ref())
+            .is_some_and(|q| q.id == id)
+        {
+            self.close_palette(window, cx);
+        }
     }
 
     pub(crate) fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -349,11 +446,34 @@ impl AbroMux {
         let Some(mut p) = self.palette.take() else {
             return;
         };
-        if p.mode == Mode::NewFolder {
-            let typed = crate::one_line(&p.input.read(cx).value());
-            let named = !typed.is_empty();
-            let name = if named { typed } else { p.suggested };
-            return self.new_folder_workspace(name, named, window, cx);
+        if p.mode == Mode::Prompt {
+            let typed = p.input.read(cx).value().to_string();
+            // Typed in the same moment as Enter: its filtering hasn't run yet.
+            if p.query != typed {
+                p.filter(&typed);
+            }
+            let chosen = p
+                .matches
+                .get(p.selected)
+                .map(|&(ix, _)| &p.entries[ix].target);
+            let answer = match (&p.prompt, chosen) {
+                (Some(q), _) if !q.pick => Some(serde_json::json!(typed)),
+                (Some(_), Some(Target::Choice(id))) => Some(serde_json::json!(id)),
+                (Some(q), None) if q.allow_other && !typed.trim().is_empty() => {
+                    Some(serde_json::json!({ "text": typed }))
+                }
+                _ => None,
+            };
+            let Some(answer) = answer else {
+                // Nothing to answer with yet: it stays.
+                self.palette = Some(p);
+                return;
+            };
+            if let Some(tx) = p.prompt.as_mut().and_then(|q| q.answer.take()) {
+                let _ = tx.send(serde_json::json!({ "answer": answer }));
+            }
+            self.restore_focus(p.prev_focus, window, cx);
+            return cx.notify();
         }
         if let Mode::OpenLink(id) = p.mode {
             let url = p.input.read(cx).value().trim().to_string();
@@ -414,6 +534,8 @@ impl AbroMux {
                 None => self.restore_focus(p.prev_focus, window, cx),
             },
             Target::Mr(k) => self.open_mr(k, window, cx),
+            // Answered above.
+            Target::Choice(_) => {}
             Target::Tab(id) => {
                 if self.pin_workspace(id).is_some() {
                     self.reveal_tab(id, window, cx);
@@ -785,27 +907,27 @@ impl AbroMux {
         let empty: SharedString = match p.mode {
             Mode::Commands => "No commands match your search.".into(),
             Mode::Workspaces => "No workspaces match your search.".into(),
+            Mode::Prompt => {
+                let typed = p.input.read(cx).value().to_string();
+                let q = p.prompt.as_ref();
+                let confirm = q.and_then(|q| q.confirm.clone());
+                match q {
+                    Some(q) if !q.pick => {
+                        let what = confirm.unwrap_or_else(|| format!("Use “{}”", typed.trim()));
+                        format!("↵ {what}  ·  esc cancel").into()
+                    }
+                    Some(q) if q.allow_other && !typed.trim().is_empty() => {
+                        format!("↵ Use “{}”  ·  esc cancel", typed.trim()).into()
+                    }
+                    _ => "Nothing matches.  ·  esc cancel".into(),
+                }
+            }
             Mode::MergeRequests => {
                 if crate::gitlab::model::MrKey::parse(&p.input.read(cx).value()).is_some() {
                     "Enter to open this merge request".into()
                 } else {
                     "No cached merge requests match. Paste a link to open any.".into()
                 }
-            }
-            Mode::NewFolder => {
-                let typed = crate::one_line(&p.input.read(cx).value());
-                let name = if typed.is_empty() {
-                    &p.suggested
-                } else {
-                    &typed
-                };
-                let root = crate::folder::root(cx.global::<Settings>());
-                let dir = root.join(crate::folder::slug(name));
-                format!(
-                    "New workspace in {}  ·  Enter to create, Esc to cancel",
-                    tilde(&dir.to_string_lossy())
-                )
-                .into()
             }
             Mode::OpenLink(id) => {
                 let url = p.input.read(cx).value().trim().to_string();
@@ -867,6 +989,17 @@ impl AbroMux {
                                 .on_mouse_down(MouseButton::Left, |_, window, _| {
                                     window.prevent_default()
                                 })
+                                .when_some(p.prompt.as_ref().map(|q| q.title.clone()), |d, t| {
+                                    d.child(
+                                        div()
+                                            .px(px(14.))
+                                            .pt(px(9.))
+                                            .text_size(px(11.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(rgb(pal().muted))
+                                            .child(t),
+                                    )
+                                })
                                 .child(
                                     div()
                                         .h(px(40.))
@@ -921,6 +1054,26 @@ impl AbroMux {
                                         }))
                                         .into_any_element(),
                                 })
+                                .when_some(
+                                    p.prompt
+                                        .as_ref()
+                                        .filter(|q| q.pick && !p.matches.is_empty())
+                                        .map(|q| q.confirm.clone().unwrap_or("choose".into())),
+                                    |d, confirm| {
+                                        d.child(
+                                            div()
+                                                .px(px(14.))
+                                                .py(px(6.))
+                                                .border_t_1()
+                                                .border_color(rgb(pal().border))
+                                                .text_size(px(11.))
+                                                .text_color(rgb(pal().muted))
+                                                .child(format!(
+                                                    "↑↓ select  ·  ↵ {confirm}  ·  esc cancel"
+                                                )),
+                                        )
+                                    },
+                                )
                                 .when(p.tabs.is_some(), |d| {
                                     d.child(
                                         div()
@@ -944,6 +1097,7 @@ impl AbroMux {
 
 impl Palette {
     fn filter(&mut self, query: &str) {
+        self.query = query.to_string();
         self.matches = rank(&self.entries, query);
         self.selected = 0;
         self.scroll.scroll_to_item(0);

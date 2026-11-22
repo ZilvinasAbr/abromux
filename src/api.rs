@@ -111,7 +111,10 @@ pub const METHODS: &[Method] = &[
         "Open a workspace, with one terminal or a cmux-style layout.",
         "name?:string Its name;description?:string A description under the name;cwd?:string Where its terminals start;\
          command?:string Typed into its first terminal;focus?:boolean Select it (default true);group?:ref A sidebar group to put it in;\
-         layout?:string A layout as JSON: splits, panes and tabs",
+         layout?:string A layout as JSON: splits, panes and tabs;\
+         folder?:string Its own folder (absolute): $ABROMUX_WORKSPACE_DIR in its terminals, and kept with it (default cwd);\
+         env?:object Environment variables for its terminals, kept with it;\
+         provisional?:boolean The name is a stand-in that agents' auto-naming may replace",
     ),
     m(
         "workspace.select",
@@ -126,12 +129,6 @@ pub const METHODS: &[Method] = &[
         "workspace:ref The workspace",
     ),
     m(
-        "folder.remove",
-        "folder remove",
-        "Remove a workspace folder: its git worktrees, the folder, and its workspace. Refuses while there are changes or Docker leftovers.",
-        "path?:string The folder (default: the caller's);force?:boolean Remove it anyway",
-    ),
-    m(
         "workspace.rename",
         "rename-workspace",
         "Rename a workspace.",
@@ -141,7 +138,7 @@ pub const METHODS: &[Method] = &[
         "workspace.action",
         "workspace-action",
         "One of the sidebar's workspace actions.",
-        "@workspace;action:string rename, clear-name, set-description, clear-description, set-color, clear-color, move-up, move-down, move-top, move-bottom, close-others, close-above, close-below, mark-read, mark-unread;\
+        "@workspace;action:string rename, clear-name, set-description, clear-description, set-color, clear-color, move-up, move-down, move-top, move-bottom, move-to-cleanup (into the Cleanup group, last in the sidebar), close-others, close-above, close-below, mark-read, mark-unread;\
          title?:string For rename;description?:string For set-description;color?:string For set-color: a palette name or #rrggbb",
     ),
     m(
@@ -416,6 +413,16 @@ pub const METHODS: &[Method] = &[
         "",
         "A plugin tab's own command (the GitLab tab's).",
         "@surface;command:string The command;args?:object Its arguments",
+    ),
+    m(
+        "ui.prompt",
+        "",
+        "Ask in the command palette and wait for the answer: a line of text (kind input) or a choice from a list (kind pick). Lua scripts call it as abromux.ui.input / abromux.ui.pick. Returns answer (the text, the chosen item's id, or {text} for typed text with allow_other), or reason when there's none: cancelled, timeout or busy (another question is showing).",
+        "kind:string input or pick;title:string The question;placeholder?:string Hint while the field is empty;\
+         value?:string Text the field starts with;confirm?:string What Enter does, shown under the field;\
+         items?:array For pick: ids as strings, or objects with id, title?, subtitle?, detail?;\
+         allow_other?:boolean For pick: typed text that matches no item is an answer too;\
+         timeout?:number Seconds to wait (default 300, at most 3600)",
     ),
     m(
         "events.subscribe",
@@ -838,6 +845,18 @@ pub const METHODS: &[Method] = &[
 
 /// Methods the new-tab parameters apply to.
 const NEW_TAB_METHODS: &[&str] = &["surface.split", "surface.create", "pane.create"];
+
+/// Each method's namespace (`surface` of `surface.split`), once.
+pub fn namespaces() -> Vec<&'static str> {
+    let mut out: Vec<&str> = vec![];
+    for m in METHODS {
+        let ns = m.name.split('.').next().unwrap_or(m.name);
+        if !out.contains(&ns) {
+            out.push(ns);
+        }
+    }
+    out
+}
 
 pub fn find(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)

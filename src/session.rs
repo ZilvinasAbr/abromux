@@ -133,6 +133,7 @@ impl AbroMux {
                 description: ws.description.clone(),
                 color: ws.color,
                 home: ws.home.as_ref().map(|h| h.to_string_lossy().into_owned()),
+                env: ws.env.clone(),
                 links: ws.links.clone(),
                 hidden_links: ws.hidden_links.clone(),
                 pinned: pin_states(ws, scrollback, &self.surface_refs, cx),
@@ -380,8 +381,10 @@ impl AbroMux {
             // Its new shells get the folder's env before it's in the list.
             let home = state.home.map(std::path::PathBuf::from);
             self.building_home = home.clone();
+            self.building_env = state.env.clone();
             let root = self.build_node(state.root, id, window, cx);
             self.building_home = None;
+            self.building_env.clear();
             let Some(root) = root else {
                 ids.push(None);
                 continue;
@@ -398,6 +401,7 @@ impl AbroMux {
             ws.description = state.description;
             ws.color = state.color;
             ws.home = home;
+            ws.env = state.env;
             ws.links = state.links;
             ws.hidden_links = state.hidden_links;
             for pin in state.pinned {

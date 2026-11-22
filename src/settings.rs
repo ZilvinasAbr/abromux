@@ -679,6 +679,16 @@ pub struct Command {
     pub url: Option<String>,
     #[serde(default)]
     pub workspace: Option<WorkspaceSpec>,
+    /// A Lua script to run with `abromux do` (`~/…`, absolute, or relative
+    /// to the config file's folder, or the project's).
+    #[serde(default)]
+    pub script: Option<String>,
+    /// With `script`: run this action of it (`abromux do <script> --action`).
+    #[serde(default)]
+    pub action: Option<String>,
+    /// With `script`: its arguments (`abromux.args`).
+    #[serde(default)]
+    pub args: Option<serde_json::Map<String, serde_json::Value>>,
     /// What a workspace command does when a workspace of its name is open.
     #[serde(default)]
     pub restart: Restart,
@@ -722,6 +732,12 @@ impl Command {
         if let Some(url) = &self.url {
             return format!("Opens {url}");
         }
+        if let Some(script) = &self.script {
+            return match &self.action {
+                Some(a) => format!("Runs the Lua action “{a}” of {script}"),
+                None => format!("Runs the Lua script {script}"),
+            };
+        }
         let Some(w) = &self.workspace else {
             return String::new();
         };
@@ -741,10 +757,17 @@ impl Command {
             self.run.is_some(),
             self.url.is_some(),
             self.workspace.is_some(),
+            self.script.is_some(),
         ];
         if kinds.iter().filter(|k| **k).count() != 1 {
             return Err(format!(
-                "command {:?} needs one of \"run\", \"url\" or \"workspace\"",
+                "command {:?} needs one of \"run\", \"url\", \"workspace\" or \"script\"",
+                self.title
+            ));
+        }
+        if self.script.is_none() && (self.action.is_some() || self.args.is_some()) {
+            return Err(format!(
+                "command {:?}: \"action\" and \"args\" go with \"script\"",
                 self.title
             ));
         }
@@ -977,6 +1000,49 @@ pub fn ensure_file() -> PathBuf {
 /// The settings in the config file, or the defaults if there is none.
 pub fn load() -> Result<Settings, String> {
     read(&path())
+}
+
+/// `load`, plus the actions init.lua (next to the file) defines, as
+/// commands after the file's own: what the app uses.
+pub fn load_app() -> Result<Settings, String> {
+    let mut s = load()?;
+    s.commands.extend(lua_commands(&crate::lua::init_path())?);
+    Ok(s)
+}
+
+/// What's wrong with the config file or init.lua, if anything, for the
+/// Settings window. It asks often (each change, each time it comes to the
+/// front), so init.lua only runs again once it, or a file it `require`s,
+/// has changed.
+pub fn app_error() -> Option<String> {
+    let init = crate::lua::init_path();
+    load()
+        .and_then(|_| commands_of(&init, crate::lua::collect_cached(&init)?))
+        .err()
+}
+
+/// The actions of `init`, each a palette command that runs it.
+pub fn lua_commands(init: &Path) -> Result<Vec<Command>, String> {
+    commands_of(init, crate::lua::collect(init)?)
+}
+
+fn commands_of(init: &Path, actions: Vec<crate::lua::ActionDef>) -> Result<Vec<Command>, String> {
+    let at = |e: serde_json::Error| format!("{}: {e}", init.display());
+    actions
+        .into_iter()
+        .filter(|a| a.palette)
+        .map(|a| {
+            serde_json::from_value::<Command>(serde_json::json!({
+                "title": a.title,
+                "description": a.description,
+                "keywords": a.keywords,
+                "script": init.to_string_lossy(),
+                "action": a.name,
+                "shortcut": a.key,
+            }))
+            .map_err(at)
+        })
+        .collect()
 }
 
 pub fn read(path: &Path) -> Result<Settings, String> {
@@ -1277,6 +1343,48 @@ mod tests {
         );
         let e = err(r#"{"shortcuts": {"find": {"keys": "cmd-f", "when": "a &&"}}}"#);
         assert!(e.contains("key context"), "{e}");
+    }
+
+    #[test]
+    fn script_commands() {
+        let s = parse(
+            r#"{ "commands": [
+                { "title": "Ticket", "script": "~/scripts/ticket.lua", "args": { "board": "PAY" } },
+                { "title": "Tests", "script": "init.lua", "action": "tests", "shortcut": "cmd-alt-t" }
+            ] }"#,
+        )
+        .unwrap();
+        assert_eq!(s.commands[0].args.as_ref().unwrap()["board"], "PAY");
+        assert!(s.commands[1].describe().contains("action “tests”"));
+        assert!(s.commands[1].shortcut.is_some());
+        // One kind per command, and action/args only with a script.
+        assert!(
+            parse(r#"{ "commands": [{ "title": "X", "script": "a.lua", "run": "ls" }] }"#).is_err()
+        );
+        assert!(
+            parse(r#"{ "commands": [{ "title": "X", "run": "ls", "action": "a" }] }"#).is_err()
+        );
+
+        let dir = std::env::temp_dir().join(format!("abromux-lua-cmds-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let init = dir.join("init.lua");
+        std::fs::write(
+            &init,
+            r#"abromux.action{ name = "tests", title = "Run Tests", key = "cmd-alt-t", run = function() end }"#,
+        )
+        .unwrap();
+        let cmds = lua_commands(&init).unwrap();
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].title, "Run Tests");
+        assert_eq!(cmds[0].action.as_deref(), Some("tests"));
+        assert!(cmds[0].shortcut.is_some());
+        std::fs::write(
+            &init,
+            r#"abromux.action{ name = "x", title = "X", key = 42, run = print }"#,
+        )
+        .unwrap();
+        assert!(lua_commands(&init).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

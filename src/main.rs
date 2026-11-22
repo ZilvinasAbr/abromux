@@ -13,7 +13,6 @@ mod debug;
 mod editor;
 mod events;
 mod find_bar;
-mod folder;
 mod gitlab;
 mod icon;
 mod ipc;
@@ -21,6 +20,7 @@ mod keymap;
 mod layout;
 mod link;
 mod links;
+mod lua;
 mod markdown;
 mod menu;
 mod naming;
@@ -80,8 +80,6 @@ actions!(
         OpenConfig,
         Quit,
         NewWorkspace,
-        NewFolderWorkspace,
-        CleanUpWorkspaceFolder,
         CloseWorkspace,
         RenameWorkspace,
         NextWorkspace,
@@ -300,6 +298,8 @@ struct AbroMux {
     /// The folder of the workspace whose terminals are being made before
     /// it's in `workspaces` (new or restored), for their env.
     building_home: Option<std::path::PathBuf>,
+    /// The same for its `env`.
+    building_env: std::collections::BTreeMap<String, String>,
     next_pane: usize,
     next_surface: usize,
     /// Stable `surface:N` numbers handed out to the control socket.
@@ -398,6 +398,7 @@ impl AbroMux {
             next_id: 1,
             next_ws: 0,
             building_home: None,
+            building_env: Default::default(),
             next_pane: 0,
             next_surface: 0,
             surface_refs: Default::default(),
@@ -785,20 +786,19 @@ impl AbroMux {
             attach,
         } = opts;
         let surface = attach.as_ref().map_or(self.next_surface + 1, |(n, _)| *n);
-        let home = self
-            .workspaces
-            .iter()
-            .find(|w| w.id == ws)
-            .and_then(|w| w.home.clone())
-            .or_else(|| self.building_home.clone());
+        let (home, ws_env) = match self.workspaces.iter().find(|w| w.id == ws) {
+            Some(w) => (w.home.clone(), w.env.clone()),
+            None => (self.building_home.clone(), self.building_env.clone()),
+        };
         if let Some(home) = home {
             env.push((
                 "ABROMUX_WORKSPACE_DIR".into(),
                 home.to_string_lossy().into_owned(),
             ));
-            // Compose stacks started here are the workspace's, for cleanup.
-            env.push(("COMPOSE_PROJECT_NAME".into(), folder::tag(&home)));
         }
+        // What the workspace was made with (the workspace folders script
+        // gives its compose project name, say).
+        env.extend(ws_env);
         // This app's CLI, for programs that call back into it (the stable and
         // nightly apps each have their own).
         if let Ok(exe) = std::env::current_exe() {
@@ -1717,136 +1717,6 @@ impl AbroMux {
         index
     }
 
-    /// ⇧⌘I, once named: a workspace with its own folder under
-    /// `~/.abromux/ws` (`app.workspaceFoldersDirectory`) and a shell in it.
-    /// A made-up name (`named` false) is only a stand-in: agents working
-    /// there rename it until you name it yourself (`server::auto_name`).
-    fn new_folder_workspace(
-        &mut self,
-        name: String,
-        named: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let root = folder::root(cx.global::<settings::Settings>());
-        let dir = match folder::create_in(&root, &name) {
-            Ok(d) => d,
-            Err(e) => {
-                let msg = format!("{}: {e}", root.display());
-                let note = Notification::error(msg).title("Couldn't make the workspace folder");
-                window.push_notification(note, cx);
-                return self.focus_active(window, cx);
-            }
-        };
-        self.building_home = Some(dir.clone());
-        let index =
-            self.create_workspace(Some(dir.to_string_lossy().into_owned()), true, window, cx);
-        self.building_home = None;
-        let ws = &mut self.workspaces[index];
-        ws.home = Some(dir);
-        if named {
-            ws.custom_name = Some(name);
-        } else {
-            ws.auto_title = Some(name);
-        }
-        cx.notify();
-    }
-
-    /// Right-click › Clean Up and Delete Folder…: a tab in workspace `wi`'s
-    /// folder running the cleanup agent (`automation.workspaceCleanupAgent`,
-    /// default `claude`) on `.abromux/cleanup.md`. The agent finds what the
-    /// workspace made, removes it (asking only if work would be lost), and
-    /// ends with `abromux folder remove`. It runs in a shell, so the shell
-    /// stays if it stops early. The workspace moves to the "Cleanup" group,
-    /// last in the sidebar.
-    pub(crate) fn clean_up_folder(
-        &mut self,
-        wi: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(home) = self.workspaces.get(wi).and_then(|w| w.home.clone()) else {
-            let note = Notification::warning(format!(
-                "Only a workspace made with {} has a folder to clean up.",
-                keymap::default_label("newFolderWorkspace")
-            ))
-            .title("Not a workspace folder");
-            return window.push_notification(note, cx);
-        };
-        let ask = match folder::write_cleanup(&home) {
-            Ok(a) => a,
-            Err(e) => {
-                let note = Notification::error(format!("{}: {e}", home.display()))
-                    .title("Couldn't start the cleanup");
-                return window.push_notification(note, cx);
-            }
-        };
-        let agent = cx
-            .global::<settings::Settings>()
-            .automation
-            .workspace_cleanup_agent
-            .clone()
-            .filter(|a| !a.trim().is_empty())
-            .unwrap_or_else(|| "claude".into());
-        let wi = self.move_to_cleanup(wi, cx);
-        let id = self.workspaces[wi].id;
-        let s = self.make_terminal(
-            id,
-            TerminalOpts::cwd(Some(home.to_string_lossy().into_owned())),
-            window,
-            cx,
-        );
-        if let Surface::Terminal(t) = &s {
-            t.update(cx, |t, _| {
-                t.send(format!("{} '{ask}'\r", agent.trim()).as_bytes())
-            });
-        }
-        self.select_workspace(wi, window, cx);
-        let pane = self.workspaces[wi].focused_pane;
-        self.add_tab_to(wi, pane, s, true, window, cx);
-    }
-
-    /// `abromux folder remove` from (maybe) one of workspace `id`'s own
-    /// shells: once it has printed and hung up (`gone`), close the
-    /// workspace, then delete the folder off the main thread (a toast only
-    /// if that fails).
-    pub(crate) fn remove_folder_later(
-        &mut self,
-        id: usize,
-        dir: std::path::PathBuf,
-        force: bool,
-        gone: server::Hangup,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.spawn_in(window, async move |this, cx| {
-            // A caller that keeps the connection open doesn't hold this up
-            // for long.
-            let limit = cx.background_executor().timer(Duration::from_secs(10));
-            futures::future::select(gone, limit).await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                if let Some(i) = this.ws_index(id) {
-                    this.close_workspace(i, window, cx);
-                }
-            });
-            let d = dir.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move { folder::remove(&d, force) })
-                .await;
-            // Only a failure is worth a toast: the workspace closing already
-            // says it went.
-            if let Err(e) = result {
-                let _ = this.update_in(cx, |_, window, cx| {
-                    let note = Notification::error(format!("{}: {e}", dir.display()))
-                        .title("Couldn't remove the workspace folder");
-                    window.push_notification(note, cx);
-                });
-            }
-        })
-        .detach();
-    }
-
     /// Put `ws` at `index`, keeping the selected workspace selected.
     /// Returns where it went: never below the cleanup group unless it's in it.
     fn insert_workspace(&mut self, index: usize, ws: Workspace) -> usize {
@@ -2282,6 +2152,95 @@ impl AbroMux {
         .detach();
     }
 
+    /// A command's Lua script (`"script"` in a config file, or an init.lua
+    /// action): `abromux do` in the background, acting on the focused tab as
+    /// a script run in its terminal would. A relative path is the project's
+    /// (`base`), else the config folder's. A failure shows its error.
+    fn run_script(
+        &mut self,
+        c: &settings::Command,
+        base: Option<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(script) = &c.script else { return };
+        let path = match script.strip_prefix("~/") {
+            Some(rest) => paths::home().join(rest),
+            None => {
+                let p = std::path::PathBuf::from(script);
+                let dir = base
+                    .clone()
+                    .or_else(|| settings::path().parent().map(std::path::Path::to_path_buf));
+                match dir {
+                    Some(d) if p.is_relative() => d.join(p),
+                    _ => p,
+                }
+            }
+        };
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("do").arg(&path);
+        if let Some(a) = &c.action {
+            cmd.args(["--action", a]);
+        }
+        if let Some(args) = &c.args {
+            cmd.arg("--args")
+                .arg(serde_json::Value::Object(args.clone()).to_string());
+        }
+        cmd.env("ABROMUX_ACTION_ORIGIN", "palette")
+            .env("ABROMUX_WORKSPACE_ID", self.ws_ref(self.active));
+        match self.ws().focused_surface() {
+            Some(s) => cmd.env("ABROMUX_SURFACE_ID", self.sref(s)),
+            None => cmd.env_remove("ABROMUX_SURFACE_ID"),
+        };
+        if let Some(sock) = &self.socket {
+            cmd.env("ABROMUX_SOCKET_PATH", sock);
+        }
+        let cwd = self
+            .focused_cwd(cx)
+            .map(std::path::PathBuf::from)
+            .or(base)
+            .filter(|d| d.is_dir())
+            .unwrap_or_else(paths::home);
+        cmd.current_dir(cwd)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped());
+        let title = c.title.clone();
+        let child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                let note = Notification::error(format!("{title}: {e}"));
+                return window.push_notification(note, cx);
+            }
+        };
+        let (tx, rx) = futures::channel::oneshot::channel();
+        // Waited for off the main thread: an action may ask a question in
+        // the palette, or keep running with handlers.
+        std::thread::spawn(move || {
+            let _ = tx.send(child.wait_with_output());
+        });
+        cx.spawn_in(window, async move |_, cx| {
+            let Ok(Ok(out)) = rx.await else { return };
+            if out.status.success() {
+                return;
+            }
+            let err = String::from_utf8_lossy(&out.stderr);
+            let lines: Vec<&str> = err.trim().lines().collect();
+            let tail = lines[lines.len().saturating_sub(8)..].join("\n");
+            let tail = tail.strip_prefix("abromux: ").unwrap_or(&tail).to_string();
+            let _ = cx.update(|window, cx| {
+                let note = Notification::error(tail)
+                    .title(format!("{title} failed"))
+                    .autohide(false);
+                window.push_notification(note, cx);
+            });
+        })
+        .detach();
+    }
+
     /// Run `c`; `base` is its project's directory, which a workspace's
     /// `cwd` is relative to (else the focused terminal's).
     fn execute_command(
@@ -2349,6 +2308,9 @@ impl AbroMux {
                 }
             }
             return;
+        }
+        if c.script.is_some() {
+            return self.run_script(&c, base, window, cx);
         }
         let Some(run) = c.run else { return };
         let term = match self.ws().focused_surface() {
@@ -2450,7 +2412,7 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let result = settings::load().map(|s| settings_window::apply(s, cx));
+        let result = settings::load_app().map(|s| settings_window::apply(s, cx));
         let note = match &result {
             Ok(()) => Notification::success(format!(
                 "Reloaded {}",
@@ -3234,12 +3196,6 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &CloseWorkspace, window, cx| {
                 this.request_close_workspace(this.active, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &CleanUpWorkspaceFolder, window, cx| {
-                this.clean_up_folder(this.active, window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &NewFolderWorkspace, window, cx| {
-                this.toggle_palette(palette::Mode::NewFolder, window, cx)
-            }))
             .on_action(cx.listener(|this, _: &RenameWorkspace, window, cx| {
                 this.sidebar = true;
                 this.start_rename(this.active, window, cx)
@@ -3781,7 +3737,7 @@ fn run_app(cwd: Option<String>) {
         abromux_platform::prefs::import_once(&alert::SKIP_KEYS);
         gpui_component::init(cx);
         // A broken config file starts with the defaults, and says so once the window is up.
-        let (settings, settings_error) = match settings::load() {
+        let (settings, settings_error) = match settings::load_app() {
             Ok(s) => (s, None),
             Err(e) => (settings::Settings::default(), Some(e)),
         };
