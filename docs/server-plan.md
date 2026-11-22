@@ -183,7 +183,9 @@ below) with the app's handlers untouched:
       `{"open":N}`, the app opens its side (`{"op":"control","conn":N}`) and
       serves it with its existing code (`server::serve`), the server
       splicing bytes. CLI, hooks and the phone app work as before.
-- [x] **Model methods vs view methods**, as the split the server can act on:
+- [x] **Model methods vs view methods**: every method is one or the other
+      (`api::kind`, shown by `abromux rpc describe`; a test keeps what the
+      server takes to model methods). What the server acts on:
       while the app is away the server answers `ping`, `list-workspaces`,
       status/log/notification lists from what the app last pushed
       (`{"op":"state"}`), *keeps* status, progress, log, notifications and

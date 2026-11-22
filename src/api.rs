@@ -23,6 +23,48 @@ pub struct Method {
     pub params: &'static str,
 }
 
+/// What a method needs (docs/server-plan.md, phase 2): the workspaces'
+/// state (**model**: workspaces, panes, tabs, status, notifications, links,
+/// forwards), or the app's views (**view**: browser automation, input,
+/// focus, reading a screen, questions to a person). A server answering for
+/// an app that's away can only ever take model methods
+/// (abromux_server::control::RECORDED, ANSWERED).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Model,
+    View,
+}
+
+pub fn kind(method: &str) -> Kind {
+    let (ns, verb) = method.split_once('.').unwrap_or((method, ""));
+    match ns {
+        "workspace" | "group" | "status" | "progress" | "log" | "notification" | "link"
+        | "forward" | "agent" | "tab" | "system" | "session" => Kind::Model,
+        "pane" if verb != "zoom" => Kind::Model,
+        "surface"
+            if matches!(
+                verb,
+                "list"
+                    | "split"
+                    | "create"
+                    | "close"
+                    | "rename"
+                    | "respawn"
+                    | "move"
+                    | "reorder"
+                    | "split_off"
+                    | "move_to_new_workspace"
+                    | "clear_history"
+                    | "reclaim"
+                    | "restream"
+            ) =>
+        {
+            Kind::Model
+        }
+        _ => Kind::View,
+    }
+}
+
 const fn m(
     name: &'static str,
     cli: &'static str,
@@ -1034,6 +1076,10 @@ pub fn describe(m: &Method) -> Value {
         "name": m.name,
         "description": m.doc,
         "cli": (!m.cli.is_empty()).then(|| format!("abromux {}", m.cli)),
+        "kind": match kind(m.name) {
+            Kind::Model => "model",
+            Kind::View => "view",
+        },
         "input_schema": {
             "type": "object",
             "properties": props,
@@ -1141,6 +1187,46 @@ mod tests {
                 m.name
             );
         }
+    }
+
+    /// What the server takes while the app is away is model methods only,
+    /// and real ones; the views' methods are the app's.
+    #[test]
+    fn methods_are_model_or_view() {
+        for m in abromux_server::control::RECORDED
+            .iter()
+            .chain(abromux_server::control::ANSWERED)
+        {
+            assert!(find(m).is_some(), "{m} isn't a method");
+            assert_eq!(kind(m), Kind::Model, "{m}");
+        }
+        for v in [
+            "browser.click",
+            "window.focus",
+            "surface.send_text",
+            "surface.read_text",
+            "ui.prompt",
+        ] {
+            assert_eq!(kind(v), Kind::View, "{v}");
+        }
+        for m in [
+            "workspace.create",
+            "surface.split",
+            "pane.create",
+            "forward.add",
+        ] {
+            assert_eq!(kind(m), Kind::Model, "{m}");
+        }
+        let models = METHODS
+            .iter()
+            .filter(|m| kind(m.name) == Kind::Model)
+            .count();
+        assert!(
+            models > 40 && models < METHODS.len() - 30,
+            "{models} of {}",
+            METHODS.len()
+        );
+        assert_eq!(describe(find("browser.click").unwrap())["kind"], "view");
     }
 
     #[test]
