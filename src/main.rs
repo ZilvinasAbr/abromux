@@ -699,11 +699,12 @@ impl AbroMux {
             let mut last = None;
             loop {
                 Timer::after(Duration::from_secs(5)).await;
-                let Ok((s, state, terms)) = this.update(cx, |this, cx| {
+                let Ok((s, state, terms, model)) = this.update(cx, |this, cx| {
                     (
                         this.snapshot(false, cx),
                         this.control_state(cx),
                         this.held_terms(cx),
+                        this.model(cx),
                     )
                 }) else {
                     break;
@@ -718,11 +719,22 @@ impl AbroMux {
                     if let Some(link) = control_link::remote(h) {
                         let (ws, sess) = for_host(&state, &session, h);
                         link.push_state(ws, sess);
+                        // Its replica: the workspaces with something there.
+                        let mut m = model.clone();
+                        m.workspaces.retain(|w| {
+                            w.host.as_deref() == Some(h.as_str())
+                                || w.layout
+                                    .tabs()
+                                    .iter()
+                                    .any(|t| t.host.as_deref() == Some(h.as_str()))
+                        });
+                        link.push_model(m);
                     }
                 }
                 if let Some(link) = control_link::current() {
                     link.push_state(state, session);
                     link.push_terms(terms);
+                    link.push_model(model);
                 }
                 if last.as_ref() != Some(&s) {
                     session::save(&s);

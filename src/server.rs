@@ -3989,6 +3989,92 @@ impl AbroMux {
         Ok(Reply::Now(v))
     }
 
+    /// The workspaces as the model has them (abromux_model): what the app
+    /// drives its own copy and its server's replica with.
+    pub(crate) fn model(&self, cx: &App) -> abromux_model::Model {
+        use abromux_model as m;
+        let surface =
+            |s: &Surface| self.surface_refs.get(&s.entity_id()).copied().unwrap_or(0) as u64;
+        let tab = |s: &Surface| {
+            let (kind, held, host) = match s {
+                Surface::Terminal(t) => {
+                    let t = t.read(cx);
+                    ("terminal", t.held_id(), t.host.clone())
+                }
+                Surface::Browser(_) => ("browser", None, None),
+                Surface::Plugin(_) => ("plugin", None, None),
+            };
+            m::Tab {
+                surface: surface(s),
+                kind: kind.into(),
+                title: s.title(cx),
+                held,
+                host,
+            }
+        };
+        fn node(n: &crate::workspace::Node, tab: &dyn Fn(&Surface) -> m::Tab) -> m::Node {
+            match n {
+                crate::workspace::Node::Leaf(p) => m::Node::Pane {
+                    id: p.id as u64,
+                    tabs: p.tabs.iter().map(tab).collect(),
+                    active: p.active,
+                },
+                crate::workspace::Node::Split {
+                    axis,
+                    ratio,
+                    children,
+                    ..
+                } => m::Node::Split {
+                    vertical: matches!(axis, Axis::Vertical),
+                    ratio: *ratio,
+                    children: Box::new([node(&children[0], tab), node(&children[1], tab)]),
+                },
+            }
+        }
+        m::Model {
+            seq: 0,
+            selected: self.workspaces.get(self.active).map(|w| w.id as u64),
+            workspaces: self
+                .workspaces
+                .iter()
+                .map(|w| m::Workspace {
+                    id: w.id as u64,
+                    name: w.name(cx),
+                    description: w.description.clone(),
+                    host: w.host.clone(),
+                    folder: w
+                        .home
+                        .as_ref()
+                        .map(|h| h.to_string_lossy().into_owned())
+                        .or_else(|| w.env.get("ABROMUX_WORKSPACE_DIR").cloned()),
+                    cwd: w.cwd(cx),
+                    group: w
+                        .group
+                        .and_then(|g| self.groups.iter().find(|x| x.id == g))
+                        .map(|g| g.name.clone()),
+                    layout: node(&w.root, &tab),
+                    status: w
+                        .status
+                        .iter()
+                        .map(|s| {
+                            let v = status::status_json(s);
+                            m::Status {
+                                key: v["key"].as_str().unwrap_or_default().into(),
+                                value: v["value"].as_str().unwrap_or_default().into(),
+                                color: v["color"].as_str().map(String::from),
+                            }
+                        })
+                        .collect(),
+                    progress: w.progress.as_ref().map(|p| m::Progress {
+                        value: p.value as f64,
+                        label: p.label.clone(),
+                    }),
+                    unread: self.ws_unread(w) as u32,
+                })
+                .collect(),
+        }
+    }
+
     /// The terminals this app holds of its own server, with what it parses
     /// of them (title, folder), for the server to list to other apps.
     pub(crate) fn held_terms(&self, cx: &App) -> Value {

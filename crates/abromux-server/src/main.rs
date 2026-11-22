@@ -20,6 +20,7 @@ const USAGE: &str = "usage: abromux-server [serve] [--socket PATH] [--control PA
        abromux-server install | uninstall            (a systemd user service)
        abromux-server notify|set-status|clear-status|set-progress|clear-progress|log|list-workspaces|ping ...
        abromux-server call <method> [<params json>]
+       abromux-server folder new <name> | add <path> [--branch B] | list | all | path | remove [--force]
 
 Keeps abromux terminals running on this machine, for the abromux app here
 or on another machine (docs/server-plan.md).
@@ -74,6 +75,18 @@ fn run(args: Vec<String>, as_cli: bool) -> i32 {
             };
             report(r.map(|m| println!("{m}")))
         }
+        Some("folder") => match abromux_server::folder::command(&args[1..]) {
+            Ok(lines) => {
+                for l in lines {
+                    println!("{l}");
+                }
+                0
+            }
+            Err(e) => {
+                eprintln!("abromux folder: {e}");
+                1
+            }
+        },
         Some("install") if !as_cli => report(abromux_server::service::install(&args[1..])),
         Some("uninstall") if !as_cli => report(abromux_server::service::uninstall()),
         Some(cmd) if as_cli || !cmd.starts_with('-') && cmd != "serve" => cli(&args),

@@ -169,42 +169,53 @@ replays only what the server had kept, so a full-screen program may need a
 resize to redraw; the server's `exit_code` waits up to 300 ms on its loop
 for a program to be reaped.
 
-### Phase 2: the server owns the control socket
+### Phase 2: the model leaves GPUI; the server owns the control socket
 
-**Built differently from the plan.** The plan moved the workspace model out
-of GPUI into the server, the app keeping a replica. That's a rewrite of
-`src/server.rs`'s ~140 handlers and of how the app holds its state, with
-perf risk at every step. What was built gets the same outcome (the done-when
-below) with the app's handlers untouched:
+- [x] `crates/abromux-model`: workspaces, the pane/tab tree (surface ids,
+      not GPUI entities), groups, status, progress, unread, selection;
+      events (`Workspace`, `Removed`, `Selected`) with a gapless `seq`,
+      `diff` and `apply`. Unit-tested without a window: any change's diff,
+      applied, gives the new model; a gap is refused, a resend ignored.
+- [x] Model methods vs view methods: every control method is one or the
+      other (`api::kind`, shown by `abromux rpc describe`); a test keeps
+      what the server takes for an absent app to model methods.
+- [x] The app keeps its model in-process and changes it only through
+      `apply` of the events `diff` gives, the path a replica takes
+      (`control_link::Link::push_model`; it checks the result equals the
+      model it built). Changes are batched: one set of events per tick.
+- [x] Events with a gapless `seq`: the app's server keeps a replica
+      (`{"op":"events"}`); on a gap it asks for a snapshot (`resync`), which
+      the app sends (`{"op":"model"}`), as it does on every new link. Any
+      client gets the replica (`{"op":"model"}`) or a snapshot then every
+      event (`{"op":"subscribe"}`). Remote servers get a replica of the
+      workspaces with something on them.
+- [x] The control socket (`abromux.sock`) is the server's. While the app is
+      attached, each connection is handed to it and spliced to its
+      handlers; while it's away, the server answers model methods from its
+      state (`list-workspaces`, status/log/notification lists), keeps the
+      ones that change it (status, progress, log, notifications, agent
+      reports) and replays them when the app is back; view methods are
+      refused (`app_closed`). One app at a time; a server without a control
+      socket leaves the app binding it itself.
+- [x] The server saves its state, the replica and the app's session
+      (`server-state.json`); a lost workspace is opened again from it
+      (phase 3).
+- [x] Server-side folders (`abromux_server::folder`, the same files and
+      rules as the app's Lua module): `abromux-server folder new|add|list|
+      all|path|remove`, and `abromux new-workspace --host H --folder NAME`
+      makes the folder on H and puts the workspace's terminals in it.
 
-- [x] `abromux server --control PATH` serves the control socket
-      (`abromux.sock`, `abromux_server::control`). The app attaches
-      (`{"op":"app"}`); for each control connection the server says
-      `{"open":N}`, the app opens its side (`{"op":"control","conn":N}`) and
-      serves it with its existing code (`server::serve`), the server
-      splicing bytes. CLI, hooks and the phone app work as before.
-- [x] **Model methods vs view methods**: every method is one or the other
-      (`api::kind`, shown by `abromux rpc describe`; a test keeps what the
-      server takes to model methods). What the server acts on:
-      while the app is away the server answers `ping`, `list-workspaces`,
-      status/log/notification lists from what the app last pushed
-      (`{"op":"state"}`), *keeps* status, progress, log, notifications and
-      agent reports, and *replays* them when the app attaches (connection
-      0). Everything else is refused (`app_closed`, the CLI's exit 4).
-- [x] The server saves its state and the kept calls (`server-state.json`),
-      including the app's session.
-- [x] One app at a time; an older server (protocol 2), or one serving
-      another socket, leaves the app binding the socket itself.
-- [x] One server per socket (a lock file): several starting at once (the
-      app's terminals and its link) don't split the terminals.
-- [ ] Not built: the `abromux-model` crate and a replica in the app;
-      server-side `folder add`/cleanup (workspace folders became a Lua
-      module on `main`; they run where the app is).
+As built, the app stays the source of the model while it runs (its GPUI
+views draw from its own state, not from a replica of the server's): moving
+the handlers themselves into the server would rewrite ~140 of them, with perf
+risk at each, for no change anyone sees. The server is the source while the
+app is away, and for every other client.
 
 **Done when:** quitting the app leaves every workspace's state (status pills,
 progress, notifications, agents' state) live in the server, and the app picks
 it back up at launch. *Met:* checked in the app (status, notification and log
-reported while it was closed came back on the right workspace and tab).
+reported while it was closed came back on the right workspace and tab); the
+replica followed a rename live on a VPS's server (`subscribe`).
 
 ### Phase 3: the app as a client of several servers
 

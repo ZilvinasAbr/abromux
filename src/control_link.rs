@@ -52,6 +52,12 @@ pub struct Link {
     last: Arc<Mutex<Option<Value>>>,
     up: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
+    /// The app's copy of the model as this server has it: changed only by
+    /// applying the events sent (abromux_model), as the server's replica
+    /// is. `resync`: the server asked for a snapshot (it saw a gap, or it's
+    /// a new connection).
+    model: Arc<Mutex<abromux_model::Model>>,
+    resync: Arc<AtomicBool>,
 }
 
 impl Link {
@@ -68,6 +74,37 @@ impl Link {
             && writeln!(s, "{msg}").is_ok()
         {
             *last = Some(msg);
+        }
+    }
+
+    /// Bring the server's replica to `new`: the events from the last model
+    /// sent to it (applied to the app's copy first, the same way the server
+    /// applies them), or the whole model when it needs a snapshot.
+    pub fn push_model(&self, new: abromux_model::Model) {
+        let mut cur = self.model.lock().unwrap();
+        let events = abromux_model::stamp(cur.seq, abromux_model::diff(&cur, &new));
+        for e in &events {
+            cur.apply(e).expect("stamped in order");
+        }
+        debug_assert_eq!(
+            abromux_model::Model {
+                seq: cur.seq,
+                ..new
+            },
+            *cur,
+            "the events didn't make the model"
+        );
+        let msg = if self.resync.swap(false, Ordering::Relaxed) {
+            json!({ "op": "model", "model": *cur })
+        } else if events.is_empty() {
+            return;
+        } else {
+            json!({ "op": "events", "events": events })
+        };
+        if let Some(s) = self.writer.lock().unwrap().as_mut()
+            && writeln!(s, "{msg}").is_err()
+        {
+            self.resync.store(true, Ordering::Relaxed);
         }
     }
 
@@ -116,6 +153,7 @@ pub fn attach_local(control: &Path) -> bool {
             let link = Link::default();
             *link.writer.lock().unwrap() = Some(writer);
             link.up.store(true, Ordering::Relaxed);
+            link.resync.store(true, Ordering::Relaxed);
             let l = link.clone();
             std::thread::spawn(move || run(reader, target, l));
             let _ = LOCAL.set(link);
@@ -159,6 +197,7 @@ pub fn sync_remotes(hosts: &[String]) {
                     Ok((r, w)) => {
                         *link.writer.lock().unwrap() = Some(w);
                         link.up.store(true, Ordering::Relaxed);
+                        link.resync.store(true, Ordering::Relaxed);
                         reader = Some(r);
                     }
                     Err(_) => {
@@ -271,6 +310,10 @@ fn run(mut reader: BufReader<UnixStream>, target: Target, link: Link) {
                         let _ = tx.unbounded_send((req, reply, gone.shared()));
                     }
                 };
+                // The replica missed something: a snapshot next time.
+                if msg["resync"] == true {
+                    link.resync.store(true, Ordering::Relaxed);
+                }
                 if let Some(id) = msg["release"].as_str() {
                     ask("surface.restream", id);
                 }
@@ -294,6 +337,7 @@ fn run(mut reader: BufReader<UnixStream>, target: Target, link: Link) {
                 reader = r;
                 *link.writer.lock().unwrap() = Some(w);
                 link.up.store(true, Ordering::Relaxed);
+                link.resync.store(true, Ordering::Relaxed);
                 break;
             }
             delay = (delay * 2).min(Duration::from_secs(15));

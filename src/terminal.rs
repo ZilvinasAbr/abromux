@@ -2864,7 +2864,10 @@ fn spawn_shell(
                 .filter(|(k, _)| {
                     matches!(
                         k.as_str(),
-                        "COMPOSE_PROJECT_NAME" | "ABROMUX_SURFACE_ID" | "ABROMUX_WORKSPACE_ID"
+                        "COMPOSE_PROJECT_NAME"
+                            | "ABROMUX_SURFACE_ID"
+                            | "ABROMUX_WORKSPACE_ID"
+                            | "ABROMUX_WORKSPACE_DIR"
                     )
                 })
                 .cloned(),

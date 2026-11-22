@@ -44,6 +44,7 @@
 //!   → `{"ok":true,"code":n|null}`: its exit status, null if a signal ended it
 
 pub mod control;
+pub mod folder;
 pub mod http;
 pub mod service;
 pub mod tailnet;
@@ -257,6 +258,8 @@ enum Mode {
     /// A streamed attach waiting for a local app to let go of the terminal:
     /// what it sends meanwhile waits too.
     Waiting,
+    /// Gets the model's events as they come (`subscribe`).
+    Subscriber,
 }
 
 struct Client {
@@ -754,6 +757,26 @@ impl Server {
                                 let terms = &self.terms;
                                 self.state
                                     .update(&msg, &|id| terms.get(id).is_some_and(|t| !t.eof));
+                            } else if msg["op"] == "events" {
+                                // The app's model changed: the replica follows.
+                                let events: Vec<abromux_model::Stamped> =
+                                    serde_json::from_value(msg["events"].clone())
+                                        .unwrap_or_default();
+                                match self.state.apply_events(&events) {
+                                    Ok(done) => self.publish(&done),
+                                    Err(_) => {
+                                        let c = self.clients.get_mut(&cid).unwrap();
+                                        c.reply(json!({ "resync": true }));
+                                        self.flush(cid);
+                                    }
+                                }
+                            } else if msg["op"] == "model" {
+                                if let Ok(m) = serde_json::from_value(msg["model"].clone()) {
+                                    self.state.set_model(m);
+                                    // Subscribers start over from it.
+                                    let snap = json!({ "model": self.state.model });
+                                    self.to_subscribers(&snap);
+                                }
                             } else if msg["op"] == "terms" {
                                 // What the app parses of the terminals it
                                 // holds: their titles and folders.
@@ -784,7 +807,7 @@ impl Server {
                         _ => unreachable!(),
                     }
                 }
-                Mode::Pending | Mode::Splice(_) | Mode::Waiting => return,
+                Mode::Pending | Mode::Splice(_) | Mode::Waiting | Mode::Subscriber => return,
             }
         }
     }
@@ -873,6 +896,17 @@ impl Server {
                 self.app_owner = req["owner"].as_str().map(String::from);
                 self.attach_app(cid)
             }
+            // The app's model as the replica has it (abromux_model).
+            Some("model") => {
+                c.reply(json!({ "ok": true, "model": self.state.model }));
+                self.flush(cid);
+            }
+            // The model, then each event after it, as they come.
+            Some("subscribe") => {
+                c.reply(json!({ "ok": true, "model": self.state.model }));
+                c.mode = Mode::Subscriber;
+                self.flush(cid);
+            }
             // A forwarded port (`abromux forward`): connect to it here, then
             // this connection is that TCP connection.
             Some("connect") => {
@@ -908,6 +942,21 @@ impl Server {
                         self.flush(cid);
                     }
                 }
+            }
+            // Workspace folders here (`abromux-server folder ...`): what the
+            // app asks of a host for a workspace there.
+            Some("folder") => {
+                let args: Vec<String> = req["args"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|a| a.as_str().map(String::from))
+                    .collect();
+                match folder::command(&args) {
+                    Ok(lines) => c.reply(json!({ "ok": true, "out": lines })),
+                    Err(e) => fail(c, e),
+                }
+                self.flush(cid);
             }
             // What listens for connections here (to offer to forward).
             Some("ports") => {
@@ -1321,6 +1370,34 @@ impl Server {
         if only_ours && let Some(a) = self.clients.get_mut(&app) {
             a.reply(json!({ "reclaim": id }));
             self.flush(app);
+        }
+    }
+
+    /// Events the replica applied, to every subscriber.
+    fn publish(&mut self, events: &[abromux_model::Stamped]) {
+        for e in events {
+            self.to_subscribers(&json!(e));
+        }
+    }
+
+    fn to_subscribers(&mut self, v: &Value) {
+        let subs: Vec<u64> = self
+            .clients
+            .iter()
+            .filter(|(_, c)| c.mode == Mode::Subscriber)
+            .map(|(id, _)| *id)
+            .collect();
+        for s in subs {
+            if let Some(c) = self.clients.get_mut(&s) {
+                // One that doesn't keep up starts over (a snapshot) rather
+                // than holding the server up.
+                if c.out.len() > HIGH_WATER {
+                    c.closing = true;
+                    continue;
+                }
+                c.reply(v.clone());
+            }
+            self.flush(s);
         }
     }
 

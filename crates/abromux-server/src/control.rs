@@ -58,6 +58,9 @@ pub struct State {
     pub session: Value,
     /// Calls kept for the app: `{"method","params","at"}`.
     pub kept: Vec<Value>,
+    /// The replica of the app's model (abromux_model), from the events it
+    /// sends: what subscribers get.
+    pub model: abromux_model::Model,
     path: Option<PathBuf>,
 }
 
@@ -72,14 +75,14 @@ impl State {
             s.workspaces = v["workspaces"].as_array().cloned().unwrap_or_default();
             s.session = v["session"].clone();
             s.kept = v["kept"].as_array().cloned().unwrap_or_default();
+            s.model = serde_json::from_value(v["model"].clone()).unwrap_or_default();
         }
         s
     }
 
     pub fn save(&self) {
         let Some(path) = &self.path else { return };
-        let v =
-            json!({ "workspaces": self.workspaces, "session": self.session, "kept": self.kept });
+        let v = json!({ "workspaces": self.workspaces, "session": self.session, "kept": self.kept, "model": self.model });
         let tmp = path.with_extension("tmp");
         if std::fs::write(&tmp, v.to_string()).is_ok() {
             use std::os::unix::fs::PermissionsExt;
@@ -120,6 +123,31 @@ impl State {
             }
             self.session = session;
         }
+        self.save();
+    }
+
+    /// The app's `{"op":"events"}`: apply them to the replica, in order.
+    /// The ones applied, for subscribers; Err on a gap (the app is asked
+    /// for a snapshot).
+    pub fn apply_events(
+        &mut self,
+        events: &[abromux_model::Stamped],
+    ) -> Result<Vec<abromux_model::Stamped>, abromux_model::Gap> {
+        let mut done = vec![];
+        for e in events {
+            let before = self.model.seq;
+            self.model.apply(e)?;
+            if self.model.seq != before {
+                done.push(e.clone());
+            }
+        }
+        self.save();
+        Ok(done)
+    }
+
+    /// The app's `{"op":"model"}`: a whole snapshot.
+    pub fn set_model(&mut self, model: abromux_model::Model) {
+        self.model = model;
         self.save();
     }
 

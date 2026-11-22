@@ -640,3 +640,65 @@ fn forwards_a_port() {
     let (refused, ..) = request(&sock, json!({ "op": "connect", "port": 1 }));
     assert_eq!(refused["ok"], false);
 }
+
+// ---- the model replica (phase 2) -------------------------------------------
+
+#[test]
+fn keeps_a_replica_of_the_apps_model() {
+    use abromux_model::{Event, Model, Node, Workspace, stamp};
+    let (sock, _control) = server_with_control("model");
+    let (mut link, mut lw) = app_link(&sock);
+    // Someone watching from the start.
+    let (snap, mut sub, _sw) = request(&sock, json!({ "op": "subscribe" }));
+    assert_eq!(snap["model"]["seq"], 0);
+
+    let ws = |id: u64, name: &str| Workspace {
+        id,
+        name: name.into(),
+        layout: Node::default(),
+        ..Default::default()
+    };
+    let events = stamp(
+        0,
+        vec![
+            Event::Workspace {
+                index: 0,
+                workspace: ws(1, "home"),
+            },
+            Event::Workspace {
+                index: 1,
+                workspace: ws(2, "vps"),
+            },
+            Event::Selected { id: Some(2) },
+        ],
+    );
+    writeln!(lw, "{}", json!({ "op": "events", "events": events })).unwrap();
+    for want in 1..=3 {
+        let mut line = String::new();
+        sub.read_line(&mut line).unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["seq"], want, "{v}");
+    }
+    let (m, ..) = request(&sock, json!({ "op": "model" }));
+    let m: Model = serde_json::from_value(m["model"].clone()).unwrap();
+    assert_eq!((m.seq, m.workspaces.len(), m.selected), (3, 2, Some(2)));
+
+    // A gap: the app is asked for the whole model, which subscribers get.
+    let late = stamp(5, vec![Event::Removed { id: 1 }]);
+    writeln!(lw, "{}", json!({ "op": "events", "events": late })).unwrap();
+    let mut line = String::new();
+    link.read_line(&mut line).unwrap();
+    assert!(line.contains("resync"), "{line}");
+    let whole = Model {
+        seq: 6,
+        workspaces: vec![ws(2, "vps")],
+        selected: Some(2),
+    };
+    writeln!(lw, "{}", json!({ "op": "model", "model": whole })).unwrap();
+    let mut line = String::new();
+    sub.read_line(&mut line).unwrap();
+    let v: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(v["model"]["seq"], 6, "{v}");
+    let (m, ..) = request(&sock, json!({ "op": "model" }));
+    assert_eq!(m["model"]["workspaces"][0]["name"], "vps");
+}

@@ -32,6 +32,7 @@ Commands:
   current-workspace
   new-workspace [--name <title>] [--description <text>] [--cwd <path>] [--command <text>] [--focus <true|false>]
                 [--host ssh://[user@]host[:port]]                (its terminals run on that machine's abromux-server)
+                [--host <server> --folder <name>]                (in a workspace folder made there)
                 [--group <ref>] [--layout <json>|@<file>]  (build a cmux-style layout: splits, panes, tabs)
   select-workspace --workspace <id|ref|index>
   close-workspace --workspace <id|ref|index>
@@ -820,6 +821,30 @@ fn dispatch(
                 && let Ok(abs) = std::path::absolute(&*c)
             {
                 *c = abs.to_string_lossy().into_owned();
+            }
+            // `--host H --folder NAME`: a workspace folder made on H (its
+            // server's `folder new`), the workspace's terminals in it.
+            if let Some(Value::String(name)) = opts.remove("folder") {
+                let host = match opts.get("host") {
+                    Some(Value::String(h)) => crate::servers::resolve(h)?.ok_or(
+                        "--folder with --host local: make it with New Workspace Folder… (⇧⌘I)",
+                    )?,
+                    _ => return Err("--folder needs --host (a folder here is ⇧⌘I)".into()),
+                };
+                let dir = remote_folder(&host, &name)?;
+                let tag = abromux_server::folder::slug(
+                    std::path::Path::new(&dir)
+                        .file_name()
+                        .map(|n| n.to_string_lossy())
+                        .unwrap_or_default()
+                        .as_ref(),
+                );
+                opts.insert("cwd".into(), json!(dir));
+                opts.entry("name").or_insert(json!(name));
+                opts.insert(
+                    "env".into(),
+                    json!({ "ABROMUX_WORKSPACE_DIR": dir, "COMPOSE_PROJECT_NAME": tag }),
+                );
             }
             ("workspace.create", |v| format!("OK {}", s(&v["ref"])))
         }
@@ -2630,6 +2655,30 @@ fn created(v: &Value) -> String {
         s(&v["pane"]),
         s(&v["workspace"])
     )
+}
+
+/// Make workspace folder `name` on the server at `host`: its path there.
+fn remote_folder(host: &str, name: &str) -> Result<String, String> {
+    use std::io::BufRead;
+    let req = json!({ "op": "folder", "args": ["new", name] });
+    let (s, _) = abromux_term::remote::open_stream(host, Some(&req))?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(20)))
+        .ok();
+    let mut line = String::new();
+    std::io::BufReader::new(s)
+        .read_line(&mut line)
+        .map_err(|e| e.to_string())?;
+    let v: Value = serde_json::from_str(&line).map_err(|e| format!("{e}: {line:?}"))?;
+    if v["ok"] != true {
+        return Err(format!(
+            "{host}: {}",
+            v["error"].as_str().unwrap_or("refused")
+        ));
+    }
+    v["out"][0]
+        .as_str()
+        .map(String::from)
+        .ok_or_else(|| "the server said nothing".into())
 }
 
 /// A socket here whose connections go to the control socket of the server

@@ -214,6 +214,10 @@ The app reaches it with `ssh HOST abromux-server --stdio`, which starts the serv
 
 **This Mac's server is the same.** It owns the control socket now, so `abromux` commands and agent hooks keep working while the app is closed: it answers `list-workspaces`, keeps status, progress, the log, notifications and agent reports, and the app shows them at its next launch. Another app (another Mac, or the web client) can open a terminal this app has: the app shares it, and holds it alone again once the other is gone.
 
+**Workspace folders there.** `abromux new-workspace --host vps --folder "fix login"` makes a workspace folder on the host (as ⇧⌘I does here: `AGENTS.md`, `CLAUDE.md`, `.abromux/workspace.json`) and opens the workspace in it; `abromux folder add ~/repos/x` in its terminals makes a worktree there, and `abromux-server folder list|all|remove` the rest.
+
+**The model.** Each server keeps a copy of the app's workspaces (theirs, for a remote one), kept up to date with numbered events: `{"op":"model"}` on its socket gives it, and `{"op":"subscribe"}` gives it and then every change, for scripts and other clients.
+
 **Ports.** A dev server on the host isn't on this machine: `abromux forward 3000` (in the workspace) makes `http://127.0.0.1:<port>` here reach port 3000 there, through the server. `forward list`, `forward remove 3000`, and `forward ports` (what listens there). Forwards are the workspace's: saved with it, on the same port next time, and closed with it.
 
 **Tailscale and a phone.** `abromux-server --tailnet` (or `install --tailnet`) also listens on the host's Tailscale addresses, port 7297, letting in only its Tailscale user (and `--tailnet-allow` logins). An app reaches it at `tailnet://host`, no ssh needed, and a phone's browser at `http://host:7297/`: the terminals there, each in a terminal with the keys a phone keyboard lacks (`#term=<id>` opens one directly, for the Home Screen). Server-side parsing (`--vt` packages, or the app's own server) gives it the screen as it is; without it, what was printed since the last app left.

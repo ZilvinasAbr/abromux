@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 abromux-core = { path = "../abromux-core" }
+abromux-model = { path = "../abromux-model" }
 anyhow = "1"
 base64 = "0.22"
 sha1_smol = "1"
