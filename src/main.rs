@@ -30,6 +30,7 @@ mod pins;
 mod placement;
 mod plugins;
 mod quit;
+mod remote;
 mod server;
 mod session;
 mod settings;
@@ -39,6 +40,7 @@ mod sidebar;
 mod skills;
 mod sprite;
 mod status;
+mod stream;
 mod tabs;
 mod terminal;
 mod terminal_browser;
@@ -217,6 +219,7 @@ impl AssetSource for Assets {
             };
         }
         let bytes = embed!(
+            "smartphone",
             "terminal",
             "claude",
             "codex",
@@ -563,6 +566,10 @@ impl AbroMux {
         this.place_window(window, cx);
         this.socket = server::start(window, cx);
         Self::watch_events(cx);
+        // Phone access (Settings › Phone Access), once the socket it relays to is up.
+        if this.socket.is_some() {
+            remote::start(&cx.global::<settings::Settings>().remote);
+        }
         let restored = session.is_some_and(|s| this.restore(s, window, cx));
         if !restored || cwd.is_some() {
             this.new_workspace(cwd, window, cx);

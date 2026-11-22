@@ -28,6 +28,17 @@ gpui-component = "=0.5.1"
 # Markdown tabs' URL scheme (src/markdown.rs); wry's own http, re-exported
 http = "1"
 portable-pty = "0.9"
+# surface.stream's output and the phone bridge (remote/); already in the build
+base64 = "0.22"
+# The phone bridge (src/remote/): the WebSocket handshake's SHA-1, Web Push's
+# P-256, HKDF and AES-128-GCM (RFC 8291/8292), and the pairing QR code.
+sha1_smol = "1"
+p256 = { version = "0.13", default-features = false, features = ["ecdh", "ecdsa", "std"] }
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+getrandom = "0.2"
+qrcode = { version = "0.14", default-features = false }
 anyhow = "1"
 futures = { version = "0.3", features = ["executor"] }
 serde = { version = "1", features = ["derive"] }

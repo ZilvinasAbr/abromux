@@ -932,6 +932,23 @@ impl Terminal {
         }
     }
 
+    /// Where the cursor is in the viewport, shown or not, and whether it's
+    /// shown, as the last `update_frame` found it. None when it's off the
+    /// viewport (scrolled back).
+    pub fn cursor_at(&self) -> Option<(u16, u16, bool)> {
+        let mut cursor = sized!(GhosttyRenderStateCursor);
+        unsafe {
+            ghostty_render_state_get(
+                self.render,
+                GHOSTTY_RENDER_STATE_DATA_CURSOR,
+                &mut cursor as *mut _ as *mut c_void,
+            );
+        }
+        cursor
+            .viewport_has_value
+            .then_some((cursor.viewport_x, cursor.viewport_y, cursor.visible))
+    }
+
     pub fn scroll_to_bottom(&mut self) {
         let v = GhosttyTerminalScrollViewport {
             tag: GHOSTTY_TERMINAL_SCROLL_VIEWPORT_BOTTOM,
