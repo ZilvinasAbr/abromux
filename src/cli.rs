@@ -31,6 +31,7 @@ Commands:
   list-workspaces
   current-workspace
   new-workspace [--name <title>] [--description <text>] [--cwd <path>] [--command <text>] [--focus <true|false>]
+                [--host ssh://[user@]host[:port]]                (its terminals run on that machine's abromux-server)
                 [--group <ref>] [--layout <json>|@<file>]  (build a cmux-style layout: splits, panes, tabs)
   select-workspace --workspace <id|ref|index>
   close-workspace --workspace <id|ref|index>
@@ -779,8 +780,10 @@ fn dispatch(
             {
                 *l = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
             }
-            // The app runs elsewhere: make the directory absolute here.
-            if let Some(Value::String(c)) = opts.get_mut("cwd")
+            // The app runs elsewhere: make the directory absolute here
+            // (unless it's on another host, where it means that host's).
+            if !opts.contains_key("host")
+                && let Some(Value::String(c)) = opts.get_mut("cwd")
                 && let Ok(abs) = std::path::absolute(&*c)
             {
                 *c = abs.to_string_lossy().into_owned();

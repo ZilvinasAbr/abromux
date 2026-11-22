@@ -805,6 +805,11 @@ impl AbroMux {
                 let cwd = str_param(p, "cwd")
                     .map(String::from)
                     .or_else(|| folder.as_ref().map(|f| f.to_string_lossy().into_owned()));
+                // On another machine's server: its terminals start there.
+                let host = str_param(p, "host").map(String::from);
+                if let Some(h) = &host {
+                    abromux_term::remote::Endpoint::parse(h).map_err(|e| anyhow!(e))?;
+                }
                 let group = str_param(p, "group")
                     .map(|g| self.find_group(g))
                     .transpose()?;
@@ -814,12 +819,15 @@ impl AbroMux {
                     self.active = start;
                 }
                 let focus = bool_param(p, "focus", true);
-                // Its first terminal gets the folder and env too.
+                // Its first terminal gets the folder, env and host too.
                 self.building_home = folder.clone();
                 self.building_env = env.clone();
+                self.building_host = host.clone();
                 let wi = self.create_workspace(cwd, focus, window, cx);
                 self.building_home = None;
                 self.building_env.clear();
+                self.building_host = None;
+                self.workspaces[wi].host = host;
                 if !focus {
                     self.active = prev.and_then(|id| self.ws_index(id)).unwrap_or(0);
                 }

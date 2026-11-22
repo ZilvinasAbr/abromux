@@ -285,6 +285,9 @@ pub struct TerminalView {
     pub app: Option<Box<dyn TerminalApp>>,
     /// Kept to start the shell again the same way (`respawn-pane`).
     env: Vec<(String, String)>,
+    /// The server on another machine its program runs on
+    /// (`ssh://host`), None for this machine's.
+    pub host: Option<String>,
     /// Bumped on respawn so the old shell's output and exit are ignored.
     generation: usize,
     /// A task will repaint once the program's hold on the screen times out.
@@ -305,19 +308,29 @@ impl Focusable for TerminalView {
 
 impl TerminalView {
     /// A login shell in `cwd`; with a `command`, the shell runs it and the
-    /// terminal closes when it ends. With `attach`, the holder's terminal
+    /// terminal closes when it ends. With `attach`, the server's terminal
     /// from the last session, if it's still running (a new shell if not).
+    /// With `host`, on that machine's server instead of this one's.
     pub fn new(
         cwd: Option<String>,
         env: Vec<(String, String)>,
         command: Option<String>,
         attach: Option<&str>,
+        host: Option<String>,
         cx: &mut Context<Self>,
     ) -> Self {
         let (cols, rows) = (80, 24);
         let cwd = cwd.unwrap_or_else(|| crate::paths::home().to_string_lossy().into_owned());
-        let (opened, feed) =
-            spawn_shell(&cwd, &env, command.as_deref(), (cols, rows), 0, attach, cx);
+        let (opened, feed) = spawn_shell(
+            &cwd,
+            &env,
+            command.as_deref(),
+            (cols, rows),
+            0,
+            attach,
+            host.as_deref(),
+            cx,
+        );
         let (opened, failed) = match opened {
             Ok(o) => (o, None),
             Err(e) => (Opened::failed(), Some(e)),
@@ -400,6 +413,7 @@ impl TerminalView {
             command,
             app: None,
             env,
+            host,
             generation: 0,
             hold_timer: false,
             scrolled_at: None,
@@ -474,6 +488,7 @@ impl TerminalView {
             self.grid,
             self.generation,
             None,
+            self.host.as_deref(),
             cx,
         );
         let (opened, failed) = match opened {
@@ -751,8 +766,8 @@ impl TerminalView {
         self.pty.kill();
     }
 
-    /// The holder's id for this terminal, to take it back next launch.
-    pub fn held_id(&self) -> Option<&str> {
+    /// The server's id for this terminal, to take it back next launch.
+    pub fn held_id(&self) -> Option<String> {
         self.pty.held_id()
     }
 
@@ -2733,18 +2748,52 @@ fn sprite_char(c: &ghostty::Cell) -> Option<char> {
 
 /// Start the user's login shell at `size` (running `command` if there is
 /// one), or take back `attach`, and drain its output into the view on the
-/// main thread. Output and the exit of a shell from an older `generation`
-/// (one `respawn` replaced) are dropped. When nothing could be started,
-/// the error, for the view to show in place of the shell.
+/// main thread. With `host`, on that machine's server. Output and the exit
+/// of a shell from an older `generation` (one `respawn` replaced) are
+/// dropped. When nothing could be started, the error, for the view to show
+/// in place of the shell.
+#[allow(clippy::too_many_arguments)]
 fn spawn_shell(
     cwd: &str,
-    env: &[(String, String)],
+    env_in: &[(String, String)],
     command: Option<&str>,
     size: (u16, u16),
     generation: usize,
     attach: Option<&str>,
+    host: Option<&str>,
     cx: &mut Context<TerminalView>,
 ) -> (anyhow::Result<Opened>, Feed) {
+    if let Some(host) = host {
+        // The host's own shell and environment: only what describes this
+        // terminal goes along. This app's socket, CLI and shell integration
+        // are this machine's, so its hooks can't reach it from there yet
+        // (docs/server-plan.md, phase 3).
+        let mut env: Vec<(String, String)> = [
+            ("TERM", "xterm-256color"),
+            ("COLORTERM", "truecolor"),
+            ("TERM_PROGRAM", "abromux"),
+        ]
+        .map(|(k, v)| (k.into(), v.into()))
+        .into();
+        env.extend(
+            env_in
+                .iter()
+                .filter(|(k, _)| k == "COMPOSE_PROJECT_NAME")
+                .cloned(),
+        );
+        let spec = abromux_term::remote::SpawnSpec {
+            command: command.map(String::from),
+            cwd: cwd.to_string(),
+            env,
+        };
+        let (feed, wake) = Feed::new();
+        let opened = crate::pty::open_remote(host, attach, spec, size, &feed);
+        if let Err(e) = &opened {
+            eprintln!("abromux: terminal on {host}: {e:#}");
+        }
+        drain(feed.clone(), wake, generation, cx);
+        return (opened, feed);
+    }
     let shell = abromux_core::paths::user_shell();
     let mut argv = vec![shell, "-l".into()];
     if let Some(c) = command {
@@ -2757,12 +2806,12 @@ fn spawn_shell(
     ]
     .map(|(k, v)| (k.into(), v.into()))
     .into();
-    vars.extend(env.iter().cloned());
+    vars.extend(env_in.iter().cloned());
     if cx
         .try_global::<Config>()
         .is_none_or(|c| c.shell_integration)
     {
-        vars.extend(crate::shell::inject(&mut argv, env));
+        vars.extend(crate::shell::inject(&mut argv, env_in));
     }
     // Held shells are for taking back next launch; a run that won't restore
     // a session (ABROMUX_NO_RESTORE, demos, scripted tests) would only leave

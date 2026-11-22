@@ -435,6 +435,9 @@ pub struct Workspace {
     /// Environment variables its new terminals get (`workspace.create`'s
     /// `env`).
     pub env: std::collections::BTreeMap<String, String>,
+    /// The server on another machine its new terminals start on
+    /// (`ssh://host`, `abromux new-workspace --host`); None for this one.
+    pub host: Option<String>,
     pub root: Node,
     pub focused_pane: usize,
     /// The pane filling the workspace (⌘⇧↩), hiding the others. Only holds
@@ -514,6 +517,7 @@ impl Workspace {
             group: None,
             home: None,
             env: Default::default(),
+            host: None,
             root,
             focused_pane,
             zoom: None,

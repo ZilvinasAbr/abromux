@@ -123,6 +123,7 @@ pub const METHODS: &[Method] = &[
         "new-workspace",
         "Open a workspace, with one terminal or a cmux-style layout.",
         "name?:string Its name;description?:string A description under the name;cwd?:string Where its terminals start;\
+         host?:string Run its terminals on another machine's abromux server (ssh://[user@]host[:port]);\
          command?:string Typed into its first terminal;focus?:boolean Select it (default true);group?:ref A sidebar group to put it in;\
          layout?:string A layout as JSON: splits, panes and tabs;\
          folder?:string Its own folder (absolute): $ABROMUX_WORKSPACE_DIR in its terminals, and kept with it (default cwd);\
