@@ -21,6 +21,14 @@ pub struct Server {
     pub name: String,
     /// `ssh://[user@]host[:port]` (or a Unix socket path).
     pub address: String,
+    /// Other addresses of the same machine, tried in order when `address`
+    /// doesn't answer (its LAN name, then its Tailscale name, say).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<String>,
+    /// The machine's id as its server first reported it (`hello`), to
+    /// notice when an address leads somewhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -94,14 +102,24 @@ pub fn normalize(address: &str) -> Result<String, String> {
 }
 
 /// Add a server. The name is how the palette and `--host` call it.
+/// `address` may list more than one, separated by commas or spaces: the
+/// first is its address, the others are tried after it.
 pub fn add(name: &str, address: &str) -> Result<Server, String> {
     let name = name.trim();
     if name.is_empty() || name.eq_ignore_ascii_case("local") {
         return Err(format!("{name:?} can't be a server's name"));
     }
+    let mut all = address
+        .split([',', ' '])
+        .filter(|a| !a.trim().is_empty())
+        .map(normalize)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter();
     let server = Server {
         name: name.to_string(),
-        address: normalize(address)?,
+        address: all.next().ok_or("no address")?,
+        also: all.collect(),
+        host_id: None,
     };
     let s = server.clone();
     edit(move |list| {
@@ -149,6 +167,17 @@ fn names() -> Vec<String> {
     }
 }
 
+/// The other addresses of the server whose address is `host`
+/// (abromux_term::remote tries them after it).
+pub fn alternates(host: &str) -> Vec<String> {
+    let norm = normalize(host).unwrap_or_else(|_| host.to_string());
+    load()
+        .into_iter()
+        .find(|x| x.address == norm)
+        .map(|x| x.also)
+        .unwrap_or_default()
+}
+
 /// What to call the server at `address`: its name here, else its host.
 pub fn label(address: &str) -> String {
     let norm = normalize(address).unwrap_or_else(|_| address.to_string());
@@ -159,6 +188,25 @@ pub fn label(address: &str) -> String {
         .unwrap_or_else(|| Endpoint::parse(address).map_or_else(|_| address.into(), |e| e.label()))
 }
 
+/// The workspaces the server at `host` keeps for this app: the session
+/// the app last sent it (crate::control_link). Blocks on the network.
+pub fn fetch_workspaces(host: &str) -> Result<Vec<abromux_core::session::WorkspaceState>, String> {
+    use std::io::BufRead;
+    let first = serde_json::json!({ "op": "get-state" });
+    let (s, hello) = abromux_term::remote::open_stream(host, Some(&first))?;
+    if hello["protocol"].as_u64().unwrap_or(1) < abromux_core::wire::CONTROL {
+        return Err("the server there is too old to keep workspaces; update it".into());
+    }
+    s.set_read_timeout(Some(std::time::Duration::from_secs(15)))
+        .ok();
+    let mut line = String::new();
+    std::io::BufReader::new(s)
+        .read_line(&mut line)
+        .map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+    Ok(serde_json::from_value(v["session"]["workspaces"].clone()).unwrap_or_default())
+}
+
 // ---- reachability ----------------------------------------------------------
 
 #[derive(Clone, Debug)]
@@ -167,6 +215,8 @@ pub enum Status {
     /// The server's answer: its machine name and version.
     Up(String),
     Down(String),
+    /// It answered, but as another machine than the one first seen there.
+    Moved(String),
 }
 
 static STATUS: Mutex<Option<HashMap<String, Status>>> = Mutex::new(None);
@@ -200,6 +250,7 @@ pub fn check(address: &str) {
     let address = address.to_string();
     std::thread::spawn(move || {
         let s = match check_now(&address) {
+            Ok(up) if up.starts_with(MOVED) => Status::Moved(up),
             Ok(up) => Status::Up(up),
             Err(e) => Status::Down(e),
         };
@@ -207,13 +258,39 @@ pub fn check(address: &str) {
     });
 }
 
-/// The same, blocking: "hostname, abromux-server 0.1.0" or why not.
+const MOVED: &str = "a different machine";
+
+/// The same, blocking: "hostname, version 0.1.0" or why not. The first
+/// answer's machine id is kept; a later one from another machine says so.
 pub fn check_now(address: &str) -> Result<String, String> {
-    let ep = Endpoint::parse(address)?;
-    let v = abromux_term::remote::hello(&ep)?;
+    // Its other addresses too, as terminals and links try them.
+    let (_conn, v) = abromux_term::remote::open_stream(address, None)?;
     let host = v["host"].as_str().unwrap_or("?");
     let version = v["version"].as_str().unwrap_or("?");
-    Ok(format!("{host}, version {version}"))
+    let about = format!("{host}, version {version}");
+    let Some(id) = v["host_id"].as_str() else {
+        return Ok(about);
+    };
+    let norm = normalize(address).unwrap_or_else(|_| address.to_string());
+    let known = load().into_iter().find(|s| s.address == norm);
+    match known.as_ref().and_then(|s| s.host_id.as_deref()) {
+        Some(k) if k != id => Ok(format!(
+            "{MOVED} answers there now ({about}); remove and add the server if that's right"
+        )),
+        Some(_) => Ok(about),
+        None => {
+            if known.is_some() {
+                let id = id.to_string();
+                let _ = edit(|list| {
+                    if let Some(s) = list.iter_mut().find(|s| s.address == norm) {
+                        s.host_id = Some(id);
+                    }
+                    Ok(())
+                });
+            }
+            Ok(about)
+        }
+    }
 }
 
 #[cfg(test)]

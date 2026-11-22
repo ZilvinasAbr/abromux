@@ -74,6 +74,7 @@ pub const ACTIONS: &[Act] = {
         "moveWorkspaceDown", Some("Move Workspace Down"), MoveWorkspaceDown, [(None, [])];
         "newWorkspaceGroup", Some("New Group from Workspace"), NewGroup, [(None, [])];
         "groupWorkspacesByFolder", Some("Group Workspaces by Folder"), GroupByFolder, [(None, [])];
+        "groupWorkspacesByServer", Some("Group Workspaces by Server"), GroupByServer, [(None, [])];
         "ungroupWorkspaces", Some("Ungroup Workspaces"), Ungroup, [(None, [])];
         "toggleWorkspaceGroup", Some("Collapse or Expand Group"), ToggleGroup, [(None, [])];
         "reopenPreviousSession", Some("Reopen Previous Session"), ReopenSession,
@@ -335,6 +336,14 @@ pub fn find(name: &str) -> Option<&'static Act> {
 pub struct OnServer {
     pub address: String,
     pub tab: bool,
+}
+
+/// Opens the workspaces the server at `address` keeps for this app that
+/// aren't open here (src/servers.rs).
+#[derive(Clone, PartialEq, serde::Deserialize, gpui::Action)]
+#[action(namespace = abromux, no_json)]
+pub struct OpenFromServer {
+    pub address: String,
 }
 
 /// Opens a new tab of plugin `id` (src/plugins.rs) in the focused pane.

@@ -163,7 +163,8 @@ fn log_entries(list: &std::collections::VecDeque<Value>, p: &Value) -> anyhow::R
 pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> {
     let path = ipc::socket_path();
     let (tx, rx) = mpsc::unbounded::<Request>();
-    if crate::control_link::attach(&path, tx.clone()).is_some() {
+    crate::control_link::init(tx.clone());
+    if crate::control_link::attach_local(&path) {
         serve_requests(rx, window, cx);
         return Some(path);
     }
@@ -965,6 +966,7 @@ impl AbroMux {
                 json!(null)
             }
             "group.by_folder" => json!({ "created": self.group_by_folder(cx) }),
+            "group.by_server" => json!({ "created": self.group_by_server(cx) }),
             "group.rename" | "group.color" | "group.collapse" | "group.expand"
             | "group.ungroup" => {
                 let g = match str_param(p, "group") {
@@ -3903,6 +3905,20 @@ impl AbroMux {
                             .collect::<Vec<_>>()
                     );
                     v["host"] = json!(ws.host);
+                    // Every host it has something on: its own, and its
+                    // tabs' (`new-surface --host`).
+                    let mut hosts: Vec<String> = ws.host.iter().cloned().collect();
+                    for p in ws.panes() {
+                        for s in &p.tabs {
+                            if let Surface::Terminal(t) = s
+                                && let Some(h) = &t.read(cx).host
+                                && !hosts.contains(h)
+                            {
+                                hosts.push(h.clone());
+                            }
+                        }
+                    }
+                    v["hosts"] = json!(hosts);
                     v
                 })
                 .collect::<Vec<_>>()

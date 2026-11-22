@@ -452,6 +452,42 @@ impl AbroMux {
         made
     }
 
+    /// Group the workspaces on other machines that aren't in a group yet,
+    /// one group per server, named after it. Returns how many it made.
+    pub(crate) fn group_by_server(&mut self, cx: &mut Context<Self>) -> usize {
+        let mut made = 0;
+        let hosts: Vec<String> = self
+            .workspaces
+            .iter()
+            .filter(|w| w.group.is_none())
+            .filter_map(|w| w.host.clone())
+            .fold(vec![], |mut v, h| {
+                if !v.contains(&h) {
+                    v.push(h);
+                }
+                v
+            });
+        for h in hosts {
+            self.next_group += 1;
+            let id = self.next_group;
+            self.groups.push(Group {
+                id,
+                name: crate::servers::label(&h),
+                color: None,
+                collapsed: false,
+                cleanup: false,
+            });
+            for w in self.workspaces.iter_mut() {
+                if w.group.is_none() && w.host.as_deref() == Some(&h) {
+                    w.group = Some(id);
+                }
+            }
+            made += 1;
+        }
+        self.rearrange(cx, |_, _| ());
+        made
+    }
+
     pub(crate) fn toggle_group(&mut self, group: usize, cx: &mut Context<Self>) {
         if let Some(g) = self.groups.iter_mut().find(|g| g.id == group) {
             g.collapsed = !g.collapsed;
@@ -1247,6 +1283,12 @@ impl AbroMux {
             .flatten();
         // A workspace on another machine says which.
         let host = ws.host.as_deref().map(crate::servers::label);
+        // Its server can't be reached now: it shows faded, until it can.
+        let away = ws
+            .host
+            .as_deref()
+            .and_then(crate::control_link::host_up)
+            .is_some_and(|up| !up);
         let description: Vec<String> = ws
             .description
             .as_deref()
@@ -1272,6 +1314,7 @@ impl AbroMux {
             .id(("ws", ws.id))
             .group(group.clone())
             .relative()
+            .when(away, |s| s.opacity(0.5))
             .mx(px(8.))
             // A group's workspaces sit in from its header.
             .when(ws.group.is_some(), |s| s.ml(px(GROUP_INDENT)))
@@ -1513,7 +1556,11 @@ impl AbroMux {
                         .text_size(px(11. * z))
                         .text_color(sub)
                         .child(icon("globe").size(px(10. * z)).text_color(sub))
-                        .child(div().min_w_0().truncate().child(host)),
+                        .child(div().min_w_0().truncate().child(if away {
+                            format!("{host} · can't reach it")
+                        } else {
+                            host
+                        })),
                 )
             })
             .when(

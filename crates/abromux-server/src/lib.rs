@@ -190,6 +190,17 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
+    // One server per socket: several starting at once (an app's terminals
+    // and its link, all finding none) would each replace the last one's
+    // socket and split the terminals between them. The lock is held for as
+    // long as this one serves; one that can't take it leaves it to the
+    // other, which its starter then connects to.
+    let Some(_lock) = lock(&path.with_extension("lock"))? else {
+        return Ok(());
+    };
+    if UnixStream::connect(path).is_ok() {
+        return Ok(());
+    }
     let _ = std::fs::remove_file(path);
     let listener = UnixListener::bind(path)?;
     use std::os::unix::fs::PermissionsExt;
@@ -221,6 +232,7 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
         },
         state: control::State::load(control::state_path(path)),
         app: None,
+        host_id: host_id(&path.with_file_name("host-id")),
     };
     let mut idle_since = Instant::now();
     let mut buf = vec![0u8; 1 << 16];
@@ -361,6 +373,8 @@ struct Server {
     state: control::State,
     /// The app's link, while it's attached.
     app: Option<u64>,
+    /// This machine, as `hello` says: made once, kept beside the socket.
+    host_id: String,
 }
 
 impl Server {
@@ -560,7 +574,9 @@ impl Server {
                         Mode::App => {
                             let msg: Value = serde_json::from_slice(&line).unwrap_or(Value::Null);
                             if msg["op"] == "state" {
-                                self.state.update(&msg);
+                                let terms = &self.terms;
+                                self.state
+                                    .update(&msg, &|id| terms.get(id).is_some_and(|t| !t.eof));
                             }
                         }
                         Mode::Replay(left) => {
@@ -644,6 +660,7 @@ impl Server {
                     "protocol": wire::PROTOCOL,
                     "version": self.opts.version,
                     "host": hostname(),
+                    "host_id": self.host_id,
                     "control": self.opts.control,
                     "app": self.app.is_some(),
                 });
@@ -651,6 +668,16 @@ impl Server {
                 self.flush(cid);
             }
             Some("app") => self.attach_app(cid),
+            // What the app last said about its workspaces here: another app
+            // (or this one, without its session) opens them from it.
+            Some("get-state") => {
+                c.reply(json!({
+                    "ok": true,
+                    "workspaces": self.state.workspaces,
+                    "session": self.state.session,
+                }));
+                self.flush(cid);
+            }
             Some("control") => match req["conn"].as_u64() {
                 Some(conn) => self.open_control(cid, conn),
                 None => {
@@ -939,6 +966,44 @@ fn set_nonblocking(fd: RawFd, on: bool) {
         };
         libc::fcntl(fd, libc::F_SETFL, flags);
     }
+}
+
+/// An exclusive lock on `path`, held while the returned file is open;
+/// None if another process holds it.
+fn lock(path: &Path) -> io::Result<Option<std::fs::File>> {
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)?;
+    // SAFETY: flock on a descriptor we own.
+    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        Ok(Some(f))
+    } else {
+        let e = io::Error::last_os_error();
+        if e.kind() == io::ErrorKind::WouldBlock {
+            Ok(None)
+        } else {
+            Err(e)
+        }
+    }
+}
+
+/// A random id for this machine, made the first time and kept at `path`,
+/// so an app can tell when an address it knows leads somewhere else.
+fn host_id(path: &Path) -> String {
+    if let Ok(id) = std::fs::read_to_string(path)
+        && !id.trim().is_empty()
+    {
+        return id.trim().to_string();
+    }
+    let mut bytes = [0u8; 12];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        let _ = f.read_exact(&mut bytes);
+    }
+    let id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let _ = std::fs::write(path, &id);
+    id
 }
 
 /// This machine's name, for `hello`.

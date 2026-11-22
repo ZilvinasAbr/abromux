@@ -205,6 +205,12 @@ pub const METHODS: &[Method] = &[
         "",
     ),
     m(
+        "group.by_server",
+        "group by-server",
+        "Group the ungrouped workspaces on other machines, one group per server.",
+        "",
+    ),
+    m(
         "group.rename",
         "group rename",
         "Rename a group.",

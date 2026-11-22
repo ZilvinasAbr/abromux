@@ -898,6 +898,7 @@ fn servers_page(inputs: &(Entity<InputState>, Entity<InputState>)) -> Page {
             Some(Status::Checking) => " · checking…".into(),
             Some(Status::Up(about)) => format!(" · up: {about}"),
             Some(Status::Down(e)) => format!(" · can't reach it: {e}"),
+            Some(Status::Moved(e)) => format!(" · {e}"),
         };
         let (check, remove) = (s.address.clone(), s.name.clone());
         info_row(

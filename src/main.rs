@@ -163,6 +163,7 @@ actions!(
         MoveWorkspaceDown,
         NewGroup,
         GroupByFolder,
+        GroupByServer,
         Ungroup,
         ToggleGroup,
         ReopenSession,
@@ -699,9 +700,20 @@ impl AbroMux {
                 }) else {
                     break;
                 };
-                // The server answers for the app from this while it's closed.
+                // The servers answer for the app from this while it's closed:
+                // the local one about everything, each remote one about
+                // the workspaces with something on it.
+                let session = serde_json::to_value(&s).unwrap_or_default();
+                let hosts = control_link_hosts(&state);
+                control_link::sync_remotes(&hosts);
+                for h in &hosts {
+                    if let Some(link) = control_link::remote(h) {
+                        let (ws, sess) = for_host(&state, &session, h);
+                        link.push_state(ws, sess);
+                    }
+                }
                 if let Some(link) = control_link::current() {
-                    link.push_state(state, serde_json::to_value(&s).unwrap_or_default());
+                    link.push_state(state, session);
                 }
                 if last.as_ref() != Some(&s) {
                     session::save(&s);
@@ -1722,6 +1734,50 @@ impl AbroMux {
 
     /// A workspace, or a terminal tab beside the focused one, on the
     /// abromux server at `host` (Settings › Servers, the palette).
+    /// Open the workspaces the server at `host` keeps for this app (what the
+    /// app last told it: crate::control_link) that aren't open here: after
+    /// the session here was lost, or on another Mac. Their terminals are
+    /// taken back from the server, running as they were.
+    fn open_from_server(&mut self, host: String, window: &mut Window, cx: &mut Context<Self>) {
+        let open: std::collections::HashSet<String> = self
+            .workspaces
+            .iter()
+            .flat_map(|w| w.panes().flat_map(|p| p.tabs.iter()))
+            .filter_map(|s| match s {
+                Surface::Terminal(t) => t.read(cx).held_id(),
+                _ => None,
+            })
+            .collect();
+        let fetch = cx
+            .background_executor()
+            .spawn(async move { servers::fetch_workspaces(&host) });
+        cx.spawn_in(window, async move |this, cx| {
+            let states = fetch.await;
+            let _ = this.update_in(cx, |this, window, cx| match states {
+                Ok(states) => {
+                    let new: Vec<_> = states
+                        .into_iter()
+                        .filter(|w| w.root.held_ids().iter().all(|id| !open.contains(id)))
+                        .collect();
+                    if new.is_empty() {
+                        window.push_notification(
+                            Notification::info("Every workspace it keeps is open here."),
+                            cx,
+                        );
+                    } else {
+                        this.add_workspaces(new, &[], window, cx);
+                        cx.notify();
+                    }
+                }
+                Err(e) => window.push_notification(
+                    Notification::error(e).title("Couldn't open its workspaces"),
+                    cx,
+                ),
+            });
+        })
+        .detach();
+    }
+
     fn on_server(&mut self, host: String, tab: bool, window: &mut Window, cx: &mut Context<Self>) {
         if tab {
             let ws = self.ws().id;
@@ -3239,6 +3295,9 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &NewGroup, window, cx| {
                 this.new_group_and_rename(this.active, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &GroupByServer, _, cx| {
+                this.group_by_server(cx);
+            }))
             .on_action(cx.listener(|this, _: &GroupByFolder, _, cx| {
                 this.group_by_folder(cx);
             }))
@@ -3482,6 +3541,9 @@ impl Render for AbroMux {
             }))
             .on_action(cx.listener(|this, a: &keymap::OnServer, window, cx| {
                 this.on_server(a.address.clone(), a.tab, window, cx)
+            }))
+            .on_action(cx.listener(|this, a: &keymap::OpenFromServer, window, cx| {
+                this.open_from_server(a.address.clone(), window, cx)
             }))
             .on_action(cx.listener(|_, a: &keymap::OpenPluginLink, window, cx| {
                 // Chosen from the palette, focus is going back to the pane
@@ -3803,6 +3865,55 @@ fn main() {
     run_app(std::env::var("ABROMUX_CWD").ok());
 }
 
+/// The remote hosts in `control_state`'s workspaces.
+fn control_link_hosts(state: &serde_json::Value) -> Vec<String> {
+    let mut hosts: Vec<String> = vec![];
+    for w in state.as_array().into_iter().flatten() {
+        for h in w["hosts"].as_array().into_iter().flatten() {
+            if let Some(h) = h.as_str().filter(|h| !hosts.iter().any(|x| x == h)) {
+                hosts.push(h.to_string());
+            }
+        }
+    }
+    hosts
+}
+
+/// What the server at `host` is told: the workspaces with something on it,
+/// and the session's own workspaces there (to open them again from it).
+fn for_host(
+    state: &serde_json::Value,
+    session: &serde_json::Value,
+    host: &str,
+) -> (serde_json::Value, serde_json::Value) {
+    let on = |w: &serde_json::Value| {
+        w["hosts"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|h| h == host))
+    };
+    let ws: Vec<_> = state
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|w| on(w))
+        .cloned()
+        .collect();
+    let mut sess = session.clone();
+    let mine: Vec<_> = session["workspaces"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|w| w["host"] == host)
+        .map(|w| {
+            let mut w = w.clone();
+            w["group"] = serde_json::Value::Null;
+            w
+        })
+        .collect();
+    sess["workspaces"] = serde_json::json!(mine);
+    sess["groups"] = serde_json::json!([]);
+    (serde_json::json!(ws), sess)
+}
+
 /// `abromux server [--socket PATH] [--control PATH] [--stdio]`: serve, or
 /// (`--stdio`) bridge stdin and stdout to this app's server, starting it if
 /// needed.
@@ -3848,6 +3959,8 @@ fn server_command(args: &[String]) -> i32 {
 fn run_app(cwd: Option<String>) {
     // The server this app starts serves its control socket too.
     hold::set_control(ipc::socket_path());
+    // A server's other addresses, for remote terminals and links.
+    abromux_term::remote::set_alternates(servers::alternates);
     let app = Application::new().with_assets(Assets);
     // Files opened from Finder (editor.rs). They can come before the window
     // is up, at launch, so they wait in the channel until it is.

@@ -88,13 +88,37 @@ impl State {
         }
     }
 
-    /// The app's `{"op":"state"}`.
-    pub fn update(&mut self, msg: &Value) {
+    /// The app's `{"op":"state"}`. A workspace the app no longer mentions
+    /// is kept in the session while any of its terminals still runs here
+    /// (`alive`): the app may have lost it (its session file, another
+    /// Mac), and `get-state` is how it gets it back. One closed in the app
+    /// has its terminals ended, so it goes.
+    pub fn update(&mut self, msg: &Value, alive: &dyn Fn(&str) -> bool) {
         if let Some(w) = msg["workspaces"].as_array() {
             self.workspaces = w.clone();
         }
         if !msg["session"].is_null() {
-            self.session = msg["session"].clone();
+            let mut session = msg["session"].clone();
+            let new_ids: Vec<String> = session["workspaces"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(held_ids)
+                .collect();
+            let orphans: Vec<Value> = self.session["workspaces"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|w| {
+                    let ids = held_ids(w);
+                    ids.iter().any(|id| alive(id)) && ids.iter().all(|id| !new_ids.contains(id))
+                })
+                .cloned()
+                .collect();
+            if let Some(list) = session["workspaces"].as_array_mut() {
+                list.extend(orphans);
+            }
+            self.session = session;
         }
         self.save();
     }
@@ -266,6 +290,28 @@ impl State {
     }
 }
 
+/// The server ids of the terminals a saved workspace keeps (`held`).
+fn held_ids(ws: &Value) -> Vec<String> {
+    fn walk(n: &Value, out: &mut Vec<String>) {
+        for t in n["tabs"].as_array().into_iter().flatten() {
+            if let Some(h) = t["held"].as_str() {
+                out.push(h.to_string());
+            }
+        }
+        for c in n["children"].as_array().into_iter().flatten() {
+            walk(c, out);
+        }
+    }
+    let mut out = vec![];
+    walk(&ws["root"], &mut out);
+    for p in ws["pinned"].as_array().into_iter().flatten() {
+        if let Some(h) = p["hidden"]["held"].as_str() {
+            out.push(h.to_string());
+        }
+    }
+    out
+}
+
 fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -286,7 +332,7 @@ mod tests {
         s.update(&json!({ "workspaces": [
             { "ref": "workspace:1", "index": 0, "name": "Home", "selected": true, "surfaces": ["surface:1"], "status": [] },
             { "ref": "workspace:4", "index": 1, "name": "VPS", "selected": false, "surfaces": ["surface:7", "surface:8"], "status": [] },
-        ]}));
+        ]}), &|_| false);
         s
     }
 
@@ -335,12 +381,42 @@ mod tests {
         assert_eq!(r["code"], "app_closed");
     }
 
+    /// A workspace the app forgets stays while its terminals run here.
+    #[test]
+    fn keeps_workspaces_the_app_lost_while_they_run() {
+        let ws = |name: &str, held: &str| json!({ "name": name, "root": { "kind": "pane", "tabs": [{ "kind": "terminal", "cwd": "~", "held": held }] } });
+        let mut s = State::default();
+        s.update(
+            &json!({ "session": { "workspaces": [ws("a", "1-1"), ws("b", "1-2")] } }),
+            &|_| true,
+        );
+        // The app now only has a; b's terminal still runs, c's is gone.
+        s.update(
+            &json!({ "session": { "workspaces": [ws("a", "1-1")] } }),
+            &|id| id == "1-2",
+        );
+        let names: Vec<_> = s.session["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["name"].clone())
+            .collect();
+        assert_eq!(names, [json!("a"), json!("b")]);
+        // Once its terminal ends, it goes.
+        s.update(
+            &json!({ "session": { "workspaces": [ws("a", "1-1")] } }),
+            &|_| false,
+        );
+        assert_eq!(s.session["workspaces"].as_array().unwrap().len(), 1);
+    }
+
     #[test]
     fn survives_a_restart() {
         let path = std::env::temp_dir().join(format!("abx-state-{}.json", std::process::id()));
         let mut s = State::load(path.clone());
         s.update(
             &json!({ "workspaces": [{ "ref": "workspace:1", "selected": true, "surfaces": [] }] }),
+            &|_| false,
         );
         call(&mut s, "log.add", json!({ "message": "hi" }));
         let s2 = State::load(path.clone());

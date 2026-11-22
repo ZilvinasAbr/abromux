@@ -47,6 +47,7 @@ Commands:
   group remove [--workspace <ref>]
   group rename|color|collapse|expand|ungroup [--group <ref>] [<title>|<color>]   (default: the workspace's group)
   group by-folder                                            (group ungrouped workspaces that share a repo/folder)
+  group by-server                                            (group ungrouped workspaces on other machines, one per server)
   restore-session [--from <stable|nightly|nightly-<name>|cmux|path>]
                                                              (reopen the session this launch restored, or another one,
                                                              cmux's included; only workspaces not already open)
@@ -139,9 +140,12 @@ Commands:
                                                              `folder list|all|repos|resources|remove`)
   wait-for [-S|--signal] <name> [--timeout <seconds>]        (wait until another script signals <name>; default 30s)
   servers [list]                                             (other machines' abromux servers, for --host <name>)
-  servers add <name> <ssh://[user@]host[:port]>              (one more; Settings › Servers too)
+  servers add <name> <ssh://[user@]host[:port]> [<other address>...]
+                                                             (one more, its other addresses tried in order; Settings › Servers too)
   servers remove <name>
   servers check [<name>...]                                  (ask each whether it's there: its machine and version)
+  --server <name> <command>...                               (run the command against that server: its app, or the
+                                                             server itself while the app is closed)
   remote [status]                                            (phone access over Tailscale: its URL, phones connected)
   remote enable [--https-port <443|8443|10000>] [--port <n>] (serve the phone app on this Mac's tailnet address with
                                                              `tailscale serve`, for its Tailscale user; prints a QR code)
@@ -328,6 +332,24 @@ pub fn run(argv: Vec<String>) -> i32 {
         // SAFETY: single-threaded at this point; read back by ipc::socket_path.
         unsafe { std::env::set_var("ABROMUX_SOCKET_PATH", s) };
     }
+    // `--server NAME`: the command goes to that server's control socket,
+    // over ssh (and from there to the app, or the server answers itself).
+    let _proxy = match opts.remove("server") {
+        Some(Value::String(name)) => match crate::servers::resolve(&name) {
+            Ok(Some(host)) => match server_proxy(&host) {
+                Ok(p) => {
+                    // SAFETY: single-threaded still; the proxy's thread
+                    // doesn't read the environment.
+                    unsafe { std::env::set_var("ABROMUX_SOCKET_PATH", p.path()) };
+                    Some(p)
+                }
+                Err(e) => return fail(format!("--server {name}: {e}")),
+            },
+            Ok(None) => None,
+            Err(e) => return fail(format!("--server: {e}")),
+        },
+        _ => None,
+    };
     let as_json = opts.remove("json").is_some();
     if pos.is_empty() || opts.contains_key("help") || pos[0] == "help" {
         print!("{}", help());
@@ -845,6 +867,7 @@ fn dispatch(
                 "add" => "group.add",
                 "remove" => "group.remove",
                 "by-folder" => "group.by_folder",
+                "by-server" => "group.by_server",
                 "rename" | "color" | "collapse" | "expand" | "ungroup" => {
                     let key = match sub.as_str() {
                         "rename" => Some("title"),
@@ -2561,6 +2584,63 @@ fn created(v: &Value) -> String {
     )
 }
 
+/// A socket here whose connections go to the control socket of the server
+/// at `host` (`{"op":"control"}`, over ssh): what `--server` points the
+/// CLI at. Removed when dropped.
+struct ServerProxy {
+    dir: std::path::PathBuf,
+}
+
+impl ServerProxy {
+    fn path(&self) -> std::path::PathBuf {
+        self.dir.join("control.sock")
+    }
+}
+
+impl Drop for ServerProxy {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn server_proxy(host: &str) -> Result<ServerProxy, String> {
+    use std::os::unix::net::{UnixListener, UnixStream};
+    let dir = std::env::temp_dir().join(format!("abromux-cli-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let proxy = ServerProxy { dir };
+    let listener = UnixListener::bind(proxy.path()).map_err(|e| e.to_string())?;
+    // The first connection is made here, so a host that can't be reached
+    // fails the command at once with ssh's reason.
+    let first = abromux_term::remote::open_stream(host, Some(&json!({ "op": "control" })))?.0;
+    let host = host.to_string();
+    std::thread::spawn(move || {
+        let mut first = Some(first);
+        for conn in listener.incoming().flatten() {
+            let remote = match first.take() {
+                Some(r) => r,
+                None => match abromux_term::remote::open_stream(
+                    &host,
+                    Some(&json!({ "op": "control" })),
+                ) {
+                    Ok((r, _)) => r,
+                    Err(_) => continue,
+                },
+            };
+            let pump = |mut from: UnixStream, mut to: UnixStream| {
+                std::thread::spawn(move || {
+                    let _ = std::io::copy(&mut from, &mut to);
+                    let _ = to.shutdown(std::net::Shutdown::Write);
+                });
+            };
+            if let (Ok(a), Ok(b)) = (conn.try_clone(), remote.try_clone()) {
+                pump(a, remote);
+                pump(b, conn);
+            }
+        }
+    });
+    Ok(proxy)
+}
+
 /// `abromux servers [list|add|remove|check]` (src/servers.rs).
 fn servers_cmd(mut pos: Vec<String>, as_json: bool) -> Result<(), String> {
     use crate::servers;
@@ -2579,14 +2659,24 @@ fn servers_cmd(mut pos: Vec<String>, as_json: bool) -> Result<(), String> {
             } else {
                 let w = list.iter().map(|s| s.name.len()).max().unwrap_or(0);
                 for s in list {
-                    println!("{:w$}  {}", s.name, s.address);
+                    let also = if s.also.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  (then {})", s.also.join(", "))
+                    };
+                    println!("{:w$}  {}{also}", s.name, s.address);
                 }
             }
             Ok(())
         }
-        ("add", [name, address]) => {
-            let s = servers::add(name, address)?;
-            println!("OK {} {}", s.name, s.address);
+        ("add", [name, addresses @ ..]) if !addresses.is_empty() => {
+            let s = servers::add(name, &addresses.join(" "))?;
+            let also = if s.also.is_empty() {
+                String::new()
+            } else {
+                format!(" (then {})", s.also.join(", "))
+            };
+            println!("OK {} {}{also}", s.name, s.address);
             Ok(())
         }
         ("remove" | "rm", [name]) => {

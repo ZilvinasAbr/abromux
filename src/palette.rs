@@ -181,6 +181,14 @@ fn commands(project: Option<&Path>, cx: &App) -> Vec<Cmd> {
             };
             vec![
                 (
+                    format!("Open Workspaces from {}", s.name),
+                    Some("its workspaces that aren't open here".into()),
+                    words(),
+                    Box::new(keymap::OpenFromServer {
+                        address: s.address.clone(),
+                    }),
+                ),
+                (
                     format!("New Workspace on {}", s.name),
                     Some(s.address.clone()),
                     words(),

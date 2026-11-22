@@ -299,6 +299,14 @@ fn without_the_app_the_server_answers_and_keeps() {
     assert_eq!(hello["protocol"], 3);
     assert_eq!(hello["app"], false);
     assert_eq!(hello["control"], json!(control));
+    let id = hello["host_id"].as_str().unwrap().to_string();
+    assert_eq!(id.len(), 24);
+    let (again, ..) = request(&sock, json!({ "op": "hello" }));
+    assert_eq!(
+        again["host_id"],
+        id.as_str(),
+        "the same machine says the same"
+    );
 }
 
 #[test]
@@ -379,4 +387,35 @@ fn control_over_the_server_socket() {
     let mut line = String::new();
     BufReader::new(conn).read_line(&mut line).unwrap();
     assert!(line.contains("pong"), "{line}");
+}
+
+/// Many starting at once: one serves, the others leave it to it.
+#[test]
+fn only_one_server_per_socket() {
+    let dir = std::env::temp_dir().join(format!("abx-race-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let sock = dir.join("s.sock");
+    let started: Vec<_> = (0..8)
+        .map(|_| {
+            let s = sock.clone();
+            std::thread::spawn(move || {
+                let opts = Options {
+                    version: "test".into(),
+                    ..Default::default()
+                };
+                let t = Instant::now();
+                let _ = serve(&s, &opts);
+                t.elapsed()
+            })
+        })
+        .collect();
+    while UnixStream::connect(&sock).is_err() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    // All but one returned at once; the one serving is still at it.
+    let done = started.iter().filter(|h| h.is_finished()).count();
+    assert_eq!(done, 7, "seven left it to the first");
+    let (hello, ..) = request(&sock, json!({ "op": "hello" }));
+    assert_eq!(hello["ok"], true);
 }

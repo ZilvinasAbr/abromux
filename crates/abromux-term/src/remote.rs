@@ -296,7 +296,10 @@ pub fn snapshot_key(host: &str, id: &str) -> String {
 /// machine, version and protocol. Blocks for as long as connecting takes
 /// (ssh's 10 s timeout at most), so call it off the main thread.
 pub fn hello(endpoint: &Endpoint) -> Result<Value, String> {
-    let mut conn = endpoint.connect()?;
+    hello_on(&mut endpoint.connect()?)
+}
+
+fn hello_on(conn: &mut Conn) -> Result<Value, String> {
     let sent = writeln!(conn.write, "{}", json!({ "op": "hello" }))
         .and_then(|_| conn.write.flush())
         .map_err(|e| e.to_string());
@@ -305,6 +308,92 @@ pub fn hello(endpoint: &Endpoint) -> Result<Value, String> {
         Ok(_) => Err("not an abromux server (an old holder?)".into()),
         Err(e) => Err(conn.error(e)),
     }
+}
+
+/// Other addresses of the server a host string names, tried after it when
+/// it doesn't answer (the app's Settings › Servers). Set once by the app.
+static ALTERNATES: std::sync::OnceLock<fn(&str) -> Vec<String>> = std::sync::OnceLock::new();
+
+pub fn set_alternates(f: fn(&str) -> Vec<String>) {
+    let _ = ALTERNATES.set(f);
+}
+
+/// The server at `host` (`endpoint`, then its other addresses), connected
+/// and its `hello` answered: the first address that answers wins.
+fn dial(host: &str, endpoint: &Endpoint) -> Result<(Conn, Value), String> {
+    let mut tried = vec![endpoint.clone()];
+    if let Some(f) = ALTERNATES.get() {
+        tried.extend(
+            f(host)
+                .iter()
+                .filter_map(|a| Endpoint::parse(a).ok())
+                .filter(|e| e != endpoint),
+        );
+    }
+    let mut errors = vec![];
+    for ep in &tried {
+        match ep
+            .connect()
+            .and_then(|mut c| hello_on(&mut c).map(|h| (c, h)))
+        {
+            Ok(ok) => return Ok(ok),
+            Err(e) => errors.push(if tried.len() > 1 {
+                format!("{}: {e}", ep.label())
+            } else {
+                e
+            }),
+        }
+    }
+    Err(errors.join("; "))
+}
+
+/// A connection to the server at `host` as a local socket: what's written
+/// to it goes to the server and back, over ssh when it's elsewhere (two
+/// threads copy). `first` goes out before anything else (`{"op":..}`).
+pub fn open_stream(host: &str, first: Option<&Value>) -> Result<(UnixStream, Value), String> {
+    let endpoint = Endpoint::parse(host)?;
+    let (conn, hello) = dial(host, &endpoint)?;
+    let (mine, theirs) = UnixStream::pair().map_err(|e| e.to_string())?;
+    let Conn {
+        read, mut write, ..
+    } = conn;
+    if let Some(f) = first {
+        writeln!(write, "{f}").map_err(|e| e.to_string())?;
+    }
+    let mut down = theirs.try_clone().map_err(|e| e.to_string())?;
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            // SAFETY: reads into `buf`, valid for its length.
+            let n = unsafe { libc::read(read.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
+            if n < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            if n <= 0 || down.write_all(&buf[..n as usize]).is_err() {
+                let _ = down.shutdown(std::net::Shutdown::Both);
+                return;
+            }
+        }
+    });
+    let mut up = theirs;
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            match io::Read::read(&mut up, &mut buf) {
+                Ok(0) | Err(_) => return, // dropping `write` ends ssh
+                Ok(n) => {
+                    if write
+                        .write_all(&buf[..n])
+                        .and_then(|_| write.flush())
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    Ok((mine, hello))
 }
 
 /// What the reader thread and the view share.
@@ -519,7 +608,13 @@ enum Failed {
 /// Attach to the terminal (or spawn it), and get the connection streaming:
 /// its read side, and the backlog to show first.
 fn connect(s: &Shared, spawn: &SpawnSpec) -> Result<(OwnedFd, Vec<u8>), Failed> {
-    let mut conn = s.endpoint.connect().map_err(Failed::Retry)?;
+    let (mut conn, hello) = dial(&s.host, &s.endpoint).map_err(Failed::Retry)?;
+    // Revision 1 is a holder, which can't stream.
+    if hello["protocol"].as_u64().unwrap_or(1) < wire::STREAMS {
+        return Err(Failed::Retry(
+            "the server there is too old to stream terminals; update it".into(),
+        ));
+    }
     let size = *s.size.lock().unwrap();
     let id = s.id.lock().unwrap().clone();
     let mut backlog = Vec::new();
@@ -592,20 +687,8 @@ fn connect(s: &Shared, spawn: &SpawnSpec) -> Result<(OwnedFd, Vec<u8>), Failed> 
 }
 
 /// `hello`, then `req`: the reply to `req`.
+/// `req` on a connection whose `hello` is answered: its reply.
 fn request(conn: &mut Conn, req: &Value) -> Result<Value, String> {
-    let hello = json!({ "op": "hello" });
-    let sent = writeln!(conn.write, "{hello}")
-        .and_then(|_| conn.write.flush())
-        .map_err(|e| e.to_string());
-    let reply = sent.and_then(|_| read_line(&conn.read));
-    let reply = match reply {
-        Ok(r) => r,
-        Err(e) => return Err(conn.error(e)),
-    };
-    // Revision 1 is a holder, which can't stream.
-    if reply["protocol"].as_u64().unwrap_or(1) < wire::STREAMS {
-        return Err("the server there is too old to stream terminals; update it".into());
-    }
     writeln!(conn.write, "{req}")
         .and_then(|_| conn.write.flush())
         .map_err(|e| e.to_string())?;

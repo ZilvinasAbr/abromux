@@ -2765,9 +2765,9 @@ fn spawn_shell(
 ) -> (anyhow::Result<Opened>, Feed) {
     if let Some(host) = host {
         // The host's own shell and environment: only what describes this
-        // terminal goes along. This app's socket, CLI and shell integration
-        // are this machine's, so its hooks can't reach it from there yet
-        // (docs/server-plan.md, phase 3).
+        // terminal goes along. Its socket and CLI are the host's server's
+        // (which sets ABROMUX_SOCKET_PATH and ABROMUX_BIN there and hands
+        // what comes in to this app), so agent hooks there report to it.
         let mut env: Vec<(String, String)> = [
             ("TERM", "xterm-256color"),
             ("COLORTERM", "truecolor"),
@@ -2778,7 +2778,12 @@ fn spawn_shell(
         env.extend(
             env_in
                 .iter()
-                .filter(|(k, _)| k == "COMPOSE_PROJECT_NAME")
+                .filter(|(k, _)| {
+                    matches!(
+                        k.as_str(),
+                        "COMPOSE_PROJECT_NAME" | "ABROMUX_SURFACE_ID" | "ABROMUX_WORKSPACE_ID"
+                    )
+                })
                 .cloned(),
         );
         let spec = abromux_term::remote::SpawnSpec {

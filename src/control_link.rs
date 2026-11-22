@@ -1,7 +1,7 @@
-//! The app's link to its server's control socket (docs/server-plan.md,
-//! phase 2; abromux_server::control).
+//! The app's links to servers' control sockets (docs/server-plan.md, phases
+//! 2 and 3; abromux_server::control).
 //!
-//! The server owns `abromux.sock`, so the CLI, agent hooks and the phone app
+//! A server owns `abromux.sock`, so the CLI, agent hooks and the phone app
 //! reach it whether or not the app is open. While the app runs, it's
 //! attached (`{"op":"app"}`): for each control connection the server says
 //! `{"open":N}`, the app opens its side (`{"op":"control","conn":N}`) and
@@ -9,35 +9,54 @@
 //! it (`server::serve`), while the server splices the bytes. Connection 0 is
 //! the server replaying what it kept while the app was away.
 //!
-//! The app tells the server about its workspaces (`{"op":"state"}`) as they
-//! change, so the server can answer `list-workspaces` and know which
-//! workspace an agent's report is about while the app is closed.
+//! The app links to its own server (local), and to the server of every
+//! host its workspaces and tabs are on (remote, over ssh): an agent hook on
+//! a VPS calls that machine's control socket, and its report comes here, or
+//! waits there while the app is closed.
 //!
-//! If the server can't do this (one from before the control socket, or one
-//! serving another socket), [`attach`] says so and the app binds the socket
-//! itself, as before.
+//! The app tells each server about its workspaces there (`{"op":"state"}`)
+//! as they change, so it can answer `list-workspaces` and know which
+//! workspace an agent's report is about while the app is closed, and so
+//! the workspaces can be opened again from it (`get-state`).
+//!
+//! If the local server can't do this (one from before the control socket,
+//! or one serving another socket), [`attach_local`] says so and the app
+//! binds the socket itself, as before.
 
 use crate::server::Request;
 use abromux_term::hold;
 use futures::channel::mpsc;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-/// Where state goes to the server: the link's writer while attached.
+/// Which server a link is to.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Target {
+    /// This app's own server, serving this control socket.
+    Local(PathBuf),
+    /// The server at this host address (`ssh://..`).
+    Remote(String),
+}
+
+/// One link: where state goes to its server, and whether it's up.
 #[derive(Clone, Default)]
 pub struct Link {
     writer: Arc<Mutex<Option<UnixStream>>>,
     /// What was last sent, to send only changes.
     last: Arc<Mutex<Option<Value>>>,
+    up: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
 }
 
 impl Link {
-    /// Tell the server about the workspaces (`server::describe_ws` with
-    /// their surfaces) and the session, if they changed.
+    /// Tell the server about its workspaces (`server::control_state`) and
+    /// the session (those workspaces of it), if they changed.
     pub fn push_state(&self, workspaces: Value, session: Value) {
         let msg = json!({ "op": "state", "workspaces": workspaces, "session": session });
         let mut last = self.last.lock().unwrap();
@@ -51,55 +70,158 @@ impl Link {
             *last = Some(msg);
         }
     }
+
+    pub fn is_up(&self) -> bool {
+        self.up.load(Ordering::Relaxed)
+    }
 }
 
-static CURRENT: std::sync::OnceLock<Link> = std::sync::OnceLock::new();
+/// Where control requests go to be answered (`server::serve_requests`).
+static TX: OnceLock<mpsc::UnboundedSender<Request>> = OnceLock::new();
+static LOCAL: OnceLock<Link> = OnceLock::new();
+static REMOTES: Mutex<Option<HashMap<String, Link>>> = Mutex::new(None);
 
-/// The link, once attached.
+/// Where requests from servers' control connections go. Once, at launch.
+pub fn init(tx: mpsc::UnboundedSender<Request>) {
+    let _ = TX.set(tx);
+}
+
+/// The link to this app's own server, once attached.
 pub fn current() -> Option<&'static Link> {
-    CURRENT.get()
+    LOCAL.get()
 }
 
-/// Attach to the server as the app, serving its control connections on
-/// `tx`. None if it can't (the app then binds `control` itself).
-pub fn attach(control: &Path, tx: mpsc::UnboundedSender<Request>) -> Option<Link> {
-    let (reader, writer) = connect(control)
-        .map_err(|e| eprintln!("abromux: control socket: {e}"))
-        .ok()?;
-    let link = Link::default();
-    *link.writer.lock().unwrap() = Some(writer);
-    let l = link.clone();
-    let control = control.to_path_buf();
-    std::thread::spawn(move || run(reader, control, tx, l));
-    let _ = CURRENT.set(link.clone());
-    Some(link)
+/// Attach to this app's server as the app. False if it can't: the app then
+/// binds `control` itself.
+pub fn attach_local(control: &Path) -> bool {
+    let target = Target::Local(control.to_path_buf());
+    match connect(&target) {
+        Ok((reader, writer)) => {
+            let link = Link::default();
+            *link.writer.lock().unwrap() = Some(writer);
+            link.up.store(true, Ordering::Relaxed);
+            let l = link.clone();
+            std::thread::spawn(move || run(reader, target, l));
+            let _ = LOCAL.set(link);
+            true
+        }
+        Err(e) => {
+            eprintln!("abromux: control socket: {e}");
+            false
+        }
+    }
+}
+
+/// Keep a link to the server of each of `hosts` (the hosts the app's
+/// workspaces and tabs are on), and drop the others.
+pub fn sync_remotes(hosts: &[String]) {
+    let mut g = REMOTES.lock().unwrap();
+    let map = g.get_or_insert_default();
+    map.retain(|h, l| {
+        let keep = hosts.contains(h);
+        if !keep {
+            l.stop.store(true, Ordering::Relaxed);
+            if let Some(w) = l.writer.lock().unwrap().take() {
+                let _ = w.shutdown(std::net::Shutdown::Both);
+            }
+        }
+        keep
+    });
+    for h in hosts {
+        if map.contains_key(h) {
+            continue;
+        }
+        let link = Link::default();
+        map.insert(h.clone(), link.clone());
+        let target = Target::Remote(h.clone());
+        std::thread::spawn(move || {
+            // Connect off the main thread; ssh can take a while.
+            let mut reader = None;
+            let mut delay = Duration::from_millis(500);
+            while reader.is_none() && !link.stop.load(Ordering::Relaxed) {
+                match connect(&target) {
+                    Ok((r, w)) => {
+                        *link.writer.lock().unwrap() = Some(w);
+                        link.up.store(true, Ordering::Relaxed);
+                        reader = Some(r);
+                    }
+                    Err(_) => {
+                        std::thread::sleep(delay);
+                        delay = (delay * 2).min(Duration::from_secs(30));
+                    }
+                }
+            }
+            if let Some(r) = reader {
+                run(r, target, link);
+            }
+        });
+    }
+}
+
+/// The link to the server at `host`, if the app keeps one.
+pub fn remote(host: &str) -> Option<Link> {
+    REMOTES.lock().unwrap().as_ref()?.get(host).cloned()
+}
+
+/// Whether the server at `host` is reachable now: None when the app has
+/// no link to it (yet).
+pub fn host_up(host: &str) -> Option<bool> {
+    remote(host).map(|l| l.is_up())
+}
+
+/// A fresh connection to `target`'s server socket.
+fn dial(target: &Target, start: bool) -> Result<(UnixStream, Option<Value>), String> {
+    match target {
+        Target::Local(_) => {
+            let socket = hold::socket_path();
+            let s = if start {
+                let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+                abromux_server::connect_or_start(&socket, &exe, &hold::server_args())
+            } else {
+                UnixStream::connect(&socket)
+            };
+            s.map(|s| (s, None))
+                .map_err(|e| format!("can't reach abromux server: {e}"))
+        }
+        Target::Remote(host) => {
+            abromux_term::remote::open_stream(host, None).map(|(s, hello)| (s, Some(hello)))
+        }
+    }
 }
 
 /// The server's socket, its hello checked, attached as the app.
-fn connect(control: &Path) -> Result<(BufReader<UnixStream>, UnixStream), String> {
-    let socket = hold::socket_path();
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let conn = abromux_server::connect_or_start(&socket, &exe, &hold::server_args())
-        .map_err(|e| format!("can't start abromux server: {e}"))?;
-    conn.set_read_timeout(Some(Duration::from_secs(5))).ok();
+fn connect(target: &Target) -> Result<(BufReader<UnixStream>, UnixStream), String> {
+    let (conn, hello) = dial(target, true)?;
+    conn.set_read_timeout(Some(Duration::from_secs(15))).ok();
     let mut w = conn.try_clone().map_err(|e| e.to_string())?;
     let mut r = BufReader::new(conn);
     let mut ask = |req: Value| -> Result<Value, String> {
         writeln!(w, "{req}").map_err(|e| e.to_string())?;
         let mut line = String::new();
         r.read_line(&mut line).map_err(|e| e.to_string())?;
-        serde_json::from_str(&line).map_err(|e| e.to_string())
+        serde_json::from_str(&line).map_err(|e| format!("{e}: {line:?}"))
     };
-    let hello = ask(json!({ "op": "hello" }))?;
+    let hello = match hello {
+        Some(h) => h,
+        None => ask(json!({ "op": "hello" }))?,
+    };
     if hello["protocol"].as_u64().unwrap_or(1) < abromux_core::wire::CONTROL {
-        return Err("the running server is older than the control socket".into());
+        return Err("the server is older than the control socket; update it".into());
     }
-    if hello["control"].as_str().map(PathBuf::from).as_deref() != Some(control) {
-        return Err(format!(
-            "the running server serves {} as its control socket, not {}",
-            hello["control"],
-            control.display()
-        ));
+    match target {
+        Target::Local(control)
+            if hello["control"].as_str().map(PathBuf::from).as_deref() != Some(control) =>
+        {
+            return Err(format!(
+                "the running server serves {} as its control socket, not {}",
+                hello["control"],
+                control.display()
+            ));
+        }
+        Target::Remote(_) if hello["control"].is_null() => {
+            return Err("the server there has no control socket".into());
+        }
+        _ => {}
     }
     let app = ask(json!({ "op": "app" }))?;
     if app["ok"] != true {
@@ -110,56 +232,59 @@ fn connect(control: &Path) -> Result<(BufReader<UnixStream>, UnixStream), String
 }
 
 /// Serve the link: open the app's side of each connection the server hands
-/// over. When the link breaks (the server restarted), attach again.
-fn run(
-    mut reader: BufReader<UnixStream>,
-    control: PathBuf,
-    tx: mpsc::UnboundedSender<Request>,
-    link: Link,
-) {
+/// over. When the link breaks (the server restarted, the network), attach
+/// again.
+fn run(mut reader: BufReader<UnixStream>, target: Target, link: Link) {
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
             Ok(n) if n > 0 => {
                 let msg: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
                 if let Some(conn) = msg["open"].as_u64() {
-                    let tx = tx.clone();
-                    std::thread::spawn(move || open(conn, tx));
+                    let target = target.clone();
+                    std::thread::spawn(move || open(&target, conn));
                 }
                 continue;
             }
             _ => {}
         }
-        if tx.is_closed() {
-            return; // the app is quitting
-        }
-        // The server went away: come back to the next one.
+        link.up.store(false, Ordering::Relaxed);
         *link.writer.lock().unwrap() = None;
         *link.last.lock().unwrap() = None;
         let mut delay = Duration::from_millis(200);
         loop {
-            std::thread::sleep(delay);
-            if tx.is_closed() {
+            if link.stop.load(Ordering::Relaxed) || TX.get().is_none_or(|t| t.is_closed()) {
                 return;
             }
-            if let Ok((r, w)) = connect(&control) {
+            std::thread::sleep(delay);
+            if let Ok((r, w)) = connect(&target) {
                 reader = r;
                 *link.writer.lock().unwrap() = Some(w);
+                link.up.store(true, Ordering::Relaxed);
                 break;
             }
-            delay = (delay * 2).min(Duration::from_secs(10));
+            delay = (delay * 2).min(Duration::from_secs(15));
         }
     }
 }
 
 /// The app's side of control connection `conn`, served as the socket's own
 /// connections were.
-fn open(conn: u64, tx: mpsc::UnboundedSender<Request>) {
-    let Ok(mut s) = UnixStream::connect(hold::socket_path()) else {
-        return;
+fn open(target: &Target, conn: u64) {
+    let Some(tx) = TX.get().cloned() else { return };
+    let first = json!({ "op": "control", "conn": conn });
+    let s = match target {
+        Target::Local(_) => UnixStream::connect(hold::socket_path())
+            .ok()
+            .and_then(|mut s| {
+                writeln!(s, "{first}").ok()?;
+                Some(s)
+            }),
+        Target::Remote(host) => abromux_term::remote::open_stream(host, Some(&first))
+            .ok()
+            .map(|(s, _)| s),
     };
-    if writeln!(s, "{}", json!({ "op": "control", "conn": conn })).is_err() {
-        return;
+    if let Some(s) = s {
+        crate::server::serve(s, tx);
     }
-    crate::server::serve(s, tx);
 }

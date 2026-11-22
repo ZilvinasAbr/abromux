@@ -214,6 +214,24 @@ pub enum TabState {
 }
 
 impl NodeState {
+    /// The server ids of the terminals in it that are kept running (`held`).
+    pub fn held_ids(&self) -> Vec<String> {
+        match self {
+            NodeState::Pane { tabs, .. } => tabs
+                .iter()
+                .filter_map(|t| match t {
+                    TabState::Terminal { held, .. } => held.clone(),
+                    _ => None,
+                })
+                .collect(),
+            NodeState::Split { children, .. } => {
+                let mut v = children[0].held_ids();
+                v.extend(children[1].held_ids());
+                v
+            }
+        }
+    }
+
     /// The highest surface number a terminal in it keeps.
     pub fn max_surface(&self) -> usize {
         match self {
