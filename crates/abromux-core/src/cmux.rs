@@ -113,6 +113,7 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
         home: None,
         env: Default::default(),
         host: None,
+        forwards: vec![],
         links: vec![],
         hidden_links: vec![],
         pinned: vec![],

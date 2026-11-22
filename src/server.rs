@@ -967,6 +967,70 @@ impl AbroMux {
             }
             "group.by_folder" => json!({ "created": self.group_by_folder(cx) }),
             "group.by_server" => json!({ "created": self.group_by_server(cx) }),
+            // A port of a workspace's host, here (crate::forward).
+            "forward.add" => {
+                let wi = self.workspace_target(p)?;
+                let host = match str_param(p, "host") {
+                    Some(h) => crate::servers::resolve(h).map_err(|e| anyhow!(e))?,
+                    None => self.workspaces[wi].host.clone(),
+                }
+                .context("that workspace runs here: its ports are already this machine's (or give --host)")?;
+                let port = p["port"]
+                    .as_u64()
+                    .and_then(|p| u16::try_from(p).ok())
+                    .context("missing port")?;
+                let local = p["local"].as_u64().and_then(|p| u16::try_from(p).ok());
+                let id = self.workspaces[wi].id;
+                let list = self.forwards.entry(id).or_default();
+                if let Some(f) = list.iter().find(|f| f.port == port && f.host == host) {
+                    return Ok(Reply::Now(f.json()));
+                }
+                let f =
+                    crate::forward::Forward::start(&host, port, local).map_err(|e| anyhow!(e))?;
+                let out = f.json();
+                list.push(f);
+                out
+            }
+            "forward.list" => json!(
+                self.workspaces
+                    .iter()
+                    .flat_map(|w| {
+                        let r = format!("workspace:{}", w.id);
+                        self.forwards
+                            .get(&w.id)
+                            .into_iter()
+                            .flatten()
+                            .map(move |f| {
+                                let mut v = f.json();
+                                v["workspace"] = json!(r);
+                                v
+                            })
+                    })
+                    .collect::<Vec<_>>()
+            ),
+            "forward.remove" => {
+                let wi = self.workspace_target(p)?;
+                let port = p["port"].as_u64().context("missing port")?;
+                let id = self.workspaces[wi].id;
+                let list = self.forwards.entry(id).or_default();
+                let before = list.len();
+                list.retain(|f| u64::from(f.port) != port && u64::from(f.local) != port);
+                json!({ "removed": before - list.len() })
+            }
+            "forward.ports" => {
+                let wi = self.workspace_target(p)?;
+                let host = match str_param(p, "host") {
+                    Some(h) => crate::servers::resolve(h).map_err(|e| anyhow!(e))?,
+                    None => self.workspaces[wi].host.clone(),
+                }
+                .context("that workspace runs here (or give --host)")?;
+                let task = cx
+                    .background_executor()
+                    .spawn(async move { crate::forward::ports(&host) });
+                return Ok(Reply::Later(
+                    async move { task.await.map_err(|e| anyhow!(e)) }.boxed_local(),
+                ));
+            }
             // The server wants a terminal this app holds shared with
             // another app (crate::control_link): stream it instead.
             "surface.restream" => {

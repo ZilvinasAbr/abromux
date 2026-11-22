@@ -135,6 +135,17 @@ impl AbroMux {
                 home: ws.home.as_ref().map(|h| h.to_string_lossy().into_owned()),
                 env: ws.env.clone(),
                 host: ws.host.clone(),
+                forwards: self
+                    .forwards
+                    .get(&ws.id)
+                    .into_iter()
+                    .flatten()
+                    .map(|f| abromux_core::session::ForwardState {
+                        host: f.host.clone(),
+                        port: f.port,
+                        local: f.local,
+                    })
+                    .collect(),
                 links: ws.links.clone(),
                 hidden_links: ws.hidden_links.clone(),
                 pinned: pin_states(ws, scrollback, &self.surface_refs, cx),
@@ -406,6 +417,14 @@ impl AbroMux {
             ws.home = home;
             ws.env = state.env;
             ws.host = state.host;
+            // Its forwarded ports, at the same port here if it's free.
+            for f in state.forwards {
+                let started = crate::forward::Forward::start(&f.host, f.port, Some(f.local))
+                    .or_else(|_| crate::forward::Forward::start(&f.host, f.port, None));
+                if let Ok(fw) = started {
+                    self.forwards.entry(id).or_default().push(fw);
+                }
+            }
             ws.links = state.links;
             ws.hidden_links = state.hidden_links;
             for pin in state.pinned {

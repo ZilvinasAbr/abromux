@@ -205,6 +205,30 @@ pub const METHODS: &[Method] = &[
         "",
     ),
     m(
+        "forward.add",
+        "forward",
+        "A port here that reaches a port on the workspace's host, through its abromux server. The result has its url.",
+        "port:number The port on the host;local?:number The port here (default: a free one);@workspace;host?:string Another server (a name or ssh:// address)",
+    ),
+    m(
+        "forward.list",
+        "forward list",
+        "The forwarded ports, with their workspaces.",
+        "",
+    ),
+    m(
+        "forward.remove",
+        "forward remove",
+        "Stop forwarding a port (the host's or the local one).",
+        "port:number The port;@workspace",
+    ),
+    m(
+        "forward.ports",
+        "forward ports",
+        "What listens on the workspace's host: ports to forward.",
+        "@workspace;host?:string Another server",
+    ),
+    m(
         "surface.reclaim",
         "",
         "Internal: hold again a terminal of this app's server it streamed while another app shared it.",

@@ -139,6 +139,9 @@ Commands:
                                                              with the workspace folders script, `folder add <path>`,
                                                              `folder list|all|repos|resources|remove`)
   wait-for [-S|--signal] <name> [--timeout <seconds>]        (wait until another script signals <name>; default 30s)
+  forward <port> [--local <port>] [--workspace <ref>] [--host <server>]
+                                                             (a port here that reaches <port> on the workspace's host)
+  forward list | remove <port> | ports [--host <server>]     (forwards; what listens on the host)
   servers [list]                                             (other machines' abromux servers, for --host <name>)
   servers add <name> <ssh://[user@]host[:port]> [<other address>...]
                                                              (one more, its other addresses tried in order; Settings › Servers too)
@@ -855,6 +858,51 @@ fn dispatch(
         "reorder-workspaces" => ("workspace.reorder_all", |v| {
             format!("OK {}", lines(v, s).replace('\n', ","))
         }),
+        "forward" => {
+            // `forward 3000` is `forward add 3000`.
+            let sub = match pos.first() {
+                None => "list".to_string(),
+                Some(p) if p.parse::<u16>().is_ok() => "add".to_string(),
+                Some(_) => pos.remove(0),
+            };
+            if matches!(sub.as_str(), "add" | "remove") {
+                let port = pos
+                    .first()
+                    .and_then(|p| p.parse::<u16>().ok())
+                    .ok_or(format!("forward {sub}: missing <port>"))?;
+                opts.insert("port".into(), json!(port));
+            }
+            if let Some(Value::String(l)) = opts.get("local").cloned() {
+                let l: u16 = l.parse().map_err(|_| "--local: a port".to_string())?;
+                opts.insert("local".into(), json!(l));
+            }
+            match sub.as_str() {
+                "add" => ("forward.add", |v| {
+                    format!(
+                        "OK {}  ->  {} port {}",
+                        s(&v["url"]),
+                        s(&v["server"]),
+                        v["port"]
+                    )
+                }),
+                "list" => ("forward.list", |v| {
+                    lines(v, |f| {
+                        format!(
+                            "{}  ->  {} port {}  ({})",
+                            s(&f["url"]),
+                            s(&f["server"]),
+                            f["port"],
+                            s(&f["workspace"])
+                        )
+                    })
+                }),
+                "remove" => ("forward.remove", |v| format!("OK removed {}", v["removed"])),
+                "ports" => ("forward.ports", |v| {
+                    lines(v, |p| format!("{:<6} {}", p["port"], s(&p["address"])))
+                }),
+                other => return Err(format!("forward: unknown subcommand {other:?}")),
+            }
+        }
         "group" => {
             let sub = if pos.is_empty() {
                 "list".to_string()

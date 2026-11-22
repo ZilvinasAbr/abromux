@@ -105,6 +105,10 @@ pub struct WorkspaceState {
     /// The server on another machine its terminals run on (`ssh://host`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// Its forwarded ports (`abromux forward`): a port on its host, and the
+    /// port here it was reached at.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forwards: Vec<ForwardState>,
     /// Its tracked links (`crate::links`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<crate::links::Link>,
@@ -113,6 +117,14 @@ pub struct WorkspaceState {
     /// Its pinned tabs, in the sidebar's order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pinned: Vec<PinState>,
+}
+
+/// A forwarded port of a workspace.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ForwardState {
+    pub host: String,
+    pub port: u16,
+    pub local: u16,
 }
 
 /// A pinned tab: one in the layout, or a hidden one, saved whole.
@@ -344,6 +356,11 @@ mod tests {
                 home: Some("/tmp/ws".into()),
                 env: Default::default(),
                 host: Some("ssh://box".into()),
+                forwards: vec![ForwardState {
+                    host: "ssh://box".into(),
+                    port: 3000,
+                    local: 53000,
+                }],
                 links: vec![crate::links::Link {
                     kind: crate::links::Kind::Jira,
                     key: "PAY-1".into(),

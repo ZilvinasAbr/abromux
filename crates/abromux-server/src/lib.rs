@@ -247,7 +247,7 @@ enum Mode {
 }
 
 struct Client {
-    stream: UnixStream,
+    stream: Conn,
     /// Bytes read but not handled yet (a partial line).
     buf: Vec<u8>,
     decoder: Decoder,
@@ -269,6 +269,62 @@ impl Client {
 
     fn streams(&self) -> bool {
         self.mode == Mode::Frames
+    }
+}
+
+/// A connection: a Unix socket (apps, the CLI), or TCP (a forwarded port,
+/// the tailnet listener).
+enum Conn {
+    Unix(UnixStream),
+    Tcp(std::net::TcpStream),
+}
+
+impl From<UnixStream> for Conn {
+    fn from(s: UnixStream) -> Self {
+        Conn::Unix(s)
+    }
+}
+
+impl From<std::net::TcpStream> for Conn {
+    fn from(s: std::net::TcpStream) -> Self {
+        Conn::Tcp(s)
+    }
+}
+
+impl Conn {
+    fn as_raw_fd(&self) -> RawFd {
+        match self {
+            Conn::Unix(s) => s.as_raw_fd(),
+            Conn::Tcp(s) => s.as_raw_fd(),
+        }
+    }
+
+    fn set_nonblocking(&self, on: bool) -> io::Result<()> {
+        match self {
+            Conn::Unix(s) => s.set_nonblocking(on),
+            Conn::Tcp(s) => s.set_nonblocking(on),
+        }
+    }
+}
+
+impl Read for Conn {
+    fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Conn::Unix(s) => s.read(b),
+            Conn::Tcp(s) => s.read(b),
+        }
+    }
+}
+
+impl Write for Conn {
+    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+        match self {
+            Conn::Unix(s) => s.write(b),
+            Conn::Tcp(s) => s.write(b),
+        }
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -484,7 +540,8 @@ struct Server {
 }
 
 impl Server {
-    fn add_client(&mut self, stream: UnixStream) -> u64 {
+    fn add_client(&mut self, stream: impl Into<Conn>) -> u64 {
+        let stream = stream.into();
         let _ = stream.set_nonblocking(true);
         self.next_client += 1;
         self.clients.insert(
@@ -802,6 +859,47 @@ impl Server {
             Some("app") => {
                 self.app_owner = req["owner"].as_str().map(String::from);
                 self.attach_app(cid)
+            }
+            // A forwarded port (`abromux forward`): connect to it here, then
+            // this connection is that TCP connection.
+            Some("connect") => {
+                let port = req["port"].as_u64().filter(|p| (1..=65535).contains(p));
+                let host = req["host"].as_str().unwrap_or("127.0.0.1").to_string();
+                let Some(port) = port else {
+                    fail(c, "connect: bad port".into());
+                    return self.flush(cid);
+                };
+                let addr = std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port as u16))
+                    .ok()
+                    .and_then(|mut a| a.next());
+                let tcp = addr
+                    .ok_or_else(|| io::Error::other("no such host"))
+                    .and_then(|a| std::net::TcpStream::connect_timeout(&a, Duration::from_secs(3)));
+                match tcp {
+                    Ok(tcp) => {
+                        let _ = tcp.set_nodelay(true);
+                        let tid = self.add_client(tcp);
+                        let c = self.clients.get_mut(&cid).unwrap();
+                        c.reply(json!({ "ok": true }));
+                        c.mode = Mode::Splice(tid);
+                        let rest = std::mem::take(&mut c.buf);
+                        let t = self.clients.get_mut(&tid).unwrap();
+                        t.mode = Mode::Splice(cid);
+                        t.out.extend_from_slice(&rest);
+                        self.flush(cid);
+                        self.flush(tid);
+                    }
+                    Err(e) => {
+                        let c = self.clients.get_mut(&cid).unwrap();
+                        fail(c, format!("{host}:{port}: {e}"));
+                        self.flush(cid);
+                    }
+                }
+            }
+            // What listens for connections here (to offer to forward).
+            Some("ports") => {
+                c.reply(json!({ "ok": true, "ports": listening_ports() }));
+                self.flush(cid);
             }
             // The terminals it keeps: who holds or streams each, and what
             // its program last said (title, folder).
@@ -1290,6 +1388,58 @@ fn lock(path: &Path) -> io::Result<Option<std::fs::File>> {
     }
 }
 
+/// The TCP ports something listens on here: `{"port","address"}`, by port.
+fn listening_ports() -> Vec<Value> {
+    let mut out: Vec<(u16, String)> = vec![];
+    if cfg!(target_os = "linux") {
+        for (file, v6) in [("/proc/net/tcp", false), ("/proc/net/tcp6", true)] {
+            let Ok(text) = std::fs::read_to_string(file) else {
+                continue;
+            };
+            for line in text.lines().skip(1) {
+                let f: Vec<&str> = line.split_whitespace().collect();
+                // sl local rem st ...; st 0A is LISTEN.
+                if f.len() < 4 || f[3] != "0A" {
+                    continue;
+                }
+                let Some((addr, port)) = f[1].split_once(':') else {
+                    continue;
+                };
+                let Ok(port) = u16::from_str_radix(port, 16) else {
+                    continue;
+                };
+                let any = addr.chars().all(|c| c == '0');
+                let loopback = addr == "0100007F" || addr == "00000000000000000000000001000000";
+                let address = match (any, loopback, v6) {
+                    (true, _, false) => "0.0.0.0",
+                    (true, _, true) => "::",
+                    (_, true, false) => "127.0.0.1",
+                    (_, true, true) => "::1",
+                    _ => "other",
+                };
+                out.push((port, address.to_string()));
+            }
+        }
+    } else if let Ok(o) = std::process::Command::new("lsof")
+        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-Fn"])
+        .output()
+    {
+        for line in String::from_utf8_lossy(&o.stdout).lines() {
+            if let Some(n) = line.strip_prefix('n')
+                && let Some((addr, port)) = n.rsplit_once(':')
+                && let Ok(port) = port.parse()
+            {
+                out.push((port, addr.trim_matches(['[', ']']).to_string()));
+            }
+        }
+    }
+    out.sort();
+    out.dedup_by_key(|p| p.0);
+    out.into_iter()
+        .map(|(port, address)| json!({ "port": port, "address": address }))
+        .collect()
+}
+
 /// A random id for this machine, made the first time and kept at `path`,
 /// so an app can tell when an address it knows leads somewhere else.
 fn host_id(path: &Path) -> String {
@@ -1439,7 +1589,9 @@ fn spawn(req: &Value, stream: bool, control: Option<&Path>) -> Result<Term, Stri
 /// Send `data` with the descriptor `fd` attached, blocking until it's all
 /// out (a reply line: small, and nothing else is queued before it).
 fn send_with_fd(c: &mut Client, data: &[u8], fd: RawFd) -> io::Result<()> {
-    let sock = &c.stream;
+    let Conn::Unix(sock) = &c.stream else {
+        return Err(io::Error::other("descriptors go over Unix sockets only"));
+    };
     // Anything queued goes first, so replies stay in order.
     sock.set_nonblocking(false)?;
     let res = (|| {

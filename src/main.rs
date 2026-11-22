@@ -14,6 +14,7 @@ mod debug;
 mod editor;
 mod events;
 mod find_bar;
+mod forward;
 mod gitlab;
 mod icon;
 mod ipc;
@@ -318,6 +319,8 @@ struct AbroMux {
     next_surface: usize,
     /// Stable `surface:N` numbers handed out to the control socket.
     surface_refs: HashMap<EntityId, usize>,
+    /// Forwarded ports, by workspace id (crate::forward): closed with it.
+    forwards: HashMap<usize, Vec<forward::Forward>>,
     /// How closed terminals' programs exited, by surface number (`abromux
     /// wait`, the `surface.closed` event).
     exits: HashMap<usize, Option<i32>>,
@@ -417,6 +420,7 @@ impl AbroMux {
             next_pane: 0,
             next_surface: 0,
             surface_refs: Default::default(),
+            forwards: Default::default(),
             exits: Default::default(),
             events: Default::default(),
             socket: None,
@@ -1865,6 +1869,7 @@ impl AbroMux {
             return;
         }
         let ws = self.workspaces.remove(index);
+        self.forwards.remove(&ws.id);
         // Hide any webviews before they drop so nothing lingers on screen.
         // Hidden pinned tabs go with it.
         for s in ws.all_surfaces() {

@@ -582,3 +582,34 @@ fn the_local_app_is_told_to_hold_it_again() {
     let msg: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(msg["reclaim"], id.as_str(), "{msg}");
 }
+
+/// A port forwarded through the server: `connect`, then bytes both ways.
+#[test]
+fn forwards_a_port() {
+    let sock = server("forward");
+    let web = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = web.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let (mut c, _) = web.accept().unwrap();
+        let mut req = [0u8; 4];
+        c.read_exact(&mut req).unwrap();
+        c.write_all(b"pong").unwrap();
+    });
+    let (ports, ..) = request(&sock, json!({ "op": "ports" }));
+    assert!(
+        ports["ports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["port"] == port),
+        "{ports}"
+    );
+    let (reply, mut r, mut w) = request(&sock, json!({ "op": "connect", "port": port }));
+    assert_eq!(reply["ok"], true, "{reply}");
+    w.write_all(b"ping").unwrap();
+    let mut back = [0u8; 4];
+    r.read_exact(&mut back).unwrap();
+    assert_eq!(&back, b"pong");
+    let (refused, ..) = request(&sock, json!({ "op": "connect", "port": 1 }));
+    assert_eq!(refused["ok"], false);
+}
