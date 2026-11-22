@@ -409,11 +409,47 @@ function wsRow(w) {
     b.append(m);
   }
   b.onclick = () => {
+    if (longPress.fired) return;
     const last = store.get("tab:" + w.ref, null);
     go(w.ref, last);
     setSidebar(false);
   };
+  longPress(b, () => workspaceSheet(w));
   return b;
+}
+
+// Hold a row to act on it (iOS gives web apps no contextmenu event on a
+// touch). The tap that ends a hold is swallowed; moving cancels it.
+function longPress(node, run) {
+  let timer = 0, x = 0, y = 0;
+  const cancel = () => clearTimeout(timer);
+  node.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1) return cancel();
+    longPress.fired = false;
+    x = e.touches[0].clientX;
+    y = e.touches[0].clientY;
+    cancel();
+    timer = setTimeout(() => {
+      longPress.fired = true;
+      if (navigator.vibrate) navigator.vibrate(10);
+      run();
+    }, 500);
+  }, { passive: true });
+  node.addEventListener("touchmove", (e) => {
+    const t = e.touches[0];
+    if (Math.abs(t.clientX - x) > 8 || Math.abs(t.clientY - y) > 8) cancel();
+  }, { passive: true });
+  node.addEventListener("touchend", (e) => {
+    cancel();
+    // Lifting the finger would tap whatever the sheet put under it.
+    if (longPress.fired) e.preventDefault();
+  });
+  node.addEventListener("touchcancel", cancel);
+  node.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    cancel();
+    run();
+  });
 }
 
 function surfacesOf(w) {
@@ -592,8 +628,11 @@ function placeholder(ic, title, text, action) {
 
 // ---- sheets ------------------------------------------------------------------
 
+let sheetTimer = 0;
 function openSheet(build) {
   const root = $("sheet");
+  // One sheet may open as another closes (a confirmation after a choice).
+  clearTimeout(sheetTimer);
   root.classList.remove("closing");
   const body = $("sheet-body");
   body.replaceChildren();
@@ -604,7 +643,7 @@ function closeSheet() {
   const root = $("sheet");
   if (root.hidden) return;
   root.classList.add("closing");
-  setTimeout(() => { root.hidden = true; root.classList.remove("closing"); }, 280);
+  sheetTimer = setTimeout(() => { root.hidden = true; root.classList.remove("closing"); }, 280);
 }
 document.querySelector(".sheet-scrim").onclick = closeSheet;
 // Pull the sheet down by its grabber to close it.
@@ -635,7 +674,7 @@ function actionSheet(title, actions) {
     const g = el("div", "action-group");
     if (title) g.append(el("div", "action-title", title));
     for (const a of actions) {
-      const b = el("button", "action");
+      const b = el("button", "action" + (a.danger ? " danger" : ""));
       if (a.icon) b.append(icon(a.icon));
       const t = el("div");
       t.append(el("div", "", a.label));
@@ -670,6 +709,85 @@ function newTabSheet() {
   ]);
 }
 $("add-btn").onclick = newTabSheet;
+document.querySelector(".nav-title").onclick = () => {
+  const w = state.workspaces.find((x) => x.ref === state.route.ws);
+  if (w) workspaceSheet(w);
+};
+
+// What a workspace offers, from holding its row or tapping the title. For
+// now: Clean Up and Delete Folder…, ⇧⌘X on the Mac (init.lua's workspace
+// folders action), for a workspace that has a folder.
+const CLEANUP_ACTION = "clean_up_workspace_folder";
+let actionNames = null;
+async function hasAction(name) {
+  if (!actionNames) {
+    // An older Mac app has no action.list; ask again next time.
+    try { actionNames = new Set(((await call("action.list")) || []).map((a) => a.name)); }
+    catch { return false; }
+  }
+  return actionNames.has(name);
+}
+onConnect(() => { actionNames = null; });
+
+async function workspaceSheet(w) {
+  const actions = [];
+  if (w.ref !== state.route.ws) {
+    actions.push({ icon: "chevron-right", label: "Open", run: () => { go(w.ref, store.get("tab:" + w.ref, null)); setSidebar(false); } });
+  }
+  if (w.home && await hasAction(CLEANUP_ACTION)) {
+    actions.push({ icon: "x", label: "Clean Up and Delete Folder…", desc: "An agent cleans up, then deletes it (⇧⌘X)", danger: true, run: () => cleanUpSheet(w) });
+  }
+  if (!actions.length) {
+    toast(w.home ? "Workspace folders aren't turned on in init.lua." : "Nothing to do here: it has no workspace folder.");
+    return;
+  }
+  actionSheet(w.name || "Workspace", actions);
+}
+
+// Moves the workspace into the Cleanup group and starts the cleanup agent
+// in a tab there, which ends with `abromux folder remove`; the phone opens
+// that tab. The Mac's selection stays where it is.
+function cleanUpSheet(w) {
+  openSheet((body) => {
+    const head = el("div", "sheet-head");
+    head.append(el("h3", "", "Clean up " + (w.name || "this workspace") + "?"));
+    const text = el("p", "sheet-text",
+      "An agent removes what the workspace made outside " + (tilde(w.home) || "its folder") +
+      ", then deletes the folder and closes the workspace. It asks first if work would be lost.");
+    const wrap = el("div", "actions");
+    const g = el("div", "action-group");
+    const go_ = el("button", "action danger");
+    go_.append(icon("x"));
+    const t = el("div");
+    t.append(el("div", "", "Clean Up and Delete Folder"));
+    const small = el("small", "", "Starts the cleanup agent in " + (w.name || "it"));
+    t.append(small);
+    go_.append(t);
+    go_.onclick = async () => {
+      if (go_.disabled) return;
+      go_.disabled = true;
+      small.textContent = "Starting…";
+      try {
+        const r = await call("action.run", { action: CLEANUP_ACTION, args: { workspace: w.ref, focus: false }, origin: "phone" });
+        closeSheet();
+        await refresh();
+        go(w.ref, (r && r.surface) || null);
+        setSidebar(false);
+      } catch (e) {
+        toast(e.message, 4000);
+        go_.disabled = false;
+        small.textContent = "Starts the cleanup agent in " + (w.name || "it");
+      }
+    };
+    g.append(go_);
+    const cancel = el("div", "action-group");
+    const c = el("button", "action cancel", "Cancel");
+    c.onclick = closeSheet;
+    cancel.append(c);
+    wrap.append(g, cancel);
+    body.append(head, text, wrap);
+  });
+}
 
 // New Workspace: a plain one, or (with init.lua's workspace folders turned
 // on) a workspace folder, as ⇧⌘I makes on the Mac. Neither takes the Mac's

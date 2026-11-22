@@ -20,6 +20,7 @@
   --chip-on: rgba(255, 255, 255, 0.16);
   --scrim: rgba(0, 0, 0, 0.45);
   --warn: #e0a84f;
+  --danger: #ff6961;
   --shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -50,6 +51,7 @@
     --chip-on: rgba(0, 0, 0, 0.11);
     --scrim: rgba(0, 0, 0, 0.25);
     --warn: #b77812;
+    --danger: #d70015;
     --shadow: 0 10px 40px rgba(0, 0, 0, 0.18);
     color-scheme: light;
   }
@@ -461,6 +463,8 @@ button, .tab, .ws, .group-head { -webkit-user-select: none; user-select: none; -
 .action > div { flex: 1; min-width: 0; text-align: left; }
 .action small { display: block; font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .action.cancel { justify-content: center; font-weight: 600; color: var(--accent-bright); }
+.action.danger, .action.danger .ic { color: var(--danger); }
+.sheet-text { margin: 0 16px 12px; font-size: 15px; line-height: 1.4; color: var(--muted); }
 
 #toast {
   position: fixed;
