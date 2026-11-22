@@ -348,6 +348,68 @@ pub(crate) fn commit_author(r: &Review, cm: &crate::types::Commit) -> User {
 }
 
 /// A title without its draft marker, as "Mark as ready" leaves it.
+/// A title change's old and new titles, each as pieces with whether
+/// GitLab marked them added, removed (or neither), from its HTML body.
+/// Text pieces, each marked added (Some(true)), removed, or neither.
+type Marked = Vec<(String, Option<bool>)>;
+
+fn title_change(body: &str) -> Option<(Marked, Marked)> {
+    let b = body
+        .trim()
+        .trim_start_matches("<p>")
+        .trim_end_matches("</p>");
+    let rest = b.strip_prefix("changed title from ")?;
+    let code = |s: &str| -> Option<(String, usize)> {
+        let s2 = s.strip_prefix("<code class=\"idiff\">")?;
+        let end = s2.find("</code>")?;
+        Some((
+            s2[..end].to_string(),
+            "<code class=\"idiff\">".len() + end + "</code>".len(),
+        ))
+    };
+    let (old, used) = code(rest)?;
+    let rest = rest[used..].strip_prefix(" to ")?;
+    let (new, _) = code(rest)?;
+    let unescape = |t: &str| {
+        t.replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&")
+    };
+    let pieces = |html: &str| {
+        let mut out = vec![];
+        let mut s = html;
+        while !s.is_empty() {
+            if let Some(i) = s.find("<span") {
+                if i > 0 {
+                    out.push((unescape(&s[..i]), None));
+                }
+                let open_end = s[i..].find('>').map(|j| i + j + 1).unwrap_or(s.len());
+                let tag = &s[i..open_end];
+                let added = if tag.contains("addition") {
+                    Some(true)
+                } else if tag.contains("deletion") {
+                    Some(false)
+                } else {
+                    None
+                };
+                let close = s[open_end..]
+                    .find("</span>")
+                    .map(|j| open_end + j)
+                    .unwrap_or(s.len());
+                out.push((unescape(&s[open_end..close]), added));
+                s = &s[(close + "</span>".len()).min(s.len())..];
+            } else {
+                out.push((unescape(s), None));
+                break;
+            }
+        }
+        out
+    };
+    Some((pieces(&old), pieces(&new)))
+}
+
 #[cfg(test)]
 fn ready_title(title: &str) -> String {
     crate::edit::draft_title(title, false)
@@ -412,6 +474,7 @@ impl GitLabView {
             ),
             (Section::Commits, "Commits", r.commits.len()),
             (Section::Pipelines, "Pipelines", r.pipelines.len()),
+            (Section::Reports, "Reports", r.reports.count()),
             // What the Changes tab shows: a commit or a version's files, as GitLab counts them.
             (
                 Section::Changes,
@@ -422,7 +485,7 @@ impl GitLabView {
         // A local diff has no pipelines.
         let sections = sections
             .into_iter()
-            .filter(|(s, ..)| !(local && *s == Section::Pipelines));
+            .filter(|(s, ..)| !(local && matches!(*s, Section::Pipelines | Section::Reports)));
         let tabs = sections.map(|(s, label, n)| {
             let on = self.loc.section == s;
             div()
@@ -446,7 +509,7 @@ impl GitLabView {
         let top = match self.loc.section {
             Section::Changes => Some(self.diff_list.logical_scroll_top()),
             Section::Overview => Some(self.overview_list.logical_scroll_top()),
-            Section::Commits | Section::Pipelines => None,
+            Section::Commits | Section::Pipelines | Section::Reports => None,
         };
         if top.is_some_and(|t| t.item_ix > 0 || t.offset_in_item > px(0.)) {
             return div()
@@ -498,7 +561,7 @@ impl GitLabView {
                                 .items_center()
                                 .gap_2()
                                 .children(self.thread_nav(r, unresolved, cx))
-                                .children(self.review_button(r, cx)),
+                                .children(self.your_review_button(r, cx)),
                         ),
                 );
         }
@@ -584,7 +647,7 @@ impl GitLabView {
                             .items_center()
                             .gap_2()
                             .children(self.thread_nav(r, unresolved, cx))
-                            .children(self.review_button(r, cx)),
+                            .children(self.your_review_button(r, cx)),
                     ),
             )
     }
@@ -1048,7 +1111,11 @@ impl GitLabView {
                 let (label, live) = crate::edit::busy_label(
                     self.busy,
                     crate::edit::Write::Merge,
-                    if auto { "Set to auto-merge" } else { "Merge" },
+                    match (auto, r.premium.trains_enabled) {
+                        (true, _) => "Set to auto-merge",
+                        (false, true) => "Add to merge train",
+                        (false, false) => "Merge",
+                    },
                     if auto { "Setting…" } else { "Merging…" },
                 );
                 div()
@@ -1083,9 +1150,11 @@ impl GitLabView {
                                 })),
                         )
                     })
+                    .child(self.merge_message_editor(r, squash, cx))
             });
         // Set to auto-merge: who did, and GitLab's Cancel auto-merge.
-        let auto_line = (auto_set && r.mr.state == "opened").then(|| {
+        let train = self.train_status(r, cx);
+        let auto_line = (auto_set && r.mr.state == "opened" && train.is_none()).then(|| {
             let who =
                 r.mr.merge_user
                     .as_ref()
@@ -1121,12 +1190,15 @@ impl GitLabView {
                     )
                 })
         });
+        let checks_toggle = self.checks_toggle(r, cx);
+        let checks_list = self.merge_checks_list(r);
         let merge = div()
             .flex()
             .flex_col()
             .rounded(px(12.))
             .bg(c(RAISED))
             .text_color(c(TEXT))
+            .children(train)
             .children(auto_line)
             .when(!auto_set, |d| {
                 d.child(
@@ -1148,9 +1220,12 @@ impl GitLabView {
                             }
                             MergeState::Checking => "Checking if merge request can be merged…",
                             MergeState::Blocked(_) => "Merge blocked: 1 check failed",
-                        })),
+                        }))
+                        .child(div().flex_1())
+                        .children(checks_toggle),
                 )
             })
+            .children(checks_list)
             .children(controls)
             // The failed check, with GitLab's fix for a draft.
             .when_some(
@@ -1216,10 +1291,27 @@ impl GitLabView {
                 )
             });
         let merge = match r.mr.state.as_str() {
-            "merged" | "closed" => self.outcome(r, mono),
+            "merged" | "closed" => self.outcome(r, mono).children(self.pick_buttons(r, cx)),
             _ => merge,
         };
-        div().flex().flex_col().gap_3().child(approval).child(merge)
+        let reports = self.report_widgets(r, cx);
+        let deps = self.dependencies(r, cx);
+        // Premium's approval rules under the approval line.
+        let approval = div()
+            .flex()
+            .flex_col()
+            .rounded(px(12.))
+            .bg(c(RAISED))
+            .child(approval)
+            .children(self.approval_rules(r));
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(approval)
+            .children(reports)
+            .children(deps)
+            .child(merge)
     }
 
     /// The widget of a merge request that's done: who merged or closed it,
@@ -1487,7 +1579,8 @@ impl GitLabView {
                 .flex_col()
                 .gap_4()
                 .children(self.write_alert(cx))
-                .when(self.editing_mr, |d| d.child(self.mr_edit_form(cx)))
+                .when(self.editing_mr, |d| d.child(self.mr_edit_form(window, cx)))
+                .children(self.duo_chat(window, cx))
                 .when(!self.editing_mr, |d| {
                     d.children(self.description(&r, window, cx))
                 })
@@ -1517,7 +1610,7 @@ impl GitLabView {
             return pad(div())
                 .pt_2()
                 .pb_6()
-                .child(self.comment_form(cx))
+                .child(self.comment_form(window, cx))
                 .into_any_element();
         }
         let Some(e) = entries.get(ix - 1) else {
@@ -1565,7 +1658,13 @@ impl GitLabView {
                             .children(self.thread_notes(d, None, false, true, window, cx))
                             // A thread (not a lone comment) takes replies.
                             .when(!d.individual_note, |el| {
-                                el.child(self.reply_bar(&d.id, d.resolvable(), d.resolved(), cx))
+                                el.child(self.reply_bar(
+                                    &d.id,
+                                    d.resolvable(),
+                                    d.resolved(),
+                                    window,
+                                    cx,
+                                ))
                             }),
                     )
                     .into_any_element()
@@ -1577,9 +1676,31 @@ impl GitLabView {
 
     /// "Alice Author requested review from @bob 1 hour ago"
     fn system_note(&self, n: &Note, cx: &mut Context<Self>) -> Div {
+        // "changed title from <code class="idiff">…</code> to …": GitLab
+        // sends this one as HTML, its changed part marked; drawn as its page
+        // draws it.
         let me = self.me.as_ref().map(|u| u.username.as_str());
         let mut body = div().flex().flex_wrap().items_center().gap_1();
-        let text = n.body.lines().next().unwrap_or_default();
+        let mut text = n.body.lines().next().unwrap_or_default();
+        if let Some((old, new)) = title_change(&n.body) {
+            let part = |segs: Vec<(String, Option<bool>)>| {
+                div()
+                    .flex()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .children(segs.into_iter().map(|(t, added)| {
+                        div()
+                            .when(added == Some(true), |d| d.bg(ca(0x2da16055)))
+                            .when(added == Some(false), |d| d.bg(ca(0xdd2b0e55)))
+                            .child(t)
+                    }))
+            };
+            body = body
+                .child("changed title from")
+                .child(part(old))
+                .child("to")
+                .child(part(new));
+            text = "";
+        }
         for word in text.split(' ').filter(|w| !w.is_empty()) {
             let name = word.trim_end_matches([',', '.']);
             body = if name.starts_with('@') && name.len() > 1 {
@@ -1945,7 +2066,9 @@ impl GitLabView {
                         )
                     }),
             );
-            if let Some((f, h, l)) = at {
+            if let Some((f, h, l)) =
+                at.filter(|(f, h, l)| f.body().hunks().get(*h).is_some_and(|x| *l < x.lines.len()))
+            {
                 // Up to 16 lines of the hunk, ending at the thread's line.
                 let lines = &f.body().hunks()[h].lines;
                 let start = (l + 1).saturating_sub(16);
@@ -1972,7 +2095,7 @@ impl GitLabView {
                     .flex_col()
                     .children(self.thread_notes(d, Some(&path), true, false, window, cx))
                     .child(
-                        self.reply_bar(&d.id, d.resolvable(), d.resolved(), cx)
+                        self.reply_bar(&d.id, d.resolvable(), d.resolved(), window, cx)
                             .rounded_b(px(8.)),
                     ),
             );
@@ -2114,13 +2237,12 @@ impl GitLabView {
                 "" => "",
                 other => other,
             };
-            div()
+            let jobs = self.pipeline_jobs(p, cx);
+            let row = div()
                 .flex()
                 .items_start()
                 .gap_4()
                 .py_3()
-                .border_b_1()
-                .border_color(c(RAISED))
                 .child(
                     div()
                         .w(px(180.))
@@ -2195,8 +2317,15 @@ impl GitLabView {
                                 }),
                         ),
                 )
-                .child(div().w(px(120.)).flex_none().child(pipeline_icon(p, 20.)))
-                .child(self.pipeline_buttons(p, cx))
+                .child(div().w(px(120.)).flex_none().child(self.stage_icons(p)))
+                .child(self.pipeline_buttons(p, cx));
+            div()
+                .flex()
+                .flex_col()
+                .border_b_1()
+                .border_color(c(RAISED))
+                .child(row)
+                .children(jobs.map(|j| j.pl(px(196.))))
         });
         div()
             .id("gl-pipelines")
@@ -2437,6 +2566,19 @@ impl GitLabView {
 #[cfg(test)]
 mod ready_tests {
     use super::ready_title;
+
+    #[test]
+    fn reads_title_changes() {
+        let (old, new) = super::title_change(r#"<p>changed title from <code class="idiff">Fix typo</code> to <code class="idiff">Fix typo<span class="idiff left right addition"> (edited)</span></code></p>"#).unwrap();
+        assert_eq!(old, vec![("Fix typo".to_string(), None)]);
+        assert_eq!(
+            new,
+            vec![
+                ("Fix typo".to_string(), None),
+                (" (edited)".to_string(), Some(true))
+            ]
+        );
+    }
 
     #[test]
     fn mark_as_ready_drops_the_draft_marker() {

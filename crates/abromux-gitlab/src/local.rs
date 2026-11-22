@@ -1386,6 +1386,20 @@ impl LocalGitLab {
                 })?;
                 Answer::One(json!(d))
             }
+            ("PUT", ["projects", _, "merge_requests", _, "draft_notes", d]) => {
+                let d: u64 = d.parse().unwrap_or(0);
+                let note = text("note");
+                let got = update(&id, |s| {
+                    let x = s
+                        .drafts
+                        .iter_mut()
+                        .find(|x| x.id == d)
+                        .context("no such draft")?;
+                    x.note = note;
+                    Ok(x.clone())
+                })?;
+                Answer::One(json!(got))
+            }
             ("DELETE", ["projects", _, "merge_requests", _, "draft_notes", d]) => {
                 let d: u64 = d.parse().unwrap_or(0);
                 update(&id, |s| {

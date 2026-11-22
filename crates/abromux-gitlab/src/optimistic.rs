@@ -32,6 +32,8 @@ pub enum Patch {
     /// A comment on the merge request.
     Comment {
         body: String,
+        /// An internal note.
+        internal: bool,
     },
     /// A reply in `thread`, and with `resolve`, resolving it.
     Reply {
@@ -64,9 +66,23 @@ pub enum Patch {
         new: Option<u32>,
         body: String,
     },
-    /// A comment into your review (GitLab's "Pending").
+    /// A comment into your review (GitLab's "Pending"): on a line at
+    /// `position`, a reply in thread `discussion`, or on the merge request.
     Draft {
         body: String,
+        position: Option<Box<Position>>,
+        discussion: Option<String>,
+    },
+    /// A pending comment changed, or (`body` None) taken out.
+    EditDraft {
+        id: u64,
+        body: Option<String>,
+    },
+    /// The review submitted: its comments go (GitLab's threads replace
+    /// them), with the summary as a comment and the reviewer's state.
+    Submit {
+        summary: String,
+        state: Option<String>,
     },
     /// The merge request's fields as PUT (assignee_ids, reviewer_ids,
     /// labels, remove_labels, milestone_id, title); `people`: who the ids
@@ -88,6 +104,23 @@ pub enum Patch {
     State {
         open: bool,
     },
+    /// Suggestions `ids` applied.
+    Suggestions {
+        ids: Vec<u64>,
+    },
+    /// A to-do added, or yours marked done.
+    Todo {
+        add: bool,
+    },
+    /// Notifications on or off.
+    Subscribed {
+        on: bool,
+    },
+    /// A reviewer's review state (asked again: `unreviewed`).
+    ReviewState {
+        user: u64,
+        state: String,
+    },
 }
 
 impl Patch {
@@ -105,7 +138,7 @@ impl Patch {
         };
         let mine = |n: &Note, body: &str| n.author.id == me.id && n.body.trim() == body.trim();
         match self {
-            Patch::Comment { body } => {
+            Patch::Comment { body, internal } => {
                 if !r
                     .general
                     .iter()
@@ -115,7 +148,10 @@ impl Patch {
                     r.general.push(Discussion {
                         id: format!("{THREAD_PREFIX}{n}"),
                         individual_note: true,
-                        notes: vec![note(body, None, false)],
+                        notes: vec![Note {
+                            internal: *internal,
+                            ..note(body, None, false)
+                        }],
                     });
                     r.mr.user_notes_count += 1;
                 }
@@ -189,11 +225,23 @@ impl Patch {
                     head_sha: refs.head_sha,
                     old_path: Some(f.meta.old_path.clone()),
                     new_path: Some(f.meta.new_path.clone()),
-                    position_type: "text".into(),
+                    position_type: if old.is_none() && new.is_none() {
+                        "file"
+                    } else {
+                        "text"
+                    }
+                    .into(),
                     old_line: *old,
                     new_line: *new,
+                    line_range: None,
+                    ..Default::default()
                 };
-                let Some((h, l)) = f.find(&pos) else { return };
+                let found = if pos.position_type == "file" {
+                    Some((crate::review::FILE_THREAD, 0))
+                } else {
+                    f.find(&pos)
+                };
+                let Some((h, l)) = found else { return };
                 let mut first = note(body, Some("DiffNote"), true);
                 first.position = Some(pos);
                 let d = Discussion {
@@ -206,9 +254,37 @@ impl Patch {
                     .partition_point(|(fh, fl, _)| (*fh, *fl) <= (h, l));
                 f.threads.insert(at, (h, l, d));
             }
-            Patch::Draft { body } => {
+            Patch::EditDraft { id, body } => match body {
+                Some(b) => {
+                    if let Some(d) = r.drafts.iter_mut().find(|d| d.id == *id) {
+                        d.note = b.clone();
+                    }
+                }
+                None => r.drafts.retain(|d| d.id != *id),
+            },
+            Patch::Submit { summary, state } => {
+                r.drafts.clear();
+                if !summary.trim().is_empty() {
+                    Patch::Comment {
+                        body: summary.clone(),
+                        internal: false,
+                    }
+                    .apply(r, me, n);
+                }
+                if let Some(s) = state {
+                    r.review_states.insert(me.id, s.clone());
+                }
+            }
+            Patch::Draft {
+                body,
+                position,
+                discussion,
+            } => {
                 if !r.drafts.iter().any(|d| d.note.trim() == body.trim()) {
                     r.drafts.push(DraftNote {
+                        position: position.as_deref().cloned(),
+                        discussion_id: discussion.clone(),
+                        resolve_discussion: false,
                         id: NOTE_BASE + n,
                         note: body.clone(),
                     });
@@ -237,6 +313,29 @@ impl Patch {
                 if r.mr.state != "merged" {
                     r.mr.state = if *open { "opened" } else { "closed" }.to_string();
                 }
+            }
+            Patch::Suggestions { ids } => {
+                for d in threads_mut(r) {
+                    for n in &mut d.notes {
+                        for s in n.suggestions.iter_mut().filter(|s| ids.contains(&s.id)) {
+                            s.applied = true;
+                            s.appliable = false;
+                        }
+                    }
+                }
+            }
+            Patch::Todo { add } => {
+                if *add {
+                    if r.todos.is_empty() {
+                        r.todos.push(NOTE_BASE + n);
+                    }
+                } else {
+                    r.todos.clear();
+                }
+            }
+            Patch::Subscribed { on } => r.mr.subscribed = Some(*on),
+            Patch::ReviewState { user, state } => {
+                r.review_states.insert(*user, state.clone());
             }
         }
     }
@@ -310,6 +409,9 @@ fn apply_fields(r: &mut Review, fields: &Value, people: &[User], me: &User) {
             .map(|id| known.iter().find(|u| Some(u.id) == id.as_u64()).cloned())
             .collect()
     };
+    if let Some(on) = fields.get("discussion_locked").and_then(Value::as_bool) {
+        r.mr.discussion_locked = Some(on);
+    }
     if let Some(us) = fields.get("assignee_ids").and_then(users) {
         r.mr.assignees = us;
     }
@@ -357,6 +459,15 @@ fn apply_fields(r: &mut Review, fields: &Value, people: &[User], me: &User) {
     }
     if let Some(d) = fields.get("description").and_then(Value::as_str) {
         r.mr.description = Some(d.to_string());
+    }
+    if let Some(t) = fields.get("target_branch").and_then(Value::as_str) {
+        r.mr.target_branch = t.to_string();
+    }
+    if let Some(on) = fields.get("squash").and_then(Value::as_bool) {
+        r.mr.squash = on;
+    }
+    if let Some(on) = fields.get("remove_source_branch").and_then(Value::as_bool) {
+        r.mr.force_remove_source_branch = on;
     }
 }
 
@@ -416,7 +527,10 @@ mod tests {
     #[test]
     fn a_comment_shows_once() {
         let mut r = review();
-        let p = Patch::Comment { body: "hi".into() };
+        let p = Patch::Comment {
+            body: "hi".into(),
+            internal: false,
+        };
         p.apply(&mut r, &user(1), 1);
         p.apply(&mut r, &user(1), 2);
         assert_eq!(r.general.len(), 2);

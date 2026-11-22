@@ -265,6 +265,34 @@ impl GitLabView {
         };
         let listing = !people.is_empty();
         let mut wrap = div().flex().flex_col().gap_1().child(input);
+        // GitLab's quick actions (slash.rs) take the keys while listed.
+        if let Some(list) = self.slash_list(field, cx) {
+            return wrap
+                .capture_action(cx.listener(|v, _: &input::MoveUp, _, cx| {
+                    v.move_slash(-1, cx);
+                    cx.stop_propagation();
+                }))
+                .capture_action(cx.listener(|v, _: &input::MoveDown, _, cx| {
+                    v.move_slash(1, cx);
+                    cx.stop_propagation();
+                }))
+                .capture_action(cx.listener(|v, _: &input::Enter, window, cx| {
+                    if v.accept_slash(None, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .capture_action(cx.listener(|v, _: &input::IndentInline, window, cx| {
+                    if v.accept_slash(None, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .capture_action(cx.listener(|v, _: &input::Escape, _, cx| {
+                    v.more.slash = None;
+                    cx.stop_propagation();
+                    cx.notify();
+                }))
+                .child(list);
+        }
         if listing {
             wrap = wrap
                 .capture_action(cx.listener(|v, _: &input::MoveUp, _, cx| {

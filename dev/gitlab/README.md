@@ -35,11 +35,22 @@ python3 dev/gitlab/seed.py  # recreate the fixtures project from scratch
 - Every push runs a pipeline. There's no runner, so they stay pending and
   GitLab fails them as stuck after an hour: both states get shown.
 
+## Reports
+
+The fixtures' pipelines never run (no runner). For the Reports tab and the
+report widgets, `dev/gitlab/reports.sh` starts a GitLab Runner in Docker that
+only takes jobs tagged `reports` (the rest stay pending) and makes a merge
+request whose pipeline writes a JUnit report with one failure and a Code
+Quality report with two findings; `--down` removes both. `tests/reports.rs`
+checks the review loads them.
+
 ## Tests
 
 ```bash
 cargo test -p abromux-gitlab                         # offline, on tests/fixtures
-ABROMUX_GITLAB_LIVE=1 cargo test -p abromux-gitlab   # also against the live GitLab (tests/manage.rs merges
+ABROMUX_GITLAB_LIVE=1 cargo test -p abromux-gitlab   # also against the live GitLab (tests/actions.rs applies
+                                                     # suggestions, to-dos, notifications, locking and a review
+                                                     # on a merge request it makes; tests/manage.rs merges
                                                      # a merge request it makes, as alice, with a token it revokes)
 dev/gitlab/record-fixtures.sh                        # re-record tests/fixtures after reseeding
 ```
@@ -88,7 +99,16 @@ it shows: `state`, `open {url | iid}`, `section {name}`, `file {path}`,
 `list {scope, state}`, `browse {path | id}` (a project's merge requests; `{}`: the projects),
 `paste {text}` (into the list's search), `back`, `refresh`; and writing: `merge {auto, squash, remove_source_branch}`,
 `cancel_auto_merge`, `close`, `reopen`, `draft {on}`, `edit_mr {title, description, save}`, `edit_note {id, body, save}`,
-`delete_note {id, sure}`, `pipeline {id, action: retry|cancel|run}`, `menu {on}` (the header's ⋮). Real input goes through `debug.input`
+`delete_note {id, sure}`, `pipeline {id, action: retry|cancel|run}`, `menu {on}` (the header's ⋮). Beyond reviewing (actions.rs, compose.rs, create.rs): `apply_suggestion {id, message}`, `batch_suggestion {id}`, `apply_batch`,
+`todo`, `subscribe {on}`, `lock {on}`, `code_menu {on}`, `merge_message {on, merge, squash}`,
+`pick {cherry, branch, new_mr, go}` (revert or cherry-pick a merged one), `submit_review {verdict, summary}`, `review_panel {on}`,
+`reply_to_review {thread, body}`, `comment_to_review {body}`, `comment {body, thread}`, `delete_draft {id}`,
+`md {box, text, op, preview}` (the editor: `op` bold, italic, strike, quote, code, link, bullets, numbers, tasks, table, suggestion),
+`attach {box, paths}`, `line_comment {path, new|old, from_new|from_old, body, review}` (a range with `from_*`),
+`file_comment {path, body, review}`, `rerequest {username}`, `time {duration, summary, estimate}`, `whitespace {show}`,
+`task {n, done}`, `new_mr {source, target, title, description, draft, create}`,
+`reports {pick, quality_open, tests_open}`, `image_comment {path, x, y, body, review}`,
+`dependency {add | remove}` (Premium), `duo {action: review|summarize|commit|describe|ask, text}` (Duo), `comment` also takes `internal`, and `edit_mr` also takes `target`, `squash` and `remove_source_branch`. Real input goes through `debug.input`
 (`key:n`, `ui:down,X,Y;ui:up,X,Y`, `ui:scroll,X,Y,DY`).
 
 The loop in one command, tests + build + a screenshot in `target/shots/`:

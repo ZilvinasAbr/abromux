@@ -206,7 +206,12 @@ fn merge_squash_and_delete_branch() {
     // Into a target of its own, so main stays as seeded.
     let branch = format!("merge-test-{}", std::process::id());
     let target = format!("{branch}-target");
-    let _cleanup = Cleanup(pat_id, p, vec![branch.clone(), target.clone()]);
+    let reverted = format!("{branch}-revert");
+    let _cleanup = Cleanup(
+        pat_id,
+        p,
+        vec![branch.clone(), target.clone(), reverted.clone()],
+    );
     for b in [&target, &branch] {
         root(
             "POST",
@@ -246,10 +251,38 @@ fn merge_squash_and_delete_branch() {
         remove_source_branch: true,
         auto: false,
         sha: m.sha.clone(),
+        merge_commit_message: Some(format!("Merge {branch}, as typed")),
+        squash_commit_message: Some("Squashed, as typed".into()),
     };
     let merged = c.merge(p, iid, &opts).unwrap();
     assert_eq!(merged.state, "merged");
-    assert!(merged.squash_commit_sha.is_some(), "squashed");
+    let squashed = merged.squash_commit_sha.clone().expect("squashed");
+    // "Edit commit message": GitLab wrote what was typed.
+    let commit = root(
+        "GET",
+        &format!("projects/{p}/repository/commits/{squashed}"),
+        serde_json::json!({}),
+    );
+    assert_eq!(commit["title"], "Squashed, as typed");
+    let merge_sha = merged.merge_commit_sha.clone().expect("a merge commit");
+    let commit = root(
+        "GET",
+        &format!("projects/{p}/repository/commits/{merge_sha}"),
+        serde_json::json!({}),
+    );
+    assert_eq!(
+        commit["title"].as_str().unwrap(),
+        format!("Merge {branch}, as typed")
+    );
+    // Revert, as "Start a new merge request with these changes" does it.
+    c.create_branch(p, &reverted, &target).unwrap();
+    let r = c.pick_commit(p, &merge_sha, &reverted, false).unwrap();
+    assert!(r.title.starts_with("Revert"), "{}", r.title);
+    let rmr = c
+        .create_mr(p, &reverted, &target, "Revert it", "reverts")
+        .unwrap();
+    assert_eq!(rmr.target_branch, target);
+    c.set_open(p, rmr.iid, false).unwrap();
     // The branch goes (in the background).
     let gone = (0..20).any(|_| {
         std::thread::sleep(std::time::Duration::from_millis(500));

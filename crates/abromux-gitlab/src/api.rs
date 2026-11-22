@@ -623,6 +623,60 @@ impl Client {
         )
     }
 
+    /// An internal note on the merge request ("Make this an internal
+    /// note"): only the project's members see it.
+    pub fn internal_comment(&self, project: u64, iid: u64, body: &str) -> anyhow::Result<Note> {
+        self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/notes"),
+            serde_json::json!({ "body": body, "internal": true }),
+        )
+    }
+
+    /// An internal thread: REST's discussions take no `internal`, GraphQL's
+    /// createDiscussion does. `mr`: the merge request's global id.
+    pub fn internal_thread(&self, mr: u64, body: &str) -> anyhow::Result<()> {
+        let url = format!("{}/api/graphql", self.host);
+        let q = "mutation($id: NoteableID!, $body: String!) { createDiscussion(input: { noteableId: $id, body: $body, internal: true }) { errors } }";
+        let r = self.transport.send(
+            "POST",
+            &url,
+            &self.token,
+            serde_json::json!({
+                "query": q,
+                "variables": { "id": format!("gid://gitlab/MergeRequest/{mr}"), "body": body },
+            })
+            .to_string()
+            .as_bytes(),
+        )?;
+        let v: serde_json::Value = decode(&r.body, &url)?;
+        let errs = v["data"]["createDiscussion"]["errors"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if let Some(e) = v["errors"]
+            .as_array()
+            .and_then(|e| e.first())
+            .or(errs.first())
+        {
+            anyhow::bail!(
+                "GitLab didn't take the internal thread: {}",
+                e["message"].as_str().unwrap_or(&e.to_string())
+            );
+        }
+        Ok(())
+    }
+
+    /// A thread on the merge request (the comment box's "Start thread"):
+    /// one that can be resolved, unlike a comment.
+    pub fn start_thread(&self, project: u64, iid: u64, body: &str) -> anyhow::Result<Discussion> {
+        self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/discussions"),
+            serde_json::json!({ "body": body }),
+        )
+    }
+
     /// A reply in thread `discussion`.
     pub fn reply(
         &self,
@@ -678,6 +732,10 @@ impl Client {
         if let Some(n) = new_line {
             position["new_line"] = n.into();
         }
+        // On no line: GitLab's "Comment on this file".
+        if old_line.is_none() && new_line.is_none() {
+            position["position_type"] = "file".into();
+        }
         let path = format!("projects/{project}/merge_requests/{iid}/draft_notes");
         self.write(
             "POST",
@@ -691,6 +749,31 @@ impl Client {
         self.get_all(&format!(
             "projects/{project}/merge_requests/{iid}/draft_notes"
         ))
+    }
+
+    /// Submit your review as "Your review" does: every pending comment,
+    /// with `note` as a summary comment and `state` the reviewer's state
+    /// (`requested_changes` or `reviewed`).
+    pub fn publish_review(
+        &self,
+        project: u64,
+        iid: u64,
+        note: Option<&str>,
+        state: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let mut body = serde_json::json!({});
+        if let Some(n) = note {
+            body["note"] = n.into();
+        }
+        if let Some(s) = state {
+            body["reviewer_state"] = s.into();
+        }
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/draft_notes/bulk_publish"),
+            body,
+        )?;
+        Ok(())
     }
 
     /// Submit your review: every pending comment at once.
@@ -731,12 +814,800 @@ impl Client {
         if let Some(n) = new_line {
             position["new_line"] = n.into();
         }
+        // On no line: GitLab's "Comment on this file".
+        if old_line.is_none() && new_line.is_none() {
+            position["position_type"] = "file".into();
+        }
         let path = format!("projects/{project}/merge_requests/{iid}/discussions");
         self.write(
             "POST",
             &path,
             serde_json::json!({ "body": body, "position": position }),
         )
+    }
+
+    /// Apply suggestions `ids` to the source branch in one commit, as
+    /// GitLab's "Apply suggestion" (one) and "Apply N suggestions" (a
+    /// batch) do; `message` is the commit's, GitLab's default when None.
+    pub fn apply_suggestions(&self, ids: &[u64], message: Option<&str>) -> anyhow::Result<()> {
+        let mut body = serde_json::json!({});
+        if let Some(m) = message.filter(|m| !m.trim().is_empty()) {
+            body["commit_message"] = m.into();
+        }
+        let path = match ids {
+            [one] => format!("suggestions/{one}/apply"),
+            _ => {
+                body["ids"] = ids.into();
+                "suggestions/batch_apply".to_string()
+            }
+        };
+        // Right after a commit (the last apply, a push) GitLab refuses with
+        // "A file has been changed" until it has the merge request's new
+        // diff: a moment later the same apply goes through.
+        let mut tries = 0;
+        loop {
+            match self.write::<serde_json::Value>("PUT", &path, body.clone()) {
+                Ok(_) => return Ok(()),
+                // And while it moves the threads onto the new diff, "this
+                // line was changed in a more recent version", even for
+                // lines that weren't.
+                Err(e)
+                    if tries < 8
+                        && ApiError::status_of(&e) == Some(400)
+                        && (format!("{e:#}").contains("has been changed")
+                            || format!("{e:#}").contains("more recent version")) =>
+                {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(1000));
+                }
+                Err(e) => {
+                    return Err(match ApiError::status_of(&e) {
+                        Some(400 | 422) => e.context("GitLab can't apply it"),
+                        _ => e,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Get, or stop getting, its notifications (the sidebar's toggle).
+    pub fn subscribe(&self, project: u64, iid: u64, on: bool) -> anyhow::Result<()> {
+        let what = if on { "subscribe" } else { "unsubscribe" };
+        let path = format!("projects/{project}/merge_requests/{iid}/{what}");
+        match self.write::<serde_json::Value>("POST", &path, serde_json::json!({})) {
+            // 304: it already was.
+            Err(e) if ApiError::status_of(&e) == Some(304) => Ok(()),
+            r => r.map(|_| ()),
+        }
+    }
+
+    /// Add it to your to-do list ("Add a to-do item").
+    pub fn add_todo(&self, project: u64, iid: u64) -> anyhow::Result<()> {
+        let path = format!("projects/{project}/merge_requests/{iid}/todo");
+        match self.write::<serde_json::Value>("POST", &path, serde_json::json!({})) {
+            Err(e) if ApiError::status_of(&e) == Some(304) => Ok(()),
+            r => r.map(|_| ()),
+        }
+    }
+
+    /// Your pending to-dos on it: their ids (Mark as done takes them).
+    pub fn todos(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Todo>> {
+        let all: Vec<Todo> = self.get(&todos_path(project))?;
+        Ok(all.into_iter().filter(|t| t.target.iid == iid).collect())
+    }
+
+    /// Mark to-do `id` as done.
+    pub fn todo_done(&self, id: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("todos/{id}/mark_as_done"),
+            serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
+    /// Change a comment of your review before it's submitted.
+    pub fn edit_draft(&self, project: u64, iid: u64, id: u64, body: &str) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "PUT",
+            &format!("projects/{project}/merge_requests/{iid}/draft_notes/{id}"),
+            serde_json::json!({ "note": body }),
+        )?;
+        Ok(())
+    }
+
+    /// Take a comment out of your review.
+    pub fn delete_draft(&self, project: u64, iid: u64, id: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "DELETE",
+            &format!("projects/{project}/merge_requests/{iid}/draft_notes/{id}"),
+            serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
+    /// A comment held in your review (GitLab's "Add to review" on the
+    /// overview's box, or a reply's), with `discussion` the thread it
+    /// replies to and `resolve` whether submitting resolves it.
+    pub fn draft_comment(
+        &self,
+        project: u64,
+        iid: u64,
+        body: &str,
+        discussion: Option<&str>,
+        resolve: bool,
+    ) -> anyhow::Result<DraftNote> {
+        let mut b = serde_json::json!({ "note": body });
+        if let Some(d) = discussion {
+            b["in_reply_to_discussion_id"] = d.into();
+            b["resolve_discussion"] = resolve.into();
+        }
+        self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/draft_notes"),
+            b,
+        )
+    }
+
+    /// Revert (`cherry_pick` false) or cherry-pick commit `sha` onto
+    /// `branch`, as a merged merge request's Revert and Cherry-pick do.
+    /// GitLab commits it there; it answers with the new commit.
+    pub fn pick_commit(
+        &self,
+        project: u64,
+        sha: &str,
+        branch: &str,
+        cherry_pick: bool,
+    ) -> anyhow::Result<Commit> {
+        let what = if cherry_pick { "cherry_pick" } else { "revert" };
+        self.write(
+            "POST",
+            &format!("projects/{project}/repository/commits/{sha}/{what}"),
+            serde_json::json!({ "branch": branch }),
+        )
+        .map_err(|e| match ApiError::status_of(&e) {
+            Some(400 | 409 | 422) => e.context(format!(
+                "GitLab can't {} it onto {branch}: it may not apply cleanly, or is there already",
+                if cherry_pick { "cherry-pick" } else { "revert" }
+            )),
+            _ => e,
+        })
+    }
+
+    /// Branches matching `search`, for picking a target.
+    pub fn branches(&self, project: u64, search: &str) -> anyhow::Result<Vec<Branch>> {
+        self.get(&format!(
+            "projects/{project}/repository/branches?per_page=50&search={}",
+            query_value(search)
+        ))
+    }
+
+    /// Make branch `name` from `from`.
+    pub fn create_branch(&self, project: u64, name: &str, from: &str) -> anyhow::Result<Branch> {
+        self.write(
+            "POST",
+            &format!("projects/{project}/repository/branches"),
+            serde_json::json!({ "branch": name, "ref": from }),
+        )
+    }
+
+    /// Open a merge request from `source` into `target`.
+    pub fn create_mr(
+        &self,
+        project: u64,
+        source: &str,
+        target: &str,
+        title: &str,
+        description: &str,
+    ) -> anyhow::Result<MergeRequest> {
+        self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests"),
+            serde_json::json!({
+                "source_branch": source,
+                "target_branch": target,
+                "title": title,
+                "description": description,
+                "remove_source_branch": true,
+            }),
+        )
+    }
+
+    /// Ask `username` to review it again (GitLab's ↻ by a reviewer):
+    /// GitLab's `/request_review` quick action, which writes no comment.
+    pub fn rerequest_review(&self, project: u64, iid: u64, username: &str) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/notes"),
+            serde_json::json!({ "body": format!("/request_review @{username}") }),
+        )?;
+        Ok(())
+    }
+
+    /// Log time spent (`1h 30m`), with what it was for.
+    pub fn add_spent_time(
+        &self,
+        project: u64,
+        iid: u64,
+        duration: &str,
+        summary: &str,
+    ) -> anyhow::Result<()> {
+        let mut body = serde_json::json!({ "duration": duration });
+        if !summary.trim().is_empty() {
+            body["summary"] = summary.into();
+        }
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/add_spent_time"),
+            body,
+        )?;
+        Ok(())
+    }
+
+    /// Set the estimate (`3d`).
+    pub fn set_estimate(&self, project: u64, iid: u64, duration: &str) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/time_estimate"),
+            serde_json::json!({ "duration": duration }),
+        )?;
+        Ok(())
+    }
+
+    /// Open a merge request as GitLab's "New merge request" form does.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_mr_with(
+        &self,
+        project: u64,
+        source: &str,
+        target: &str,
+        title: &str,
+        description: &str,
+        remove_source_branch: bool,
+        squash: bool,
+    ) -> anyhow::Result<MergeRequest> {
+        self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests"),
+            serde_json::json!({
+                "source_branch": source,
+                "target_branch": target,
+                "title": title,
+                "description": description,
+                "remove_source_branch": remove_source_branch,
+                "squash": squash,
+            }),
+        )
+        .map_err(|e| match ApiError::status_of(&e) {
+            Some(409) => e.context("there's already an open merge request for this source branch"),
+            Some(404 | 422) => {
+                e.context("GitLab didn't take it: check both branches exist and differ")
+            }
+            _ => e,
+        })
+    }
+
+    /// Upload `file` to the project, as the editor's "Attach a file or
+    /// image" does: GitLab answers with the markdown that shows it.
+    /// Through curl's multipart form, whatever the transport (a local
+    /// review has nowhere to upload to).
+    pub fn upload(&self, project: u64, file: &std::path::Path) -> anyhow::Result<String> {
+        #[derive(serde::Deserialize)]
+        struct Uploaded {
+            markdown: String,
+        }
+        let url = format!("{}/api/v4/projects/{project}/uploads", self.host);
+        // curl's -F: quotes keep commas and semicolons in the name.
+        let form = format!(
+            "file=@\"{}\"",
+            file.display()
+                .to_string()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+        );
+        let r = curl(&["-X", "POST", "-F", &form], &url, &self.token)
+            .with_context(|| format!("uploading {}", file.display()))?;
+        let r = self.check(r, &url)?;
+        let u: Uploaded = decode(&r.body, "uploads")?;
+        Ok(u.markdown)
+    }
+
+    /// GitLab's merge checks (`mergeabilityChecks`, GraphQL only): each
+    /// check's identifier and status (SUCCESS, FAILED, WARNING, INACTIVE…).
+    pub fn merge_checks(&self, full_path: &str, iid: u64) -> anyhow::Result<Vec<(String, String)>> {
+        let v = self.graphql(
+            "query($p: ID!, $iid: String!) { project(fullPath: $p) { mergeRequest(iid: $iid) { mergeabilityChecks { identifier status } } } }",
+            serde_json::json!({ "p": full_path, "iid": iid.to_string() }),
+        )?;
+        Ok(v["data"]["project"]["mergeRequest"]["mergeabilityChecks"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|c| {
+                (
+                    c["identifier"].as_str().unwrap_or_default().to_string(),
+                    c["status"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect())
+    }
+
+    /// Your comment templates (GitLab's saved replies): name and text.
+    pub fn saved_replies(&self) -> anyhow::Result<Vec<(String, String)>> {
+        let v = self.graphql(
+            "{ currentUser { savedReplies(first: 100) { nodes { name content } } } }",
+            serde_json::json!({}),
+        )?;
+        Ok(v["data"]["currentUser"]["savedReplies"]["nodes"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|n| {
+                (
+                    n["name"].as_str().unwrap_or_default().to_string(),
+                    n["content"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect())
+    }
+
+    /// Pipeline `id`'s jobs (the latest try of each).
+    pub fn jobs(&self, project: u64, pipeline: u64) -> anyhow::Result<Vec<Job>> {
+        self.get_all(&format!("projects/{project}/pipelines/{pipeline}/jobs"))
+    }
+
+    /// Run job `id` again ("Retry").
+    pub fn retry_job(&self, project: u64, id: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/jobs/{id}/retry"),
+            serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
+    /// The work items linked to the merge request (GraphQL).
+    pub fn work_items(&self, full_path: &str, iid: u64) -> anyhow::Result<Vec<WorkItemLink>> {
+        let v = self.graphql(
+            "query($p: ID!, $iid: String!) { project(fullPath: $p) { mergeRequest(iid: $iid) { workItemRelations { nodes { id linkType fromMrDescription workItem { iid title state webUrl reference } } } } } }",
+            serde_json::json!({ "p": full_path, "iid": iid.to_string() }),
+        )?;
+        Ok(
+            v["data"]["project"]["mergeRequest"]["workItemRelations"]["nodes"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .map(|n| {
+                    let w = &n["workItem"];
+                    WorkItemLink {
+                        id: n["id"].as_str().unwrap_or_default().to_string(),
+                        link_type: n["linkType"].as_str().unwrap_or_default().to_string(),
+                        from_description: n["fromMrDescription"].as_bool().unwrap_or(false),
+                        iid: w["iid"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0),
+                        title: w["title"].as_str().unwrap_or_default().to_string(),
+                        state: w["state"].as_str().unwrap_or_default().to_string(),
+                        web_url: w["webUrl"].as_str().unwrap_or_default().to_string(),
+                        reference: w["reference"].as_str().unwrap_or_default().to_string(),
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// Link issue `issue` (its iid, in the same project) to the merge
+    /// request as `link_type` (CLOSES, RELATED, MENTIONED).
+    pub fn link_work_item(
+        &self,
+        full_path: &str,
+        project: u64,
+        iid: u64,
+        issue: u64,
+        link_type: &str,
+    ) -> anyhow::Result<()> {
+        let i: serde_json::Value = self.get(&format!("projects/{project}/issues/{issue}"))?;
+        let id = i["id"].as_u64().context("no such issue")?;
+        let v = self.graphql(
+            "mutation($p: ID!, $iid: String!, $ids: [WorkItemID!]!, $t: MergeRequestWorkItemLinkType) { mergeRequestCreateWorkItemRelations(input: { projectPath: $p, iid: $iid, workItemIds: $ids, linkType: $t }) { errors } }",
+            serde_json::json!({ "p": full_path, "iid": iid.to_string(), "ids": [format!("gid://gitlab/WorkItem/{id}")], "t": link_type }),
+        )?;
+        if let Some(e) = v["data"]["mergeRequestCreateWorkItemRelations"]["errors"]
+            .as_array()
+            .and_then(|e| e.first())
+        {
+            anyhow::bail!("GitLab: {}", e.as_str().unwrap_or("couldn't link it"));
+        }
+        Ok(())
+    }
+
+    /// Unlink relation `id` (a global id).
+    pub fn unlink_work_item(&self, full_path: &str, iid: u64, id: &str) -> anyhow::Result<()> {
+        let v = self.graphql(
+            "mutation($p: ID!, $iid: String!, $ids: [MergeRequestIssueID!]!) { mergeRequestDestroyWorkItemRelations(input: { projectPath: $p, iid: $iid, ids: $ids }) { errors } }",
+            serde_json::json!({ "p": full_path, "iid": iid.to_string(), "ids": [id] }),
+        )?;
+        if let Some(e) = v["data"]["mergeRequestDestroyWorkItemRelations"]["errors"]
+            .as_array()
+            .and_then(|e| e.first())
+        {
+            anyhow::bail!("GitLab: {}", e.as_str().unwrap_or("couldn't unlink it"));
+        }
+        Ok(())
+    }
+
+    /// A new issue titled `title`: its iid.
+    pub fn create_issue(&self, project: u64, title: &str) -> anyhow::Result<u64> {
+        let v: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/issues"),
+            serde_json::json!({ "title": title }),
+        )?;
+        v["iid"].as_u64().context("GitLab made no issue")
+    }
+
+    /// GitLab's "Create issue to resolve thread": an issue made from thread
+    /// `discussion`, which GitLab then resolves. Its web URL.
+    /// `mr_title`: the merge request's, for GitLab's default title.
+    pub fn issue_for_thread(
+        &self,
+        project: u64,
+        iid: u64,
+        discussion: &str,
+        mr_title: &str,
+    ) -> anyhow::Result<String> {
+        let v: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/issues"),
+            serde_json::json!({
+                "title": format!("Follow-up from \"{mr_title}\""),
+                "merge_request_to_resolve_discussions_of": iid,
+                "discussion_to_resolve": discussion,
+            }),
+        )?;
+        Ok(v["web_url"].as_str().unwrap_or_default().to_string())
+    }
+
+    /// The merge request's context commits ("previously merged commits").
+    pub fn context_commits(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Commit>> {
+        self.get(&format!(
+            "projects/{project}/merge_requests/{iid}/context_commits"
+        ))
+    }
+
+    /// Add (or with `add` false, remove) context commits `shas`.
+    pub fn context_commits_change(
+        &self,
+        project: u64,
+        iid: u64,
+        shas: &[String],
+        add: bool,
+    ) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            if add { "POST" } else { "DELETE" },
+            &format!("projects/{project}/merge_requests/{iid}/context_commits"),
+            serde_json::json!({ "commits": shas }),
+        )?;
+        Ok(())
+    }
+
+    /// Branch `branch`'s latest commits, for picking context.
+    pub fn branch_commits(&self, project: u64, branch: &str) -> anyhow::Result<Vec<Commit>> {
+        self.get(&format!(
+            "projects/{project}/repository/commits?ref_name={}&per_page=50",
+            query_value(branch)
+        ))
+    }
+
+    /// Pipeline `id`'s test report.
+    pub fn test_report(&self, project: u64, id: u64) -> anyhow::Result<TestReport> {
+        self.get(&format!("projects/{project}/pipelines/{id}/test_report"))
+    }
+
+    /// The merge request's Code Quality comparison (GraphQL only), once
+    /// GitLab has parsed it; None when there's none.
+    pub fn code_quality(&self, full_path: &str, iid: u64) -> anyhow::Result<Option<Quality>> {
+        let q = format!(
+            "{{ project(fullPath: {full_path:?}) {{ mergeRequest(iid: \"{iid}\") {{ codequalityReportsComparer {{ status report {{ newErrors {{ description severity filePath line }} resolvedErrors {{ description severity filePath line }} }} }} }} }} }}"
+        );
+        let url = format!("{}/api/graphql", self.host);
+        // GitLab compares the reports when first asked: "PARSING" until
+        // then, as its page polls. A few tries, a moment apart.
+        let mut v = serde_json::Value::Null;
+        for _ in 0..8 {
+            let r = self.transport.send(
+                "POST",
+                &url,
+                &self.token,
+                serde_json::json!({ "query": q }).to_string().as_bytes(),
+            )?;
+            v = decode(&r.body, &url)?;
+            if v["data"]["project"]["mergeRequest"]["codequalityReportsComparer"]["status"]
+                != "PARSING"
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        }
+        let c = &v["data"]["project"]["mergeRequest"]["codequalityReportsComparer"];
+        if c["status"] != "PARSED" {
+            return Ok(None);
+        }
+        let list = |k: &str| -> Vec<Finding> {
+            serde_json::from_value(c["report"][k].clone()).unwrap_or_default()
+        };
+        Ok(Some(Quality {
+            new: list("newErrors"),
+            resolved: list("resolvedErrors"),
+        }))
+    }
+
+    /// Premium's approval rules; None on a GitLab without them (404).
+    pub fn approval_state(&self, project: u64, iid: u64) -> anyhow::Result<Option<ApprovalState>> {
+        absent_on_404(self.get(&format!(
+            "projects/{project}/merge_requests/{iid}/approval_state"
+        )))
+    }
+
+    /// Whether the project runs merge trains (a paid GitLab's setting).
+    pub fn merge_trains_enabled(&self, project: u64) -> anyhow::Result<bool> {
+        let p: serde_json::Value = self.get(&project_path(project))?;
+        Ok(p["merge_trains_enabled"].as_bool().unwrap_or(false))
+    }
+
+    /// The merge request's place on its merge train, if it's on one.
+    pub fn train_entry(&self, project: u64, iid: u64) -> anyhow::Result<Option<TrainEntry>> {
+        absent_on_404(self.get(&format!(
+            "projects/{project}/merge_trains/merge_requests/{iid}"
+        )))
+    }
+
+    /// Put it on the merge train ("Add to merge train"; with `auto`, once
+    /// its checks pass), at head `sha`.
+    pub fn add_to_train(
+        &self,
+        project: u64,
+        iid: u64,
+        auto: bool,
+        sha: Option<&str>,
+        squash: bool,
+    ) -> anyhow::Result<()> {
+        let mut body = serde_json::json!({ "auto_merge": auto, "squash": squash });
+        if let Some(s) = sha {
+            body["sha"] = s.into();
+        }
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_trains/merge_requests/{iid}"),
+            body,
+        )?;
+        Ok(())
+    }
+
+    /// The merge requests this one depends on (Premium); empty without.
+    pub fn blocks(&self, project: u64, iid: u64) -> anyhow::Result<Vec<Block>> {
+        Ok(
+            absent_on_404(self.get(&format!("projects/{project}/merge_requests/{iid}/blocks")))?
+                .unwrap_or_default(),
+        )
+    }
+
+    /// Make it depend on `!blocking` of the same project.
+    pub fn add_block(&self, project: u64, iid: u64, blocking: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!(
+                "projects/{project}/merge_requests/{iid}/blocks?blocking_merge_request_iid={blocking}"
+            ),
+            serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
+    /// Drop dependency `block`.
+    pub fn remove_block(&self, project: u64, iid: u64, block: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "DELETE",
+            &format!("projects/{project}/merge_requests/{iid}/blocks/{block}"),
+            serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
+    /// Whether GitLab Duo's actions are there: an Enterprise GitLab
+    /// (`/metadata`) whose GraphQL schema has `aiAction`'s input.
+    pub fn duo_available(&self) -> anyhow::Result<bool> {
+        let m: serde_json::Value = self.get("metadata")?;
+        if m["enterprise"].as_bool() != Some(true) {
+            return Ok(false);
+        }
+        let v = self.graphql(
+            "{ __type(name: \"AiActionInput\") { name } }",
+            serde_json::json!({}),
+        )?;
+        Ok(v["data"]["__type"]["name"] == "AiActionInput")
+    }
+
+    /// A GraphQL request; GitLab's errors become ours.
+    pub fn graphql(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        let url = format!("{}/api/graphql", self.host);
+        let r = self.transport.send(
+            "POST",
+            &url,
+            &self.token,
+            serde_json::json!({ "query": query, "variables": variables })
+                .to_string()
+                .as_bytes(),
+        )?;
+        let v: serde_json::Value = decode(&r.body, &url)?;
+        if let Some(e) = v["errors"].as_array().and_then(|e| e.first()) {
+            anyhow::bail!(
+                "GitLab: {}",
+                e["message"].as_str().unwrap_or("GraphQL error")
+            );
+        }
+        Ok(v)
+    }
+
+    /// Ask GitLab Duo (`aiAction`, with `input` its action, e.g.
+    /// `{"summarizeReview": {"resourceId": …}}`) and wait for its answer
+    /// (`aiMessages`), as GitLab's page does.
+    pub fn ask_duo(&self, input: serde_json::Value) -> anyhow::Result<String> {
+        let v = self.graphql(
+            "mutation($input: AiActionInput!) { aiAction(input: $input) { requestId errors } }",
+            serde_json::json!({ "input": input }),
+        )?;
+        let a = &v["data"]["aiAction"];
+        if let Some(e) = a["errors"].as_array().and_then(|e| e.first()) {
+            anyhow::bail!("GitLab Duo: {}", e.as_str().unwrap_or("refused"));
+        }
+        let id = a["requestId"]
+            .as_str()
+            .context("GitLab Duo gave no request id")?
+            .to_string();
+        for _ in 0..120 {
+            let m = self.graphql(
+                "query($ids: [ID!]) { aiMessages(requestIds: $ids, roles: [ASSISTANT]) { nodes { content errors chunkId } } }",
+                serde_json::json!({ "ids": [id] }),
+            )?;
+            let nodes = m["data"]["aiMessages"]["nodes"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            // The whole answer, not a streamed chunk.
+            if let Some(n) = nodes.iter().find(|n| n["chunkId"].is_null()) {
+                if let Some(e) = n["errors"].as_array().and_then(|e| e.first()) {
+                    anyhow::bail!("GitLab Duo: {}", e.as_str().unwrap_or("failed"));
+                }
+                return Ok(n["content"].as_str().unwrap_or_default().to_string());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        anyhow::bail!("GitLab Duo didn't answer in a minute")
+    }
+
+    /// Ask GitLab Duo to review it (`/assign_reviewer @GitLabDuo`).
+    pub fn request_duo_review(&self, project: u64, iid: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/notes"),
+            serde_json::json!({ "body": "/assign_reviewer @GitLabDuo" }),
+        )?;
+        Ok(())
+    }
+
+    /// Delete the merge request (owners and admins only).
+    pub fn delete_mr(&self, project: u64, iid: u64) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.write(
+            "DELETE",
+            &format!("projects/{project}/merge_requests/{iid}"),
+            serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
+    /// A thread on lines `range.start` to `range.end` (its end is where it
+    /// shows, as GitLab places a multi-line comment); `draft`: into your
+    /// review instead.
+    #[allow(clippy::too_many_arguments)]
+    pub fn range_comment(
+        &self,
+        project: u64,
+        iid: u64,
+        refs: &DiffRefs,
+        old_path: &str,
+        new_path: &str,
+        range: &LineRange,
+        body: &str,
+        draft: bool,
+    ) -> anyhow::Result<()> {
+        let point = |l: &LinePoint| {
+            let mut v = serde_json::json!({
+                "line_code": line_code(new_path, l.old_pos, l.new_pos),
+                "type": l.kind,
+            });
+            if let Some(o) = l.old {
+                v["old_line"] = o.into();
+            }
+            if let Some(n) = l.new {
+                v["new_line"] = n.into();
+            }
+            v
+        };
+        let mut position = serde_json::json!({
+            "position_type": "text",
+            "base_sha": refs.base_sha,
+            "start_sha": refs.start_sha,
+            "head_sha": refs.head_sha,
+            "old_path": old_path,
+            "new_path": new_path,
+            "line_range": { "start": point(&range.start), "end": point(&range.end) },
+        });
+        if let Some(o) = range.end.old {
+            position["old_line"] = o.into();
+        }
+        if let Some(n) = range.end.new {
+            position["new_line"] = n.into();
+        }
+        if draft {
+            let _: DraftNote = self.write(
+                "POST",
+                &format!("projects/{project}/merge_requests/{iid}/draft_notes"),
+                serde_json::json!({ "note": body, "position": position }),
+            )?;
+        } else {
+            let _: Discussion = self.write(
+                "POST",
+                &format!("projects/{project}/merge_requests/{iid}/discussions"),
+                serde_json::json!({ "body": body, "position": position }),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// A thread on point (`x`, `y`) of the new image at `path` (`width` ×
+    /// `height`), as a click on GitLab's image diff starts; `draft`: into
+    /// your review.
+    #[allow(clippy::too_many_arguments)]
+    pub fn image_comment(
+        &self,
+        project: u64,
+        iid: u64,
+        refs: &DiffRefs,
+        old_path: &str,
+        new_path: &str,
+        (x, y, width, height): (u32, u32, u32, u32),
+        body: &str,
+        draft: bool,
+    ) -> anyhow::Result<()> {
+        let position = serde_json::json!({
+            "position_type": "image",
+            "base_sha": refs.base_sha,
+            "start_sha": refs.start_sha,
+            "head_sha": refs.head_sha,
+            "old_path": old_path,
+            "new_path": new_path,
+            "width": width,
+            "height": height,
+            "x": x,
+            "y": y,
+        });
+        let (path, key) = if draft {
+            ("draft_notes", "note")
+        } else {
+            ("discussions", "body")
+        };
+        let _: serde_json::Value = self.write(
+            "POST",
+            &format!("projects/{project}/merge_requests/{iid}/{path}"),
+            serde_json::json!({ key: body, "position": position }),
+        )?;
+        Ok(())
     }
 
     /// Approve, or take back the approval.
@@ -889,6 +1760,20 @@ impl Client {
         });
         if let Some(sha) = &opts.sha {
             body["sha"] = sha.clone().into();
+        }
+        if let Some(m) = opts
+            .merge_commit_message
+            .as_ref()
+            .filter(|m| !m.trim().is_empty())
+        {
+            body["merge_commit_message"] = m.clone().into();
+        }
+        if let Some(m) = opts
+            .squash_commit_message
+            .as_ref()
+            .filter(|m| !m.trim().is_empty())
+        {
+            body["squash_commit_message"] = m.clone().into();
         }
         if opts.auto {
             // `auto_merge` since GitLab 17; older ones know the other name.
@@ -1315,6 +2200,47 @@ pub struct MergeOptions {
     pub auto: bool,
     /// The head commit the merge is for.
     pub sha: Option<String>,
+    /// "Edit commit message": the merge commit's and the squashed one's.
+    pub merge_commit_message: Option<String>,
+    pub squash_commit_message: Option<String>,
+}
+
+/// One end of a multi-line comment: the line's numbers, GitLab's running
+/// positions (an added line's old position is the old side's count there),
+/// and its type (`new`, `old`, or empty for an unchanged line).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LinePoint {
+    pub old: Option<u32>,
+    pub new: Option<u32>,
+    pub old_pos: u32,
+    pub new_pos: u32,
+    pub kind: &'static str,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LineRange {
+    pub start: LinePoint,
+    pub end: LinePoint,
+}
+
+/// A paid GitLab's endpoint, on a free one: a 404 means "not here".
+fn absent_on_404<T>(got: anyhow::Result<T>) -> anyhow::Result<Option<T>> {
+    match got {
+        Ok(v) => Ok(Some(v)),
+        Err(e) if ApiError::status_of(&e) == Some(404) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// GitLab's code for a diff line: `sha1(path)_old_new`.
+pub fn line_code(path: &str, old_pos: u32, new_pos: u32) -> String {
+    let sha = sha1_smol::Sha1::from(path).digest().to_string();
+    format!("{sha}_{old_pos}_{new_pos}")
+}
+
+/// Your pending to-dos on the project's merge requests.
+pub fn todos_path(project: u64) -> String {
+    format!("todos?project_id={project}&type=MergeRequest&state=pending&per_page=100")
 }
 
 /// The merge requests list in `scope` and `state` (all its pages: `get_all`).

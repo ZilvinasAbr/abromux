@@ -121,6 +121,13 @@ pub struct MergeRequest {
     pub sha: Option<String>,
     /// What the signed-in user may do; single-MR endpoint only.
     pub user: Option<MrPermissions>,
+    /// You get its notifications (the sidebar's toggle); single-MR endpoint only.
+    pub subscribed: Option<bool>,
+    /// Only project members may comment ("Lock discussion").
+    pub discussion_locked: Option<bool>,
+    /// The messages merging writes, when set on the merge request.
+    pub merge_commit_message: Option<String>,
+    pub squash_commit_message: Option<String>,
 }
 
 /// The single-MR endpoint's `user`: whether you may merge it.
@@ -136,6 +143,12 @@ pub struct MrPermissions {
 pub struct DraftNote {
     pub id: u64,
     pub note: String,
+    /// Where on the diff it goes; None for a comment on the merge request.
+    pub position: Option<Position>,
+    /// The thread it replies to.
+    pub discussion_id: Option<String>,
+    /// Resolve that thread when the review is submitted.
+    pub resolve_discussion: bool,
 }
 
 /// An issue the merge request closes when merged ("Closes #12").
@@ -252,20 +265,48 @@ pub struct FileDiff {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Position {
+    #[serde(deserialize_with = "null_as_default")]
     pub base_sha: String,
+    #[serde(deserialize_with = "null_as_default")]
     pub start_sha: String,
+    #[serde(deserialize_with = "null_as_default")]
     pub head_sha: String,
     pub old_path: Option<String>,
     pub new_path: Option<String>,
     /// text, image or file
+    #[serde(deserialize_with = "null_as_default")]
     pub position_type: String,
     pub old_line: Option<u32>,
     pub new_line: Option<u32>,
+    /// A comment on several lines: the first and the last.
+    pub line_range: Option<PosRange>,
+    /// A comment on a point of an image: the image's size and the point.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub x: Option<u32>,
+    pub y: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PosRange {
+    pub start: PosPoint,
+    pub end: PosPoint,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PosPoint {
+    pub old_line: Option<u32>,
+    pub new_line: Option<u32>,
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Suggestion {
+    pub id: u64,
     pub from_line: u32,
     pub to_line: u32,
     pub from_content: String,
@@ -286,6 +327,8 @@ pub struct Note {
     pub created_at: String,
     /// GitLab's own notes ("requested review from …", "approved this …").
     pub system: bool,
+    /// Only the project's members see it ("Internal note").
+    pub internal: bool,
     pub resolvable: bool,
     pub resolved: bool,
     pub resolved_by: Option<User>,
@@ -352,6 +395,9 @@ pub struct Approver {
 pub struct Approvals {
     pub approved: bool,
     pub approved_by: Vec<Approver>,
+    /// You may approve it (not yet, not your own when that's barred).
+    pub user_can_approve: bool,
+    pub user_has_approved: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -625,4 +671,194 @@ mod stack_tests {
         all.sort();
         assert_eq!(all, [1, 2, 3]);
     }
+}
+
+/// A branch, for picking where a revert or cherry-pick goes.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Branch {
+    pub name: String,
+    pub default: bool,
+}
+
+/// One of your to-dos (`GET /todos`): what it's on.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Todo {
+    pub id: u64,
+    pub target: TodoTarget,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TodoTarget {
+    pub iid: u64,
+}
+
+/// A pipeline's test report (`/pipelines/:id/test_report`): GitLab's
+/// "Test summary".
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TestReport {
+    pub total_time: f64,
+    pub total_count: u32,
+    pub success_count: u32,
+    pub failed_count: u32,
+    pub skipped_count: u32,
+    pub error_count: u32,
+    pub test_suites: Vec<TestSuite>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TestSuite {
+    pub name: String,
+    pub total_time: f64,
+    pub total_count: u32,
+    pub success_count: u32,
+    pub failed_count: u32,
+    pub skipped_count: u32,
+    pub error_count: u32,
+    pub suite_error: Option<String>,
+    pub test_cases: Vec<TestCase>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TestCase {
+    /// success, failed, skipped, error
+    pub status: String,
+    pub name: String,
+    pub classname: String,
+    pub execution_time: f64,
+    pub file: Option<String>,
+    pub system_output: Option<String>,
+    pub stack_trace: Option<String>,
+}
+
+/// One Code Quality finding of the merge request's head against its base.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Finding {
+    pub description: String,
+    /// BLOCKER, CRITICAL, MAJOR, MINOR, INFO
+    pub severity: String,
+    pub file_path: String,
+    pub line: Option<u32>,
+}
+
+/// The merge request's Code Quality comparison: what it adds and fixes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Quality {
+    pub new: Vec<Finding>,
+    pub resolved: Vec<Finding>,
+}
+
+/// The head pipeline's reports, as GitLab's report widgets and Reports
+/// tab show them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Reports {
+    pub tests: Option<TestReport>,
+    pub quality: Option<Quality>,
+}
+
+impl Reports {
+    /// How many reports there are, for the Reports tab's count.
+    pub fn count(&self) -> usize {
+        self.tests.iter().filter(|t| t.total_count > 0).count() + self.quality.iter().count()
+    }
+}
+
+/// Premium's approval rules (`/merge_requests/:iid/approval_state`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ApprovalState {
+    pub approval_rules_overwritten: bool,
+    pub rules: Vec<ApprovalRule>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ApprovalRule {
+    pub id: u64,
+    pub name: String,
+    /// regular, code_owner, report_approver, any_approver
+    pub rule_type: String,
+    pub approvals_required: u32,
+    #[serde(deserialize_with = "null_as_empty")]
+    pub eligible_approvers: Vec<User>,
+    #[serde(deserialize_with = "null_as_empty")]
+    pub approved_by: Vec<User>,
+    pub approved: bool,
+}
+
+/// Premium's merge train entry of a merge request
+/// (`/merge_trains/merge_requests/:iid`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TrainEntry {
+    pub id: u64,
+    /// idle, fresh, stale (on the train); merging, merged, skip_merged
+    pub status: String,
+    pub user: Option<User>,
+    pub pipeline: Option<Pipeline>,
+    pub target_branch: String,
+    pub created_at: String,
+}
+
+/// Premium's merge request dependency (`/merge_requests/:iid/blocks`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Block {
+    pub id: u64,
+    /// None when you can't see it.
+    pub blocking_merge_request: Option<MergeRequest>,
+}
+
+/// What a paid GitLab adds to the merge request, where the server has it
+/// (a free GitLab answers 404, and these stay empty).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Premium {
+    pub rules: Option<ApprovalState>,
+    pub trains_enabled: bool,
+    pub train: Option<TrainEntry>,
+    pub blocks: Vec<Block>,
+    /// GitLab Duo answers here: an Enterprise GitLab whose GraphQL has
+    /// `aiAction` (Duo's actions show only then).
+    pub duo: bool,
+}
+
+/// One of a pipeline's jobs (`/pipelines/:id/jobs`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Job {
+    pub id: u64,
+    pub name: String,
+    pub stage: String,
+    pub status: String,
+    pub web_url: String,
+    pub artifacts: Vec<JobArtifact>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct JobArtifact {
+    /// archive, junit, codequality, trace…
+    pub file_type: String,
+}
+
+/// A work item linked to the merge request (GitLab's sidebar "Work items").
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WorkItemLink {
+    /// The relation's global id (for unlinking).
+    pub id: String,
+    /// CLOSES, RELATED or MENTIONED.
+    pub link_type: String,
+    /// Made by the description's "Closes #12": unlinked by editing it.
+    pub from_description: bool,
+    pub iid: u64,
+    pub title: String,
+    pub state: String,
+    pub web_url: String,
+    pub reference: String,
 }

@@ -360,6 +360,10 @@ impl GitLabView {
                     gpui_component::tooltip::Tooltip::new(tip).build(window, cx)
                 })
         };
+        // A pending comment of your review has no page to link to yet.
+        if d.id.starts_with("optimistic-draft-") {
+            return div();
+        }
         // Made here and not yet GitLab's: nothing to do to it yet.
         let writes = self.me.is_some() && !crate::optimistic::is_pending_thread(&d.id);
         let resolved = d.resolved();
@@ -406,6 +410,24 @@ impl GitLabView {
                     .on_click(cx.listener(move |v, _, window, cx| v.open_reply(&id, window, cx))),
                 )
             })
+            // GitLab's "Create issue to resolve thread".
+            .when(
+                writes && d.resolvable() && !resolved && !self.is_local(),
+                |el| {
+                    let id = d.id.clone();
+                    el.child(
+                        button(
+                            format!("note-issue-{}", d.id),
+                            "square-plus",
+                            c(MUTED),
+                            "Create issue to resolve thread",
+                        )
+                        .on_click(cx.listener(move |v, _, window, cx| {
+                            v.issue_for_thread(id.clone(), window, cx)
+                        })),
+                    )
+                },
+            )
             .when(self.has_web(), |el| {
                 el.child(
                     button(format!("note-link-{}", d.id), "link", c(MUTED), "Copy link").on_click(
@@ -439,8 +461,10 @@ impl GitLabView {
         // GitLab's "Add reaction" first among a note's buttons; a local diff
         // has no reactions.
         let pending = crate::optimistic::is_pending_note(n.id);
+        let draft = crate::actions::is_draft(n);
         let react = (self.me.is_some()
             && !pending
+            && !draft
             && !self.is_local()
             && !n.system
             && self.review.ready().is_some_and(|r| r.mr.state != "locked"))
@@ -456,9 +480,41 @@ impl GitLabView {
             (None, Some(o)) => Some(o.ml_1()),
             (Some(a), Some(o)) => Some(a.child(o)),
         };
+        // GitLab's "Internal note" badge, before the rest.
+        let actions = if n.internal {
+            let tag = badge("Internal note", fixed(0xe9731f), on_fill()).flex_none();
+            Some(match actions {
+                Some(a) => div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .ml_1()
+                    .child(tag)
+                    .child(a.ml_0()),
+                None => div().flex().items_center().ml_1().child(tag),
+            })
+        } else {
+            actions
+        };
+        // A comment of your review not yet submitted: GitLab's "Pending".
+        let actions = if draft {
+            let tag = badge("Pending", ca(0xc17d1033), c(ORANGE));
+            Some(match actions {
+                Some(a) => div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .ml_1()
+                    .child(tag)
+                    .child(a.ml_0()),
+                None => div().flex().items_center().ml_1().child(tag),
+            })
+        } else {
+            actions
+        };
         let editing = self.editing_note == Some(n.id);
         let body = if editing {
-            self.note_edit_form(cx)
+            self.note_edit_form(window, cx)
         } else {
             body
         };
@@ -476,6 +532,8 @@ impl GitLabView {
             .py_3()
             // Faded until GitLab has it.
             .when(pending, |d| d.opacity(0.6))
+            // An internal note on GitLab's warm background.
+            .when(n.internal, |d| d.bg(c(0x4a3a22)).rounded(px(8.)))
             .when(avatar, |d| d.child(self.avatars.of(&n.author, 24.)))
             .child(
                 div()
@@ -517,6 +575,8 @@ impl GitLabView {
         let project = web.split("/-/").next().unwrap_or_default().to_string();
         let host = self.host();
         let jira = abromux_plugin::jira_url("", cx);
+        // Task items so far, to know which one a click ticks.
+        let mut task_n = 0;
         for (i, p) in parts(body, suggestions).into_iter().enumerate() {
             out = match p {
                 Part::Markdown(md) => {
@@ -533,17 +593,32 @@ impl GitLabView {
                         .entry(text)
                         .or_insert_with_key(|t| crate::gfm::blocks(t).into())
                         .clone();
-                    out.children(blocks.iter().enumerate().map(|(b, block)| {
-                        TextView::markdown(
-                            SharedString::from(format!("{}-{}-{i}-{b}", id.0, id.1)),
-                            block.clone(),
-                            window,
-                            cx,
-                        )
-                        .style(md_style())
-                        .selectable(true)
-                        .text_size(px(14.))
-                    }))
+                    let mut done = vec![];
+                    for (b, block) in blocks.iter().enumerate() {
+                        // A checklist: GitLab's clickable task items.
+                        if let Some(items) = crate::tasks::parse_block(block) {
+                            let first = task_n;
+                            task_n += items.len();
+                            done.push(
+                                self.task_list(id, i, b, first, items, window, cx)
+                                    .into_any_element(),
+                            );
+                            continue;
+                        }
+                        done.push(
+                            TextView::markdown(
+                                SharedString::from(format!("{}-{}-{i}-{b}", id.0, id.1)),
+                                block.clone(),
+                                window,
+                                cx,
+                            )
+                            .style(md_style())
+                            .selectable(true)
+                            .text_size(px(14.))
+                            .into_any_element(),
+                        );
+                    }
+                    out.children(done)
                 }
                 Part::Suggestion(s) => out.child(self.suggestion(s, path, cx)),
                 Part::Code(lang, code) => {
@@ -554,6 +629,99 @@ impl GitLabView {
             };
         }
         out
+    }
+
+    /// A checklist: each item's checkbox and text. In the description
+    /// (when you may edit it) a click ticks it, as on GitLab's page.
+    #[allow(clippy::too_many_arguments)]
+    fn task_list(
+        &self,
+        id: (&'static str, usize),
+        part: usize,
+        block: usize,
+        first: usize,
+        items: Vec<crate::tasks::Task>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let editable = id.0 == "description"
+            && self.me.is_some()
+            && !self.is_local()
+            && self.review.ready().is_some_and(|r| r.mr.state != "locked");
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .children(items.into_iter().enumerate().map(|(k, t)| {
+                let n = first + k;
+                let done = t.done;
+                let box_ = div()
+                    .id(SharedString::from(format!("task-{}-{}-{n}", id.0, id.1)))
+                    .mt(px(3.))
+                    .flex_none()
+                    .child(icon(
+                        if done { "square-check" } else { "square" },
+                        16.,
+                        c(if done { FOCUS } else { MUTED }),
+                    ))
+                    .when(editable, |d| {
+                        d.cursor_pointer().on_click(
+                            cx.listener(move |v, _, window, cx| {
+                                v.toggle_task(n, !done, window, cx)
+                            }),
+                        )
+                    });
+                div()
+                    .flex()
+                    .items_start()
+                    .gap_2()
+                    .pl(px(t.indent as f32 * 8.))
+                    .child(box_)
+                    .child(
+                        div().flex_1().min_w(px(0.)).child(
+                            TextView::markdown(
+                                SharedString::from(format!(
+                                    "{}-{}-{part}-{block}-t{k}",
+                                    id.0, id.1
+                                )),
+                                t.text,
+                                window,
+                                cx,
+                            )
+                            .style(md_style())
+                            .selectable(true)
+                            .text_size(px(14.)),
+                        ),
+                    )
+            }))
+    }
+
+    /// Tick (or untick) the description's `n`th task item and save it.
+    pub(crate) fn toggle_task(
+        &mut self,
+        n: usize,
+        done: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(body) = self.review.ready().and_then(|r| r.mr.description.clone()) else {
+            return;
+        };
+        let Some(new) = crate::tasks::toggle(&body, n, done) else {
+            return;
+        };
+        let fields = serde_json::json!({ "description": new });
+        self.write(
+            crate::edit::Write::EditMr,
+            Some(crate::optimistic::Patch::Fields {
+                fields: fields.clone(),
+                people: vec![],
+            }),
+            move |c, p, iid| c.update(p, iid, fields).map(|_| ()),
+            |_, _, _| {},
+            window,
+            cx,
+        );
     }
 
     /// A fenced code block as GitLab draws it: the code background, a
@@ -674,16 +842,20 @@ impl GitLabView {
             .overflow_hidden()
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
                     .px_3()
                     .py_2()
                     .bg(c(RAISED))
-                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(c(TEXT))
-                    .child(if s.applied {
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(if s.applied {
                         "Suggestion applied"
                     } else {
                         "Suggested change"
-                    }),
+                    }))
+                    .children(self.suggestion_buttons(s, cx)),
             )
             .children({
                 let group = crate::select::Group::block(("suggestion", s.from_line, &s.to_content));
@@ -719,6 +891,44 @@ impl GitLabView {
             return out;
         };
         let actions = self.thread_actions(d, first, cx);
+        // A thread on a point of an image.
+        if let Some((x, y)) = first
+            .position
+            .as_ref()
+            .filter(|p| p.position_type == "image")
+            .and_then(|p| Some((p.x?, p.y?)))
+        {
+            out.push(
+                div()
+                    .px_4()
+                    .pt_2()
+                    .text_size(px(12.))
+                    .text_color(c(MUTED))
+                    .child(format!("Comment on the image at ({x}, {y})"))
+                    .into_any_element(),
+            );
+        }
+        // GitLab's "Comment on lines +2 to +4" over a multi-line thread.
+        if let Some(lr) = first.position.as_ref().and_then(|p| p.line_range.as_ref()) {
+            let label = |p: &crate::types::PosPoint| match (p.old_line, p.new_line) {
+                (_, Some(n)) if p.kind.as_deref() != Some("old") => format!("+{n}"),
+                (Some(o), _) => format!("-{o}"),
+                (_, Some(n)) => format!("+{n}"),
+                _ => String::new(),
+            };
+            let (a, b) = (label(&lr.start), label(&lr.end));
+            if a != b && !a.is_empty() {
+                out.push(
+                    div()
+                        .px_4()
+                        .pt_2()
+                        .text_size(px(12.))
+                        .text_color(c(MUTED))
+                        .child(format!("Comment on lines {a} to {b}"))
+                        .into_any_element(),
+                );
+            }
+        }
         out.push(
             self.note(first, path, first_avatar, Some(actions), window, cx)
                 .into_any_element(),

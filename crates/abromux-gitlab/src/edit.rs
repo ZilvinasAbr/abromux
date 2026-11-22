@@ -48,6 +48,12 @@ pub enum Write {
     EditNote,
     DeleteNote,
     Pipeline,
+    /// Applying suggestions.
+    Suggestion,
+    /// Adding a to-do, or marking it done.
+    Todo,
+    /// Reverting or cherry-picking the merge.
+    Pick,
 }
 
 /// A button's label and whether it's live, given what's being written:
@@ -304,7 +310,7 @@ impl GitLabView {
     }
 
     /// The last review GitLab sent, with the writes not yet in it on top.
-    fn present(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn present(&mut self, cx: &mut Context<Self>) {
         let Some(base) = self.writes.base.clone() else {
             return;
         };
@@ -317,9 +323,22 @@ impl GitLabView {
                 for s in on {
                     s.patch.apply(&mut r, me, s.n);
                 }
+                crate::actions::place_drafts(&mut r, me);
+                Rc::new(r)
+            }
+            (Some(me), true) if !base.drafts.is_empty() => {
+                let mut r = (*base).clone();
+                crate::actions::place_drafts(&mut r, me);
                 Rc::new(r)
             }
             _ => base,
+        };
+        let shown = if self.more.hide_whitespace {
+            let mut r = (*shown).clone();
+            crate::actions::hide_whitespace(&mut r);
+            Rc::new(r)
+        } else {
+            shown
         };
         self.review = Load::Ready(shown);
         self.rebuild_rows(cx);
@@ -428,6 +447,7 @@ impl GitLabView {
     /// Post the Overview's comment box: it shows in the activity at once,
     /// and comes back to the box if GitLab turns it down.
     pub(crate) fn post_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.more.previewing.remove(&crate::compose::MdBox::Comment);
         let body = self.boxes.comment.read(cx).value().trim().to_string();
         if body.is_empty() {
             return;
@@ -436,10 +456,26 @@ impl GitLabView {
             .comment
             .update(cx, |b, cx| b.set_value("", window, cx));
         let back = body.clone();
+        let thread = self.more.start_thread;
+        let internal = self.more.internal && !self.is_local();
+        let mr = self.review.ready().map_or(0, |r| r.mr.id);
         self.write(
             Write::Comment,
-            Some(Patch::Comment { body: body.clone() }),
-            move |c, p, iid| c.comment(p, iid, &body).map(|_| ()),
+            // Only quick actions: GitLab runs them and writes no comment.
+            (!body
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .all(|l| l.trim_start().starts_with('/')))
+            .then(|| Patch::Comment {
+                body: body.clone(),
+                internal,
+            }),
+            move |c, p, iid| match (thread, internal) {
+                (true, true) => c.internal_thread(mr, &body),
+                (true, false) => c.start_thread(p, iid, &body).map(|_| ()),
+                (false, true) => c.internal_comment(p, iid, &body).map(|_| ()),
+                (false, false) => c.comment(p, iid, &body).map(|_| ()),
+            },
             move |v, window, cx| put_back(&v.boxes.comment, &back, window, cx),
             window,
             cx,
@@ -475,6 +511,7 @@ impl GitLabView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.more.previewing.remove(&crate::compose::MdBox::Reply);
         let Some(id) = self.replying.clone() else {
             return;
         };
@@ -648,6 +685,8 @@ impl GitLabView {
             self.boxes
                 .line
                 .update(cx, |b, cx| b.set_value("", window, cx));
+            self.more.range_from = None;
+            self.more.image_point = None;
         }
         self.commenting = Some(key);
         self.boxes.line.update(cx, |b, cx| b.focus(window, cx));
@@ -656,6 +695,8 @@ impl GitLabView {
 
     pub(crate) fn close_line_comment(&mut self, cx: &mut Context<Self>) {
         self.commenting = None;
+        self.more.range_from = None;
+        self.more.image_point = None;
         self.rebuild_rows(cx);
     }
 
@@ -668,6 +709,7 @@ impl GitLabView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.more.previewing.remove(&crate::compose::MdBox::Line);
         let Some((fi, old, new)) = self.commenting else {
             return;
         };
@@ -682,13 +724,41 @@ impl GitLabView {
             return;
         }
         let (old_path, new_path) = (f.meta.old_path.clone(), f.meta.new_path.clone());
+        let range = self.comment_range();
+        let point = self
+            .more
+            .image_point
+            .filter(|p| p.0 == fi && old.is_none() && new.is_none())
+            .map(|(_, x, y, w, h)| (x, y, w, h));
+        self.more.image_point = None;
         self.boxes
             .line
             .update(cx, |b, cx| b.set_value("", window, cx));
         self.commenting = None;
+        self.more.range_from = None;
         let back = body.clone();
         let patch = if draft {
-            Patch::Draft { body: body.clone() }
+            Patch::Draft {
+                body: body.clone(),
+                position: Some(Box::new(crate::types::Position {
+                    base_sha: refs.base_sha.clone(),
+                    start_sha: refs.start_sha.clone(),
+                    head_sha: refs.head_sha.clone(),
+                    old_path: Some(old_path.clone()),
+                    new_path: Some(new_path.clone()),
+                    position_type: if old.is_none() && new.is_none() {
+                        "file"
+                    } else {
+                        "text"
+                    }
+                    .into(),
+                    old_line: old,
+                    new_line: new,
+                    line_range: None,
+                    ..Default::default()
+                })),
+                discussion: None,
+            }
         } else {
             Patch::LineComment {
                 file: fi,
@@ -706,7 +776,11 @@ impl GitLabView {
             Some(patch),
             move |c, p, iid| {
                 let refs: DiffRefs = refs;
-                if draft {
+                if let Some(point) = point {
+                    c.image_comment(p, iid, &refs, &old_path, &new_path, point, &body, draft)
+                } else if let Some(range) = &range {
+                    c.range_comment(p, iid, &refs, &old_path, &new_path, range, &body, draft)
+                } else if draft {
                     c.draft_line_comment(p, iid, &refs, &old_path, &new_path, old, new, &body)
                         .map(|_| ())
                 } else {
@@ -759,44 +833,29 @@ impl GitLabView {
         );
     }
 
-    /// GitLab's header button while a review is pending: how many comments
-    /// it holds, a click submits them.
-    pub(crate) fn review_button(
-        &self,
-        r: &crate::review::Review,
-        cx: &mut Context<Self>,
-    ) -> Option<Stateful<Div>> {
-        let n = r.drafts.len();
-        (n > 0 && self.me.is_some()).then(|| {
-            let (label, live) = busy_label(
-                self.busy,
-                Write::SubmitReview,
-                "Submit review",
-                "Submitting…",
-            );
-            primary("gl-submit-review", label, live)
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(count_badge(n))
-                .on_click(cx.listener(|v, _, window, cx| v.submit_review(window, cx)))
-        })
-    }
-
     /// Merge now, or with `auto` once the checks pass, with the widget's
     /// ticks. It waits for GitLab ("Merging…"): a merge can be refused.
     pub(crate) fn merge(&mut self, auto: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(r) = self.review.ready() else { return };
+        let trains = r.premium.trains_enabled;
         let opts = crate::api::MergeOptions {
             squash: self.merge_squash(r),
             remove_source_branch: self.merge_remove(r),
             auto,
             sha: r.mr.sha.clone(),
+            merge_commit_message: self.more.merge_message(r, false, cx),
+            squash_commit_message: self.more.merge_message(r, true, cx),
         };
         self.write(
             Write::Merge,
             None,
-            move |c, p, iid| c.merge(p, iid, &opts).map(|_| ()),
+            move |c, p, iid| {
+                if trains {
+                    c.add_to_train(p, iid, opts.auto, opts.sha.as_deref(), opts.squash)
+                } else {
+                    c.merge(p, iid, &opts).map(|_| ())
+                }
+            },
             |_, _, _| {},
             window,
             cx,
@@ -872,6 +931,12 @@ impl GitLabView {
         self.boxes.description.update(cx, |b, cx| {
             b.set_value(r.mr.description.clone().unwrap_or_default(), window, cx)
         });
+        self.more.edit_target.update(cx, |b, cx| {
+            b.set_value(r.mr.target_branch.clone(), window, cx)
+        });
+        self.more.edit_remove =
+            r.mr.force_remove_source_branch || r.mr.should_remove_source_branch.unwrap_or(false);
+        self.more.edit_squash = r.mr.squash;
         self.set_section(crate::Section::Overview, cx);
         self.overview_list.scroll_to(gpui::ListOffset::default());
         self.boxes.title.update(cx, |b, cx| b.focus(window, cx));
@@ -886,13 +951,30 @@ impl GitLabView {
     /// Save the edited title and description: they show at once, and the
     /// form comes back with them if GitLab turns them down.
     pub(crate) fn save_mr(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.more
+            .previewing
+            .remove(&crate::compose::MdBox::Description);
         let title = self.boxes.title.read(cx).value().trim().to_string();
         let description = self.boxes.description.read(cx).value().to_string();
         if title.is_empty() {
             return;
         }
         self.close_edit_mr(cx);
-        let fields = serde_json::json!({ "title": title, "description": description });
+        let mut fields = serde_json::json!({
+            "title": title,
+            "description": description,
+            "remove_source_branch": self.more.edit_remove,
+            "squash": self.more.edit_squash,
+        });
+        let target = self.more.edit_target.read(cx).value().trim().to_string();
+        if !target.is_empty()
+            && self
+                .review
+                .ready()
+                .is_some_and(|r| r.mr.target_branch != target)
+        {
+            fields["target_branch"] = target.into();
+        }
         self.write(
             Write::EditMr,
             Some(Patch::Fields {
@@ -943,6 +1025,7 @@ impl GitLabView {
     /// Save the comment being edited: the new text shows at once, and comes
     /// back to its field if GitLab turns it down.
     pub(crate) fn save_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.more.previewing.remove(&crate::compose::MdBox::Note);
         let Some(note) = self.editing_note else {
             return;
         };
@@ -951,6 +1034,10 @@ impl GitLabView {
             return;
         }
         self.close_edit_note(cx);
+        if let Some(d) = crate::actions::draft_of(note) {
+            self.save_draft(d, body, window, cx);
+            return;
+        }
         let back = body.clone();
         self.write(
             Write::EditNote,
@@ -988,6 +1075,10 @@ impl GitLabView {
             return;
         }
         self.deleting_note = None;
+        if let Some(d) = crate::actions::draft_of(note) {
+            self.delete_draft(d, window, cx);
+            return;
+        }
         self.write(
             Write::DeleteNote,
             Some(Patch::DeleteNote { note }),
@@ -1051,6 +1142,8 @@ impl GitLabView {
         };
         let menu = self.mr_menu.then(|| {
             let draft = m.draft;
+            let locked = m.discussion_locked.unwrap_or(false);
+            let web = m.web_url.clone();
             let open = m.state == "opened";
             let reference = m.references.full.clone();
             let items = div()
@@ -1088,6 +1181,46 @@ impl GitLabView {
                         ),
                     )
                 })
+                .when(self.duo_here(), |d| {
+                    d.child(item("gl-mr-duo", "Ask GitLab Duo".into(), false).on_click(
+                        cx.listener(|v, _, window, cx| {
+                            v.mr_menu = false;
+                            v.duo.chat_open = true;
+                            v.duo.ask.update(cx, |b, cx| b.focus(window, cx));
+                            v.set_section(crate::Section::Overview, cx);
+                            cx.notify();
+                        }),
+                    ))
+                })
+                .when(writes, |d| {
+                    d.child(
+                        item(
+                            "gl-mr-lock",
+                            if locked {
+                                "Unlock discussion"
+                            } else {
+                                "Lock discussion"
+                            }
+                            .into(),
+                            false,
+                        )
+                        .on_click(
+                            cx.listener(move |v, _, window, cx| v.set_locked(!locked, window, cx)),
+                        ),
+                    )
+                })
+                // GitLab has no API for abuse reports: its own form, on its page.
+                .when(!web.is_empty(), |d| {
+                    d.child(
+                        item("gl-mr-report-abuse", "Report abuse".into(), false).on_click(
+                            cx.listener(move |v, _, window, cx| {
+                                v.mr_menu = false;
+                                abromux_plugin::open_url(&web, window, cx);
+                                cx.notify();
+                            }),
+                        ),
+                    )
+                })
                 .when(!reference.is_empty(), |d| {
                     d.child(
                         item("gl-mr-copy-ref", "Copy reference".into(), false).on_click(
@@ -1121,6 +1254,8 @@ impl GitLabView {
             )
             .with_priority(1)
         });
+        let code = self.code_button(r, cx);
+        let toggles = self.header_toggles(r, cx);
         Some(
             div()
                 .relative()
@@ -1128,12 +1263,14 @@ impl GitLabView {
                 .items_center()
                 .gap_2()
                 .flex_none()
+                .children(code)
                 .when(writes, |d| {
                     d.child(
                         secondary("gl-mr-edit", "Edit")
                             .on_click(cx.listener(|v, _, window, cx| v.open_edit_mr(window, cx))),
                     )
                 })
+                .children(toggles)
                 .child(
                     secondary("gl-mr-more", "")
                         .px_2()
@@ -1149,7 +1286,7 @@ impl GitLabView {
     }
 
     /// Editing the merge request: Title and Description, Save changes.
-    pub(crate) fn mr_edit_form(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn mr_edit_form(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let empty = self.boxes.title.read(cx).value().trim().is_empty();
         let (label, live) = busy_label(self.busy, Write::EditMr, "Save changes", "Saving…");
         let enabled = !empty && live;
@@ -1174,8 +1311,32 @@ impl GitLabView {
             .child(field(div()).child(Input::new(&self.boxes.title).appearance(false)))
             .child(div().text_size(px(12.)).text_color(c(MUTED)).child("Start the title with Draft: to prevent a merge request draft from merging before it's ready."))
             .child(heading("Description").mt_2())
-            .child(field(div()).child(Input::new(&self.boxes.description).appearance(false)))
+            .child(field(div()).child(self.md_editor(
+                crate::compose::MdBox::Description,
+                Input::new(&self.boxes.description).appearance(false).into_any_element(),
+                window,
+                cx,
+            )))
             .child(div().text_size(px(12.)).text_color(c(MUTED)).child("Markdown is supported."))
+            .child(heading("Target branch").mt_2())
+            .child(field(div()).child(Input::new(&self.more.edit_target).appearance(false)))
+            .child(heading("Merge options").mt_2())
+            .child({
+                let on = self.more.edit_remove;
+                checkbox("gl-edit-remove", on, "Delete source branch when merge request is accepted.")
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        v.more.edit_remove = !on;
+                        cx.notify();
+                    }))
+            })
+            .child({
+                let on = self.more.edit_squash;
+                checkbox("gl-edit-squash", on, "Squash commits when merge request is accepted.")
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        v.more.edit_squash = !on;
+                        cx.notify();
+                    }))
+            })
             .child(
                 div()
                     .flex()
@@ -1197,10 +1358,11 @@ impl GitLabView {
         cx: &mut Context<Self>,
     ) -> Option<Div> {
         let mine = self.me.as_ref().is_some_and(|me| me.id == n.author.id);
+        let draft = crate::actions::is_draft(n);
         if !mine
             || n.system
             || is_pending_note(n.id)
-            || self.is_local()
+            || (self.is_local() && !draft)
             || self.review.ready().is_some_and(|r| r.mr.state == "locked")
         {
             return None;
@@ -1236,7 +1398,7 @@ impl GitLabView {
     }
 
     /// The comment being edited: its field, Save changes and Cancel.
-    pub(crate) fn note_edit_form(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn note_edit_form(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let empty = self.boxes.note.read(cx).value().trim().is_empty();
         let (label, live) = busy_label(self.busy, Write::EditNote, "Save changes", "Saving…");
         let enabled = !empty && live;
@@ -1251,7 +1413,16 @@ impl GitLabView {
                     .border_1()
                     .border_color(c(0x1068bf))
                     .bg(c(BG))
-                    .child(Input::new(&self.boxes.note).appearance(false)),
+                    .child(
+                        self.md_editor(
+                            crate::compose::MdBox::Note,
+                            Input::new(&self.boxes.note)
+                                .appearance(false)
+                                .into_any_element(),
+                            window,
+                            cx,
+                        ),
+                    ),
             )
             .child(
                 div()
@@ -1333,11 +1504,29 @@ impl GitLabView {
     }
 
     /// GitLab's comment form at the end of the Overview.
-    pub(crate) fn comment_form(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn comment_form(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let empty = self.boxes.comment.read(cx).value().trim().is_empty();
         // It shows at once (optimistic.rs): nothing to wait for.
-        let (label, enabled) = ("Comment", !empty);
-        div()
+        let label = if self.more.start_thread && !self.is_local() {
+            "Start thread"
+        } else {
+            "Comment"
+        };
+        let enabled = !empty;
+        let internal = self.more.internal;
+        let internal_box = (!self.is_local()).then(|| {
+            checkbox(
+                "gl-comment-internal",
+                internal,
+                "Make this an internal note",
+            )
+            .text_size(px(14.))
+            .on_click(cx.listener(move |v, _, _, cx| {
+                v.more.internal = !internal;
+                cx.notify();
+            }))
+        });
+        let form = div()
             .flex()
             .gap_3()
             .child(match self.me.as_ref() {
@@ -1356,11 +1545,19 @@ impl GitLabView {
                     .border_1()
                     .border_color(c(BORDER))
                     .bg(c(CARD))
-                    .child(self.mention_input(
-                        crate::mention::Field::Comment,
-                        Input::new(&self.boxes.comment).appearance(false),
-                        cx,
-                    ))
+                    .child(
+                        self.md_editor(
+                            crate::compose::MdBox::Comment,
+                            self.mention_input(
+                                crate::mention::Field::Comment,
+                                Input::new(&self.boxes.comment).appearance(false),
+                                cx,
+                            )
+                            .into_any_element(),
+                            window,
+                            cx,
+                        ),
+                    )
                     .child(
                         div()
                             .flex()
@@ -1373,13 +1570,26 @@ impl GitLabView {
                                     .text_color(c(MUTED))
                                     .child("Markdown is supported."),
                             )
+                            .children(self.to_review_button(
+                                "gl-comment-review".into(),
+                                enabled,
+                                true,
+                                cx,
+                            ))
                             .child(primary("gl-comment", label, enabled).when(enabled, |d| {
                                 d.on_click(
                                     cx.listener(|v, _, window, cx| v.post_comment(window, cx)),
                                 )
-                            })),
+                            }))
+                            .children(self.comment_kind_menu(cx)),
                     ),
-            )
+            );
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(form)
+            .children(internal_box.map(|b| div().pl(px(44.)).child(b)))
     }
 
     /// Under a thread: the reply placeholder (or the open reply box) and
@@ -1389,8 +1599,13 @@ impl GitLabView {
         id: &str,
         resolvable: bool,
         resolved: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
+        // A comment of your review: nothing to reply to until it's submitted.
+        if id.starts_with("optimistic-draft-") {
+            return div();
+        }
         // Made here, not yet GitLab's: nothing to reply to or resolve yet.
         if is_pending_thread(id) {
             return div()
@@ -1469,11 +1684,19 @@ impl GitLabView {
                     .border_1()
                     .border_color(c(0x1068bf))
                     .bg(c(BG))
-                    .child(self.mention_input(
-                        crate::mention::Field::Reply,
-                        Input::new(&self.boxes.reply).appearance(false),
-                        cx,
-                    )),
+                    .child(
+                        self.md_editor(
+                            crate::compose::MdBox::Reply,
+                            self.mention_input(
+                                crate::mention::Field::Reply,
+                                Input::new(&self.boxes.reply).appearance(false),
+                                cx,
+                            )
+                            .into_any_element(),
+                            window,
+                            cx,
+                        ),
+                    ),
             )
             .child(
                 div()
@@ -1505,6 +1728,12 @@ impl GitLabView {
                             }),
                         )
                     })
+                    .children(self.to_review_button(
+                        SharedString::from(format!("send-review-{id}")),
+                        enabled,
+                        false,
+                        cx,
+                    ))
                     .child(div().flex_1())
                     .child(
                         secondary(SharedString::from(format!("cancel-{id}")), "Cancel")
@@ -1514,7 +1743,7 @@ impl GitLabView {
     }
 
     /// The new-thread box under a line of the diff.
-    pub(crate) fn line_form(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn line_form(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let empty = self.boxes.line.read(cx).value().trim().is_empty();
         let send_label = "Add comment now";
         let enabled = !empty;
@@ -1527,6 +1756,7 @@ impl GitLabView {
             .border_t_1()
             .border_b_1()
             .border_color(c(BORDER))
+            .children(self.range_header(cx))
             .child(
                 div()
                     .p_2()
@@ -1534,11 +1764,19 @@ impl GitLabView {
                     .border_1()
                     .border_color(c(0x1068bf))
                     .bg(c(CARD))
-                    .child(self.mention_input(
-                        crate::mention::Field::Line,
-                        Input::new(&self.boxes.line).appearance(false),
-                        cx,
-                    )),
+                    .child(
+                        self.md_editor(
+                            crate::compose::MdBox::Line,
+                            self.mention_input(
+                                crate::mention::Field::Line,
+                                Input::new(&self.boxes.line).appearance(false),
+                                cx,
+                            )
+                            .into_any_element(),
+                            window,
+                            cx,
+                        ),
+                    ),
             )
             .child(
                 div()
