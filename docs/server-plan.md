@@ -103,9 +103,14 @@ per line, one JSON reply per line.
 | `RESIZE` 4 | app → server | cols u16, rows u16, width u16, height u16 (pixels) |
 | `SNAPSHOT` 5 | app → server | the screen as the app last saw it (`Terminal::snapshot`); the next `attach` sends it back |
 | `KILL` 6 | app → server | end the program and forget the terminal |
+| `DETACH` 7 | app → server | the app quits: what's left goes out, then `DETACHED`, and output after it goes to the backlog |
+| `DETACHED` 8 | server → app | the last frame of a detached stream, so the app's saved screen and the backlog meet exactly |
 
 A stream that closes without `KILL` lets go, like quitting: the server keeps
-reading the PTY into the backlog (16 MiB) until someone attaches again.
+reading the PTY into the backlog (16 MiB) until someone attaches again. A
+streamed `attach` with `"take":true` takes a terminal from another streamed
+connection: the app coming back over a new connection after the old one
+broke, before the server noticed.
 
 `abromux-server --stdio` connects to the local server's socket (starting it if
 needed) and copies stdin and stdout to it, so any byte pipe (`ssh`) can reach
@@ -117,27 +122,38 @@ Each phase lands as small PRs, with macOS behaving the same after each.
 
 ### Phase 1: the holder becomes the server; remote terminals
 
-- [ ] `crates/abromux-server`: the holder's loop moves here, with no gpui
+- [x] `crates/abromux-server`: the holder's loop moves here, with no gpui
       and no libghostty. Binary `abromux-server`. The app's `abromux server`
       (and the `abromux hold` alias) runs it.
-- [ ] Socket `server.sock` (`$ABROMUX_SERVER_SOCKET`, `$ABROMUX_HOLD_SOCKET`
+- [x] Socket `server.sock` (`$ABROMUX_SERVER_SOCKET`, `$ABROMUX_HOLD_SOCKET`
       still honoured). Attaching falls back to `hold.sock`, so terminals held
       by the previous version come back after the update.
-- [ ] `hello`, revision 2.
-- [ ] `stream` spawn/attach, frames, snapshot handed to the server.
-- [ ] `--stdio` bridge.
-- [ ] The server sleeps in `poll` with no timeout unless an idle exit is due
+- [x] `hello`, revision 2.
+- [x] `stream` spawn/attach, frames, snapshot handed to the server.
+- [x] `--stdio` bridge.
+- [x] The server sleeps in `poll` with no timeout unless an idle exit is due
       (the holder wakes every second today).
-- [ ] App: `Pty::Remote`, a terminal streamed from a server at an endpoint
+- [x] App: `Pty::Remote`, a terminal streamed from a server at an endpoint
       (`ssh://[user@]host[:port]`, `unix:///path`).
-- [ ] App: a workspace can be bound to a host (`abromux new-workspace --host
+- [x] App: a workspace can be bound to a host (`abromux new-workspace --host
       ENDPOINT`); its terminals start there and come back after a restart.
       Interim: until phase 3 the workspace itself is still the app's.
-- [ ] Docs: running `abromux-server` on a VPS (build, PATH, linger).
+- [x] Docs: running `abromux-server` on a VPS (build, PATH, linger).
 
 **Done when:** a workspace on a Linux box over ssh runs agents that keep
 going when the app quits, and come back with their screens; `perf.py run`
 shows no change for local terminals.
+
+Status: done on branch `server`. Checked against a Debian container over
+real ssh (`ABROMUX_E2E_HOST=ssh://box cargo test -p abromux-term e2e --
+--ignored`) and in the app: a ticker kept counting while the app was closed
+and came back with no gap. `perf.py run`: startup, throughput, app CPU and
+per-terminal memory within the range of earlier runs.
+
+Left for later in this phase: a reconnect after a broken connection
+replays only what the server had kept, so a full-screen program may need a
+resize to redraw; the server's `exit_code` waits up to 300 ms on its loop
+for a program to be reaped.
 
 ### Phase 2: the model leaves GPUI
 
