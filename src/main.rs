@@ -319,6 +319,10 @@ struct AbroMux {
     next_surface: usize,
     /// Stable `surface:N` numbers handed out to the control socket.
     surface_refs: HashMap<EntityId, usize>,
+    /// Views a change from the server took out of a workspace, until the
+    /// change is done (another workspace may take them): by surface number,
+    /// with the workspace they were in (crate::server, follow_model).
+    set_aside: HashMap<u64, (usize, Surface)>,
     /// A proposal to the servers is on its way (`propose_soon`), and when
     /// the last one went.
     proposing: bool,
@@ -425,6 +429,7 @@ impl AbroMux {
             next_surface: 0,
             surface_refs: Default::default(),
             forwards: Default::default(),
+            set_aside: HashMap::new(),
             proposing: false,
             proposed_at: Instant::now(),
             exits: Default::default(),

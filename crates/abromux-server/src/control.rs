@@ -21,6 +21,7 @@
 //! lose them.
 
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Calls kept while the app is away and replayed when it's back. They
@@ -64,10 +65,101 @@ pub struct State {
     /// The replica of the app's model (abromux_model), from the events it
     /// sends: what subscribers get.
     pub model: abromux_model::Model,
+    /// Who last changed each workspace (by id; the selection as
+    /// [`SELECTION`]) and at which seq: what merging the app's changes
+    /// ([`State::merge_app`]) goes by.
+    changed: HashMap<u64, (u64, Source)>,
     path: Option<PathBuf>,
 }
 
+/// Where a change to the model came from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Source {
+    /// The app: its views, as it proposes them or carries out a method.
+    #[default]
+    App,
+    /// The server itself: a method it owns (status, the log, names...).
+    Owned,
+    /// Another client (`{"op":"change"}`): a phone, a second Mac, a script.
+    Client,
+}
+
+/// The key [`State::changed`] keeps the selection under.
+const SELECTION: u64 = u64::MAX;
+
 impl State {
+    /// Stamp `events` after the model's seq, apply them, and note who made
+    /// them. Returns what changed the model.
+    pub fn commit(
+        &mut self,
+        events: Vec<abromux_model::Event>,
+        source: Source,
+    ) -> Vec<abromux_model::Stamped> {
+        let stamped = abromux_model::stamp(self.model.seq, events);
+        let done = self.apply_events(&stamped).unwrap_or_default();
+        for s in &done {
+            let key = match &s.event {
+                abromux_model::Event::Workspace { workspace, .. } => workspace.id,
+                abromux_model::Event::Removed { id } => *id,
+                abromux_model::Event::Selected { .. } => SELECTION,
+            };
+            self.changed.insert(key, (s.seq, source));
+        }
+        done
+    }
+
+    /// The app's proposal, made against the model as of `base`, merged with
+    /// what the server or other clients changed since: the server's model
+    /// is the source, the app's views propose.
+    /// - A workspace another client changed since: the app's version of it
+    ///   is dropped (the app has been sent that change to follow).
+    /// - One the server changed since (status, progress, the log, its name,
+    ///   description or colour): the app's layout and the rest, with those
+    ///   fields as the server has them.
+    /// - The selection someone else moved since: kept as they left it.
+    pub fn merge_app(
+        &self,
+        events: Vec<abromux_model::Event>,
+        base: u64,
+    ) -> Vec<abromux_model::Event> {
+        use abromux_model::Event;
+        let since = |key: u64| {
+            self.changed
+                .get(&key)
+                .filter(|(seq, src)| *seq > base && *src != Source::App)
+                .map(|(_, src)| *src)
+        };
+        events
+            .into_iter()
+            .filter_map(|e| match e {
+                Event::Workspace {
+                    index,
+                    mut workspace,
+                } => match since(workspace.id) {
+                    Some(Source::Client) => None,
+                    Some(_) => {
+                        if let Some(cur) =
+                            self.model.workspaces.iter().find(|w| w.id == workspace.id)
+                        {
+                            workspace.status = cur.status.clone();
+                            workspace.progress = cur.progress.clone();
+                            workspace.log = cur.log.clone();
+                            workspace.name = cur.name.clone();
+                            workspace.description = cur.description.clone();
+                            workspace.color = cur.color.clone();
+                        }
+                        Some(Event::Workspace { index, workspace })
+                    }
+                    None => Some(Event::Workspace { index, workspace }),
+                },
+                Event::Selected { id } => {
+                    since(SELECTION).is_none().then_some(Event::Selected { id })
+                }
+                e => Some(e),
+            })
+            .collect()
+    }
+
     /// The state saved at `path`, if any.
     pub fn load(path: PathBuf) -> Self {
         let mut s = State {
@@ -161,6 +253,7 @@ impl State {
     /// The app's `{"op":"model"}`: a whole snapshot.
     pub fn set_model(&mut self, model: abromux_model::Model) {
         self.model = model;
+        self.changed.clear();
         self.save();
     }
 

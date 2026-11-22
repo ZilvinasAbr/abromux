@@ -4114,10 +4114,41 @@ impl AbroMux {
     ) {
         use abromux_model::Event;
         let at = |this: &Self, id: u64| this.workspaces.iter().position(|w| w.id as u64 == id);
+        // Tabs the change puts somewhere: a workspace it removes keeps them
+        // for that.
+        let wanted: std::collections::HashSet<u64> = events
+            .iter()
+            .filter_map(|s| match &s.event {
+                Event::Workspace { workspace, .. } => Some(workspace.layout.tabs()),
+                _ => None,
+            })
+            .flatten()
+            .map(|t| t.surface)
+            .collect();
         for s in events {
             match &s.event {
                 Event::Removed { id } => {
                     if let Some(i) = at(self, *id) {
+                        let ws_id = self.workspaces[i].id;
+                        let keep: Vec<(u64, usize, EntityId)> = self.workspaces[i]
+                            .panes()
+                            .flat_map(|p| p.tabs.iter().map(move |t| (p.id, t)))
+                            .filter_map(|(pane, t)| {
+                                let n = *self.surface_refs.get(&t.entity_id())? as u64;
+                                wanted.contains(&n).then_some((n, pane, t.entity_id()))
+                            })
+                            .collect();
+                        for (n, pane, eid) in keep {
+                            let Some(p) = self.workspaces[i].pane_mut(pane) else {
+                                continue;
+                            };
+                            let Some(k) = p.tabs.iter().position(|t| t.entity_id() == eid) else {
+                                continue;
+                            };
+                            let t = p.tabs.remove(k);
+                            p.active = p.active.min(p.tabs.len().saturating_sub(1));
+                            self.set_aside.insert(n, (ws_id, t));
+                        }
                         self.close_workspace(i, window, cx);
                     }
                 }
@@ -4132,7 +4163,29 @@ impl AbroMux {
                 }
             }
         }
+        // Views no workspace took in the end close.
+        for (_, (wi_id, s)) in std::mem::take(&mut self.set_aside) {
+            self.discard_view(wi_id, s, cx);
+        }
         cx.notify();
+    }
+
+    /// A view the model no longer has: gone, with what was kept for it.
+    fn discard_view(&mut self, ws_id: usize, s: Surface, cx: &mut Context<Self>) {
+        let id = s.entity_id();
+        self.forget_notifications(id);
+        self.forget_status(id);
+        self.agent_pending.remove(&id);
+        self.surface_refs.remove(&id);
+        if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == ws_id) {
+            ws.pinned.retain(|p| *p != id);
+            ws.pinned_for.remove(&id);
+        }
+        match s {
+            Surface::Terminal(t) => t.update(cx, |t, _| t.close()),
+            Surface::Browser(b) => b.update(cx, |b, cx| b.set_shown(false, cx)),
+            Surface::Plugin(_) => {}
+        }
     }
 
     fn follow_workspace(
@@ -4186,74 +4239,14 @@ impl AbroMux {
         if self.workspaces[wi].description != m.description {
             self.workspaces[wi].description = m.description.clone();
         }
-        // Tabs: what the model has that the views don't opens; what they
-        // have that it doesn't closes.
-        let number = |this: &Self, s: &Surface| this.surface_refs.get(&s.entity_id()).copied();
-        let have: Vec<(usize, EntityId)> = self.workspaces[wi]
-            .panes()
-            .flat_map(|p| p.tabs.iter())
-            .filter_map(|s| Some((number(self, s)?, s.entity_id())))
-            .collect();
-        let want = m.layout.tabs();
-        let in_use = |this: &Self, n: usize| this.surface_refs.values().any(|&r| r == n);
-        let mut fresh_used = false;
-        let mut pane_of = Vec::new();
-        fn panes(n: &abromux_model::Node, out: &mut Vec<(u64, u64)>) {
-            match n {
-                abromux_model::Node::Pane { id, tabs, .. } => {
-                    out.extend(tabs.iter().map(|t| (t.surface, *id)))
-                }
-                abromux_model::Node::Split { children, .. } => {
-                    panes(&children[0], out);
-                    panes(&children[1], out);
-                }
-            }
-        }
-        panes(&m.layout, &mut pane_of);
-        for t in &want {
-            if have.iter().any(|(n, _)| *n as u64 == t.surface) || t.kind != "terminal" {
-                continue;
-            }
-            // The fresh workspace's terminal stands for its first new one.
-            if t.held.is_none() && fresh.is_some() && !fresh_used {
-                fresh_used = true;
-                continue;
-            }
-            let ws = self.workspaces[wi].id;
-            let attach = t.held.clone().map(|h| {
-                let n = t.surface as usize;
-                (
-                    if n == 0 || in_use(self, n) {
-                        self.next_surface + 1
-                    } else {
-                        n
-                    },
-                    h,
-                )
-            });
-            let opts = crate::TerminalOpts {
-                attach,
-                host: address(&t.host),
-                cwd: m.cwd.clone().filter(|_| host.is_none()),
-                ..Default::default()
-            };
-            let surface = self.make_terminal(ws, opts, window, cx);
-            let pane = pane_of
-                .iter()
-                .find(|(s, _)| *s == t.surface)
-                .map(|(_, p)| *p as usize)
-                .filter(|p| self.workspaces[wi].pane_mut(*p).is_some())
-                .unwrap_or(self.workspaces[wi].focused_pane);
-            self.add_tab_to(wi, pane, surface, false, window, cx);
-        }
-        let keep_fresh = fresh_used || want.is_empty();
-        for (n, id) in have {
-            let wanted = want.iter().any(|t| t.surface == n as u64);
-            let is_fresh = Some(id) == fresh;
-            if !wanted && !(is_fresh && keep_fresh) {
-                self.close_surface(id, window, cx);
-            }
-        }
+        // The layout: the model's, with the views it names.
+        let fresh = fresh.and_then(|id| self.surface_refs.get(&id).map(|&n| n as u64));
+        let ctx = Build {
+            ws: self.workspaces[wi].id,
+            cwd: m.cwd.clone().filter(|_| host.is_none()),
+            address: &address,
+        };
+        self.rebuild_layout(wi, &m.layout, fresh, &ctx, window, cx);
         // Where it goes in the list.
         let Some(wi) = self.workspaces.iter().position(|w| w.id as u64 == m.id) else {
             return;
@@ -4266,6 +4259,224 @@ impl AbroMux {
             if let Some(i) = selected.and_then(|id| self.workspaces.iter().position(|w| w.id == id))
             {
                 self.active = i;
+            }
+        }
+    }
+
+    /// Whether workspace `wi`'s panes are already `m`: the same splits,
+    /// panes, tabs in order and active tabs.
+    fn has_layout(&self, n: &crate::workspace::Node, m: &abromux_model::Node) -> bool {
+        use crate::workspace::Node as V;
+        use abromux_model::Node as M;
+        match (n, m) {
+            (V::Leaf(p), M::Pane { id, tabs, active }) => {
+                p.id as u64 == *id
+                    && p.active == *active
+                    && p.tabs.len() == tabs.len()
+                    && p.tabs.iter().zip(tabs).all(|(s, t)| {
+                        self.surface_refs.get(&s.entity_id()).map(|&n| n as u64) == Some(t.surface)
+                    })
+            }
+            (
+                V::Split {
+                    axis,
+                    ratio,
+                    children,
+                    ..
+                },
+                M::Split {
+                    vertical,
+                    ratio: r,
+                    children: c,
+                },
+            ) => {
+                matches!(axis, Axis::Vertical) == *vertical
+                    && (ratio - r).abs() < 1e-3
+                    && self.has_layout(&children[0], &c[0])
+                    && self.has_layout(&children[1], &c[1])
+            }
+            _ => false,
+        }
+    }
+
+    /// Make workspace `wi`'s panes the model's `layout`: the views it names
+    /// (by surface number) kept, taken from another workspace if a tab moved
+    /// here; terminals made for the ones it doesn't have (attached when the
+    /// server keeps one; `fresh`, a new workspace's first terminal, stands
+    /// for the first new one); pane ids kept; the views it no longer names
+    /// closed. A browser or plugin tab only the app makes, so one the model
+    /// names that isn't here is left out.
+    fn rebuild_layout(
+        &mut self,
+        wi: usize,
+        layout: &abromux_model::Node,
+        mut fresh: Option<u64>,
+        ctx: &Build,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.has_layout(&self.workspaces[wi].root, layout) {
+            return;
+        }
+        let number =
+            |this: &Self, s: &Surface| this.surface_refs.get(&s.entity_id()).map(|&n| n as u64);
+        let wanted: std::collections::HashSet<u64> =
+            layout.tabs().iter().map(|t| t.surface).collect();
+        let mut pool: std::collections::HashMap<u64, Surface> = std::collections::HashMap::new();
+        for s in self.workspaces[wi].panes().flat_map(|p| p.tabs.iter()) {
+            if let Some(n) = number(self, s) {
+                pool.insert(n, s.clone());
+            }
+        }
+        // Tabs moved here from another workspace: out of that one's panes.
+        let moved: Vec<(usize, usize, EntityId)> = self
+            .workspaces
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != wi)
+            .flat_map(|(j, w)| {
+                w.panes()
+                    .flat_map(move |p| p.tabs.iter().map(move |s| (j, p.id, s)))
+                    .collect::<Vec<_>>()
+            })
+            .filter_map(|(j, pane, s)| {
+                let n = number(self, s)?;
+                (wanted.contains(&n) && !pool.contains_key(&n)).then_some((j, pane, s.entity_id()))
+            })
+            .collect();
+        // Or set aside by an earlier event of the same change (a tab moved
+        // out of the workspace it was in before this one took it).
+        for n in &wanted {
+            if !pool.contains_key(n)
+                && let Some((_, s)) = self.set_aside.remove(n)
+            {
+                pool.insert(*n, s);
+            }
+        }
+        for (j, pane, id) in moved {
+            let w = &mut self.workspaces[j];
+            let Some(p) = w.pane_mut(pane) else { continue };
+            let Some(i) = p.tabs.iter().position(|s| s.entity_id() == id) else {
+                continue;
+            };
+            let s = p.tabs.remove(i);
+            p.active = p.active.min(p.tabs.len().saturating_sub(1));
+            if p.tabs.is_empty() {
+                w.remove_pane(pane);
+            }
+            if let Some(n) = number(self, &s) {
+                pool.insert(n, s);
+            }
+        }
+        let old_panes: std::collections::HashSet<usize> =
+            self.workspaces[wi].panes().map(|p| p.id).collect();
+        let Some(root) =
+            self.build_from_model(layout, &mut pool, &mut fresh, &old_panes, ctx, window, cx)
+        else {
+            // A model with no tabs: the workspace stays as it is.
+            return;
+        };
+        self.workspaces[wi].root = root;
+        // What it no longer names is set aside: another workspace in the
+        // same change may take it (follow_model closes the rest).
+        let ws_id = self.workspaces[wi].id;
+        for (n, s) in pool {
+            self.set_aside.insert(n, (ws_id, s));
+        }
+        let ws = &mut self.workspaces[wi];
+        if ws.pane_mut(ws.focused_pane).is_none() {
+            ws.focused_pane = ws.panes().next().map_or(0, |p| p.id);
+        }
+        if wi == self.active {
+            self.focus_active(window, cx);
+        }
+        cx.notify();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_from_model(
+        &mut self,
+        n: &abromux_model::Node,
+        pool: &mut std::collections::HashMap<u64, Surface>,
+        fresh: &mut Option<u64>,
+        old_panes: &std::collections::HashSet<usize>,
+        ctx: &Build,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<crate::workspace::Node> {
+        use crate::workspace::{Node as V, Pane};
+        match n {
+            abromux_model::Node::Pane { id, tabs, active } => {
+                let mut out = vec![];
+                for t in tabs {
+                    if let Some(s) = pool.remove(&t.surface) {
+                        out.push(s);
+                        continue;
+                    }
+                    if t.kind != "terminal" {
+                        continue;
+                    }
+                    if t.held.is_none()
+                        && let Some(s) = fresh.take().and_then(|f| pool.remove(&f))
+                    {
+                        out.push(s);
+                        continue;
+                    }
+                    let in_use =
+                        |this: &Self, n: usize| this.surface_refs.values().any(|&r| r == n);
+                    let attach = t.held.clone().map(|h| {
+                        let n = t.surface as usize;
+                        let n = if n == 0 || in_use(self, n) {
+                            self.next_surface + 1
+                        } else {
+                            n
+                        };
+                        (n, h)
+                    });
+                    let opts = crate::TerminalOpts {
+                        attach,
+                        host: (ctx.address)(&t.host),
+                        cwd: ctx.cwd.clone(),
+                        ..Default::default()
+                    };
+                    out.push(self.make_terminal(ctx.ws, opts, window, cx));
+                }
+                if out.is_empty() {
+                    return None;
+                }
+                let id = if *id != 0 && old_panes.contains(&(*id as usize)) {
+                    *id as usize
+                } else {
+                    self.pane_id()
+                };
+                Some(V::Leaf(Pane {
+                    id,
+                    active: (*active).min(out.len() - 1),
+                    tabs: out,
+                }))
+            }
+            abromux_model::Node::Split {
+                vertical,
+                ratio,
+                children,
+            } => {
+                let a =
+                    self.build_from_model(&children[0], pool, fresh, old_panes, ctx, window, cx);
+                let b =
+                    self.build_from_model(&children[1], pool, fresh, old_panes, ctx, window, cx);
+                match (a, b) {
+                    (Some(a), Some(b)) => Some(V::Split {
+                        id: self.id(),
+                        axis: if *vertical {
+                            Axis::Vertical
+                        } else {
+                            Axis::Horizontal
+                        },
+                        ratio: *ratio,
+                        children: Box::new([a, b]),
+                    }),
+                    (x, None) | (None, x) => x,
+                }
             }
         }
     }
@@ -4504,6 +4715,13 @@ impl AbroMux {
         }
         v
     }
+}
+
+/// What making a workspace's terminals from the model needs.
+struct Build<'a> {
+    ws: usize,
+    cwd: Option<String>,
+    address: &'a dyn Fn(&Option<String>) -> Option<String>,
 }
 
 #[cfg(test)]

@@ -254,8 +254,39 @@ for a program to be reaped.
       change after a quiet spell within 50 ms, then at most every 250 ms;
       building the model uses the sidebar's cached git-branch lookup.
 
-What stays in the app is only what needs its views: making them, and the
-view methods (browser automation, input, focus, prompts).
+- [x] **The app's windows are a copy of the server's model.** The layout
+      follows the model whole (`rebuild_layout`): splits and their ratios,
+      panes, tabs in order across panes and workspaces, the active tab. The
+      views it names are kept by surface number, including a tab moved from
+      another workspace or out of one being removed in the same change. The
+      terminals it lacks are made, attached when the server keeps one. Pane
+      ids are kept. What it no longer names is closed once the whole change
+      is in. A layout that already matches is left alone.
+- [x] **The server decides between the app and the others.** The app's
+      own actions stay optimistic: its windows change at once, and it
+      proposes the change with the model version it was made against
+      (`base`). The server merges it (`control::State::merge_app`), knowing
+      who last changed each workspace and when (`Source`: the app, the
+      server's own methods, other clients):
+      - **another client changed the workspace since:** the app's version
+        is dropped; the app has been sent the client's change to follow, so
+        its windows end up as the server has them;
+      - **the server changed it since** (status, progress, the log, the
+        name, description, colour): the app's layout goes in with those
+        fields as the server has them, so an agent's status is never undone
+        by an older proposal;
+      - **the selection someone else moved since** stays.
+
+      So every change, from anywhere, is ordered and decided by the server,
+      and the app's windows converge to its model. Keystrokes don't wait
+      for a round trip. A user's action that loses a race to another
+      client's change to the same workspace (within ~50 ms) is dropped, as
+      in any optimistic editor.
+
+What stays in the app is what only it can do: making the views a model
+describes, and the view methods (browser automation, input, focus,
+prompts). A browser or plugin tab the model names but the app doesn't
+have can't be made from the model (it holds no URL or plugin state).
 
 **Done when:** quitting the app leaves every workspace's state (status pills,
 progress, notifications, agents' state) live in the server, and the app picks
