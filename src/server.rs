@@ -531,6 +531,32 @@ fn usize_param(p: &Value, key: &str) -> anyhow::Result<Option<usize>> {
     }
 }
 
+/// Give terminal `t`'s program `text` as if pasted, then press Return
+/// (`Terminal::submit`): what an agent's input box takes as one message.
+fn submit_to<V: 'static>(t: &Entity<crate::TerminalView>, text: &str, cx: &mut Context<V>) {
+    let sent = t.update(cx, |t, cx| {
+        cx.notify();
+        t.submit(text)
+    });
+    if sent {
+        return;
+    }
+    // No bracketed paste: Return on its own, a moment after the text, or a
+    // program reading it all at once takes it as a new line in what was
+    // typed.
+    let t = t.downgrade();
+    cx.spawn(async move |_, cx| {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(150))
+            .await;
+        let _ = t.update(cx, |t, cx| {
+            t.send(b"\r");
+            cx.notify();
+        });
+    })
+    .detach();
+}
+
 fn bool_param(p: &Value, key: &str, default: bool) -> bool {
     match p.get(key) {
         Some(Value::Bool(b)) => *b,
@@ -1162,6 +1188,55 @@ impl AbroMux {
                         "token": crate::stream::open(id),
                         "surface": r,
                     })
+                } else if bool_param(p, "claude", false) {
+                    // The terminal's Claude Code session as a chat, read
+                    // from its transcript; typing still goes to the terminal.
+                    let t = self.terminal_target(p)?;
+                    let config = crate::settings::claude_config_dir(cx);
+                    let t = t.read(cx);
+                    let shell = t.shell_pid();
+                    let found = shell
+                        .and_then(|pid| crate::claude_chat::running_under(pid, config.as_deref()));
+                    let hooked = t
+                        .agent
+                        .as_ref()
+                        .filter(|a| a.kind == Kind::Claude.as_str() && a.alive());
+                    let mode = hooked.and_then(|a| a.permission_mode.clone());
+                    let follow = match (found, hooked) {
+                        (Some(r), _) => crate::claude_chat::Follow {
+                            shell,
+                            config,
+                            session: r.session,
+                            cwd: r.cwd,
+                            mode,
+                            busy: r.busy,
+                            watched: true,
+                        },
+                        (None, Some(a)) => crate::claude_chat::Follow {
+                            shell,
+                            config,
+                            session: a.session_id.clone(),
+                            cwd: std::path::PathBuf::from(if a.cwd.is_empty() {
+                                &t.cwd
+                            } else {
+                                &a.cwd
+                            }),
+                            mode,
+                            busy: t.claude_running(),
+                            watched: false,
+                        },
+                        (None, None) => bail!("no Claude Code session in that terminal"),
+                    };
+                    let key = crate::stream::private_key();
+                    let token = crate::stream::open(key);
+                    crate::claude_chat::follow(key, follow);
+                    json!({
+                        "chat": true,
+                        "terminal": true,
+                        "events": [],
+                        "token": token,
+                        "surface": r,
+                    })
                 } else {
                     let t = self.terminal_target(p)?;
                     let (mut start, id) = t.update(cx, |t, _| (t.stream_start(), t.stream_id()));
@@ -1200,10 +1275,14 @@ impl AbroMux {
                 } else {
                     unescape(text)
                 };
-                t.update(cx, |t, cx| {
-                    t.send(text.as_bytes());
-                    cx.notify();
-                });
+                if bool_param(p, "submit", false) {
+                    submit_to(&t, &text, cx);
+                } else {
+                    t.update(cx, |t, cx| {
+                        t.send(text.as_bytes());
+                        cx.notify();
+                    });
+                }
                 json!({ "bytes": text.len() })
             }
             "surface.send_key" => {
@@ -2164,7 +2243,10 @@ impl AbroMux {
             .arg(&init)
             .args(["--action", name, "--args"])
             .arg(Value::Object(args).to_string())
-            .env("ABROMUX_ACTION_ORIGIN", str_param(p, "origin").unwrap_or("api"))
+            .env(
+                "ABROMUX_ACTION_ORIGIN",
+                str_param(p, "origin").unwrap_or("api"),
+            )
             .env_remove("ABROMUX_SURFACE_ID")
             .env_remove("ABROMUX_WORKSPACE_ID")
             .current_dir(crate::paths::home())
@@ -2174,7 +2256,9 @@ impl AbroMux {
         if let Some(sock) = &self.socket {
             cmd.env("ABROMUX_SOCKET_PATH", sock);
         }
-        let child = cmd.spawn().with_context(|| format!("{name}: couldn't start it"))?;
+        let child = cmd
+            .spawn()
+            .with_context(|| format!("{name}: couldn't start it"))?;
         let (tx, rx) = oneshot::channel();
         let name = name.to_string();
         // Off the main thread: the action calls back into this socket.
@@ -2186,7 +2270,11 @@ impl AbroMux {
                     let err = err.trim().trim_start_matches("abromux: ");
                     Err(anyhow!(
                         "{}",
-                        if err.is_empty() { format!("{name} failed") } else { err.to_string() }
+                        if err.is_empty() {
+                            format!("{name} failed")
+                        } else {
+                            err.to_string()
+                        }
                     ))
                 }
                 Ok(out) => {
@@ -2194,7 +2282,11 @@ impl AbroMux {
                     let text = String::from_utf8_lossy(&out.stdout);
                     let last = text.trim().lines().last().unwrap_or_default();
                     Ok(serde_json::from_str(last).unwrap_or_else(|_| {
-                        if last.is_empty() { Value::Null } else { json!(text.trim()) }
+                        if last.is_empty() {
+                            Value::Null
+                        } else {
+                            json!(text.trim())
+                        }
                     }))
                 }
             };
@@ -3291,28 +3383,7 @@ impl AbroMux {
     ) -> anyhow::Result<()> {
         if let Some(to) = &run.send_to {
             let t = self.terminal_target(&json!({ "surface": to }))?;
-            let text = run.text.clone().unwrap_or_default();
-            let sent = t.update(cx, |t, cx| {
-                cx.notify();
-                t.submit(&text)
-            });
-            if sent {
-                return Ok(());
-            }
-            // No bracketed paste: Return on its own, a moment after the
-            // text, or a program reading it all at once takes it as a new
-            // line in what was typed.
-            let t = t.downgrade();
-            cx.spawn(async move |_, cx| {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(150))
-                    .await;
-                let _ = t.update(cx, |t, cx| {
-                    t.send(b"\r");
-                    cx.notify();
-                });
-            })
-            .detach();
+            submit_to(&t, &run.text.clone().unwrap_or_default(), cx);
             return Ok(());
         }
         let (wi, pane) = match run.beside.and_then(|id| Some((self.workspace_of(id)?, id))) {
@@ -3565,6 +3636,17 @@ impl AbroMux {
                         "finished": t.commands.finished,
                         "last_exit_code": t.commands.last_exit,
                     });
+                }
+                // Claude Code runs here (its hooks say, or its process is
+                // among the shell's): a phone may show it as a chat
+                // (`surface.stream` with `claude`).
+                if t.has_claude()
+                    || t.shell_pid().is_some_and(|pid| {
+                        let config = crate::settings::claude_config_dir(cx);
+                        crate::claude_chat::running_under(pid, config.as_deref()).is_some()
+                    })
+                {
+                    v["claude_session"] = json!(true);
                 }
                 let status = crate::events::program_status_json(t.program.shown().as_ref());
                 if !status.is_null() {

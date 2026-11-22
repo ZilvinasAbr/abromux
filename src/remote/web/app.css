@@ -332,6 +332,12 @@ button, .tab, .ws, .group-head { -webkit-user-select: none; user-select: none; -
 #zoom-in { font-size: 17px; border-left: 0.5px solid rgba(255, 255, 255, 0.15); }
 .zoom button:active { background: rgba(255, 255, 255, 0.12); }
 
+/* Chat or terminal, for a terminal running Claude Code. */
+.view-switch { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); display: flex; padding: 2px; border-radius: 16px; background: rgba(40, 40, 38, 0.75); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); z-index: 4; }
+.view-switch button { height: 28px; padding: 0 12px; border-radius: 14px; color: #ddd; font-size: 13px; font-weight: 600; }
+.view-switch button.on { background: rgba(255, 255, 255, 0.18); color: #fff; }
+.chat-ask { position: absolute; left: 12px; right: 12px; top: 46px; padding: 10px 14px; border-radius: 12px; background: var(--warn); color: #1f1e1d; font-size: 14px; font-weight: 600; z-index: 4; }
+
 /* Keys a phone keyboard lacks, like iOS's bar above the keyboard. */
 .keys {
   flex: none;

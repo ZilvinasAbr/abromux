@@ -5,6 +5,9 @@
 // Mac tab's events come back through `window.__chat.recv`.
 "use strict";
 window.__phone = true;
+// A terminal's Claude Code session (`#t:<surface>`): what you write is
+// typed into the terminal, so the controls only a Claude tab has go.
+if (location.hash.startsWith("#t:")) document.documentElement.dataset.terminal = "";
 (() => {
   const host = window.parent && window.parent !== window ? window.parent.__abromux : null;
   window.ipc = {
@@ -22,7 +25,7 @@ window.__phone = true;
   // A photo button in the composer: images go in as a paste would.
   document.addEventListener("DOMContentLoaded", () => {
     const row = document.querySelector(".composer-row");
-    if (!row) return;
+    if (!row || "terminal" in document.documentElement.dataset) return;
     const pick = document.createElement("input");
     pick.type = "file";
     pick.accept = "image/*";

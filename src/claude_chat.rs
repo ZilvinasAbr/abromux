@@ -1412,6 +1412,171 @@ fn session_file(path: &Path) -> Option<Running> {
     })
 }
 
+// ---- a terminal's session, as a chat ---------------------------------------
+
+/// A Claude Code session running in a terminal, for [`follow`].
+#[derive(Clone, Debug)]
+pub struct Follow {
+    /// The terminal's shell, to watch the session from (`running_under`).
+    pub shell: Option<u32>,
+    pub config: Option<PathBuf>,
+    pub session: String,
+    pub cwd: PathBuf,
+    pub mode: Option<String>,
+    pub busy: bool,
+    /// `running_under` found it, so it can be watched: its state, a new
+    /// conversation (`/clear`), its end. Without that (only abromux's hooks
+    /// know of it) the chat follows the one conversation.
+    pub watched: bool,
+}
+
+impl Follow {
+    fn meta(&self) -> Value {
+        json!({
+            "t": "meta",
+            "cwd": crate::workspace::tilde(&self.cwd.to_string_lossy()),
+            "cwdFull": self.cwd.to_string_lossy(),
+            "session": self.session,
+            "mode": self.mode,
+            "running": true,
+            "state": if self.busy { "running" } else { "idle" },
+            "terminal": true,
+        })
+    }
+}
+
+/// A transcript read as it grows: the page's events from each new line.
+#[derive(Default)]
+struct Tail {
+    file: Option<PathBuf>,
+    pos: u64,
+    partial: Vec<u8>,
+    tr: Translator,
+}
+
+impl Tail {
+    fn new() -> Self {
+        Self {
+            tr: Translator {
+                history: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn read(&mut self, f: &Follow, out: &mut Vec<Value>) {
+        use std::io::{Seek, SeekFrom};
+        if self.file.is_none() {
+            // A new conversation has no file until its first message.
+            self.file = transcript(&f.cwd, f.config.as_deref(), &f.session);
+        }
+        let Some(file) = &self.file else { return };
+        let Ok(mut fh) = std::fs::File::open(file) else {
+            return;
+        };
+        let len = fh.metadata().map(|m| m.len()).unwrap_or(0);
+        if len < self.pos {
+            // Rewritten from the start: read it all again.
+            *self = Self {
+                file: self.file.take(),
+                ..Self::new()
+            };
+            out.push(json!({"t": "reset"}));
+        }
+        if len == self.pos || fh.seek(SeekFrom::Start(self.pos)).is_err() {
+            return;
+        }
+        let mut buf = vec![];
+        let Ok(n) = fh.take(len - self.pos).read_to_end(&mut buf) else {
+            return;
+        };
+        self.pos += n as u64;
+        self.partial.extend_from_slice(&buf);
+        // Only whole lines: the last one may still be being written.
+        let Some(end) = self.partial.iter().rposition(|&b| b == b'\n') else {
+            return;
+        };
+        let rest = self.partial.split_off(end + 1);
+        let whole = std::mem::replace(&mut self.partial, rest);
+        for line in String::from_utf8_lossy(&whole).lines() {
+            if let Ok(v) = serde_json::from_str::<Value>(line) {
+                self.tr.line(&v, out);
+            }
+        }
+    }
+}
+
+/// Follow a terminal's Claude Code session as a Claude tab's page would see
+/// it, for a phone that shows it as a chat (`surface.stream` with
+/// `claude`): its conversation so far, then each message as Claude Code
+/// writes it to its transcript, on stream `key` (`stream::private_key`,
+/// opened already). Ends when the phone stops following, or when Claude
+/// Code ends in the terminal.
+pub fn follow(key: u64, f: Follow) {
+    let _ = std::thread::Builder::new()
+        .name("claude-follow".into())
+        .spawn(move || follow_loop(key, f));
+}
+
+fn follow_loop(key: u64, mut f: Follow) {
+    const TICK: std::time::Duration = std::time::Duration::from_millis(400);
+    if !is_session_id(&f.session) {
+        crate::stream::closed(key);
+        return;
+    }
+    let mut tail = Tail::new();
+    let mut fresh = true;
+    let mut shown: Option<Value> = None;
+    let mut quiet = 0u32;
+    for tick in 0u64.. {
+        if !fresh && !crate::stream::tapped(key) {
+            return;
+        }
+        if f.watched && tick % 3 == 0 {
+            match f.shell.and_then(|p| running_under(p, f.config.as_deref())) {
+                None => {
+                    crate::stream::closed(key);
+                    return;
+                }
+                Some(r) => {
+                    if r.session != f.session {
+                        f.session = r.session;
+                        f.cwd = r.cwd;
+                        tail = Tail::new();
+                        fresh = true;
+                    }
+                    f.busy = r.busy;
+                }
+            }
+        }
+        let mut out = vec![];
+        if fresh {
+            out.push(json!({"t": "reset"}));
+        }
+        tail.read(&f, &mut out);
+        let meta = f.meta();
+        if fresh || shown.as_ref() != Some(&meta) || out.first().is_some_and(|e| e["t"] == "reset")
+        {
+            out.insert(
+                usize::from(out.first().is_some_and(|e| e["t"] == "reset")),
+                meta.clone(),
+            );
+            shown = Some(meta);
+        }
+        fresh = false;
+        quiet += 1;
+        // Now and then an empty batch, so a phone that left is noticed.
+        if !out.is_empty() || quiet >= 12 {
+            quiet = 0;
+            if let Ok(batch) = serde_json::to_string(&out) {
+                crate::stream::events(key, &batch);
+            }
+        }
+        std::thread::sleep(TICK);
+    }
+}
+
 /// Claude Code's config folders: abromux's `claude.configDir`, then
 /// `$CLAUDE_CONFIG_DIR`, then `~/.claude`.
 fn config_roots(config: Option<&Path>) -> Vec<PathBuf> {
@@ -1984,6 +2149,53 @@ mod tests {
                 busy: true,
             })
         );
+    }
+
+    #[test]
+    fn follows_a_transcript_a_whole_line_at_a_time() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join(format!("abromux-follow-{}", std::process::id()));
+        let session = "95a19daa-2cbc-42a2-843c-208f000a0e8d";
+        let f = Follow {
+            shell: None,
+            config: Some(dir.clone()),
+            session: session.into(),
+            cwd: "/p/app".into(),
+            mode: None,
+            busy: false,
+            watched: false,
+        };
+        let mut tail = Tail::new();
+        let mut out = vec![];
+        // No file yet (a new conversation): nothing, and no harm.
+        tail.read(&f, &mut out);
+        assert!(out.is_empty());
+        let project = dir.join("projects/-p-app");
+        std::fs::create_dir_all(&project).unwrap();
+        let path = project.join(format!("{session}.jsonl"));
+        let user =
+            json!({"type":"user","message":{"role":"user","content":"Fix the bug"}}).to_string();
+        let reply = json!({"type":"assistant","message":{"id":"m","content":[{"type":"text","text":"Done."}]}}).to_string();
+        let mut fh = std::fs::File::create(&path).unwrap();
+        write!(fh, "{user}\n{}", &reply[..10]).unwrap();
+        tail.read(&f, &mut out);
+        let kinds = |out: &[Value]| {
+            out.iter()
+                .map(|e| e["t"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kinds(&out), ["user"]);
+        out.clear();
+        // The rest of a half-written line.
+        writeln!(fh, "{}", &reply[10..]).unwrap();
+        tail.read(&f, &mut out);
+        assert_eq!(kinds(&out), ["text"]);
+        out.clear();
+        // Rewritten shorter: from the start again.
+        std::fs::write(&path, format!("{user}\n")).unwrap();
+        tail.read(&f, &mut out);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(kinds(&out), ["reset", "user"]);
     }
 
     #[test]

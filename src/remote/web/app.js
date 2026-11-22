@@ -432,6 +432,34 @@ function kindOf(s) {
   return s.type || "other";
 }
 
+// A terminal running Claude Code shows as a chat, the same page a Claude
+// tab gets, read from Claude Code's transcript; what you write is typed
+// into the terminal. The switch above it flips to the terminal itself.
+// `noChat`: terminals where that didn't work out, until Claude Code is
+// seen to have ended there.
+const noChat = new Set();
+function asChat(s) {
+  if (!s.claude_session) {
+    noChat.delete(s.ref);
+    return false;
+  }
+  return !noChat.has(s.ref) && store.get("view:" + s.ref, "chat") === "chat";
+}
+
+function drawSwitch(s) {
+  const sw = $("view-switch");
+  sw.hidden = !(s && s.claude_session && !noChat.has(s.ref));
+  if (sw.hidden) return;
+  const on = asChat(s) ? "chat" : "term";
+  for (const b of sw.querySelectorAll("button")) {
+    b.classList.toggle("on", b.dataset.v === on);
+    b.onclick = () => {
+      store.set("view:" + s.ref, b.dataset.v);
+      renderMain();
+    };
+  }
+}
+
 const KIND_ICON = { terminal: "terminal", claude: "claude", browser: "globe", markdown: "markdown", gitlab: "gitlab" };
 
 // A terminal titled by its folder shows just the folder's name.
@@ -452,6 +480,8 @@ function renderMain() {
     showView("placeholder");
     closeTerm();
     closeChat();
+    drawSwitch(null);
+    $("chat-ask").hidden = true;
     const missing = state.route.ws && state.loaded;
     placeholder("panel-left", missing ? "That workspace is gone" : "Pick a workspace",
       missing ? "It was closed on the Mac." : "Your Mac's workspaces are in the sidebar.",
@@ -504,12 +534,25 @@ function renderMain() {
   if (!current) {
     closeTerm();
     closeChat();
+    drawSwitch(null);
+    $("chat-ask").hidden = true;
     showView("placeholder");
     placeholder("terminal", "No tabs", "This workspace has nothing open.", { label: "New tab", run: newTabSheet });
     return;
   }
   const kind = kindOf(current);
-  if (kind === "terminal") {
+  drawSwitch(kind === "terminal" ? current : null);
+  const p = agent.get(current.ref);
+  $("chat-ask").hidden = !(kind === "terminal" && asChat(current) && p && needsInput(p));
+  $("chat-ask").onclick = () => {
+    store.set("view:" + current.ref, "term");
+    renderMain();
+  };
+  if (kind === "terminal" && asChat(current)) {
+    closeTerm();
+    showView("chat-frame");
+    openChat(current.ref, true);
+  } else if (kind === "terminal") {
     closeChat();
     showView("term-view");
     openTerm(current.ref);
@@ -936,11 +979,50 @@ function closeChat() {
   freshFrame(null);
 }
 
-function openChat(surface) {
-  if (chat && chat.surface === surface) return;
+// `terminal`: a terminal's Claude Code session, not a Claude tab.
+function openChat(surface, terminal = false) {
+  if (chat && chat.surface === surface && chat.terminal === terminal) return;
   closeChat();
-  chat = { surface, sub: null, win: null };
-  freshFrame("/chat.html#" + encodeURIComponent(surface));
+  chat = { surface, terminal, sub: null, win: null };
+  freshFrame("/chat.html#" + (terminal ? "t:" : "") + encodeURIComponent(surface));
+}
+
+// Back to the terminal itself: Claude Code ended there, or its session
+// couldn't be read.
+function chatToTerminal(c, why) {
+  c.sub && c.sub.cancel();
+  noChat.add(c.surface);
+  if (why) toast(why);
+  if (chat === c) renderMain();
+}
+
+// What the chat page posts, for a terminal's session: typed into it.
+async function termChat(c, msg) {
+  const surface = c.surface;
+  // Pasted, so newlines stay in the message, then Return sends it.
+  const submit = (text) => call("surface.send_text", { surface, text, raw: true, submit: true });
+  const key = (k) => call("surface.send_key", { surface, key: k });
+  try {
+    switch (msg.chat) {
+      case "send": {
+        if (msg.images && msg.images.length) toast("Photos can't be typed into a terminal; sending the text.");
+        const text = msg.text || "";
+        if (!text) return;
+        return await submit(text);
+      }
+      case "new":
+        return await submit("/clear");
+      case "interrupt":
+        return await key("escape");
+      case "warm":
+      case "files":
+        return;
+      default:
+        toast("That's done in the terminal: switch to Terminal above.");
+    }
+  } catch (e) {
+    toast(e.message);
+  }
 }
 
 function chatRecv(batch) {
@@ -958,16 +1040,21 @@ window.__abromux = {
       // The page (re)loaded: start it off with the conversation so far.
       c.win = win;
       c.sub && c.sub.cancel();
-      c.sub = subscribe("surface.stream", { surface: c.surface }, {
+      const params = c.terminal ? { surface: c.surface, claude: true } : { surface: c.surface };
+      c.sub = subscribe("surface.stream", params, {
         onStart(r) { if (chat === c) chatRecv(r.events || []); },
         onData(d) {
           if (chat !== c) return;
           if (d.events) chatRecv(d.events);
+          else if (d.closed && c.terminal) { chatToTerminal(c, "Claude Code ended in this terminal."); refreshSoon(); }
           else if (d.closed) { toast("This Claude tab closed on the Mac."); refreshSoon(); }
           else if (d.behind) c.sub.restart();
         },
         onEnd() { if (chat === c && conn.up) setTimeout(() => chat === c && c.sub.restart(), 300); },
-        onError(e) { toast(e.message); },
+        onError(e) {
+          if (c.terminal) chatToTerminal(c);
+          else toast(e.message);
+        },
       });
       return;
     }
@@ -976,7 +1063,8 @@ window.__abromux = {
       if (/^https?:/i.test(msg.url || "")) window.open(msg.url, "_blank", "noopener");
       return;
     }
-    call("surface.chat", { surface: c.surface, message: msg }).catch((e) => toast(e.message));
+    if (c.terminal) termChat(c, msg);
+    else call("surface.chat", { surface: c.surface, message: msg }).catch((e) => toast(e.message));
   },
 };
 
