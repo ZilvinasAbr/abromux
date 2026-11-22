@@ -70,13 +70,17 @@ Crates:
 
 ```
 crates/
-  abromux-core/     wire format (frames, hello), settings, ipc, ... (no deps)
-  abromux-server/   the server: PTYs, terminals' lifetimes, (later) the model,
-                    listeners (unix, stdio, tailnet). Binary: abromux-server.
-  abromux-term/     libghostty-vt, the app's PTY side: Held (descriptor),
-                    Remote (stream)
-  abromux-model/    (phase 2) workspaces, panes, surfaces, status: pure Rust,
-                    ids instead of gpui entities
+  abromux-core/     wire format (frames, hello), ipc, dialing a server
+                    (dial: ssh, Unix, tailnet), method kinds, ... (no gpui)
+  abromux-server/   the server: PTYs, terminals' lifetimes, the model and
+                    its merging, listeners (unix, stdio, tailnet), the web
+                    client. Binary: abromux-server.
+  abromux-cli/      the abromux command line, run by the app and by
+                    abromux-server (the whole CLI on a host)
+  abromux-model/    workspaces, panes, tabs, status: pure Rust, ids instead
+                    of gpui entities; events, diff, apply
+  abromux-vt/       libghostty-vt: the app's and the server's parser
+  abromux-term/     the app's PTY side: Held (descriptor), Remote (stream)
 ```
 
 ## Wire protocol (revision 3)
@@ -394,7 +398,10 @@ replica followed a rename live on a VPS's server (`subscribe`).
       page answered over the MagicDNS name, with the real `tailscale whois`
       letting the owner in; the nightly app, with the server added as
       `tailnet://<name>:7397`, opened a workspace whose shell ran under it.
-      Not yet from a second device (a phone or another machine).
+      From a second machine too: the nightly app on the Mac opened a
+      workspace on another tailnet machine's 0.44.0 server
+      (`tailnet://hermes-agent`), its shell there; that server's own app
+      link (another app) was kept, a second one refused.
 
 ## Decided along the way
 
