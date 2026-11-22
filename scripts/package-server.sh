@@ -7,6 +7,11 @@
 #                                        # scripts/build-libghostty.sh first)
 #   scripts/package-server.sh --deb      # also dist/abromux-server_<version>_<arch>.deb
 #                                        # (needs dpkg-deb, so on Debian/Ubuntu)
+#   scripts/package-server.sh --target x86_64-unknown-linux-gnu
+#                                        # for another machine: its Rust target
+#                                        # and a linker for it (with --vt, build
+#                                        # libghostty-vt for it first:
+#                                        # GHOSTTY_TARGET=x86_64-linux-gnu)
 #
 # The tarball unpacks into a prefix (tar -xzf .. -C ~/.local --strip-components=1):
 #   bin/abromux-server, bin/abromux -> abromux-server (the commands agent hooks
@@ -19,19 +24,29 @@ cd "$(dirname "$0")/.."
 
 features=()
 deb=0
-for a in "$@"; do
-  case "$a" in
+target=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --vt) features=(--features vt) ;;
     --deb) deb=1 ;;
-    *) echo "package-server.sh: unknown option $a" >&2; exit 2 ;;
+    --target) target=$2; shift ;;
+    *) echo "package-server.sh: unknown option $1" >&2; exit 2 ;;
   esac
+  shift
 done
 
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-cargo build --release -p abromux-server "${features[@]}"
-bin=target/release/abromux-server
-arch=$(uname -m)
-os=$(uname -s | tr '[:upper:]' '[:lower:]')
+if [[ -n $target ]]; then
+  cargo build --release -p abromux-server "${features[@]}" --target "$target"
+  bin=target/$target/release/abromux-server
+  arch=${target%%-*}
+  os=$(echo "$target" | cut -d- -f3)
+else
+  cargo build --release -p abromux-server "${features[@]}"
+  bin=target/release/abromux-server
+  arch=$(uname -m)
+  os=$(uname -s | tr '[:upper:]' '[:lower:]')
+fi
 name="abromux-server-$version-$arch-$os"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
@@ -77,7 +92,11 @@ echo "dist/$name.tar.gz"
 
 if [[ $deb == 1 ]]; then
   command -v dpkg-deb >/dev/null || { echo "package-server.sh: --deb needs dpkg-deb" >&2; exit 1; }
-  darch=$(dpkg --print-architecture)
+  case "$arch" in
+    x86_64) darch=amd64 ;;
+    aarch64) darch=arm64 ;;
+    *) darch=$(dpkg --print-architecture) ;;
+  esac
   pkg="$stage/deb"
   mkdir -p "$pkg/DEBIAN" "$pkg/usr/bin" "$pkg/usr/lib/systemd/user" "$pkg/usr/share/doc/abromux-server"
   install -m755 "$bin" "$pkg/usr/bin/abromux-server"

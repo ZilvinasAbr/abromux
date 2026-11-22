@@ -399,7 +399,7 @@ fn run(mut reader: BufReader<UnixStream>, target: Target, link: Link) {
                 } else if msg["applied"].is_array() {
                     inject(
                         "model.applied",
-                        json!({ "link": name, "events": msg["applied"] }),
+                        json!({ "link": name, "events": msg["applied"], "from": msg["from"] }),
                     );
                 }
                 if msg["resync"] == true {

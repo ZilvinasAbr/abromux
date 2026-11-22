@@ -872,3 +872,37 @@ fn the_server_commits_what_the_app_carries_out() {
     let echo = next_msg(&mut link, "applied");
     assert_eq!(echo["from"], "app");
 }
+
+/// Another client changes the model: the server stamps it, answers with
+/// the new seq and has the app's views follow (`from: "client"`). With no
+/// app to make views, it's refused.
+#[test]
+fn a_client_changes_the_model_and_the_app_follows() {
+    use abromux_model::{Event, Node, Workspace};
+    let (sock, _control) = server_with_control("client-change");
+    let change = json!({
+        "op": "change",
+        "events": [Event::Workspace {
+            index: 0,
+            workspace: Box::new(Workspace { id: 7, name: "from a phone".into(), layout: Node::default(), ..Default::default() }),
+        }],
+    });
+    let ask = |v: &Value| {
+        let mut c = UnixStream::connect(&sock).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        writeln!(c, "{v}").unwrap();
+        let mut line = String::new();
+        BufReader::new(c).read_line(&mut line).unwrap();
+        serde_json::from_str::<Value>(&line).unwrap()
+    };
+    let refused = ask(&change);
+    assert_eq!(refused["code"], "app_closed", "{refused}");
+    let (mut link, _lw) = app_link(&sock);
+    let ok = ask(&change);
+    assert_eq!(ok["ok"], true, "{ok}");
+    let seq = ok["seq"].as_u64().unwrap();
+    let applied = next_msg(&mut link, "applied");
+    assert_eq!(applied["from"], "client");
+    assert_eq!(applied["applied"][0]["seq"].as_u64(), Some(seq));
+    assert_eq!(applied["applied"][0]["workspace"]["name"], "from a phone");
+}

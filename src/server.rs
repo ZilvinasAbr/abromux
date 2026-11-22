@@ -1105,8 +1105,18 @@ impl AbroMux {
                 let link = crate::control_link::by_name(str_param(p, "link").unwrap_or("local"));
                 let events: Vec<abromux_model::Stamped> =
                     serde_json::from_value(p["events"].clone()).unwrap_or_default();
+                // Another client changed the server's model: the views follow,
+                // and what they became (the terminals' real surfaces) goes back
+                // to the server at once, whether or not the window draws.
+                let follow = p["from"].as_str().is_some_and(|f| f != "app");
+                if follow {
+                    self.follow_model(&events, window, cx);
+                }
                 if let Some(l) = link {
                     l.apply_replica(&events);
+                }
+                if follow {
+                    self.propose_soon(cx);
                 }
                 json!(null)
             }
@@ -4091,6 +4101,175 @@ impl AbroMux {
 
     /// The workspaces as the model has them (abromux_model): what the app
     /// drives its own copy and its server's replica with.
+    /// Changes another client made to the server's model (`{"op":"change"}`):
+    /// the app's views follow, the server being the model's source.
+    /// Workspaces come, go, move and are renamed; tabs open (a terminal,
+    /// attached to the server's if the model names one) and close; the
+    /// selection moves. A browser or plugin tab only the app can make.
+    pub(crate) fn follow_model(
+        &mut self,
+        events: &[abromux_model::Stamped],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use abromux_model::Event;
+        let at = |this: &Self, id: u64| this.workspaces.iter().position(|w| w.id as u64 == id);
+        for s in events {
+            match &s.event {
+                Event::Removed { id } => {
+                    if let Some(i) = at(self, *id) {
+                        self.close_workspace(i, window, cx);
+                    }
+                }
+                Event::Selected { id: Some(id) } => {
+                    if let Some(i) = at(self, *id) {
+                        self.select_workspace(i, window, cx);
+                    }
+                }
+                Event::Selected { id: None } => {}
+                Event::Workspace { index, workspace } => {
+                    self.follow_workspace(*index, workspace, window, cx)
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn follow_workspace(
+        &mut self,
+        index: usize,
+        m: &abromux_model::Workspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A client may name a server (`docker`) or give its address; the
+        // views take the address, as the handlers do.
+        let address = |h: &Option<String>| {
+            h.as_deref().and_then(|h| match crate::servers::resolve(h) {
+                Ok(a) => a,
+                // Not one it knows: the terminal says why it can't connect.
+                Err(_) => Some(h.to_string()),
+            })
+        };
+        let host = address(&m.host);
+        let mut fresh = None;
+        let wi = match self.workspaces.iter().position(|w| w.id as u64 == m.id) {
+            Some(i) => i,
+            None => {
+                // The id the client gave it (no workspace here has it), so
+                // the server's model and the views agree.
+                let next = self.next_ws;
+                self.next_ws = (m.id as usize).saturating_sub(1);
+                self.building_host = host.clone();
+                let wi = self.create_workspace(
+                    m.cwd.clone().filter(|_| host.is_none()),
+                    false,
+                    window,
+                    cx,
+                );
+                self.building_host = None;
+                self.next_ws = next.max(m.id as usize);
+                self.workspaces[wi].host = host.clone();
+                if host.is_some() {
+                    self.join_server_group(wi, cx);
+                }
+                fresh = self.workspaces[wi]
+                    .all_surfaces()
+                    .next()
+                    .map(|s| s.entity_id());
+                wi
+            }
+        };
+        if self.workspaces[wi].name(cx) != m.name && !m.name.is_empty() {
+            self.workspaces[wi].custom_name = Some(m.name.clone());
+        }
+        if self.workspaces[wi].description != m.description {
+            self.workspaces[wi].description = m.description.clone();
+        }
+        // Tabs: what the model has that the views don't opens; what they
+        // have that it doesn't closes.
+        let number = |this: &Self, s: &Surface| this.surface_refs.get(&s.entity_id()).copied();
+        let have: Vec<(usize, EntityId)> = self.workspaces[wi]
+            .panes()
+            .flat_map(|p| p.tabs.iter())
+            .filter_map(|s| Some((number(self, s)?, s.entity_id())))
+            .collect();
+        let want = m.layout.tabs();
+        let in_use = |this: &Self, n: usize| this.surface_refs.values().any(|&r| r == n);
+        let mut fresh_used = false;
+        let mut pane_of = Vec::new();
+        fn panes(n: &abromux_model::Node, out: &mut Vec<(u64, u64)>) {
+            match n {
+                abromux_model::Node::Pane { id, tabs, .. } => {
+                    out.extend(tabs.iter().map(|t| (t.surface, *id)))
+                }
+                abromux_model::Node::Split { children, .. } => {
+                    panes(&children[0], out);
+                    panes(&children[1], out);
+                }
+            }
+        }
+        panes(&m.layout, &mut pane_of);
+        for t in &want {
+            if have.iter().any(|(n, _)| *n as u64 == t.surface) || t.kind != "terminal" {
+                continue;
+            }
+            // The fresh workspace's terminal stands for its first new one.
+            if t.held.is_none() && fresh.is_some() && !fresh_used {
+                fresh_used = true;
+                continue;
+            }
+            let ws = self.workspaces[wi].id;
+            let attach = t.held.clone().map(|h| {
+                let n = t.surface as usize;
+                (
+                    if n == 0 || in_use(self, n) {
+                        self.next_surface + 1
+                    } else {
+                        n
+                    },
+                    h,
+                )
+            });
+            let opts = crate::TerminalOpts {
+                attach,
+                host: address(&t.host),
+                cwd: m.cwd.clone().filter(|_| host.is_none()),
+                ..Default::default()
+            };
+            let surface = self.make_terminal(ws, opts, window, cx);
+            let pane = pane_of
+                .iter()
+                .find(|(s, _)| *s == t.surface)
+                .map(|(_, p)| *p as usize)
+                .filter(|p| self.workspaces[wi].pane_mut(*p).is_some())
+                .unwrap_or(self.workspaces[wi].focused_pane);
+            self.add_tab_to(wi, pane, surface, false, window, cx);
+        }
+        let keep_fresh = fresh_used || want.is_empty();
+        for (n, id) in have {
+            let wanted = want.iter().any(|t| t.surface == n as u64);
+            let is_fresh = Some(id) == fresh;
+            if !wanted && !(is_fresh && keep_fresh) {
+                self.close_surface(id, window, cx);
+            }
+        }
+        // Where it goes in the list.
+        let Some(wi) = self.workspaces.iter().position(|w| w.id as u64 == m.id) else {
+            return;
+        };
+        let to = index.min(self.workspaces.len() - 1);
+        if to != wi {
+            let selected = self.workspaces.get(self.active).map(|w| w.id);
+            let w = self.workspaces.remove(wi);
+            self.workspaces.insert(to, w);
+            if let Some(i) = selected.and_then(|id| self.workspaces.iter().position(|w| w.id == id))
+            {
+                self.active = i;
+            }
+        }
+    }
+
     pub(crate) fn model(&self, cx: &App) -> abromux_model::Model {
         use abromux_model as m;
         let surface =
@@ -4172,7 +4351,8 @@ impl AbroMux {
                     }),
                     unread: self.ws_unread(w) as u32,
                     color: w.color.map(|c| format!("#{c:06x}")),
-                    branch: w.local_cwd(cx).as_deref().and_then(git_branch),
+                    // The sidebar's cached lookup: this is built often.
+                    branch: w.local_cwd(cx).as_deref().and_then(|c| self.branch(c)),
                     log: w
                         .log
                         .iter()
