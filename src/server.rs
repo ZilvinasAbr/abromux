@@ -806,10 +806,11 @@ impl AbroMux {
                     .map(String::from)
                     .or_else(|| folder.as_ref().map(|f| f.to_string_lossy().into_owned()));
                 // On another machine's server: its terminals start there.
-                let host = str_param(p, "host").map(String::from);
-                if let Some(h) = &host {
-                    abromux_term::remote::Endpoint::parse(h).map_err(|e| anyhow!(e))?;
-                }
+                // A server's name (Settings › Servers) or an address.
+                let host = match str_param(p, "host") {
+                    Some(h) => crate::servers::resolve(h).map_err(|e| anyhow!(e))?,
+                    None => None,
+                };
                 let group = str_param(p, "group")
                     .map(|g| self.find_group(g))
                     .transpose()?;
@@ -3514,11 +3515,11 @@ impl AbroMux {
                 // `host`: another machine's server, or `local` for this one,
                 // whatever the workspace's is.
                 let host = match str_param(p, "host") {
-                    Some("local") => Some(String::new()),
-                    Some(h) => {
-                        abromux_term::remote::Endpoint::parse(h).map_err(|e| anyhow!(e))?;
-                        Some(h.to_string())
-                    }
+                    Some(h) => Some(
+                        crate::servers::resolve(h)
+                            .map_err(|e| anyhow!(e))?
+                            .unwrap_or_default(),
+                    ),
                     None => None,
                 };
                 // The workspace's folder is this machine's; elsewhere the

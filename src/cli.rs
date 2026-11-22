@@ -138,6 +138,10 @@ Commands:
                                                              with the workspace folders script, `folder add <path>`,
                                                              `folder list|all|repos|resources|remove`)
   wait-for [-S|--signal] <name> [--timeout <seconds>]        (wait until another script signals <name>; default 30s)
+  servers [list]                                             (other machines' abromux servers, for --host <name>)
+  servers add <name> <ssh://[user@]host[:port]>              (one more; Settings › Servers too)
+  servers remove <name>
+  servers check [<name>...]                                  (ask each whether it's there: its machine and version)
   remote [status]                                            (phone access over Tailscale: its URL, phones connected)
   remote enable [--https-port <443|8443|10000>] [--port <n>] (serve the phone app on this Mac's tailnet address with
                                                              `tailscale serve`, for its Tailscale user; prints a QR code)
@@ -724,6 +728,10 @@ fn dispatch(
     mut opts: Map<String, Value>,
     as_json: bool,
 ) -> Result<(), String> {
+    // A file, not the app: works with the app closed.
+    if cmd == "servers" {
+        return servers_cmd(pos, as_json);
+    }
     // `link <sub> [arg]`, as `mr`.
     let mut link_sub = String::new();
     if cmd == "link" {
@@ -2543,6 +2551,69 @@ fn created(v: &Value) -> String {
         s(&v["pane"]),
         s(&v["workspace"])
     )
+}
+
+/// `abromux servers [list|add|remove|check]` (src/servers.rs).
+fn servers_cmd(mut pos: Vec<String>, as_json: bool) -> Result<(), String> {
+    use crate::servers;
+    let sub = if pos.is_empty() {
+        "list".to_string()
+    } else {
+        pos.remove(0)
+    };
+    match (sub.as_str(), pos.as_slice()) {
+        ("list" | "ls", []) => {
+            let list = servers::load();
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&list).unwrap());
+            } else if list.is_empty() {
+                println!("No servers. Add one: abromux servers add <name> ssh://user@host");
+            } else {
+                let w = list.iter().map(|s| s.name.len()).max().unwrap_or(0);
+                for s in list {
+                    println!("{:w$}  {}", s.name, s.address);
+                }
+            }
+            Ok(())
+        }
+        ("add", [name, address]) => {
+            let s = servers::add(name, address)?;
+            println!("OK {} {}", s.name, s.address);
+            Ok(())
+        }
+        ("remove" | "rm", [name]) => {
+            servers::remove(name)?;
+            println!("OK");
+            Ok(())
+        }
+        ("check", names) => {
+            let list: Vec<_> = servers::load()
+                .into_iter()
+                .filter(|s| names.is_empty() || names.iter().any(|n| n.eq_ignore_ascii_case(&s.name)))
+                .collect();
+            if list.is_empty() {
+                return Err("no such server".into());
+            }
+            // All at once: each may take ssh's timeout.
+            let checks: Vec<_> = list
+                .into_iter()
+                .map(|s| std::thread::spawn(move || (s.name.clone(), servers::check_now(&s.address))))
+                .collect();
+            let mut down = false;
+            for c in checks {
+                let (name, r) = c.join().unwrap();
+                match r {
+                    Ok(about) => println!("{name}: up ({about})"),
+                    Err(e) => {
+                        down = true;
+                        println!("{name}: can't reach it: {e}");
+                    }
+                }
+            }
+            if down { Err("some servers can't be reached".into()) } else { Ok(()) }
+        }
+        _ => Err("usage: abromux servers [list | add <name> <address> | remove <name> | check [<name>...]]".into()),
+    }
 }
 
 #[cfg(test)]

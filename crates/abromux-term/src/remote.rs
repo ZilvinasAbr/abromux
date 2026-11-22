@@ -292,6 +292,21 @@ pub fn snapshot_key(host: &str, id: &str) -> String {
     format!("{id}@{host}")
 }
 
+/// Ask the server at `endpoint` about itself (`hello`): its name for the
+/// machine, version and protocol. Blocks for as long as connecting takes
+/// (ssh's 10 s timeout at most), so call it off the main thread.
+pub fn hello(endpoint: &Endpoint) -> Result<Value, String> {
+    let mut conn = endpoint.connect()?;
+    let sent = writeln!(conn.write, "{}", json!({ "op": "hello" }))
+        .and_then(|_| conn.write.flush())
+        .map_err(|e| e.to_string());
+    match sent.and_then(|_| read_line(&conn.read)) {
+        Ok(v) if v["ok"] == true => Ok(v),
+        Ok(_) => Err("not an abromux server (an old holder?)".into()),
+        Err(e) => Err(conn.error(e)),
+    }
+}
+
 /// What the reader thread and the view share.
 struct Shared {
     /// As the session saves it.

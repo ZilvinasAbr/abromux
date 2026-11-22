@@ -1246,9 +1246,7 @@ impl AbroMux {
             .then(|| self.render_ws_status(ws, filled, &sb))
             .flatten();
         // A workspace on another machine says which.
-        let host = ws.host.as_deref().map(|h| {
-            abromux_term::remote::Endpoint::parse(h).map_or_else(|_| h.to_string(), |e| e.label())
-        });
+        let host = ws.host.as_deref().map(crate::servers::label);
         let description: Vec<String> = ws
             .description
             .as_deref()
