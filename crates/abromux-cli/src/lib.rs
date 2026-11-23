@@ -418,6 +418,13 @@ pub fn run(argv: Vec<String>, h: Box<dyn Host>) -> i32 {
     {
         return agent::hook_event(kind, ipc::socket_path);
     }
+    // What most programs take, as well as `abromux version`.
+    if let [only] = argv.as_slice()
+        && matches!(only.as_str(), "--version" | "-V")
+    {
+        println!("abromux {}", env!("ABROMUX_VERSION"));
+        return 0;
+    }
     let Args { mut pos, mut opts } = match parse(&argv) {
         Ok(a) => a,
         Err(e) => {
