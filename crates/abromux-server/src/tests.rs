@@ -906,3 +906,85 @@ fn a_client_changes_the_model_and_the_app_follows() {
     assert_eq!(applied["applied"][0]["seq"].as_u64(), Some(seq));
     assert_eq!(applied["applied"][0]["workspace"]["name"], "from a phone");
 }
+
+/// The app's proposals are merged with what changed since the model they
+/// were made against: another client's change to a workspace stands; what
+/// the server owns (a status) is kept, with the app's layout.
+#[test]
+fn the_apps_stale_proposals_are_merged() {
+    use abromux_model::{Event, Node, Tab, Workspace};
+    let (sock, control) = server_with_control("merge");
+    let (mut link, mut lw) = app_link(&sock);
+    let ws = |name: &str, tabs: &[u64]| Workspace {
+        id: 1,
+        name: name.into(),
+        layout: Node::Pane {
+            id: 1,
+            tabs: tabs
+                .iter()
+                .map(|&s| Tab {
+                    surface: s,
+                    kind: "terminal".into(),
+                    ..Default::default()
+                })
+                .collect(),
+            active: 0,
+        },
+        ..Default::default()
+    };
+    let propose = |lw: &mut UnixStream, w: Workspace, base: u64| {
+        writeln!(lw, "{}", json!({ "op": "change", "base": base, "events": [Event::Workspace { index: 0, workspace: Box::new(w) }] })).unwrap();
+    };
+    let model = || {
+        let mut c = UnixStream::connect(&sock).unwrap();
+        writeln!(c, "{}", json!({ "op": "model" })).unwrap();
+        let mut line = String::new();
+        BufReader::new(c).read_line(&mut line).unwrap();
+        serde_json::from_str::<Value>(&line).unwrap()["model"].clone()
+    };
+    // The app makes the workspace: seq 1.
+    propose(&mut lw, ws("one", &[1]), 0);
+    assert_eq!(next_msg(&mut link, "applied")["applied"][0]["seq"], 1);
+
+    // Another client adds a tab (seq 2); the app, not having seen it yet,
+    // proposes a version made against seq 1: the client's stands.
+    let mut c = UnixStream::connect(&sock).unwrap();
+    writeln!(c, "{}", json!({ "op": "change", "events": [Event::Workspace { index: 0, workspace: Box::new(ws("one", &[1, 0])) }] })).unwrap();
+    let mut line = String::new();
+    BufReader::new(c).read_line(&mut line).unwrap();
+    assert_eq!(next_msg(&mut link, "applied")["from"], "client");
+    propose(&mut lw, ws("one", &[1, 5]), 1);
+    let echo = next_msg(&mut link, "applied");
+    assert_eq!(echo["applied"], json!([]), "dropped: {echo}");
+    let tabs = |m: &Value| {
+        m["workspaces"][0]["layout"]["tabs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["surface"].as_u64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(tabs(&model()), vec![1, 0]);
+
+    // Having followed it (base 2), the app's version goes in: seq 3.
+    propose(&mut lw, ws("one", &[1, 7]), 2);
+    assert_eq!(next_msg(&mut link, "applied")["applied"][0]["seq"], 3);
+
+    // The server sets a status (an owned method: seq 4); the app's next
+    // proposal, made against seq 3, keeps its tabs and the status.
+    let mut c = UnixStream::connect(&control).unwrap();
+    writeln!(c, "{}", json!({ "id": 1, "method": "status.set", "params": { "workspace": "workspace:1", "key": "build", "value": "ok" } })).unwrap();
+    let mut line = String::new();
+    BufReader::new(c).read_line(&mut line).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap()["ok"],
+        true,
+        "{line}"
+    );
+    next_msg(&mut link, "mirror");
+    propose(&mut lw, ws("one", &[1, 7, 9]), 3);
+    next_msg(&mut link, "applied");
+    let m = model();
+    assert_eq!(tabs(&m), vec![1, 7, 9]);
+    assert_eq!(m["workspaces"][0]["status"][0]["value"], "ok", "{m}");
+}

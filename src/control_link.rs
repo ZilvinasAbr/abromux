@@ -88,12 +88,17 @@ impl Link {
             self.send(&json!({ "op": "sync" }));
             return;
         }
-        let events = abromux_model::diff(&self.model.lock().unwrap(), &new);
+        let (events, base) = {
+            let replica = self.model.lock().unwrap();
+            (abromux_model::diff(&replica, &new), replica.seq)
+        };
         let mut proposed = self.proposed.lock().unwrap();
         if events.is_empty() || *proposed == events {
             return;
         }
-        if self.send(&json!({ "op": "change", "events": events })) {
+        // Made against the model as of `base`: the server merges it with
+        // what others changed since (control::State::merge_app).
+        if self.send(&json!({ "op": "change", "events": events, "base": base })) {
             *proposed = events;
         }
     }

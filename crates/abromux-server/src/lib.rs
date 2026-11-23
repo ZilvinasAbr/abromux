@@ -844,17 +844,20 @@ impl Server {
                                 self.state
                                     .update(&msg, &|id| terms.get(id).is_some_and(|t| !t.eof));
                             } else if msg["op"] == "change" {
-                                // The app proposes; the server orders: stamp,
-                                // apply, tell everyone, and the app too.
-                                let events: Vec<abromux_model::Event> =
+                                // The app proposes; the server decides: merged
+                                // with what others changed since the model the
+                                // app had (`base`), stamped, applied, told to
+                                // everyone; the app's replica takes what was.
+                                let mut events: Vec<abromux_model::Event> =
                                     serde_json::from_value(msg["events"].clone())
                                         .unwrap_or_default();
-                                let stamped = abromux_model::stamp(self.state.model.seq, events);
-                                if let Ok(done) = self.state.apply_events(&stamped) {
-                                    self.publish(&done);
+                                if let Some(base) = msg["base"].as_u64() {
+                                    events = self.state.merge_app(events, base);
                                 }
+                                let done = self.state.commit(events, control::Source::App);
+                                self.publish(&done);
                                 let c = self.clients.get_mut(&cid).unwrap();
-                                c.reply(json!({ "applied": stamped, "from": "app" }));
+                                c.reply(json!({ "applied": done, "from": "app" }));
                                 self.flush(cid);
                             } else if msg["op"] == "done" {
                                 self.exec_done(cid, &msg);
@@ -1037,12 +1040,7 @@ impl Server {
                             return self.flush(cid);
                         }
                     };
-                let stamped = abromux_model::stamp(self.state.model.seq, events);
-                if let Err(e) = self.state.apply_events(&stamped) {
-                    let c = self.clients.get_mut(&cid).unwrap();
-                    fail(c, format!("change: {e:?}"));
-                    return self.flush(cid);
-                }
+                let stamped = self.state.commit(events, control::Source::Client);
                 self.publish(&stamped);
                 if let Some(a) = self.clients.get_mut(&app) {
                     a.reply(json!({ "applied": stamped, "from": "client" }));
@@ -1556,9 +1554,8 @@ impl Server {
                 mirror,
             })) => (result, events, mirror),
         };
-        let stamped = abromux_model::stamp(self.state.model.seq, events);
-        let applied = self.state.apply_events(&stamped).unwrap_or_default();
-        self.publish(&applied);
+        let stamped = self.state.commit(events, control::Source::Owned);
+        self.publish(&stamped);
         match self
             .app
             .and_then(|a| self.clients.get_mut(&a).map(|c| (a, c)))
@@ -1580,10 +1577,8 @@ impl Server {
         let events: Vec<abromux_model::Event> =
             serde_json::from_value(msg["events"].clone()).unwrap_or_default();
         if !events.is_empty() {
-            let stamped = abromux_model::stamp(self.state.model.seq, events);
-            if let Ok(done) = self.state.apply_events(&stamped) {
-                self.publish(&done);
-            }
+            let stamped = self.state.commit(events, control::Source::App);
+            self.publish(&stamped);
             if let Some(a) = self.clients.get_mut(&app) {
                 a.reply(json!({ "applied": stamped, "from": "app" }));
             }
