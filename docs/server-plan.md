@@ -302,6 +302,11 @@ Two things left at first, both done since:
       action costs the same within 0.1 ms (new tab 4.30 vs 4.34 ms, split
       4.12 vs 4.05, new workspace 4.02 vs 4.07, select 0.06 both), and the
       CLI as a process the same (9.96 vs 10.00 ms for `abromux ping`).
+      On screen (`scripts/perf.py run --full`, two runs each in alternating
+      order), the drawing after each action is the same too: a new tab
+      draws in 0.99 vs 1.00 ms, a split in 0.71 vs 0.71, a workspace
+      switch in 2.6 vs 2.3; new tab 28.8 vs 27.3 ms, new workspace 28.1
+      vs 26.8, focus a tab 7.8 vs 6.7, open a browser tab 75.6 vs 72.7.
 
 What stays in the app is what only it can do: making the views a model
 describes, and the view methods (browser automation, input, focus,
