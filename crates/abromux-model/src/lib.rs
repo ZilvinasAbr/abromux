@@ -129,6 +129,15 @@ pub struct Tab {
     /// The server on another machine it runs on, if not the workspace's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// A browser tab's page: what a client gives to open one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// A plugin tab's plugin (`gitlab`, ...) and what it saved, as the
+    /// session keeps them: enough to open it again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

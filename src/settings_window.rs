@@ -889,9 +889,29 @@ fn field(input: &Entity<InputState>, width: f32) -> AnyElement {
         .into_any_element()
 }
 
+/// Keep the servers on `home` (a server's name), or this app's own again:
+/// off the main thread (it asks the server), then the page again.
+fn set_servers_home(home: Option<String>, window: &mut Window, cx: &mut App) {
+    let task = cx
+        .background_executor()
+        .spawn(async move { crate::servers::set_home(home.as_deref()) });
+    let wh = window.window_handle();
+    cx.spawn(async move |cx| {
+        let r = task.await;
+        let _ = wh.update(cx, |_, window, cx| {
+            if let Err(e) = r {
+                window.push_notification(Notification::error(e).title("Servers"), cx);
+            }
+            cx.refresh_windows();
+        });
+    })
+    .detach();
+}
+
 fn servers_page(inputs: &(Entity<InputState>, Entity<InputState>)) -> Page {
     use crate::servers::Status;
     let list = crate::servers::load();
+    let home = crate::servers::home();
     let rows = list.into_iter().map(|s| {
         let status = match crate::servers::status(&s.address) {
             None => String::new(),
@@ -901,15 +921,23 @@ fn servers_page(inputs: &(Entity<InputState>, Entity<InputState>)) -> Page {
             Some(Status::Moved(e)) => format!(" · {e}"),
         };
         let (check, remove) = (s.address.clone(), s.name.clone());
+        let is_home = home.as_deref() == Some(s.address.as_str());
+        let keeps = if is_home { " · keeps this list" } else { "" };
+        let name = s.name.clone();
         info_row(
             s.name.clone(),
-            format!("{}{status}", s.address),
+            format!("{}{status}{keeps}", s.address),
             move |_, _| {
-                let (check, remove) = (check.clone(), remove.clone());
+                let (check, remove, name) = (check.clone(), remove.clone(), name.clone());
                 div()
                     .flex()
                     .gap(px(6.))
                     .items_center()
+                    .when(!is_home, |d| {
+                        d.child(button("home-server", "Keep the List Here").on_click(
+                            move |_, window, cx| set_servers_home(Some(name.clone()), window, cx),
+                        ))
+                    })
                     .child(button("check-server", "Check").on_click(move |_, _, cx| {
                         crate::servers::check(&check);
                         cx.refresh_windows();
@@ -961,12 +989,26 @@ fn servers_page(inputs: &(Entity<InputState>, Entity<InputState>)) -> Page {
             group("Servers", rows.chain([add])),
             group(
                 "Where They're Kept",
-                [info_row(
-                    crate::workspace::tilde(&path.to_string_lossy()),
-                    "Not in config.json, so other versions of the app sharing it don't \
-                     trip on them. `abromux servers` changes it too.",
-                    |_, _| div().into_any_element(),
-                )],
+                [match home {
+                    Some(h) => info_row(
+                        format!("On {}", crate::servers::label(&h)),
+                        "Shared: every app whose list is kept there has these servers, and a \
+                         change here is a change there (`abromux servers home`). This app \
+                         keeps a copy, brought up to date when it starts.",
+                        |_, _| {
+                            button("own-servers", "This App's Own")
+                                .on_click(|_, window, cx| set_servers_home(None, window, cx))
+                                .into_any_element()
+                        },
+                    ),
+                    None => info_row(
+                        crate::workspace::tilde(&path.to_string_lossy()),
+                        "Not in config.json, so other versions of the app sharing it don't \
+                         trip on them. `abromux servers` changes it too. Keep the List Here \
+                         on a server shares it with your other apps.",
+                        |_, _| div().into_any_element(),
+                    ),
+                }],
             ),
         ],
     }

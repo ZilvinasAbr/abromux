@@ -10,10 +10,10 @@ use anyhow::{Context as _, bail};
 use std::path::{Path, PathBuf};
 
 const SKILLS: &[(&str, &str)] = &[
-    ("abromux", include_str!("../skills/abromux/SKILL.md")),
+    ("abromux", include_str!("../../../skills/abromux/SKILL.md")),
     (
         "abromux-browser",
-        include_str!("../skills/abromux-browser/SKILL.md"),
+        include_str!("../../../skills/abromux-browser/SKILL.md"),
     ),
 ];
 
@@ -29,7 +29,7 @@ fn installed(text: &str) -> String {
 
 /// Each agent's skills folder that exists or can be made, with its name.
 fn roots() -> anyhow::Result<Vec<(&'static str, PathBuf)>> {
-    let home = || crate::paths::home_var().context("HOME isn't set");
+    let home = || abromux_core::paths::home_var().context("HOME isn't set");
     let claude = match std::env::var("CLAUDE_CONFIG_DIR") {
         Ok(dir) => PathBuf::from(dir),
         Err(_) => home()?.join(".claude"),

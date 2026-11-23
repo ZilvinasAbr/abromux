@@ -192,7 +192,7 @@ pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> 
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let tx = tx.clone();
-            std::thread::spawn(move || serve(stream, tx));
+            std::thread::spawn(move || serve(stream, tx, None));
         }
     });
     serve_requests(rx, window, cx);
@@ -245,7 +245,15 @@ fn serve_requests(
     .detach();
 }
 
-pub(crate) fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
+/// `origin`: the server on another machine the connection came through
+/// (its link): a command run there means that machine, so a new workspace
+/// with no host of its own opens there (`abromux new-workspace` or
+/// `abromux open <dir>` on a VPS makes a workspace on the VPS).
+pub(crate) fn serve(
+    stream: UnixStream,
+    tx: mpsc::UnboundedSender<Request>,
+    origin: Option<String>,
+) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
@@ -292,7 +300,16 @@ pub(crate) fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
                 }
                 return;
             }
-            Ok(req) => {
+            Ok(mut req) => {
+                if let Some(o) = &origin
+                    && req["method"] == "workspace.create"
+                    && req["params"].get("host").is_none_or(Value::is_null)
+                {
+                    if !req["params"].is_object() {
+                        req["params"] = json!({});
+                    }
+                    req["params"]["host"] = json!(o);
+                }
                 let (reply_tx, reply_rx) = oneshot::channel();
                 // A question waits on a person, as long as it takes: notice
                 // the asker going away meanwhile, to take it down.
@@ -1065,10 +1082,22 @@ impl AbroMux {
             // closes views): the app's handler does it, and the server gets
             // the result with the model change, to commit before answering.
             "model.exec" => {
-                let link = crate::control_link::by_name(str_param(p, "link").unwrap_or("local"));
-                let exec = p["exec"].clone();
+                let link_name = str_param(p, "link").unwrap_or("local").to_string();
+                let link = crate::control_link::by_name(&link_name);
+                let mut exec = p["exec"].clone();
                 let method = exec["method"].as_str().unwrap_or_default().to_string();
                 let token = exec["token"].clone();
+                // Asked on another machine's server: a new workspace with no
+                // host of its own opens there (as `serve`'s `origin`).
+                if link_name != "local"
+                    && method == "workspace.create"
+                    && exec["params"].get("host").is_none_or(Value::is_null)
+                {
+                    if !exec["params"].is_object() {
+                        exec["params"] = json!({});
+                    }
+                    exec["params"]["host"] = json!(link_name);
+                }
                 let error = |e: &anyhow::Error| format!("{e:#}");
                 match self.handle(&method, &exec["params"], gone, window, cx) {
                     Ok(Reply::Now(v)) => {
@@ -4413,6 +4442,26 @@ impl AbroMux {
                         out.push(s);
                         continue;
                     }
+                    // A page, or a plugin's tab, from what the model says. The
+                    // built-in browser, whatever `browser.engine` says: a
+                    // terminal-browser tab arranges its own panes, and this
+                    // one has to be where the model puts it.
+                    if t.kind == "browser" {
+                        let url = t.url.as_deref().unwrap_or(DEFAULT_URL);
+                        out.push(self.make_builtin_browser(url, window, cx));
+                        continue;
+                    }
+                    if t.kind == "plugin" {
+                        let Some(id) = t.plugin.as_deref() else {
+                            continue;
+                        };
+                        let state = t.state.clone().unwrap_or_else(|| json!({}));
+                        match self.make_plugin(id, &state, window, cx) {
+                            Ok(s) => out.push(s),
+                            Err(e) => eprintln!("a {id} tab from the model: {e:#}"),
+                        }
+                        continue;
+                    }
                     if t.kind != "terminal" {
                         continue;
                     }
@@ -4486,21 +4535,29 @@ impl AbroMux {
         let surface =
             |s: &Surface| self.surface_refs.get(&s.entity_id()).copied().unwrap_or(0) as u64;
         let tab = |s: &Surface| {
-            let (kind, held, host) = match s {
-                Surface::Terminal(t) => {
-                    let t = t.read(cx);
-                    ("terminal", t.held_id(), t.host.clone())
-                }
-                Surface::Browser(_) => ("browser", None, None),
-                Surface::Plugin(_) => ("plugin", None, None),
-            };
-            m::Tab {
+            let mut t = m::Tab {
                 surface: surface(s),
-                kind: kind.into(),
                 title: s.title(cx),
-                held,
-                host,
+                ..Default::default()
+            };
+            match s {
+                Surface::Terminal(term) => {
+                    let term = term.read(cx);
+                    t.kind = "terminal".into();
+                    t.held = term.held_id();
+                    t.host = term.host.clone();
+                }
+                Surface::Browser(b) => {
+                    t.kind = "browser".into();
+                    t.url = Some(b.read(cx).url.clone()).filter(|u| !u.is_empty());
+                }
+                Surface::Plugin(p) => {
+                    t.kind = "plugin".into();
+                    t.plugin = Some(p.plugin().into());
+                    t.state = Some(p.save(cx));
+                }
             }
+            t
         };
         fn node(n: &crate::workspace::Node, tab: &dyn Fn(&Surface) -> m::Tab) -> m::Node {
             match n {
@@ -4732,7 +4789,7 @@ mod tests {
     fn hangup_waits_for_the_caller_to_close() {
         let (app_end, caller) = UnixStream::pair().unwrap();
         let (tx, mut rx) = mpsc::unbounded();
-        let served = std::thread::spawn(move || serve(app_end, tx));
+        let served = std::thread::spawn(move || serve(app_end, tx, None));
         let mut w = caller.try_clone().unwrap();
         w.write_all(b"{\"id\":1,\"method\":\"system.ping\"}\n")
             .unwrap();

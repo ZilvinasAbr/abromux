@@ -419,6 +419,8 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
         ports: None,
         ports_at: Instant::now(),
         execs: HashMap::new(),
+        ending: HashMap::new(),
+        statuses: Vec::new(),
         next_exec: 0,
     };
     let mut idle_since = Instant::now();
@@ -450,6 +452,15 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
             } else {
                 -1
             }
+        };
+        // A program to reap for its exit code: a look every few ms, only
+        // while there is one.
+        let timeout = if s.ending.is_empty() && s.statuses.is_empty() {
+            timeout
+        } else if timeout < 0 {
+            REAP_POLL_MS
+        } else {
+            timeout.min(REAP_POLL_MS)
         };
 
         let mut fds = vec![pollfd(listener.as_raw_fd(), libc::POLLIN)];
@@ -505,7 +516,13 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
         if s.ports.is_some() && s.app.is_some() && s.ports_at.elapsed() >= PORT_SCAN {
             s.scan_ports();
         }
+        if !s.ending.is_empty() || !s.statuses.is_empty() {
+            s.settle_endings();
+        }
         if n <= 0 {
+            // Woken by a timer (an ended program reaped meanwhile, say):
+            // what that finished goes too.
+            s.drop_done();
             continue;
         }
 
@@ -546,16 +563,7 @@ pub fn serve(path: &Path, opts: &Options) -> io::Result<()> {
             }
         }
 
-        // Connections that are done: let go of their terminals.
-        let done: Vec<u64> = s
-            .clients
-            .iter()
-            .filter(|(_, c)| c.closing && c.out.is_empty())
-            .map(|(id, _)| *id)
-            .collect();
-        for cid in done {
-            s.drop_client(cid);
-        }
+        s.drop_done();
     }
 }
 
@@ -573,6 +581,13 @@ struct Server {
     app_owner: Option<String>,
     /// This machine, as `hello` says: made once, kept beside the socket.
     host_id: String,
+    /// Terminals whose output ended before their program was reaped: the
+    /// streamed apps get its exit code once it is (or after a moment
+    /// without one), without the loop waiting for it.
+    ending: HashMap<String, Ending>,
+    /// `status` asked of a terminal whose program isn't reaped yet: the
+    /// connection, and since when.
+    statuses: Vec<(String, u64, Instant)>,
     /// Model methods the app is carrying out for the server: the caller
     /// waiting, and its request's id.
     execs: HashMap<u64, (u64, Value)>,
@@ -1094,6 +1109,37 @@ impl Server {
             }
             // Workspace folders here (`abromux-server folder ...`): what the
             // app asks of a host for a workspace there.
+            // The servers its apps share, when it's their home
+            // (abromux_cli::servers): `{"op":"servers"}` reads the list,
+            // with `set` it's replaced.
+            Some("servers") => {
+                let Some(path) = self.state.dir().map(|d| d.join("servers.json")) else {
+                    fail(c, "this server keeps no files".into());
+                    return self.flush(cid);
+                };
+                if let Some(list) = req.get("set") {
+                    if !list.is_array() {
+                        fail(c, "servers: set takes a list".into());
+                        return self.flush(cid);
+                    }
+                    let text =
+                        serde_json::to_string_pretty(&json!({ "servers": list })).unwrap() + "\n";
+                    let tmp = path.with_extension("json.tmp");
+                    match std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &path)) {
+                        Ok(()) => c.reply(json!({ "ok": true })),
+                        Err(e) => fail(c, format!("{}: {e}", path.display())),
+                    }
+                } else {
+                    let list = std::fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+                        .map(|v| v["servers"].clone())
+                        .filter(Value::is_array)
+                        .unwrap_or_else(|| json!([]));
+                    c.reply(json!({ "ok": true, "servers": list }));
+                }
+                self.flush(cid);
+            }
             Some("folder") => {
                 let args: Vec<String> = req["args"]
                     .as_array()
@@ -1276,14 +1322,23 @@ impl Server {
                 self.flush(cid);
             }
             Some("status") => {
-                let code = c
-                    .term
-                    .clone()
-                    .and_then(|id| self.terms.get_mut(&id))
-                    .and_then(exit_code);
-                let c = self.clients.get_mut(&cid).unwrap();
-                c.reply(json!({ "ok": true, "code": code }));
-                self.flush(cid);
+                let id = c.term.clone();
+                match id
+                    .as_ref()
+                    .and_then(|id| self.terms.get_mut(id))
+                    .map(reaped)
+                {
+                    // Ended but not reaped yet: answered once it is.
+                    Some(None) => {
+                        self.statuses.push((id.unwrap(), cid, Instant::now()));
+                    }
+                    found => {
+                        let code = found.flatten().flatten();
+                        let c = self.clients.get_mut(&cid).unwrap();
+                        c.reply(json!({ "ok": true, "code": code }));
+                        self.flush(cid);
+                    }
+                }
             }
             Some("kill") => {
                 if let Some(t) = c.term.take().and_then(|id| self.terms.remove(&id)) {
@@ -1407,15 +1462,20 @@ impl Server {
             t.eof = true;
             // Tell the streamed apps how it ended, then forget the terminal.
             if !streams.is_empty() {
-                let code = exit_code(t);
-                self.terms.remove(id);
-                let exit = wire::frame(wire::EXIT, json!({ "code": code }).to_string().as_bytes());
-                for cid in streams {
-                    let c = self.clients.get_mut(&cid).unwrap();
-                    c.out.extend_from_slice(&exit);
-                    c.term = None;
-                    c.closing = true;
-                    self.flush(cid);
+                let mut t = self.terms.remove(id).unwrap();
+                match reaped(&mut t) {
+                    Some(code) => self.send_exit(&streams, code),
+                    // Not reaped yet: the loop looks again (settle_endings).
+                    None => {
+                        self.ending.insert(
+                            id.to_string(),
+                            Ending {
+                                term: t,
+                                streams,
+                                since: Instant::now(),
+                            },
+                        );
+                    }
                 }
             }
             return;
@@ -1600,6 +1660,64 @@ impl Server {
         }
     }
 
+    /// Connections that are done (closing, with nothing left to send): let
+    /// go of their terminals.
+    fn drop_done(&mut self) {
+        let done: Vec<u64> = self
+            .clients
+            .iter()
+            .filter(|(_, c)| c.closing && c.out.is_empty())
+            .map(|(id, _)| *id)
+            .collect();
+        for cid in done {
+            self.drop_client(cid);
+        }
+    }
+
+    /// The streamed apps of a terminal that ended: how (its exit code), and
+    /// they're done.
+    fn send_exit(&mut self, streams: &[u64], code: Option<i32>) {
+        let exit = wire::frame(wire::EXIT, json!({ "code": code }).to_string().as_bytes());
+        for &cid in streams {
+            let Some(c) = self.clients.get_mut(&cid) else {
+                continue;
+            };
+            c.out.extend_from_slice(&exit);
+            c.term = None;
+            c.closing = true;
+            self.flush(cid);
+        }
+    }
+
+    /// Ended programs reaped since the last look (or waited for long
+    /// enough): their exit codes go out.
+    fn settle_endings(&mut self) {
+        let ids: Vec<String> = self.ending.keys().cloned().collect();
+        for id in ids {
+            let e = self.ending.get_mut(&id).unwrap();
+            let code = match reaped(&mut e.term) {
+                Some(code) => code,
+                None if e.since.elapsed() >= REAP_FOR => None,
+                None => continue,
+            };
+            let e = self.ending.remove(&id).unwrap();
+            self.send_exit(&e.streams, code);
+        }
+        let mut waiting = std::mem::take(&mut self.statuses);
+        waiting.retain(|(id, cid, since)| {
+            let code = match self.terms.get_mut(id).map(reaped) {
+                Some(None) if since.elapsed() < REAP_FOR => return true,
+                found => found.flatten().flatten(),
+            };
+            if let Some(c) = self.clients.get_mut(cid) {
+                c.reply(json!({ "ok": true, "code": code }));
+            }
+            self.flush(*cid);
+            false
+        });
+        self.statuses = waiting;
+    }
+
     /// Look at what listens here; tell the app about ports new since it
     /// asked (`{"ports_new":[..]}`).
     fn scan_ports(&mut self) {
@@ -1684,14 +1802,26 @@ impl Server {
 /// How a terminal's program ended, once its output has: its exit status,
 /// None if a signal ended it or it isn't known yet. Waits a moment for it to
 /// be reaped.
-fn exit_code(t: &mut Term) -> Option<i32> {
-    for _ in 0..30 {
-        if let Ok(Some(s)) = t.child.try_wait() {
-            return s.signal().is_none().then(|| s.exit_code() as i32);
-        }
-        std::thread::sleep(Duration::from_millis(10));
+/// How often the loop looks for an ended program to be reaped, and for how
+/// long before it says it ended without a code.
+const REAP_POLL_MS: i32 = 10;
+const REAP_FOR: Duration = Duration::from_millis(300);
+
+/// A terminal whose program is to be reaped for its exit code.
+struct Ending {
+    term: Term,
+    streams: Vec<u64>,
+    since: Instant,
+}
+
+/// The program's exit code if it has been reaped (`Some(None)`: killed by
+/// a signal); None while it hasn't. Never waits.
+fn reaped(t: &mut Term) -> Option<Option<i32>> {
+    match t.child.try_wait() {
+        Ok(Some(s)) => Some(s.signal().is_none().then(|| s.exit_code() as i32)),
+        Ok(None) => None,
+        Err(_) => Some(None),
     }
-    None
 }
 
 fn pollfd(fd: RawFd, events: libc::c_short) -> libc::pollfd {

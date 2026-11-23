@@ -19,6 +19,7 @@ gitlab = ["dep:abromux-gitlab"]
 [dependencies]
 abromux-plugin = { path = "crates/abromux-plugin" }
 abromux-core = { path = "crates/abromux-core" }
+abromux-cli = { path = "crates/abromux-cli" }
 abromux-term = { path = "crates/abromux-term" }
 abromux-server = { path = "crates/abromux-server" }
 abromux-model = { path = "crates/abromux-model" }

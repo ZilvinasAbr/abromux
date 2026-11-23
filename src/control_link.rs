@@ -468,6 +468,10 @@ fn open(target: &Target, conn: u64) {
             .map(|(s, _)| s),
     };
     if let Some(s) = s {
-        crate::server::serve(s, tx);
+        let origin = match target {
+            Target::Remote(host) => Some(host.clone()),
+            Target::Local(_) => None,
+        };
+        crate::server::serve(s, tx, origin);
     }
 }

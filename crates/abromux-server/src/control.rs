@@ -468,6 +468,13 @@ fn now() -> u64 {
 }
 
 /// Where the state is saved: beside the server's socket.
+impl State {
+    /// The folder the server keeps its files in (beside its socket).
+    pub fn dir(&self) -> Option<&Path> {
+        self.path.as_deref().and_then(Path::parent)
+    }
+}
+
 pub fn state_path(socket: &Path) -> PathBuf {
     socket.with_file_name("server-state.json")
 }
