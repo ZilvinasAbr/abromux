@@ -66,10 +66,6 @@ pub const ACTIONS: &[Act] = {
     use crate::*;
     acts![
         "newWorkspace", Some("New Workspace"), NewWorkspace, [(None, ["cmd-n"])];
-        "newFolderWorkspace", Some("New Workspace Folder"), NewFolderWorkspace,
-            [(None, ["cmd-shift-i"])];
-        "cleanUpWorkspaceFolder", Some("Clean Up and Delete Workspace Folder…"), CleanUpWorkspaceFolder,
-            [(None, ["cmd-shift-x"])];
         "renameWorkspace", Some("Rename Workspace…"), RenameWorkspace, [(None, ["cmd-shift-r"])];
         "editWorkspaceDescription", Some("Edit Workspace Description…"), EditDescription,
             [(None, ["alt-cmd-e"])];
@@ -78,6 +74,7 @@ pub const ACTIONS: &[Act] = {
         "moveWorkspaceDown", Some("Move Workspace Down"), MoveWorkspaceDown, [(None, [])];
         "newWorkspaceGroup", Some("New Group from Workspace"), NewGroup, [(None, [])];
         "groupWorkspacesByFolder", Some("Group Workspaces by Folder"), GroupByFolder, [(None, [])];
+        "groupWorkspacesByServer", Some("Group Workspaces by Server"), GroupByServer, [(None, [])];
         "ungroupWorkspaces", Some("Ungroup Workspaces"), Ungroup, [(None, [])];
         "toggleWorkspaceGroup", Some("Collapse or Expand Group"), ToggleGroup, [(None, [])];
         "reopenPreviousSession", Some("Reopen Previous Session"), ReopenSession,
@@ -90,6 +87,9 @@ pub const ACTIONS: &[Act] = {
         "previousWorkspace", Some("Previous Workspace"), PrevWorkspace, [(None, ["ctrl-cmd-["])];
         "newTerminal", Some("New Terminal Tab"), NewTerminal, [(None, ["cmd-t"])];
         "newBrowser", Some("New Browser Tab"), NewBrowser, [(None, ["cmd-shift-l"])];
+        "newClaudeChat", Some("New Claude Tab"), NewClaudeChat, [(None, ["cmd-shift-t"])];
+        "toggleClaudeView", Some("Switch Claude Code: Terminal ↔ Claude Tab"), ToggleClaudeView,
+            [(None, ["alt-cmd-y"])];
         "splitRight", Some("Split Right"), SplitRight, [(None, ["cmd-d"])];
         "splitDown", Some("Split Down"), SplitDown, [(None, ["cmd-shift-d"])];
         "renameTab", Some("Rename Tab…"), RenameTab, [(None, ["cmd-r"])];
@@ -149,6 +149,7 @@ pub const ACTIONS: &[Act] = {
             PersistenceCmuxLike, [(None, [])];
         "openSettings", Some("Settings…"), OpenSettings, [(None, ["cmd-,"])];
         "openConfig", Some("Open Config File"), OpenConfig, [(None, [])];
+        "openInitLua", Some("Open init.lua"), OpenInitLua, [(None, [])];
         "copy", Some("Copy"), terminal::Copy, [(T, ["cmd-c"])];
         "paste", Some("Paste"), terminal::Paste, [(T, ["cmd-v"])];
         "find", Some("Find…"), terminal::Find, [(T, ["cmd-f"]), (B, ["cmd-f"]), (BI, ["cmd-f"])];
@@ -223,8 +224,6 @@ pub const ACTIONS: &[Act] = {
 #[rustfmt::skip]
 pub const LINUX: &[(&str, Keys)] = &[
     ("newWorkspace", &[(None, &["ctrl-shift-n"])]),
-    ("newFolderWorkspace", &[(None, &["ctrl-alt-n"])]),
-    ("cleanUpWorkspaceFolder", &[(None, &["ctrl-alt-x"])]),
     ("renameWorkspace", &[(None, &["ctrl-alt-r"])]),
     ("editWorkspaceDescription", &[(None, &["ctrl-alt-e"])]),
     ("reopenPreviousSession", &[(None, &["ctrl-alt-o"])]),
@@ -232,6 +231,8 @@ pub const LINUX: &[(&str, Keys)] = &[
     ("previousWorkspace", &[(None, &["ctrl-alt-pageup", "ctrl-alt-["])]),
     ("newTerminal", &[(None, &["ctrl-shift-t"])]),
     ("newBrowser", &[(None, &["ctrl-alt-l"])]),
+    ("newClaudeChat", &[(None, &["ctrl-alt-y"])]),
+    ("toggleClaudeView", &[(None, &["ctrl-alt-shift-y"])]),
     ("splitRight", &[(None, &["ctrl-shift-o"])]),
     ("splitDown", &[(None, &["ctrl-shift-e"])]),
     ("renameTab", &[(None, &["ctrl-shift-r"])]),
@@ -326,6 +327,31 @@ fn linux_keys(name: &str) -> Option<Keys> {
 
 pub fn find(name: &str) -> Option<&'static Act> {
     ACTIONS.iter().find(|a| a.name == name)
+}
+
+/// A new workspace (`tab` false) or a terminal tab in the focused pane
+/// (`tab` true) on the abromux server at `address` (src/servers.rs).
+#[derive(Clone, PartialEq, serde::Deserialize, gpui::Action)]
+#[action(namespace = abromux, no_json)]
+pub struct OnServer {
+    pub address: String,
+    pub tab: bool,
+}
+
+/// Forward `port` of the server at `address` (an offer: crate::forward).
+#[derive(Clone, PartialEq, serde::Deserialize, gpui::Action)]
+#[action(namespace = abromux, no_json)]
+pub struct ForwardOffer {
+    pub address: String,
+    pub port: u16,
+}
+
+/// Opens the workspaces the server at `address` keeps for this app that
+/// aren't open here (src/servers.rs).
+#[derive(Clone, PartialEq, serde::Deserialize, gpui::Action)]
+#[action(namespace = abromux, no_json)]
+pub struct OpenFromServer {
+    pub address: String,
 }
 
 /// Opens a new tab of plugin `id` (src/plugins.rs) in the focused pane.

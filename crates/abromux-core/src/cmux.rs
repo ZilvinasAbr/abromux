@@ -111,6 +111,9 @@ fn workspace(ws: &Value) -> Option<WorkspaceState> {
         color: str_of(ws, "customColor").and_then(crate::color::parse_rgb),
         group: None,
         home: None,
+        env: Default::default(),
+        host: None,
+        forwards: vec![],
         links: vec![],
         hidden_links: vec![],
         pinned: vec![],
@@ -193,6 +196,7 @@ fn tab(p: &Value, dir: &str) -> Option<TabState> {
                 name,
                 cwd,
                 held: None,
+                host: None,
                 surface: None,
                 edit: None,
             })

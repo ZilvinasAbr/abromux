@@ -188,6 +188,22 @@ pub fn rows(r: &Review, s: &Shape) -> Vec<Row> {
     for (fi, f) in r.files.iter().enumerate() {
         out.push(Row::File(fi));
         if !(s.folded)(f) {
+            // Threads on the whole file, and the one being written; on a
+            // picture they go under it (with those on its points), as GitLab's.
+            let file_threads = |out: &mut Vec<Row>| {
+                for (ti, (h, _, d)) in f.threads.iter().enumerate() {
+                    if *h == crate::review::FILE_THREAD && ((s.open)(&d.id) || !d.resolved()) {
+                        out.push(Row::Thread(fi, ti));
+                    }
+                }
+                if s.draft == Some((fi, None, None)) {
+                    out.push(Row::Draft(fi));
+                }
+            };
+            let binary = matches!(f.body(), Body::Binary);
+            if !binary {
+                file_threads(&mut out);
+            }
             match f.body() {
                 Body::Text(hunks) => {
                     // Unchanged lines can only come from the new file's text.
@@ -225,7 +241,9 @@ pub fn rows(r: &Review, s: &Shape) -> Vec<Row> {
                         // The new-thread form goes after its line's threads.
                         let draft_on = |li: usize| {
                             let l = &h.lines[li];
-                            s.draft == Some((fi, l.old, l.new))
+                            // A file comment (no line) is drawn under the header.
+                            (l.old.is_some() || l.new.is_some())
+                                && s.draft == Some((fi, l.old, l.new))
                         };
                         if s.parallel {
                             for (l, r) in crate::diff::pairs(&h.lines) {
@@ -266,7 +284,12 @@ pub fn rows(r: &Review, s: &Shape) -> Vec<Row> {
                         }
                     }
                 }
-                _ => out.push(Row::Message(fi)),
+                _ => {
+                    out.push(Row::Message(fi));
+                    if binary {
+                        file_threads(&mut out);
+                    }
+                }
             }
             // A folded file is its rounded header alone.
             out.push(Row::End(fi));
@@ -1069,6 +1092,37 @@ impl GitLabView {
             .overflow_hidden()
             .child(option("Inline", false, cx))
             .child(option("Side-by-side", true, cx))
+            // GitLab's "Show whitespace changes" (its diff settings).
+            .child({
+                let shown = !self.more.hide_whitespace;
+                div()
+                    .id("gl-whitespace")
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .h(px(32.))
+                    .px_3()
+                    .cursor_pointer()
+                    .text_color(c(TEXT))
+                    .bg(ca(0x89888d40))
+                    .hover(|s| s.bg(ca(0x89888d99)))
+                    .child(icon(
+                        if shown { "square-check" } else { "square" },
+                        14.,
+                        c(TEXT),
+                    ))
+                    .child("Whitespace")
+                    .tooltip(hint("Show whitespace changes"))
+                    .on_click(cx.listener(move |v, _, _, cx| v.set_whitespace(shown, cx)))
+            })
+    }
+
+    /// Hide (or show again) changes only in whitespace.
+    pub(crate) fn set_whitespace(&mut self, hide: bool, cx: &mut Context<Self>) {
+        if self.more.hide_whitespace != hide {
+            self.more.hide_whitespace = hide;
+            self.present(cx);
+        }
     }
 
     pub(crate) fn set_parallel(&mut self, parallel: bool, cx: &mut Context<Self>) {
@@ -1615,7 +1669,7 @@ impl GitLabView {
                 if matches!(r.files[fi].body(), Body::Binary) && is_image(r.files[fi].path()) =>
             {
                 // GitLab's "2-up": old on the left in red, new on the right in green.
-                let side = |s: &Shot, border: Option<u32>| {
+                let side = |s: &Shot, border: Option<u32>, overlay: Option<AnyElement>| {
                     let picture = match &s.image {
                         Some(i) => img(i.clone())
                             .max_w(px(400.))
@@ -1655,20 +1709,29 @@ impl GitLabView {
                         .gap_1()
                         .child(
                             div()
+                                .relative()
                                 .when_some(border, |d, b| d.border_1().border_color(c(b)))
-                                .child(picture),
+                                .child(picture)
+                                .children(overlay),
                         )
                         .child(caption)
                 };
                 let body = match self.pictures.get(&fi) {
                     Some(Load::Ready(p)) => match (&p.old, &p.new) {
-                        (Some(o), Some(n)) => div()
-                            .flex()
-                            .w_full()
-                            .justify_around()
-                            .child(side(o, Some(0xe5484d)))
-                            .child(side(n, Some(GREEN))),
-                        (Some(s), None) | (None, Some(s)) => side(s, None),
+                        (Some(o), Some(n)) => {
+                            let overlay = self.image_overlay(fi, &r, n.size, cx);
+                            div()
+                                .flex()
+                                .w_full()
+                                .justify_around()
+                                .child(side(o, Some(0xe5484d), None))
+                                .child(side(n, Some(GREEN), overlay))
+                        }
+                        (None, Some(s)) => {
+                            let overlay = self.image_overlay(fi, &r, s.size, cx);
+                            side(s, None, overlay)
+                        }
+                        (Some(s), None) => side(s, None, None),
                         (None, None) => div(),
                     },
                     Some(Load::Failed(e)) => div().text_color(c(RED)).child(e.text.clone()),
@@ -1968,6 +2031,8 @@ impl GitLabView {
                     .into_any_element();
                 let (t, h) = line_highlights(l);
                 let text = self.sel_text(t, h, Group::Diff(0), ix, cx);
+                // In the range a comment is being written on: marked as selected.
+                let selected = selected || self.in_comment_range(key);
                 let row = code_line_with(l, &mono, Some(gutter), selected, text);
                 card(div().child(self.hover_line(key, row, cx))).into_any_element()
             }
@@ -1990,13 +2055,17 @@ impl GitLabView {
                         d.border_l_1().border_r_1().border_color(c(BORDER))
                     })
                     .children(self.thread_notes(d, Some(&path), true, true, window, cx))
-                    .child(self.reply_bar(&d.id, d.resolvable(), d.resolved(), cx))
+                    .child(self.reply_bar(&d.id, d.resolvable(), d.resolved(), window, cx))
                     // GitLab's "Start another thread" on the same line, while
                     // none is being written there.
                     .when_some(
                         d.position()
                             .map(|p| (fi, p.old_line, p.new_line))
-                            .filter(|k| self.me.is_some() && self.commenting != Some(*k)),
+                            .filter(|k| {
+                                self.me.is_some()
+                                    && self.commenting != Some(*k)
+                                    && !d.id.starts_with("optimistic-draft-")
+                            }),
                         |el, key| {
                             el.child(
                                 div()
@@ -2073,7 +2142,7 @@ impl GitLabView {
             )
             .into_any_element(),
             Row::Draft(_) => {
-                let form = self.line_form(cx);
+                let form = self.line_form(window, cx);
                 if !self.loc.parallel {
                     return card(form).into_any_element();
                 }
@@ -2239,31 +2308,136 @@ impl GitLabView {
                         .child(f.threads.len().to_string()),
                 )
             })
-            // GitLab's "View file @ <sha>", from the header's menu.
-            .when_some(self.blob_url(f), |d, (url, short)| {
-                let tip: SharedString = format!("View file @ {short}").into();
-                d.child(
-                    div()
-                        .id(SharedString::from(format!("view-{fi}")))
-                        .ml_2()
-                        .size(px(28.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(6.))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(ca(0x89888d66)))
-                        .child(icon("external-link", 14., c(TEXT)))
-                        .tooltip(move |window, cx| {
-                            gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
-                        })
-                        .on_click(move |_, window, cx| abromux_plugin::open_url(&url, window, cx)),
-                )
-            })
+            // GitLab's "Comment on this file", on the latest version.
+            .when(
+                self.me.is_some()
+                    && self.loc.iid.is_some()
+                    && self.compare == crate::Compare::default(),
+                |d| {
+                    d.child(
+                        crate::edit::icon_button(
+                            SharedString::from(format!("file-comment-{fi}")),
+                            icon("comment-lines", 15., c(TEXT)),
+                            "Comment on this file",
+                        )
+                        .ml_1()
+                        .on_click(cx.listener(move |v, _, window, cx| {
+                            cx.stop_propagation();
+                            v.open_line_comment((fi, None, None), window, cx)
+                        })),
+                    )
+                },
+            )
+            // GitLab's "Show options": View file @ <sha>, Copy link to the
+            // file, Hide comments.
+            .child(self.file_options(f, fi, cx))
     }
 
     /// The file's page in GitLab at the shown head commit, and that commit's
     /// short sha. None for a deleted file.
+    fn file_options(&self, f: &File, fi: usize, cx: &mut Context<Self>) -> Div {
+        let open = self.more.file_menu == Some(fi);
+        let path = f.path().to_string();
+        let hidden = self.more.hidden_comments.contains(&path);
+        let blob = self.blob_url(f);
+        let link = self.shown().map(|r| {
+            format!(
+                "{}/diffs#{}",
+                r.mr.web_url,
+                sha1_smol::Sha1::from(&path).digest()
+            )
+        });
+        let item = |id: String, label: String| {
+            div()
+                .id(SharedString::from(id))
+                .px_3()
+                .py_1()
+                .cursor_pointer()
+                .hover(|s| s.bg(c(RAISED)))
+                .text_color(c(TEXT))
+                .child(label)
+        };
+        let close = |v: &mut GitLabView, cx: &mut Context<GitLabView>| {
+            v.more.file_menu = None;
+            cx.notify();
+        };
+        div()
+            .relative()
+            .ml_1()
+            .child(
+                crate::edit::icon_button(
+                    SharedString::from(format!("file-options-{fi}")),
+                    icon("ellipsis-v", 15., c(TEXT)),
+                    "Show options",
+                )
+                .on_click(cx.listener(move |v, _, _, cx| {
+                    cx.stop_propagation();
+                    v.more.file_menu = if v.more.file_menu == Some(fi) {
+                        None
+                    } else {
+                        Some(fi)
+                    };
+                    cx.notify();
+                })),
+            )
+            .when(open, |d| {
+                let p2 = path.clone();
+                d.child(
+                    deferred(
+                        div()
+                            .id(SharedString::from(format!("file-options-menu-{fi}")))
+                            .absolute()
+                            .top(px(30.))
+                            .right_0()
+                            .min_w(px(220.))
+                            .py_1()
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(c(BORDER))
+                            .bg(c(CARD))
+                            .shadow_lg()
+                            .occlude()
+                            .on_mouse_down_out(cx.listener(move |v, _, _, cx| close(v, cx)))
+                            .children(blob.map(|(url, short)| {
+                                item(format!("file-view-{fi}"), format!("View file @ {short}"))
+                                    .on_click(cx.listener(move |v, _, window, cx| {
+                                        close(v, cx);
+                                        abromux_plugin::open_url(&url, window, cx);
+                                    }))
+                            }))
+                            .children(link.map(|l| {
+                                item(format!("file-link-{fi}"), "Copy link to the file".into())
+                                    .on_click(cx.listener(move |v, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(l.clone()));
+                                        close(v, cx);
+                                    }))
+                            }))
+                            .child(
+                                item(
+                                    format!("file-hide-comments-{fi}"),
+                                    if hidden {
+                                        "Show comments"
+                                    } else {
+                                        "Hide comments"
+                                    }
+                                    .into(),
+                                )
+                                .on_click(cx.listener(
+                                    move |v, _, _, cx| {
+                                        if !v.more.hidden_comments.remove(&p2) {
+                                            v.more.hidden_comments.insert(p2.clone());
+                                        }
+                                        close(v, cx);
+                                        v.rebuild_rows(cx);
+                                    },
+                                )),
+                            ),
+                    )
+                    .with_priority(2),
+                )
+            })
+    }
+
     fn blob_url(&self, f: &File) -> Option<(String, String)> {
         let r = self.shown()?;
         if f.meta.deleted_file {
@@ -2329,11 +2503,15 @@ impl GitLabView {
                 .justify_center()
                 .cursor_pointer()
                 .child(icon("comment", 12., on_fill()))
-                .tooltip(hint("Add a comment to this line"))
-                .on_click(cx.listener(move |v, _, window, cx| {
+                .tooltip(hint(
+                    "Add a comment to this line (⇧-click: to the lines between)",
+                ))
+                .on_click(cx.listener(move |v, e: &ClickEvent, window, cx| {
                     // Not also the number's click under it (selecting the line).
                     cx.stop_propagation();
-                    if v.compare == crate::Compare::default() {
+                    if v.compare == crate::Compare::default()
+                        && !(e.modifiers().shift && v.extend_comment(key, cx))
+                    {
                         v.open_line_comment(key, window, cx)
                     }
                 })),
@@ -2600,9 +2778,96 @@ impl GitLabView {
         } else {
             self.loc.viewed.push(path.to_string());
         }
+        self.save_viewed();
         // Viewed folds the file, unviewed unfolds it.
         self.folded.remove(path);
         self.rebuild_rows(cx);
+    }
+
+    /// The merge request showing and its head commit, when its Viewed marks
+    /// are kept (`viewed.rs`; not a local diff's: git has no head for it).
+    fn viewed_key(&self, r: &Review) -> Option<(u64, u64, String)> {
+        if self.is_local() {
+            return None;
+        }
+        let head = r.mr.diff_refs.as_ref()?.head_sha.clone();
+        Some((r.mr.project_id, r.mr.iid, head)).filter(|k| !k.2.is_empty())
+    }
+
+    fn save_viewed(&mut self) {
+        let Some(r) = self.review.ready().cloned() else {
+            return;
+        };
+        if let Some((p, iid, head)) = self.viewed_key(&r) {
+            crate::viewed::set(&self.host(), p, iid, &head, &self.loc.viewed);
+            self.viewed_of = Some((p, iid));
+        }
+    }
+
+    /// `r` is about to show: its kept Viewed marks, less those on files a
+    /// push since changed (asked of GitLab, so they unmark a moment later).
+    pub(crate) fn restore_viewed(&mut self, r: &Review, cx: &mut Context<Self>) {
+        let Some((p, iid, head)) = self.viewed_key(r) else {
+            return;
+        };
+        let host = self.host();
+        let fresh = self.viewed_of != Some((p, iid));
+        let Some(kept) = crate::viewed::get(&host, p, iid) else {
+            // None kept: the tab's first merge request may bring its own,
+            // from a tab saved before they were kept; else there are none.
+            if self.viewed_of.is_none() {
+                crate::viewed::set(&host, p, iid, &head, &self.loc.viewed);
+            } else if fresh {
+                self.loc.viewed.clear();
+            }
+            self.viewed_of = Some((p, iid));
+            return;
+        };
+        self.viewed_of = Some((p, iid));
+        self.loc.viewed = kept.files.keys().cloned().collect();
+        let stale = kept.stale(&head);
+        if stale.is_empty() {
+            return;
+        }
+        let Some(c) = self.client.clone() else { return };
+        self._viewed_task = Some(cx.spawn(async move |this, cx| {
+            let h = host.clone();
+            let head2 = head.clone();
+            let changed = cx
+                .background_spawn(async move {
+                    stale
+                        .into_iter()
+                        .map(|from| {
+                            let files = c.compare(p, &from, &head2)?;
+                            let paths: Vec<String> = files
+                                .into_iter()
+                                .flat_map(|f| [f.old_path, f.new_path])
+                                .collect();
+                            anyhow::Ok((from, paths))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |v, cx| {
+                let mut now = None;
+                // One that fails (a commit GitLab no longer has) keeps its
+                // marks, to try again next time.
+                for (from, paths) in changed.into_iter().flatten() {
+                    now = Some(crate::viewed::moved(&h, p, iid, &from, &head, &paths));
+                }
+                let (Some(now), Some((_, _, shown))) = (
+                    now,
+                    v.review.ready().cloned().and_then(|r| v.viewed_key(&r)),
+                ) else {
+                    return;
+                };
+                if v.viewed_of == Some((p, iid)) && shown == head && now != v.loc.viewed {
+                    v.loc.viewed = now;
+                    v.rebuild_rows(cx);
+                }
+            })
+            .ok();
+        }));
     }
 
     /// Recompute the rows after folding or opening something, keeping the
@@ -2631,6 +2896,13 @@ impl GitLabView {
             draft: self.commenting,
         };
         let mut rows = rows(&r, &shape);
+        // A file's comments hidden (its "Hide comments").
+        if !self.more.hidden_comments.is_empty() {
+            rows.retain(|row| match row {
+                Row::Thread(f, _) => !self.more.hidden_comments.contains(r.files[*f].path()),
+                _ => true,
+            });
+        }
         // GitLab's "Show one file at a time": only the chosen file's rows.
         if let Some(only) = self.single_file {
             let only = only.min(r.files.len().saturating_sub(1));

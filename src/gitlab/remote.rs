@@ -82,13 +82,33 @@ pub fn discover(places: &[Place], host: &str) -> Vec<(String, Vec<String>)> {
     found.into_iter().collect()
 }
 
+/// A checkout in a workspace folder, as `.abromux/workspace.json` lists it
+/// (the workspace folders script writes it).
+#[derive(serde::Deserialize)]
+struct Checkout {
+    path: String,
+    #[serde(default)]
+    branch: Option<String>,
+}
+
+fn checkouts(home: &Path) -> Vec<Checkout> {
+    #[derive(serde::Deserialize)]
+    struct Meta {
+        #[serde(default)]
+        checkouts: Vec<Checkout>,
+    }
+    std::fs::read_to_string(home.join(".abromux/workspace.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Meta>(&t).ok())
+        .map(|m| m.checkouts)
+        .unwrap_or_default()
+}
+
 /// The places of a workspace: its folder's checkouts, and terminal cwds.
 pub fn places(home: Option<&Path>, cwds: &[String]) -> Vec<Place> {
     let mut out = vec![];
-    if let Some(home) = home
-        && let Some(meta) = crate::folder::read_meta(home)
-    {
-        for c in meta.checkouts {
+    if let Some(home) = home {
+        for c in checkouts(home) {
             out.push(Place {
                 dir: home.join(&c.path),
                 branch: c.branch,

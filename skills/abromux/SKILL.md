@@ -164,6 +164,9 @@ abromux list-notifications
 abromux mark-notification-read --workspace workspace:2   # or --id N, --all; dismiss-notification --id N | --all-read
 abromux tab-action --tab surface:7 close-others   # close-left/right, new-terminal-right, duplicate, rename <title>, mark-unread...
 abromux clear-history --surface surface:7    # like ⌘K
+abromux do script.lua key=value         # a Lua script: abromux.surface.split{...}, abromux.wait(event), abromux.exec{...}; prints its result as JSON
+abromux do -e 'return abromux.workspace.current{}'   # Lua inline; better than chaining many calls in bash
+abromux <action> [words] [--key value]   # an action from the user's init.lua as a command (e.g. `abromux folder add <path>` from the workspace folders script)
 abromux rpc <method> '<json>'            # raw socket call
 abromux rpc list                         # every socket method; rpc describe <method> for its parameters (JSON Schema)
 ```

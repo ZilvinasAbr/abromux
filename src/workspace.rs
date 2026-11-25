@@ -35,6 +35,7 @@ impl Surface {
                 _ => "terminal",
             },
             Surface::Browser(b) if b.read(cx).markdown => "markdown",
+            Surface::Browser(b) if b.read(cx).chat.is_some() => "claude",
             Surface::Browser(_) => "globe",
             Surface::Plugin(p) => p.icon(cx),
         }
@@ -42,7 +43,15 @@ impl Surface {
 
     /// Claude Code is working in it; its logo turns.
     pub fn claude_running(&self, cx: &App) -> bool {
-        matches!(self, Surface::Terminal(t) if t.read(cx).claude_running())
+        match self {
+            Surface::Terminal(t) => t.read(cx).claude_running(),
+            Surface::Browser(b) => b
+                .read(cx)
+                .chat
+                .as_ref()
+                .is_some_and(|c| c.state == crate::claude_chat::State::Running),
+            Surface::Plugin(_) => false,
+        }
     }
 
     pub fn title(&self, cx: &App) -> String {
@@ -63,6 +72,9 @@ impl Surface {
             }
             Surface::Browser(b) => {
                 let b = b.read(cx);
+                if let Some(chat) = &b.chat {
+                    return chat.topic.clone().unwrap_or_else(|| "Claude".into());
+                }
                 if !b.title.is_empty() {
                     b.title.clone()
                 } else if let Some(name) = crate::markdown::title_of(&b.url) {
@@ -125,8 +137,18 @@ impl Surface {
     pub fn cwd(&self, cx: &App) -> Option<String> {
         match self {
             Surface::Terminal(t) => Some(t.read(cx).cwd.clone()),
-            Surface::Browser(_) | Surface::Plugin(_) => None,
+            Surface::Browser(b) => b
+                .read(cx)
+                .chat
+                .as_ref()
+                .map(|c| c.cwd.to_string_lossy().into_owned()),
+            Surface::Plugin(_) => None,
         }
+    }
+
+    /// A terminal running on another machine: its folder is that one's.
+    pub fn is_remote(&self, cx: &App) -> bool {
+        matches!(self, Surface::Terminal(t) if t.read(cx).host.is_some())
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
@@ -411,8 +433,16 @@ pub struct Workspace {
     /// The id of the [`Group`] it's in. A group's workspaces sit together
     /// in the sidebar; [`tidy_groups`] keeps them so.
     pub group: Option<usize>,
-    /// Its workspace folder (⇧⌘I, [`crate::folder`]), if it has one.
+    /// Its folder, if it was made with one (`workspace.create`'s `folder`,
+    /// as the workspace folders script does): `$ABROMUX_WORKSPACE_DIR` in its
+    /// terminals, and where files and repos are looked for first.
     pub home: Option<std::path::PathBuf>,
+    /// Environment variables its new terminals get (`workspace.create`'s
+    /// `env`).
+    pub env: std::collections::BTreeMap<String, String>,
+    /// The server on another machine its new terminals start on
+    /// (`ssh://host`, `abromux new-workspace --host`); None for this one.
+    pub host: Option<String>,
     pub root: Node,
     pub focused_pane: usize,
     /// The pane filling the workspace (⌘⇧↩), hiding the others. Only holds
@@ -491,6 +521,8 @@ impl Workspace {
             color: None,
             group: None,
             home: None,
+            env: Default::default(),
+            host: None,
             root,
             focused_pane,
             zoom: None,
@@ -812,6 +844,17 @@ impl Workspace {
 
     /// Name when not renamed: the title a program (e.g. an agent) set on the
     /// focused terminal, or any terminal, else the cwd's folder name.
+    /// Its folder when that's on this machine: not for a workspace on
+    /// another machine, or whose focused tab is (a path there may not
+    /// exist here, and looking it up can be slow: macOS's `/home` is an
+    /// automount point).
+    pub fn local_cwd(&self, cx: &App) -> Option<String> {
+        if self.host.is_some() || self.focused_surface().is_some_and(|s| s.is_remote(cx)) {
+            return None;
+        }
+        self.cwd(cx)
+    }
+
     pub fn auto_name(&self, cx: &App) -> String {
         let title = |s: &Surface| match s {
             Surface::Terminal(t) => {

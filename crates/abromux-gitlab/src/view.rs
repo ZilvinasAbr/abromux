@@ -197,6 +197,21 @@ pub struct GitLabView {
     /// Writing (edit.rs): the text fields, a write under way, the last
     /// one's error, the thread being replied to, the line being commented on.
     pub(crate) boxes: crate::edit::Boxes,
+    /// actions.rs: suggestions' batch, the Code menu, merge messages, revert.
+    pub(crate) more: crate::actions::More,
+    /// context.rs: "Add previously merged commits".
+    pub(crate) context: crate::context::ContextState,
+    /// bulk.rs: the list's Bulk edit and Actions.
+    pub(crate) bulk: crate::bulk::BulkState,
+    /// jobs.rs: the Pipelines tab's jobs.
+    pub(crate) jobs: crate::jobs::JobsState,
+    /// duo.rs: what GitLab Duo is doing, and whether this host has Duo.
+    pub(crate) duo: crate::duo::DuoState,
+    pub(crate) duo_seen: bool,
+    /// reports.rs: the report widgets opened, the report picked.
+    pub(crate) reports: crate::reports::ReportsState,
+    /// create.rs: "New merge request".
+    pub(crate) new_mr: crate::create::NewMr,
     pub(crate) busy: Option<crate::edit::Write>,
     pub(crate) writes: crate::edit::Writes,
     /// The Overview's "Add reaction" picker is open.
@@ -241,6 +256,10 @@ pub struct GitLabView {
     _list_task: Option<Task<()>>,
     _review_task: Option<Task<()>>,
     _replay_task: Option<Task<()>>,
+    /// The merge request whose Viewed marks `loc.viewed` holds, and the
+    /// check of which of them a newer push changed (`viewed.rs`).
+    pub(crate) viewed_of: Option<(u64, u64)>,
+    pub(crate) _viewed_task: Option<Task<()>>,
     /// The `cache::Shared` generation of the review showing (0: its own).
     review_serial: u64,
     refreshing: bool,
@@ -261,6 +280,24 @@ impl GitLabView {
         cx.subscribe(&tree_search, |_, _, _: &InputEvent, cx| cx.notify())
             .detach();
         let boxes = crate::edit::Boxes::new(window, cx);
+        let more = crate::actions::More::new(window, cx);
+        let new_mr = crate::create::NewMr::new(window, cx);
+        let context = crate::context::ContextState::new(window, cx);
+        let bulk = crate::bulk::BulkState::new(window, cx);
+        let duo = crate::duo::DuoState::new(window, cx);
+        // Boxes whose rich text mode renders as you type.
+        for b in [
+            boxes.description.clone(),
+            boxes.note.clone(),
+            new_mr.description.clone(),
+        ] {
+            cx.subscribe(&b, |_, _, _: &InputEvent, cx| cx.notify())
+                .detach();
+        }
+        for b in [new_mr.source.clone(), new_mr.target.clone()] {
+            cx.subscribe(&b, |_, _, _: &InputEvent, cx| cx.notify())
+                .detach();
+        }
         use crate::mention::Field;
         for (b, field) in [
             (&boxes.comment, Field::Comment),
@@ -270,7 +307,10 @@ impl GitLabView {
             cx.subscribe(b, move |v, _, ev: &InputEvent, cx| {
                 match ev {
                     // `@name` being typed lists who it could be.
-                    InputEvent::Change => v.update_mention(field, cx),
+                    InputEvent::Change => {
+                        v.update_mention(field, cx);
+                        v.update_slash(field, cx);
+                    }
                     InputEvent::Blur if v.mention.as_ref().is_some_and(|m| m.field == field) => {
                         v.mention = None
                     }
@@ -297,6 +337,16 @@ impl GitLabView {
         // A merge request's link pasted into it opens it; on the Projects
         // tab, what's typed searches GitLab's projects.
         cx.subscribe_in(&list_search, window, |v, s, ev: &InputEvent, window, cx| {
+            // A search left (Enter, or the field losing the keys) is
+            // remembered, as GitLab's recent searches.
+            if matches!(ev, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                let text = s.read(cx).value().trim().to_string();
+                if !text.is_empty() {
+                    v.bulk.history.retain(|h| *h != text);
+                    v.bulk.history.insert(0, text);
+                    v.bulk.history.truncate(5);
+                }
+            }
             if matches!(ev, InputEvent::Change) {
                 let text = s.read(cx).value().trim().to_string();
                 if v.open_link(&text, window, cx) {
@@ -310,6 +360,14 @@ impl GitLabView {
         .detach();
         let mut v = Self {
             boxes,
+            more,
+            context,
+            bulk,
+            jobs: Default::default(),
+            duo,
+            duo_seen: false,
+            reports: Default::default(),
+            new_mr,
             busy: None,
             writes: Default::default(),
             emoji_picker: None,
@@ -397,6 +455,8 @@ impl GitLabView {
             _list_task: None,
             _review_task: None,
             _replay_task: None,
+            viewed_of: None,
+            _viewed_task: None,
             review_serial: 0,
             refreshing: false,
             _sign_in_task: None,
@@ -1167,7 +1227,7 @@ impl GitLabView {
             }
         }
         // Typing in a comment: the keys are the text's.
-        if self.boxes.typing(window, cx) {
+        if self.boxes.typing(window, cx) || self.more_typing(window, cx) {
             if k.key == "escape" && self.side_menu.is_some() {
                 self.close_side_menu(window, cx);
                 return;
@@ -1286,6 +1346,7 @@ impl GitLabView {
                 .as_ref()
                 .is_some_and(|(host, token)| focused(host) || focused(token))
             || self.boxes.typing(window, cx)
+            || self.more_typing(window, cx)
     }
 
     /// Draw GitLab tabs at `z` times GitLab's sizes (all of them: the zoom
@@ -1304,22 +1365,30 @@ impl GitLabView {
         }
     }
 
-    fn refresh(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
         match (self.loc.project, self.loc.iid) {
             (Some(p), Some(iid)) => self.fetch_review(Target::Id(p, iid), true, cx),
             _ => self.load_list(cx),
         }
     }
 
-    /// Every two minutes, the merge request showing is fetched again,
-    /// quietly: new comments and pushes appear as on GitLab's page.
+    /// Every two minutes (times the app's polling setting; never when it's
+    /// off), the merge request showing is fetched again, quietly: new
+    /// comments and pushes appear as on GitLab's page.
     fn poll(cx: &mut Context<Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
+            let mut last = std::time::Instant::now();
             loop {
+                // A short tick, so a changed setting applies within seconds.
                 cx.background_executor()
-                    .timer(std::time::Duration::from_secs(120))
+                    .timer(std::time::Duration::from_secs(10))
                     .await;
+                let every = crate::cache::poll_factor()
+                    .map(|f| std::time::Duration::from_secs_f64(120. * f));
+                let due = every.filter(|e| last.elapsed() >= *e);
                 let alive = this.update(cx, |v, cx| {
+                    let Some(every) = due else { return };
+                    last = std::time::Instant::now();
                     if let (Some(p), Some(iid), Some(_)) =
                         (v.loc.project, v.loc.iid, v.review.ready())
                     {
@@ -1329,7 +1398,8 @@ impl GitLabView {
                             .and_then(|s| s.get(&v.host(), p, iid))
                             .is_some_and(|e| {
                                 !e.replayed
-                                    && e.fetched.elapsed() < std::time::Duration::from_secs(110)
+                                    && e.fetched.elapsed()
+                                        < every.saturating_sub(std::time::Duration::from_secs(10))
                             });
                         if !fresh {
                             v.fetch_review(Target::Id(p, iid), true, cx);
@@ -1427,6 +1497,7 @@ impl GitLabView {
                 Section::Overview => r.mr.web_url.clone(),
                 Section::Commits => format!("{}/commits", r.mr.web_url),
                 Section::Pipelines => format!("{}/pipelines", r.mr.web_url),
+                Section::Reports => format!("{}/reports", r.mr.web_url),
                 Section::Changes => format!("{}/diffs", r.mr.web_url),
             },
             _ => format!("{}/dashboard/merge_requests", self.host()),
@@ -1529,7 +1600,7 @@ impl GitLabView {
             .clone())
     }
 
-    fn file_index(&self, path: &str) -> anyhow::Result<usize> {
+    pub(crate) fn file_index(&self, path: &str) -> anyhow::Result<usize> {
         let r = self.shown().context("no merge request loaded")?;
         r.files
             .iter()
@@ -1611,6 +1682,34 @@ impl Tab for GitLabView {
                 "error": self.review.error().map(|e| &e.text),
                 "summary": r.map(|r| r.summary()),
                 // GitLab's "Stacked merge requests", bottom first, and its dropdown.
+                "boxes": json!({
+                    "comment": self.boxes.comment.read(cx).value().to_string(),
+                    "line": self.boxes.line.read(cx).value().to_string(),
+                    "previewing": self.more.previewing.iter().map(|b| format!("{b:?}")).collect::<Vec<_>>(),
+                    "quick_actions": self.more.slash.as_ref().map(|q| crate::slash::matches(&q.query).iter().map(|(c, ..)| format!("/{c}")).collect::<Vec<_>>()),
+                }),
+                "duo": r.map(|r| json!({
+                    "available": r.premium.duo,
+                    "busy": self.duo.busy,
+                    "error": self.duo.error,
+                    "answers": self.duo.answers.iter().map(|(q, a)| json!({ "q": q, "a": a })).collect::<Vec<_>>(),
+                    "summary": self.more.summary.read(cx).value().to_string(),
+                    "merge_message": self.more.merge_msg.read(cx).value().to_string(),
+                })),
+                "actions": r.map(|r| json!({
+                    "todo": !r.todos.is_empty(),
+                    "subscribed": r.mr.subscribed,
+                    "locked": r.mr.discussion_locked,
+                    "batch": self.more.batch,
+                    "code_menu": self.more.code_menu,
+                    "edit_message": self.more.edit_message,
+                    "picked": self.more.picked,
+                    "suggestions": r.files.iter()
+                        .flat_map(|f| f.threads.iter().map(|(_, _, d)| d))
+                        .flat_map(|d| d.notes.iter().flat_map(|n| n.suggestions.iter()))
+                        .map(|s| json!({ "id": s.id, "applied": s.applied, "appliable": s.appliable }))
+                        .collect::<Vec<_>>(),
+                })),
                 "stack": r.map(|r| r.stack.iter().map(|m| json!({ "iid": m.iid, "title": m.title, "files": m.files, "additions": m.additions, "deletions": m.deletions })).collect::<Vec<_>>()),
                 "stack_menu": self.stack_menu,
             },
@@ -1686,6 +1785,65 @@ impl Tab for GitLabView {
                 self.merge(auto, window, cx);
             }
             "cancel_auto_merge" => self.cancel_auto_merge(window, cx),
+            // actions.rs: what's beyond reviewing.
+            "apply_suggestion" => {
+                let id = num_arg("id").context("missing id")?;
+                if let Some(m) = str_arg("message") {
+                    let m = m.to_string();
+                    self.more
+                        .suggestion_msg
+                        .update(cx, |b, cx| b.set_value(m, window, cx));
+                }
+                self.apply_suggestions(vec![id], window, cx);
+            }
+            "batch_suggestion" => self.toggle_batch(num_arg("id").context("missing id")?, cx),
+            "apply_batch" => {
+                let ids = self.more.batch.clone();
+                self.apply_suggestions(ids, window, cx);
+            }
+            "todo" => self.toggle_todo(window, cx),
+            "subscribe" => self.set_subscribed(
+                args.get("on").and_then(Value::as_bool).unwrap_or(true),
+                window,
+                cx,
+            ),
+            "lock" => self.set_locked(
+                args.get("on").and_then(Value::as_bool).unwrap_or(true),
+                window,
+                cx,
+            ),
+            "code_menu" => {
+                self.more.code_menu = args.get("on").and_then(Value::as_bool).unwrap_or(true)
+            }
+            "merge_message" => {
+                self.more.edit_message = args.get("on").and_then(Value::as_bool).unwrap_or(true);
+                for (k, b) in [
+                    ("merge", self.more.merge_msg.clone()),
+                    ("squash", self.more.squash_msg.clone()),
+                ] {
+                    if let Some(t) = str_arg(k) {
+                        let t = t.to_string();
+                        b.update(cx, |b, cx| b.set_value(t, window, cx));
+                    }
+                }
+            }
+            // `{"cherry": bool, "branch": "main", "new_mr": bool, "go": bool}`
+            "pick" => {
+                let cherry = args.get("cherry").and_then(Value::as_bool).unwrap_or(false);
+                self.more.pick = Some(crate::actions::Pick {
+                    cherry,
+                    new_mr: args.get("new_mr").and_then(Value::as_bool).unwrap_or(true),
+                });
+                if let Some(b) = str_arg("branch") {
+                    let b = b.to_string();
+                    self.more
+                        .branch
+                        .update(cx, |x, cx| x.set_value(b, window, cx));
+                }
+                if args.get("go").and_then(Value::as_bool).unwrap_or(false) {
+                    self.run_pick(window, cx);
+                }
+            }
             "close" => self.set_open(false, window, cx),
             "reopen" => self.set_open(true, window, cx),
             "draft" => self.set_draft(
@@ -1704,6 +1862,18 @@ impl Tab for GitLabView {
                     self.boxes
                         .description
                         .update(cx, |b, cx| b.set_value(d.to_string(), window, cx));
+                }
+                if let Some(t) = str_arg("target") {
+                    let t = t.to_string();
+                    self.more
+                        .edit_target
+                        .update(cx, |b, cx| b.set_value(t, window, cx));
+                }
+                if let Some(on) = args.get("squash").and_then(Value::as_bool) {
+                    self.more.edit_squash = on;
+                }
+                if let Some(on) = args.get("remove_source_branch").and_then(Value::as_bool) {
+                    self.more.edit_remove = on;
                 }
                 if args.get("save").and_then(Value::as_bool).unwrap_or(true) {
                     self.save_mr(window, cx);
@@ -1925,6 +2095,12 @@ impl Tab for GitLabView {
             }
             // Writing, as the buttons do: fill the box, then press it.
             "comment" => {
+                if let Some(t) = args.get("thread").and_then(Value::as_bool) {
+                    self.more.start_thread = t;
+                }
+                if let Some(t) = args.get("internal").and_then(Value::as_bool) {
+                    self.more.internal = t;
+                }
                 let body = str_arg("body").context("missing body")?.to_string();
                 self.boxes
                     .comment
@@ -1951,7 +2127,298 @@ impl Tab for GitLabView {
                 let resolved = args.get("resolved").and_then(Value::as_bool) != Some(false);
                 self.set_resolved(&id, resolved, window, cx);
             }
-            "submit_review" => self.submit_review(window, cx),
+            // `{"verdict": "comment" | "approve" | "request_changes", "summary": "…"}`;
+            // without either, as before: just the pending comments.
+            "submit_review" => match (str_arg("verdict"), str_arg("summary")) {
+                (None, None) => self.submit_review(window, cx),
+                (v, summary) => {
+                    use crate::actions::Verdict;
+                    let verdict = match v.unwrap_or("comment") {
+                        "approve" => Verdict::Approve,
+                        "request_changes" => Verdict::RequestChanges,
+                        _ => Verdict::Comment,
+                    };
+                    let summary = summary.unwrap_or("").to_string();
+                    self.more
+                        .summary
+                        .update(cx, |b, cx| b.set_value(summary, window, cx));
+                    self.submit_review_as(verdict, window, cx);
+                }
+            },
+            "review_panel" => {
+                self.more.review_panel = args.get("on").and_then(Value::as_bool).unwrap_or(true)
+            }
+            "reply_to_review" => {
+                let id = str_arg("thread").context("missing thread")?.to_string();
+                self.open_reply(&id, window, cx);
+                let body = str_arg("body").unwrap_or("").to_string();
+                self.boxes
+                    .reply
+                    .update(cx, |b, cx| b.set_value(body, window, cx));
+                self.reply_to_review(window, cx);
+            }
+            "comment_to_review" => {
+                let body = str_arg("body").unwrap_or("").to_string();
+                self.boxes
+                    .comment
+                    .update(cx, |b, cx| b.set_value(body, window, cx));
+                self.comment_to_review(window, cx);
+            }
+            // The editor: `{"box": "comment", "op": "bold"}`, `{"box": …, "preview": true}`.
+            "md" => {
+                let b = crate::compose::MdBox::parse(str_arg("box").unwrap_or("comment"))
+                    .context("box is comment, reply, line, note or description")?;
+                if let Some(on) = args.get("rich").and_then(Value::as_bool) {
+                    if on {
+                        self.more.rich.insert(b);
+                    } else {
+                        self.more.rich.remove(&b);
+                    }
+                }
+                if let Some(on) = args.get("preview").and_then(Value::as_bool) {
+                    if on {
+                        self.more.previewing.insert(b);
+                    } else {
+                        self.more.previewing.remove(&b);
+                    }
+                }
+                if let Some(t) = str_arg("text") {
+                    let t = t.to_string();
+                    // The cursor at the end, as after typing it.
+                    let line = t.matches('\n').count() as u32;
+                    let col = t.rsplit('\n').next().unwrap_or("").chars().count() as u32;
+                    self.md_entity(b).update(cx, |s, cx| {
+                        s.set_value(t, window, cx);
+                        s.set_cursor_position(
+                            gpui_component::input::Position::new(line, col),
+                            window,
+                            cx,
+                        );
+                    });
+                }
+                if let Some(op) = str_arg("op") {
+                    let md = crate::compose::Md::parse(op).context("unknown op")?;
+                    self.md_apply(b, md, window, cx);
+                }
+            }
+            "rerequest" => {
+                let name = str_arg("username").context("missing username")?;
+                let r = self.review.ready().context("no merge request loaded")?;
+                let u =
+                    r.mr.reviewers
+                        .iter()
+                        .find(|u| u.username == name)
+                        .cloned()
+                        .context("not a reviewer")?;
+                self.rerequest(&u, window, cx);
+            }
+            // `{"duration": "1h 30m", "summary": "…", "estimate": false}`
+            "time" => {
+                let d = str_arg("duration").context("missing duration")?.to_string();
+                let sum = str_arg("summary").unwrap_or("").to_string();
+                self.more
+                    .time_spent
+                    .update(cx, |b, cx| b.set_value(d, window, cx));
+                self.more
+                    .time_summary
+                    .update(cx, |b, cx| b.set_value(sum, window, cx));
+                let estimate = args
+                    .get("estimate")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                self.save_time(estimate, window, cx);
+            }
+            // `{"source": "b", "target": "main", "title": "…", "create": true}`
+            "new_mr" => {
+                if self.new_mr.project.is_none() {
+                    self.open_new_mr(window, cx);
+                }
+                for (k, e) in [
+                    ("source", self.new_mr.source.clone()),
+                    ("target", self.new_mr.target.clone()),
+                    ("title", self.new_mr.title.clone()),
+                    ("description", self.new_mr.description.clone()),
+                ] {
+                    if let Some(t) = str_arg(k) {
+                        let t = t.to_string();
+                        e.update(cx, |b, cx| b.set_value(t, window, cx));
+                    }
+                }
+                if let Some(d) = args.get("draft").and_then(Value::as_bool) {
+                    self.new_mr.draft = d;
+                }
+                if args.get("create").and_then(Value::as_bool) == Some(true) {
+                    self.create_mr(window, cx);
+                }
+            }
+            "whitespace" => {
+                let show = args.get("show").and_then(Value::as_bool).unwrap_or(true);
+                self.set_whitespace(!show, cx);
+            }
+            // GitLab's "Comment on this file": `{"path": "a.rs", "body": "…", "review": false}`
+            "file_comment" => {
+                let fi = self.file_index(str_arg("path").context("missing path")?)?;
+                self.open_line_comment((fi, None, None), window, cx);
+                if let Some(body) = str_arg("body") {
+                    let body = body.to_string();
+                    self.boxes
+                        .line
+                        .update(cx, |b, cx| b.set_value(body, window, cx));
+                    let draft = args.get("review").and_then(Value::as_bool) == Some(true);
+                    self.send_line_comment(draft, window, cx);
+                }
+            }
+            "task" => {
+                let n = num_arg("n").context("missing n")? as usize;
+                let done = args.get("done").and_then(Value::as_bool).unwrap_or(true);
+                self.toggle_task(n, done, window, cx);
+            }
+            // Upload files into a box: `{"box": "comment", "paths": ["/tmp/a.png"]}`.
+            "attach" => {
+                let b = crate::compose::MdBox::parse(str_arg("box").unwrap_or("comment"))
+                    .context("box is comment, reply, line, note or description")?;
+                let paths = args
+                    .get("paths")
+                    .and_then(Value::as_array)
+                    .context("missing paths")?
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                self.upload_files(b, paths, window, cx);
+            }
+            // The report widgets and the Reports tab: `{"pick": "tests", "quality_open": true, "tests_open": true}`.
+            "reports" => {
+                if let Some(p) = str_arg("pick") {
+                    self.reports.pick = if p == "tests" {
+                        crate::reports::Pick::Tests
+                    } else {
+                        crate::reports::Pick::Quality
+                    };
+                }
+                if let Some(o) = args.get("quality_open").and_then(Value::as_bool) {
+                    self.reports.quality_open = o;
+                }
+                if let Some(o) = args.get("tests_open").and_then(Value::as_bool) {
+                    self.reports.tests_open = o;
+                }
+                self.rebuild_rows(cx);
+            }
+            // A click on the new image: `{"path": "a.png", "x": 10, "y": 20, "body": "…", "review": false}`.
+            "image_comment" => {
+                let fi = self.file_index(str_arg("path").context("missing path")?)?;
+                let size = match self.pictures.get(&fi) {
+                    Some(Load::Ready(p)) => p.new.as_ref().and_then(|s| s.size),
+                    _ => None,
+                }
+                .context("the image isn't loaded (scroll to it first)")?;
+                let (x, y) = (
+                    num_arg("x").context("missing x")? as u32,
+                    num_arg("y").context("missing y")? as u32,
+                );
+                self.open_line_comment((fi, None, None), window, cx);
+                self.more.image_point = Some((fi, x, y, size.0, size.1));
+                if let Some(body) = str_arg("body") {
+                    let body = body.to_string();
+                    self.boxes
+                        .line
+                        .update(cx, |b, cx| b.set_value(body, window, cx));
+                    let draft = args.get("review").and_then(Value::as_bool) == Some(true);
+                    self.send_line_comment(draft, window, cx);
+                }
+            }
+            "dependency" => {
+                if let Some(t) = str_arg("add") {
+                    let t = t.to_string();
+                    self.more
+                        .dependency
+                        .update(cx, |b, cx| b.set_value(t, window, cx));
+                    self.add_dependency(window, cx);
+                }
+                if let Some(id) = num_arg("remove") {
+                    self.remove_dependency(id, window, cx);
+                }
+            }
+            // GitLab Duo: `{"action": "review" | "summarize" | "commit" | "describe" | "ask", "text": "…"}`.
+            "duo" => match str_arg("action").unwrap_or("") {
+                "review" => self.request_duo_review(window, cx),
+                "summarize" => self.duo_summarize_review(window, cx),
+                "commit" => self.duo_commit_message(window, cx),
+                "describe" => self.duo_describe_new_mr(window, cx),
+                "ask" => {
+                    self.duo.chat_open = true;
+                    if let Some(t) = str_arg("text") {
+                        let t = t.to_string();
+                        self.duo.ask.update(cx, |b, cx| b.set_value(t, window, cx));
+                        self.duo_ask(window, cx);
+                    }
+                }
+                _ => bail!("action is review, summarize, commit, describe or ask"),
+            },
+            // The Pipelines tab: `{"failed": 157}` opens a pipeline's failed jobs,
+            // `{"retry": 161, "pipeline": 157}` retries a job.
+            "jobs" => {
+                if let Some(p) = num_arg("failed") {
+                    self.jobs.failed_open.insert(p);
+                }
+                if let (Some(j), Some(p)) = (num_arg("retry"), num_arg("pipeline")) {
+                    self.retry_job(p, j, window, cx);
+                }
+            }
+            // Bulk edit: `{"pick": [[project, iid], …], "value": "docs", "do": "add_label"}`.
+            "bulk" => {
+                use crate::bulk::Bulk;
+                self.bulk.on = true;
+                if let Some(list) = args.get("pick").and_then(Value::as_array) {
+                    self.bulk.picked = list
+                        .iter()
+                        .filter_map(|x| Some((x.get(0)?.as_u64()?, x.get(1)?.as_u64()?)))
+                        .collect();
+                }
+                if let Some(t) = str_arg("value") {
+                    let t = t.to_string();
+                    self.bulk
+                        .value
+                        .update(cx, |b, cx| b.set_value(t, window, cx));
+                }
+                if let Some(what) = str_arg("do") {
+                    let w = match what {
+                        "close" => Bulk::Close,
+                        "reopen" => Bulk::Reopen,
+                        "add_label" => Bulk::AddLabel,
+                        "remove_label" => Bulk::RemoveLabel,
+                        "milestone" => Bulk::Milestone,
+                        "no_milestone" => Bulk::NoMilestone,
+                        "assign_me" => Bulk::AssignMe,
+                        "subscribe" => Bulk::Subscribe,
+                        "unsubscribe" => Bulk::Unsubscribe,
+                        _ => bail!("unknown bulk action"),
+                    };
+                    self.run_bulk(w, window, cx);
+                }
+            }
+            // Context commits: `{"add": ["sha", …]}` or `{"remove": "sha"}`.
+            "context" => {
+                if let Some(list) = args.get("add").and_then(Value::as_array) {
+                    self.context.ticked = list
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect();
+                    self.save_context(None, window, cx);
+                }
+                if let Some(s) = str_arg("remove") {
+                    self.save_context(Some(s.to_string()), window, cx);
+                }
+                if args.get("open").and_then(Value::as_bool) == Some(true) {
+                    self.open_context(window, cx);
+                }
+            }
+            "per_page" => {
+                self.loc.per_page = num_arg("n").map(|n| n as usize);
+                self.bulk.page = num_arg("page").unwrap_or(0) as usize;
+            }
+            "delete_draft" => self.delete_draft(num_arg("id").context("missing id")?, window, cx),
             "approve" => {
                 let approve = args.get("approve").and_then(Value::as_bool) != Some(false);
                 self.set_approved(approve, window, cx);
@@ -1988,6 +2455,29 @@ impl Tab for GitLabView {
                     .context("no such line in the diff")?;
                 let key = (fi, line.old, line.new);
                 self.open_line_comment(key, window, cx);
+                // `from_new` / `from_old`: the range's first line.
+                let from = match (num_arg("from_new"), num_arg("from_old")) {
+                    (Some(n), _) => Some((Some(n as u32), true)),
+                    (None, Some(o)) => Some((Some(o as u32), false)),
+                    _ => None,
+                };
+                if let Some((n, new_side)) = from {
+                    let r = self.shown().context("no merge request loaded")?;
+                    let l = r.files[fi]
+                        .body()
+                        .hunks()
+                        .iter()
+                        .flat_map(|h| &h.lines)
+                        .find(|l| {
+                            if new_side {
+                                l.new == n
+                            } else {
+                                l.old == n && l.new.is_none()
+                            }
+                        })
+                        .context("no such first line")?;
+                    self.more.range_from = Some((fi, l.old, l.new));
+                }
                 if let Some(body) = str_arg("body") {
                     self.boxes
                         .line
@@ -2377,7 +2867,7 @@ impl GitLabView {
         )
     }
 
-    fn list_page(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn list_page(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let mono = self.mono(cx);
         let scopes = [
             (ListScope::ToReview, "Reviews"),
@@ -2468,6 +2958,30 @@ impl GitLabView {
         };
         let now = time::now();
         let query = self.list_search.read(cx).value().trim().to_lowercase();
+        // Bulk edit and Actions work on the merge requests the filter leaves.
+        let filtered: Vec<MergeRequest> = self
+            .list
+            .ready()
+            .map(|mrs| {
+                mrs.iter()
+                    .filter(|m| crate::filter::matches(m, &query))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let project_url = self
+            .loc
+            .browse
+            .as_ref()
+            .map(|b| format!("{}/{}", self.host().trim_end_matches('/'), b.path));
+        let all: Vec<(u64, u64)> = filtered.iter().map(|m| (m.project_id, m.iid)).collect();
+        let pager = self.list_pager(filtered.len(), cx);
+        let tools = self.list_tools(project_url, filtered, cx);
+        let bulk_bar = if projects {
+            None
+        } else {
+            self.bulk_bar(all, cx)
+        };
         let empty = match self.loc.state {
             MrState::Opened => "No open merge requests here.",
             MrState::Merged => "No merged merge requests here.",
@@ -2492,22 +3006,10 @@ impl GitLabView {
                             .into_any_element(),
                     ];
                 }
-                // The filter: words that must all be in the title, reference, author or branches.
+                // The filter: words and GitLab's tokens (filter.rs).
                 let mut shown: Vec<&MergeRequest> = mrs
                     .iter()
-                    .filter(|m| {
-                        let hay = format!(
-                            "{} {} {} {} {} {}",
-                            m.title,
-                            m.references.full,
-                            m.author.name,
-                            m.author.username,
-                            m.source_branch,
-                            m.target_branch
-                        )
-                        .to_lowercase();
-                        query.split_whitespace().all(|w| hay.contains(w))
-                    })
+                    .filter(|m| crate::filter::matches(m, &query))
                     .collect();
                 if shown.is_empty() {
                     return vec![
@@ -2521,10 +3023,19 @@ impl GitLabView {
                     ];
                 }
                 self.loc.sort.apply(&mut shown, self.loc.ascending);
+                // GitLab's pages, when picked.
+                if let Some(n) = self.loc.per_page.filter(|n| *n > 0) {
+                    let page = self.bulk.page.min(shown.len().saturating_sub(1) / n);
+                    let start = (page * n).min(shown.len());
+                    let end = (start + n).min(shown.len());
+                    shown = shown[start..end].to_vec();
+                }
                 shown
                     .into_iter()
                     .map(|m| {
                         let (p, iid) = (m.project_id, m.iid);
+                        let bulk_on = self.bulk.on;
+                        let ticked = self.bulk.picked.contains(&(p, iid));
                         let tasks = m.task_completion_status.as_ref().filter(|t| t.count > 0);
                         // Assignees, then reviewers, as GitLab's row shows them.
                         let people: Vec<&User> = m.assignees.iter().chain(&m.reviewers).collect();
@@ -2539,7 +3050,24 @@ impl GitLabView {
                             .border_color(c(RAISED))
                             .cursor_pointer()
                             .hover(|s| s.bg(c(CARD)))
-                            .on_click(cx.listener(move |v, _, _, cx| v.open_mr(p, iid, cx)))
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                // Bulk edit: a click ticks it.
+                                if v.bulk.on {
+                                    if !v.bulk.picked.remove(&(p, iid)) {
+                                        v.bulk.picked.insert((p, iid));
+                                    }
+                                    cx.notify();
+                                } else {
+                                    v.open_mr(p, iid, cx)
+                                }
+                            }))
+                            .when(bulk_on, |d| {
+                                d.child(icon(
+                                    if ticked { "square-check" } else { "square" },
+                                    16.,
+                                    c(if ticked { FOCUS } else { MUTED }),
+                                ))
+                            })
                             .child(
                                 div()
                                     .flex_1()
@@ -2764,6 +3292,7 @@ impl GitLabView {
                     .gap_2()
                     .border_b_1()
                     .border_color(c(RAISED))
+                    .when(!projects, |d| d.child(self.search_history(cx)))
                     .child(
                         div().flex_1().child(
                             Input::new(&self.list_search)
@@ -2771,8 +3300,57 @@ impl GitLabView {
                                 .cleanable(true),
                         ),
                     )
-                    .when(!projects, |d| d.child(self.sort_control(cx))),
+                    .when(!projects, |d| d.child(self.sort_control(cx)))
+                    .when(!projects, |d| d.child(tools))
+                    .children(self.new_mr_button(cx)),
             )
+            .children(bulk_bar)
+            // GitLab's filter tokens, a click puts one in the search.
+            .when(!projects && self.new_mr.project.is_none(), |d| {
+                d.child(
+                    div()
+                        .px_4()
+                        .py_1()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_1()
+                        .text_size(px(12.))
+                        .text_color(c(MUTED))
+                        .child("Filter:")
+                        .children(crate::filter::TOKENS.iter().map(|(label, token)| {
+                            let token = *token;
+                            div()
+                                .id(SharedString::from(format!("gl-token-{label}")))
+                                .px_2()
+                                .py(px(1.))
+                                .rounded(px(6.))
+                                .bg(ca(0x89888d33))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(ca(0x89888d66)).text_color(c(TEXT)))
+                                .child(*label)
+                                .on_click(cx.listener(move |v, _, window, cx| {
+                                    let now = v.list_search.read(cx).value().to_string();
+                                    let sep = if now.is_empty() || now.ends_with(' ') {
+                                        ""
+                                    } else {
+                                        " "
+                                    };
+                                    let t = format!("{now}{sep}{token}");
+                                    let (line, col) = (0, t.chars().count() as u32);
+                                    v.list_search.update(cx, |s, cx| {
+                                        s.set_value(t, window, cx);
+                                        s.set_cursor_position(
+                                            gpui_component::input::Position::new(line, col),
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                    cx.notify();
+                                }))
+                        })),
+                )
+            })
             .child(
                 div()
                     .id("gl-list")
@@ -2781,7 +3359,14 @@ impl GitLabView {
                     .px_4()
                     .overflow_y_scroll()
                     .children(status)
-                    .children(rows.unwrap_or_default()),
+                    .children(match self.new_mr_form(window, cx) {
+                        Some(f) => vec![f.into_any_element()],
+                        None => rows.unwrap_or_default(),
+                    })
+                    .when(
+                        !projects && self.new_mr.project.is_none() && self.list.ready().is_some(),
+                        |d| d.child(pager),
+                    ),
             )
             .into_any_element()
     }
@@ -2796,8 +3381,20 @@ impl GitLabView {
         let body = match self.loc.section {
             Section::Overview => self.overview_page(&r, window, cx),
             Section::Changes => self.changes_page(&r, cx),
-            Section::Commits => self.commits_page(&r, cx),
+            Section::Commits => div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(self.context_bar(&r, cx))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.))
+                        .child(self.commits_page(&r, cx)),
+                )
+                .into_any_element(),
             Section::Pipelines => self.pipelines_page(&r, cx),
+            Section::Reports => self.reports_page(&r, cx),
         };
         div()
             .size_full()
@@ -2813,12 +3410,19 @@ impl Render for GitLabView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The selectable lines this frame draws register themselves anew.
         self.sel_drawn.borrow_mut().clear();
+        if let Some(r) = self.review.ready().cloned() {
+            self.more_for(&r, window, cx);
+            if self.loc.section == Section::Pipelines {
+                self.want_jobs(&r, window, cx);
+            }
+            self.duo_seen |= r.premium.duo;
+        }
         let page = if self.sign_in.is_some() {
             self.sign_in_page(cx)
         } else if self.in_mr() {
             self.mr_page(window, cx)
         } else {
-            self.list_page(cx)
+            self.list_page(window, cx)
         };
         // Measure the tab; a change of width redraws it with the right layout.
         let width = self.width.clone();

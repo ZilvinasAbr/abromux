@@ -4,15 +4,17 @@ mod api;
 mod bench;
 mod browser;
 mod channel;
-mod cli;
+mod claude_chat;
+mod cli_app;
 mod config;
+mod control_link;
 mod crash;
 mod csd;
 mod debug;
 mod editor;
 mod events;
 mod find_bar;
-mod folder;
+mod forward;
 mod gitlab;
 mod icon;
 mod ipc;
@@ -20,6 +22,7 @@ mod keymap;
 mod layout;
 mod link;
 mod links;
+mod lua;
 mod markdown;
 mod menu;
 mod naming;
@@ -29,15 +32,18 @@ mod pins;
 mod placement;
 mod plugins;
 mod quit;
+mod remote;
 mod server;
+mod servers;
 mod session;
 mod settings;
 mod settings_window;
 mod shell;
 mod sidebar;
-mod skills;
+mod size_owner;
 mod sprite;
 mod status;
+mod stream;
 mod tabs;
 mod terminal;
 mod terminal_browser;
@@ -77,16 +83,17 @@ actions!(
         About,
         OpenSettings,
         OpenConfig,
+        OpenInitLua,
         Quit,
         NewWorkspace,
-        NewFolderWorkspace,
-        CleanUpWorkspaceFolder,
         CloseWorkspace,
         RenameWorkspace,
         NextWorkspace,
         PrevWorkspace,
         NewTerminal,
         NewBrowser,
+        NewClaudeChat,
+        ToggleClaudeView,
         SplitRight,
         SplitDown,
         CloseTab,
@@ -156,6 +163,7 @@ actions!(
         MoveWorkspaceDown,
         NewGroup,
         GroupByFolder,
+        GroupByServer,
         Ungroup,
         ToggleGroup,
         ReopenSession,
@@ -215,6 +223,7 @@ impl AssetSource for Assets {
             };
         }
         let bytes = embed!(
+            "smartphone",
             "terminal",
             "claude",
             "codex",
@@ -275,9 +284,13 @@ struct TerminalOpts {
     env: Vec<(String, String)>,
     /// Run this instead of a shell session.
     command: Option<String>,
-    /// Take back a terminal the holder kept from the last session: its
-    /// surface number and holder id.
+    /// Take back a terminal the server kept from the last session: its
+    /// surface number and the server's id.
     attach: Option<(usize, String)>,
+    /// The server on another machine to start it on (or that `attach` is
+    /// on). None: the workspace's, if it has one, else this machine's;
+    /// empty: this machine's, whatever the workspace's is.
+    host: Option<String>,
 }
 
 impl TerminalOpts {
@@ -297,10 +310,24 @@ struct AbroMux {
     /// The folder of the workspace whose terminals are being made before
     /// it's in `workspaces` (new or restored), for their env.
     building_home: Option<std::path::PathBuf>,
+    /// The same for its `env`.
+    building_env: std::collections::BTreeMap<String, String>,
+    /// The same for its host (`Workspace::host`).
+    building_host: Option<String>,
     next_pane: usize,
     next_surface: usize,
     /// Stable `surface:N` numbers handed out to the control socket.
     surface_refs: HashMap<EntityId, usize>,
+    /// Views a change from the server took out of a workspace, until the
+    /// change is done (another workspace may take them): by surface number,
+    /// with the workspace they were in (crate::server, follow_model).
+    set_aside: HashMap<u64, (usize, Surface)>,
+    /// A proposal to the servers is on its way (`propose_soon`), and when
+    /// the last one went.
+    proposing: bool,
+    proposed_at: Instant,
+    /// Forwarded ports, by workspace id (crate::forward): closed with it.
+    forwards: HashMap<usize, Vec<forward::Forward>>,
     /// How closed terminals' programs exited, by surface number (`abromux
     /// wait`, the `surface.closed` event).
     exits: HashMap<usize, Option<i32>>,
@@ -395,9 +422,15 @@ impl AbroMux {
             next_id: 1,
             next_ws: 0,
             building_home: None,
+            building_env: Default::default(),
+            building_host: None,
             next_pane: 0,
             next_surface: 0,
             surface_refs: Default::default(),
+            forwards: Default::default(),
+            set_aside: HashMap::new(),
+            proposing: false,
+            proposed_at: Instant::now(),
             exits: Default::default(),
             events: Default::default(),
             socket: None,
@@ -558,6 +591,10 @@ impl AbroMux {
         this.place_window(window, cx);
         this.socket = server::start(window, cx);
         Self::watch_events(cx);
+        // Phone access (Settings › Phone Access), once the socket it relays to is up.
+        if this.socket.is_some() {
+            remote::start(&cx.global::<settings::Settings>().remote);
+        }
         let restored = session.is_some_and(|s| this.restore(s, window, cx));
         if !restored || cwd.is_some() {
             this.new_workspace(cwd, window, cx);
@@ -662,6 +699,47 @@ impl AbroMux {
         .detach();
     }
 
+    /// Something on screen changed (a render): propose what changed in the
+    /// model to the servers (crate::control_link) a moment later, once for
+    /// a burst of renders. The server is the model's source; the app's own
+    /// changes reach it at once rather than with the next save.
+    fn propose_soon(&mut self, cx: &mut Context<Self>) {
+        if self.proposing || control_link::current().is_none() {
+            return;
+        }
+        self.proposing = true;
+        // The first change after a quiet spell goes out within 50 ms; while
+        // things keep redrawing (output, animation), at most every 250 ms.
+        let wait = Duration::from_millis(250)
+            .saturating_sub(self.proposed_at.elapsed())
+            .max(Duration::from_millis(50));
+        cx.spawn(async move |this, cx| {
+            Timer::after(wait).await;
+            let _ = this.update(cx, |this, cx| {
+                this.proposing = false;
+                this.proposed_at = Instant::now();
+                let model = this.model(cx);
+                if let Some(link) = control_link::current() {
+                    link.push_model(model.clone());
+                }
+                for h in control_link::remote_hosts() {
+                    if let Some(link) = control_link::remote(&h) {
+                        let mut m = model.clone();
+                        m.workspaces.retain(|w| {
+                            w.host.as_deref() == Some(h.as_str())
+                                || w.layout
+                                    .tabs()
+                                    .iter()
+                                    .any(|t| t.host.as_deref() == Some(h.as_str()))
+                        });
+                        link.push_model(m);
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Keep the session file current: layout every few seconds, everything
     /// (scrollback too) when the window closes or the app quits.
     fn persist(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -672,9 +750,43 @@ impl AbroMux {
             let mut last = None;
             loop {
                 Timer::after(Duration::from_secs(5)).await;
-                let Ok(s) = this.update(cx, |this, cx| this.snapshot(false, cx)) else {
+                let Ok((s, state, terms, model)) = this.update(cx, |this, cx| {
+                    (
+                        this.snapshot(false, cx),
+                        this.control_state(cx),
+                        this.held_terms(cx),
+                        this.model(cx),
+                    )
+                }) else {
                     break;
                 };
+                // The servers answer for the app from this while it's closed:
+                // the local one about everything, each remote one about
+                // the workspaces with something on it.
+                let session = serde_json::to_value(&s).unwrap_or_default();
+                let hosts = control_link_hosts(&state);
+                control_link::sync_remotes(&hosts);
+                for h in &hosts {
+                    if let Some(link) = control_link::remote(h) {
+                        let (ws, sess) = for_host(&state, &session, h);
+                        link.push_state(ws, sess);
+                        // Its replica: the workspaces with something there.
+                        let mut m = model.clone();
+                        m.workspaces.retain(|w| {
+                            w.host.as_deref() == Some(h.as_str())
+                                || w.layout
+                                    .tabs()
+                                    .iter()
+                                    .any(|t| t.host.as_deref() == Some(h.as_str()))
+                        });
+                        link.push_model(m);
+                    }
+                }
+                if let Some(link) = control_link::current() {
+                    link.push_state(state, session);
+                    link.push_terms(terms);
+                    link.push_model(model);
+                }
                 if last.as_ref() != Some(&s) {
                     session::save(&s);
                     last = Some(s);
@@ -684,7 +796,14 @@ impl AbroMux {
         .detach();
         cx.on_app_quit(|this, cx| {
             this.freeze_held(cx);
-            session::save(&this.snapshot(true, cx));
+            let s = this.snapshot(true, cx);
+            if let Some(link) = control_link::current() {
+                link.push_state(
+                    this.control_state(cx),
+                    serde_json::to_value(&s).unwrap_or_default(),
+                );
+            }
+            session::save(&s);
             async {}
         })
         .detach();
@@ -780,22 +899,35 @@ impl AbroMux {
             mut env,
             command,
             attach,
+            host,
         } = opts;
         let surface = attach.as_ref().map_or(self.next_surface + 1, |(n, _)| *n);
-        let home = self
-            .workspaces
-            .iter()
-            .find(|w| w.id == ws)
-            .and_then(|w| w.home.clone())
-            .or_else(|| self.building_home.clone());
+        let (home, ws_env) = match self.workspaces.iter().find(|w| w.id == ws) {
+            Some(w) => (w.home.clone(), w.env.clone()),
+            None => (self.building_home.clone(), self.building_env.clone()),
+        };
+        // A new terminal in a workspace on another machine starts there; one
+        // taken back is wherever it was.
+        let host = host
+            .or_else(|| {
+                attach.is_none().then(|| {
+                    self.workspaces
+                        .iter()
+                        .find(|w| w.id == ws)
+                        .and_then(|w| w.host.clone())
+                        .or_else(|| self.building_host.clone())
+                })?
+            })
+            .filter(|h| !h.is_empty());
         if let Some(home) = home {
             env.push((
                 "ABROMUX_WORKSPACE_DIR".into(),
                 home.to_string_lossy().into_owned(),
             ));
-            // Compose stacks started here are the workspace's, for cleanup.
-            env.push(("COMPOSE_PROJECT_NAME".into(), folder::tag(&home)));
         }
+        // What the workspace was made with (the workspace folders script
+        // gives its compose project name, say).
+        env.extend(ws_env);
         // This app's CLI, for programs that call back into it (the stable and
         // nightly apps each have their own).
         if let Ok(exe) = std::env::current_exe() {
@@ -812,7 +944,7 @@ impl AbroMux {
             ));
         }
         let held = attach.as_ref().map(|(_, a)| a.as_str());
-        let term = cx.new(|cx| TerminalView::new(cwd, env, command, held, cx));
+        let term = cx.new(|cx| TerminalView::new(cwd, env, command, held, host, cx));
         // Its env names `surface` even when the shell is a new one; restore
         // reserved the numbers the last session used, so it's free.
         self.surface_refs.insert(term.entity_id(), surface);
@@ -886,6 +1018,10 @@ impl AbroMux {
     /// set to `terminalBrowser`, a terminal running `terminal-browser`
     /// (the built-in one, with a warning, if it isn't installed).
     fn make_browser(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> Surface {
+        // Claude tabs are the built-in browser's page, whatever the engine.
+        if claude_chat::is_chat_url(url) {
+            return self.make_builtin_browser(url, window, cx);
+        }
         // Markdown tabs' scheme is the built-in browser's; without one
         // (Linux), the page as a file for the engine there is.
         let exported;
@@ -938,7 +1074,11 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if url.is_empty() || url == "about:blank" || !settings::system_browser(cx) {
+        if url.is_empty()
+            || url == "about:blank"
+            || claude_chat::is_chat_url(url)
+            || !settings::system_browser(cx)
+        {
             return false;
         }
         let target = if markdown::is_markdown_url(url) {
@@ -1005,7 +1145,10 @@ impl AbroMux {
         let ws = &self.workspaces[wi];
         let places = gitlab::remote::places(
             ws.home.as_deref(),
-            &ws.surfaces().filter_map(|s| s.cwd(cx)).collect::<Vec<_>>(),
+            &ws.surfaces()
+                .filter(|s| !s.is_remote(cx))
+                .filter_map(|s| s.cwd(cx))
+                .collect::<Vec<_>>(),
         );
         let mut repos = vec![];
         for p in places {
@@ -1187,9 +1330,163 @@ impl AbroMux {
             BrowserEvent::OpenTab { url, focus } => {
                 this.open_tab_beside(b.entity_id(), url, *focus, window, cx)
             }
+            BrowserEvent::Chat(n) => this.chat_notice(b.entity_id(), n, window, cx),
         })
         .detach();
         Surface::Browser(browser)
+    }
+
+    /// A Claude tab's state as its sidebar pill, and its notifications, as
+    /// a terminal's agent hooks would report them.
+    fn chat_notice(
+        &mut self,
+        surface: EntityId,
+        notice: &claude_chat::Notice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use claude_chat::{Notice, State};
+        let kind = agent::Kind::Claude;
+        let (label, title) = (kind.label(), kind.title());
+        match notice {
+            Notice::State(state) => {
+                let pill = match state {
+                    State::Running => Some(("Running", status::RUNNING)),
+                    State::Waiting => Some(("Needs input", status::WARNING)),
+                    State::Done => Some(("Done", status::SUCCESS)),
+                    State::Idle => None,
+                };
+                self.set_agent_status(surface, label, pill, cx);
+            }
+            Notice::NeedsInput(message) => {
+                self.add_notification(
+                    surface,
+                    title.into(),
+                    message.clone(),
+                    notification::Kind::NeedsInput,
+                    window,
+                    cx,
+                );
+            }
+            Notice::Finished(summary) => {
+                let mode = cx
+                    .try_global::<settings::Settings>()
+                    .map(|s| s.notifications.agent_turn_complete)
+                    .unwrap_or_default();
+                if mode != abromux_core::pending::TurnComplete::Never {
+                    self.add_notification(
+                        surface,
+                        title.into(),
+                        summary.clone(),
+                        notification::Kind::Done,
+                        window,
+                        cx,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Switch the focused tab's Claude Code session between the terminal
+    /// UI and a Claude tab, in place: a terminal running `claude` becomes a
+    /// Claude tab on the same conversation, and a Claude tab a terminal
+    /// typing `claude --resume <id>` with its model, effort and mode. The
+    /// old tab closes, ending its process, so only one side writes to the
+    /// session; a pinned tab passes its pin on. Not while Claude is
+    /// mid-turn, which closing would cut off.
+    fn toggle_claude_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let warn = |title: &str, msg: &str, window: &mut Window, cx: &mut Context<Self>| {
+            let note = Notification::warning(msg.to_string()).title(title.to_string());
+            window.push_notification(note, cx);
+        };
+        let ws = self.ws();
+        let Some(surface) = ws.focused_surface().cloned() else {
+            return;
+        };
+        let id = surface.entity_id();
+        let ws_id = ws.id;
+        let Some((pane, _, _)) = ws.tab_position(id) else {
+            return;
+        };
+        let busy = "Claude is working. Switch once it has finished, or stop it first.";
+        let new = match &surface {
+            Surface::Terminal(t) => {
+                let t = t.read(cx);
+                // abromux's hooks say which session runs here; without them
+                // (not installed, or another channel's binary), Claude
+                // Code's own record of its process does.
+                let hooked = t
+                    .agent
+                    .as_ref()
+                    .filter(|a| a.kind == agent::Kind::Claude.as_str() && a.alive());
+                let (session, cwd, mode, working) = if let Some(a) = hooked {
+                    let cwd = if a.cwd.is_empty() { &t.cwd } else { &a.cwd };
+                    let cwd = std::path::PathBuf::from(cwd);
+                    (
+                        a.session_id.clone(),
+                        cwd,
+                        a.permission_mode.clone(),
+                        t.claude_running(),
+                    )
+                } else if let Some(r) = t.shell_pid().and_then(|pid| {
+                    claude_chat::running_under(pid, settings::claude_config_dir(cx).as_deref())
+                }) {
+                    (r.session, r.cwd, None, r.busy)
+                } else {
+                    return warn(
+                        "No Claude Code session here",
+                        "Start `claude` in this terminal first, or switch from a Claude tab.",
+                        window,
+                        cx,
+                    );
+                };
+                if working {
+                    return warn("Claude Code is busy", busy, window, cx);
+                }
+                let start = claude_chat::Start {
+                    session: Some(session),
+                    mode,
+                    ..Default::default()
+                };
+                let url = claude_chat::url_for(&cwd, &start);
+                self.make_browser(&url, window, cx)
+            }
+            Surface::Browser(b) if b.read(cx).chat.is_some() => {
+                let b = b.read(cx);
+                let chat = b.chat.as_ref().unwrap();
+                if chat.state == claude_chat::State::Running {
+                    return warn("Claude is busy", busy, window, cx);
+                }
+                let command = claude_chat::terminal_command(&chat.settings());
+                let mut opts = TerminalOpts::cwd(Some(chat.cwd.to_string_lossy().into_owned()));
+                if let Some(dir) = settings::claude_config_dir(cx) {
+                    opts.env.push((
+                        "CLAUDE_CONFIG_DIR".into(),
+                        dir.to_string_lossy().into_owned(),
+                    ));
+                }
+                let term = self.make_terminal(ws_id, opts, window, cx);
+                if let Surface::Terminal(t) = &term {
+                    t.update(cx, |t, _| t.send(format!("{command}\r").as_bytes()));
+                }
+                term
+            }
+            _ => {
+                return warn(
+                    "Not a Claude Code tab",
+                    "Switch from a terminal running Claude Code, or from a Claude tab.",
+                    window,
+                    cx,
+                );
+            }
+        };
+        let new_id = new.entity_id();
+        let wi = self.active;
+        for p in self.workspaces[wi].pinned.iter_mut().filter(|p| **p == id) {
+            *p = new_id;
+        }
+        self.add_tab_to(wi, pane, new, true, window, cx);
+        self.close_surface(id, window, cx);
     }
 
     /// ⌘-click on a terminal link: web URLs open in a browser tab in the
@@ -1516,6 +1813,71 @@ impl AbroMux {
         self.create_workspace(cwd, true, window, cx);
     }
 
+    /// A workspace, or a terminal tab beside the focused one, on the
+    /// abromux server at `host` (Settings › Servers, the palette).
+    /// Open the workspaces the server at `host` keeps for this app (what the
+    /// app last told it: crate::control_link) that aren't open here: after
+    /// the session here was lost, or on another Mac. Their terminals are
+    /// taken back from the server, running as they were.
+    fn open_from_server(&mut self, host: String, window: &mut Window, cx: &mut Context<Self>) {
+        let open: std::collections::HashSet<String> = self
+            .workspaces
+            .iter()
+            .flat_map(|w| w.panes().flat_map(|p| p.tabs.iter()))
+            .filter_map(|s| match s {
+                Surface::Terminal(t) => t.read(cx).held_id(),
+                _ => None,
+            })
+            .collect();
+        let fetch = cx
+            .background_executor()
+            .spawn(async move { servers::fetch_workspaces(&host) });
+        cx.spawn_in(window, async move |this, cx| {
+            let states = fetch.await;
+            let _ = this.update_in(cx, |this, window, cx| match states {
+                Ok(states) => {
+                    let new: Vec<_> = states
+                        .into_iter()
+                        .filter(|w| w.root.held_ids().iter().all(|id| !open.contains(id)))
+                        .collect();
+                    if new.is_empty() {
+                        window.push_notification(
+                            Notification::info("Every workspace it keeps is open here."),
+                            cx,
+                        );
+                    } else {
+                        this.add_workspaces(new, &[], window, cx);
+                        cx.notify();
+                    }
+                }
+                Err(e) => window.push_notification(
+                    Notification::error(e).title("Couldn't open its workspaces"),
+                    cx,
+                ),
+            });
+        })
+        .detach();
+    }
+
+    fn on_server(&mut self, host: String, tab: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if tab {
+            let ws = self.ws().id;
+            let opts = TerminalOpts {
+                host: Some(host),
+                ..Default::default()
+            };
+            let s = self.make_terminal(ws, opts, window, cx);
+            self.add_tab(s, window, cx);
+        } else {
+            self.building_host = Some(host.clone());
+            let wi = self.create_workspace(None, true, window, cx);
+            self.building_host = None;
+            self.workspaces[wi].host = Some(host);
+            self.join_server_group(wi, cx);
+        }
+        cx.notify();
+    }
+
     /// ⌘N: a new workspace in the focused terminal's directory, unless
     /// `app.workspaceInheritWorkingDirectory` is off.
     fn new_workspace_here(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1558,136 +1920,6 @@ impl AbroMux {
         index
     }
 
-    /// ⇧⌘I, once named: a workspace with its own folder under
-    /// `~/.abromux/ws` (`app.workspaceFoldersDirectory`) and a shell in it.
-    /// A made-up name (`named` false) is only a stand-in: agents working
-    /// there rename it until you name it yourself (`server::auto_name`).
-    fn new_folder_workspace(
-        &mut self,
-        name: String,
-        named: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let root = folder::root(cx.global::<settings::Settings>());
-        let dir = match folder::create_in(&root, &name) {
-            Ok(d) => d,
-            Err(e) => {
-                let msg = format!("{}: {e}", root.display());
-                let note = Notification::error(msg).title("Couldn't make the workspace folder");
-                window.push_notification(note, cx);
-                return self.focus_active(window, cx);
-            }
-        };
-        self.building_home = Some(dir.clone());
-        let index =
-            self.create_workspace(Some(dir.to_string_lossy().into_owned()), true, window, cx);
-        self.building_home = None;
-        let ws = &mut self.workspaces[index];
-        ws.home = Some(dir);
-        if named {
-            ws.custom_name = Some(name);
-        } else {
-            ws.auto_title = Some(name);
-        }
-        cx.notify();
-    }
-
-    /// Right-click › Clean Up and Delete Folder…: a tab in workspace `wi`'s
-    /// folder running the cleanup agent (`automation.workspaceCleanupAgent`,
-    /// default `claude`) on `.abromux/cleanup.md`. The agent finds what the
-    /// workspace made, removes it (asking only if work would be lost), and
-    /// ends with `abromux folder remove`. It runs in a shell, so the shell
-    /// stays if it stops early. The workspace moves to the "Cleanup" group,
-    /// last in the sidebar.
-    pub(crate) fn clean_up_folder(
-        &mut self,
-        wi: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(home) = self.workspaces.get(wi).and_then(|w| w.home.clone()) else {
-            let note = Notification::warning(format!(
-                "Only a workspace made with {} has a folder to clean up.",
-                keymap::default_label("newFolderWorkspace")
-            ))
-            .title("Not a workspace folder");
-            return window.push_notification(note, cx);
-        };
-        let ask = match folder::write_cleanup(&home) {
-            Ok(a) => a,
-            Err(e) => {
-                let note = Notification::error(format!("{}: {e}", home.display()))
-                    .title("Couldn't start the cleanup");
-                return window.push_notification(note, cx);
-            }
-        };
-        let agent = cx
-            .global::<settings::Settings>()
-            .automation
-            .workspace_cleanup_agent
-            .clone()
-            .filter(|a| !a.trim().is_empty())
-            .unwrap_or_else(|| "claude".into());
-        let wi = self.move_to_cleanup(wi, cx);
-        let id = self.workspaces[wi].id;
-        let s = self.make_terminal(
-            id,
-            TerminalOpts::cwd(Some(home.to_string_lossy().into_owned())),
-            window,
-            cx,
-        );
-        if let Surface::Terminal(t) = &s {
-            t.update(cx, |t, _| {
-                t.send(format!("{} '{ask}'\r", agent.trim()).as_bytes())
-            });
-        }
-        self.select_workspace(wi, window, cx);
-        let pane = self.workspaces[wi].focused_pane;
-        self.add_tab_to(wi, pane, s, true, window, cx);
-    }
-
-    /// `abromux folder remove` from (maybe) one of workspace `id`'s own
-    /// shells: once it has printed and hung up (`gone`), close the
-    /// workspace, then delete the folder off the main thread (a toast only
-    /// if that fails).
-    pub(crate) fn remove_folder_later(
-        &mut self,
-        id: usize,
-        dir: std::path::PathBuf,
-        force: bool,
-        gone: server::Hangup,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.spawn_in(window, async move |this, cx| {
-            // A caller that keeps the connection open doesn't hold this up
-            // for long.
-            let limit = cx.background_executor().timer(Duration::from_secs(10));
-            futures::future::select(gone, limit).await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                if let Some(i) = this.ws_index(id) {
-                    this.close_workspace(i, window, cx);
-                }
-            });
-            let d = dir.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move { folder::remove(&d, force) })
-                .await;
-            // Only a failure is worth a toast: the workspace closing already
-            // says it went.
-            if let Err(e) = result {
-                let _ = this.update_in(cx, |_, window, cx| {
-                    let note = Notification::error(format!("{}: {e}", dir.display()))
-                        .title("Couldn't remove the workspace folder");
-                    window.push_notification(note, cx);
-                });
-            }
-        })
-        .detach();
-    }
-
     /// Put `ws` at `index`, keeping the selected workspace selected.
     /// Returns where it went: never below the cleanup group unless it's in it.
     fn insert_workspace(&mut self, index: usize, ws: Workspace) -> usize {
@@ -1710,6 +1942,7 @@ impl AbroMux {
             return;
         }
         let ws = self.workspaces.remove(index);
+        self.forwards.remove(&ws.id);
         // Hide any webviews before they drop so nothing lingers on screen.
         // Hidden pinned tabs go with it.
         for s in ws.all_surfaces() {
@@ -2123,6 +2356,95 @@ impl AbroMux {
         .detach();
     }
 
+    /// A command's Lua script (`"script"` in a config file, or an init.lua
+    /// action): `abromux do` in the background, acting on the focused tab as
+    /// a script run in its terminal would. A relative path is the project's
+    /// (`base`), else the config folder's. A failure shows its error.
+    fn run_script(
+        &mut self,
+        c: &settings::Command,
+        base: Option<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(script) = &c.script else { return };
+        let path = match script.strip_prefix("~/") {
+            Some(rest) => paths::home().join(rest),
+            None => {
+                let p = std::path::PathBuf::from(script);
+                let dir = base
+                    .clone()
+                    .or_else(|| settings::path().parent().map(std::path::Path::to_path_buf));
+                match dir {
+                    Some(d) if p.is_relative() => d.join(p),
+                    _ => p,
+                }
+            }
+        };
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("do").arg(&path);
+        if let Some(a) = &c.action {
+            cmd.args(["--action", a]);
+        }
+        if let Some(args) = &c.args {
+            cmd.arg("--args")
+                .arg(serde_json::Value::Object(args.clone()).to_string());
+        }
+        cmd.env("ABROMUX_ACTION_ORIGIN", "palette")
+            .env("ABROMUX_WORKSPACE_ID", self.ws_ref(self.active));
+        match self.ws().focused_surface() {
+            Some(s) => cmd.env("ABROMUX_SURFACE_ID", self.sref(s)),
+            None => cmd.env_remove("ABROMUX_SURFACE_ID"),
+        };
+        if let Some(sock) = &self.socket {
+            cmd.env("ABROMUX_SOCKET_PATH", sock);
+        }
+        let cwd = self
+            .focused_cwd(cx)
+            .map(std::path::PathBuf::from)
+            .or(base)
+            .filter(|d| d.is_dir())
+            .unwrap_or_else(paths::home);
+        cmd.current_dir(cwd)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped());
+        let title = c.title.clone();
+        let child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                let note = Notification::error(format!("{title}: {e}"));
+                return window.push_notification(note, cx);
+            }
+        };
+        let (tx, rx) = futures::channel::oneshot::channel();
+        // Waited for off the main thread: an action may ask a question in
+        // the palette, or keep running with handlers.
+        std::thread::spawn(move || {
+            let _ = tx.send(child.wait_with_output());
+        });
+        cx.spawn_in(window, async move |_, cx| {
+            let Ok(Ok(out)) = rx.await else { return };
+            if out.status.success() {
+                return;
+            }
+            let err = String::from_utf8_lossy(&out.stderr);
+            let lines: Vec<&str> = err.trim().lines().collect();
+            let tail = lines[lines.len().saturating_sub(8)..].join("\n");
+            let tail = tail.strip_prefix("abromux: ").unwrap_or(&tail).to_string();
+            let _ = cx.update(|window, cx| {
+                let note = Notification::error(tail)
+                    .title(format!("{title} failed"))
+                    .autohide(false);
+                window.push_notification(note, cx);
+            });
+        })
+        .detach();
+    }
+
     /// Run `c`; `base` is its project's directory, which a workspace's
     /// `cwd` is relative to (else the focused terminal's).
     fn execute_command(
@@ -2190,6 +2512,9 @@ impl AbroMux {
                 }
             }
             return;
+        }
+        if c.script.is_some() {
+            return self.run_script(&c, base, window, cx);
         }
         let Some(run) = c.run else { return };
         let term = match self.ws().focused_surface() {
@@ -2291,7 +2616,7 @@ impl AbroMux {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let result = settings::load().map(|s| settings_window::apply(s, cx));
+        let result = settings::load_app().map(|s| settings_window::apply(s, cx));
         let note = match &result {
             Ok(()) => Notification::success(format!(
                 "Reloaded {}",
@@ -2974,6 +3299,7 @@ impl Render for AbroMux {
         }
         self.window_bounds = Some(window.window_bounds().get_bounds());
         self.mark_viewed(window, cx);
+        self.propose_soon(cx);
         for ws in &mut self.workspaces {
             ws.zoomed();
         }
@@ -3053,6 +3379,9 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &NewGroup, window, cx| {
                 this.new_group_and_rename(this.active, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &GroupByServer, _, cx| {
+                this.group_by_server(cx);
+            }))
             .on_action(cx.listener(|this, _: &GroupByFolder, _, cx| {
                 this.group_by_folder(cx);
             }))
@@ -3075,12 +3404,6 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &CloseWorkspace, window, cx| {
                 this.request_close_workspace(this.active, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &CleanUpWorkspaceFolder, window, cx| {
-                this.clean_up_folder(this.active, window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &NewFolderWorkspace, window, cx| {
-                this.toggle_palette(palette::Mode::NewFolder, window, cx)
-            }))
             .on_action(cx.listener(|this, _: &RenameWorkspace, window, cx| {
                 this.sidebar = true;
                 this.start_rename(this.active, window, cx)
@@ -3102,6 +3425,18 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &NewBrowser, window, cx| {
                 let s = this.make_browser(DEFAULT_URL, window, cx);
                 this.add_tab(s, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NewClaudeChat, window, cx| {
+                let cwd = this
+                    .focused_cwd(cx)
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(paths::home);
+                let url = claude_chat::url_for(&cwd, &claude_chat::Start::default());
+                let s = this.make_browser(&url, window, cx);
+                this.add_tab(s, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ToggleClaudeView, window, cx| {
+                this.toggle_claude_view(window, cx)
             }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
                 this.split(Axis::Horizontal, false, window, cx)
@@ -3288,6 +3623,28 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, a: &keymap::OpenPlugin, window, cx| {
                 this.open_plugin(&a.id, window, cx)
             }))
+            .on_action(cx.listener(|this, a: &keymap::OnServer, window, cx| {
+                this.on_server(a.address.clone(), a.tab, window, cx)
+            }))
+            .on_action(cx.listener(|this, a: &keymap::ForwardOffer, window, cx| {
+                let p = serde_json::json!({ "host": a.address, "port": a.port });
+                match this.forward_offer(&p, cx) {
+                    Ok(v) => window.push_notification(
+                        Notification::info(format!(
+                            "{} reaches port {} on {}",
+                            v["url"].as_str().unwrap_or_default(),
+                            a.port,
+                            servers::label(&a.address)
+                        ))
+                        .title("Port forwarded"),
+                        cx,
+                    ),
+                    Err(e) => window.push_notification(Notification::error(format!("{e:#}")), cx),
+                }
+            }))
+            .on_action(cx.listener(|this, a: &keymap::OpenFromServer, window, cx| {
+                this.open_from_server(a.address.clone(), window, cx)
+            }))
             .on_action(cx.listener(|_, a: &keymap::OpenPluginLink, window, cx| {
                 // Chosen from the palette, focus is going back to the pane
                 // just now: ask once that's done, or the pane keeps the keys.
@@ -3302,6 +3659,17 @@ impl Render for AbroMux {
             }))
             // Also on the root (not only app-wide) so the palette lists it.
             .on_action(|_: &OpenConfig, _, cx| settings_window::open_config(cx))
+            .on_action(cx.listener(|this, _: &OpenInitLua, window, cx| {
+                let file = crate::lua::ensure_init_file();
+                let wi = this.active;
+                let pane = this.workspaces[wi].focused_pane;
+                if let Err(e) = this.edit_file(wi, pane, &file, true, window, cx) {
+                    window.push_notification(
+                        Notification::warning(e).title("Can't open init.lua"),
+                        cx,
+                    );
+                }
+            }))
             .on_action(cx.listener(|this, _: &ReloadConfig, window, cx| {
                 // A toast says how it went.
                 let _ = this.reload_settings(window, cx);
@@ -3564,8 +3932,14 @@ fn hint_pill(text: String) -> Div {
 fn main() {
     // First, so any panic after it says what and where (crash.rs).
     crash::install();
-    // Before anything can reach the holder or read a terminal.
-    hold::set_dir(channel::runtime_dir());
+    // Before any pty: a Finder-launched app may only have 256 files open,
+    // a few dozen tabs' worth (abromux_platform::files). The server too.
+    abromux_platform::files::raise_open_files_limit();
+    // Before anything can reach the server or read a terminal. Its socket
+    // is in the state folder (the support folder on macOS), which outlives a
+    // login session on Linux; the holder before it kept `hold.sock` in the
+    // runtime folder.
+    hold::set_dir(channel::state_dir(), channel::runtime_dir());
     pty::on_output(abromux_platform::power::output);
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "bench-vt") {
@@ -3574,27 +3948,173 @@ fn main() {
     if args.first().is_some_and(|a| a == "bench-kitty") {
         std::process::exit(bench::kitty(&args[1..]));
     }
-    // The background process that keeps shells running (`"persistence": "abromux"`, abromux_term::hold).
-    if args.first().is_some_and(|a| a == "hold") {
-        if let Err(e) = hold::serve(&hold::socket_path()) {
-            eprintln!("abromux hold: {e}");
-            std::process::exit(1);
-        }
-        std::process::exit(0);
+    // The background process that keeps shells running (`"persistence":
+    // "abromux"`, abromux_server; `hold` is its old name).
+    if args.first().is_some_and(|a| a == "server" || a == "hold") {
+        std::process::exit(server_command(&args[1..]));
     }
     // Started from a shell of another channel's app (the release starting
     // a nightly, or running its CLI): that app's socket and surface aren't this one's.
     ipc::forget_foreign_env();
     if !args.is_empty() {
-        std::process::exit(cli::run(args));
+        std::process::exit(cli_app::run(args));
     }
-    if let Some(code) = cli::launch() {
+    if let Some(code) = cli_app::launch() {
         std::process::exit(code);
     }
     run_app(std::env::var("ABROMUX_CWD").ok());
 }
 
+/// The remote hosts in `control_state`'s workspaces.
+fn control_link_hosts(state: &serde_json::Value) -> Vec<String> {
+    let mut hosts: Vec<String> = vec![];
+    for w in state.as_array().into_iter().flatten() {
+        for h in w["hosts"].as_array().into_iter().flatten() {
+            if let Some(h) = h.as_str().filter(|h| !hosts.iter().any(|x| x == h)) {
+                hosts.push(h.to_string());
+            }
+        }
+    }
+    hosts
+}
+
+/// What the server at `host` is told: the workspaces with something on it,
+/// and the session's own workspaces there (to open them again from it).
+fn for_host(
+    state: &serde_json::Value,
+    session: &serde_json::Value,
+    host: &str,
+) -> (serde_json::Value, serde_json::Value) {
+    let on = |w: &serde_json::Value| {
+        w["hosts"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|h| h == host))
+    };
+    let ws: Vec<_> = state
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|w| on(w))
+        .cloned()
+        .collect();
+    let mut sess = session.clone();
+    let mine: Vec<_> = session["workspaces"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|w| w["host"] == host)
+        .map(|w| {
+            let mut w = w.clone();
+            w["group"] = serde_json::Value::Null;
+            w
+        })
+        .collect();
+    sess["workspaces"] = serde_json::json!(mine);
+    sess["groups"] = serde_json::json!([]);
+    (serde_json::json!(ws), sess)
+}
+
+/// `abromux server [--socket PATH] [--control PATH] [--stdio]`: serve, or
+/// (`--stdio`) bridge stdin and stdout to this app's server, starting it if
+/// needed.
+fn server_command(args: &[String]) -> i32 {
+    let mut socket = None;
+    let mut control = None;
+    let mut stdio = false;
+    let mut tailnet: Option<abromux_server::tailnet::Config> = None;
+    let mut it = args.iter().peekable();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--socket" => socket = it.next().map(std::path::PathBuf::from),
+            "--control" => control = it.next().map(std::path::PathBuf::from),
+            "--stdio" => stdio = true,
+            "--tailnet" => {
+                let port = it
+                    .next_if(|p| p.parse::<u16>().is_ok())
+                    .and_then(|p| p.parse().ok());
+                tailnet.get_or_insert_default().port =
+                    port.unwrap_or(abromux_server::tailnet::DEFAULT_PORT);
+            }
+            "--tailnet-allow" => {
+                let t = tailnet.get_or_insert_with(|| abromux_server::tailnet::Config {
+                    port: abromux_server::tailnet::DEFAULT_PORT,
+                    ..Default::default()
+                });
+                t.allow.extend(
+                    it.next()
+                        .into_iter()
+                        .flat_map(|l| l.split(','))
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty()),
+                );
+            }
+            _ => {
+                eprintln!(
+                    "usage: abromux server [--socket PATH] [--control PATH] [--stdio] \
+                     [--tailnet [PORT]] [--tailnet-allow LOGINS]"
+                );
+                return 2;
+            }
+        }
+    }
+    let socket = socket.unwrap_or_else(hold::socket_path);
+    let res = if stdio {
+        let exe = std::env::current_exe().unwrap_or_else(|_| "abromux".into());
+        hold::set_control(ipc::socket_path());
+        abromux_server::connect_or_start(&socket, &exe, &hold::server_args())
+            .and_then(abromux_server::stdio)
+    } else {
+        let opts = abromux_server::Options {
+            version: env!("ABROMUX_VERSION").into(),
+            control,
+            idle_exit: tailnet.is_none(),
+        };
+        if let Some(cfg) = &tailnet {
+            match abromux_server::tailnet::start(cfg, &socket) {
+                Ok(addrs) => {
+                    for a in addrs {
+                        eprintln!(
+                            "abromux server: on the tailnet at {a} (web client: http://{a}/)"
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("abromux server: --tailnet: {e}");
+                    return 1;
+                }
+            }
+        }
+        abromux_server::serve(&socket, &opts)
+    };
+    match res {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("abromux server: {e}");
+            1
+        }
+    }
+}
+
 fn run_app(cwd: Option<String>) {
+    // The server this app starts serves its control socket too.
+    hold::set_control(ipc::socket_path());
+    // A server's other addresses, for remote terminals and links.
+    abromux_term::remote::set_alternates(servers::alternates);
+    // A copy of a home server's list (`abromux servers home`): up to date
+    // at launch and every few minutes after, off the main thread.
+    std::thread::spawn(|| {
+        loop {
+            if let Err(e) = servers::sync_home() {
+                eprintln!("servers: {e}");
+            }
+            if servers::home().is_none() {
+                // None now: looked at again when one is set (the CLI writes
+                // it, and the next launch picks it up), not polled.
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(600));
+        }
+    });
     let app = Application::new().with_assets(Assets);
     // Files opened from Finder (editor.rs). They can come before the window
     // is up, at launch, so they wait in the channel until it is.
@@ -3607,7 +4127,7 @@ fn run_app(cwd: Option<String>) {
         abromux_platform::prefs::import_once(&alert::SKIP_KEYS);
         gpui_component::init(cx);
         // A broken config file starts with the defaults, and says so once the window is up.
-        let (settings, settings_error) = match settings::load() {
+        let (settings, settings_error) = match settings::load_app() {
             Ok(s) => (s, None),
             Err(e) => (settings::Settings::default(), Some(e)),
         };
@@ -3658,10 +4178,10 @@ fn run_app(cwd: Option<String>) {
             ),
             KeyBinding::new("enter", palette::Confirm, Some("CommandPalette > Input")),
             KeyBinding::new("escape", palette::Dismiss, Some("CommandPalette > Input")),
-            KeyBinding::new("tab", palette::SwitchColumn, Some("CommandPalette > Input")),
+            KeyBinding::new("tab", palette::ToggleScope, Some("CommandPalette > Input")),
             KeyBinding::new(
                 "shift-tab",
-                palette::SwitchColumn,
+                palette::ToggleScope,
                 Some("CommandPalette > Input"),
             ),
             KeyBinding::new("down", browser::SuggestNext, Some("Omnibar > Input")),

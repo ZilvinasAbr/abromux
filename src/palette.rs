@@ -1,9 +1,10 @@
 //! The command palette (⌘⇧P) and the switcher (⌘P), as in cmux.
 //!
-//! ⌘P has two columns: every workspace on the left, the selected
-//! workspace's tabs on the right (pinned ones first, hidden ones too, then
-//! its other tabs and its suggested links). What's typed filters both;
-//! Tab (or ⇧Tab) moves between them, ↑ ↓ pick within one, Enter goes there.
+//! ⌘P is one list searching every workspace and every workspace's tabs
+//! (pinned ones first, hidden ones too, then its other tabs and its
+//! suggested links), each tab tagged with its workspace, whose name it
+//! matches too. Tab (or ⇧Tab) narrows it to this workspace's tabs, and
+//! back; ↑ ↓ pick a row, Enter goes there.
 //!
 //! Commands are the app's actions with a title. Only the ones that apply to
 //! what had focus when the palette opened are listed (terminal commands for
@@ -25,29 +26,57 @@ use std::path::Path;
 
 actions!(
     palette,
-    [SelectNext, SelectPrev, Confirm, Dismiss, SwitchColumn]
+    [SelectNext, SelectPrev, Confirm, Dismiss, ToggleScope]
 );
 
 /// Key context of the palette, for its bindings in main.rs.
 pub const CONTEXT: &str = "CommandPalette";
 const WIDTH: f32 = 560.;
-/// ⌘P's width, for its two columns.
-const SWITCHER_WIDTH: f32 = 900.;
+/// ⌘P's width, with room for each tab's workspace.
+const SWITCHER_WIDTH: f32 = 720.;
 const MAX_ROWS_HEIGHT: f32 = 360.;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
     Commands,
     Workspaces,
-    /// ⇧⌘I: name a new workspace folder. No rows; Enter makes it.
-    NewFolder,
     /// A plugin's "Open … link": paste a link it opens. No rows; Enter
     /// opens it in a new tab.
     OpenLink(&'static str),
     /// ⇧⌘M: the cached GitLab merge requests. A pasted link or
     /// `group/project!12` that isn't cached opens too.
     MergeRequests,
+    /// A question a script asked (`ui.prompt`): a line of text, or a
+    /// choice from its items.
+    Prompt,
 }
+
+/// The question `Mode::Prompt` shows, and where its answer goes.
+pub(crate) struct Prompt {
+    pub id: u64,
+    pub title: String,
+    /// A list to choose from, not a line of text.
+    pub pick: bool,
+    /// Pick: typed text that matches no item answers too.
+    pub allow_other: bool,
+    /// What Enter does, said under the field.
+    pub confirm: Option<String>,
+    /// Dropped unanswered (Esc, a click outside, another palette), the
+    /// asker hears it was cancelled.
+    pub answer: Option<futures::channel::oneshot::Sender<serde_json::Value>>,
+}
+
+/// What ⌘P searches.
+#[derive(Clone, Copy, PartialEq)]
+enum Scope {
+    /// Every workspace and every workspace's tabs.
+    All,
+    /// The tabs (and suggestions) of the workspace you're on.
+    Here,
+}
+
+/// One item of a pick: id, title, subtitle, detail.
+pub(crate) type PromptItem = (String, String, Option<String>, Option<String>);
 
 enum Target {
     Action(Box<dyn Action>),
@@ -57,6 +86,8 @@ enum Target {
     /// A suggested link of workspace `.0` (by id), opened in a pinned tab.
     Link(usize, crate::links::Link),
     Mr(crate::gitlab::model::MrKey),
+    /// A prompt's item, by id.
+    Choice(String),
 }
 
 struct Entry {
@@ -71,14 +102,11 @@ struct Entry {
     icon: Option<(&'static str, Option<u32>)>,
     /// The workspace or tab you're on now.
     current: bool,
-}
-
-/// ⌘P's tabs column: its own rows, matches and selection.
-struct Column {
-    entries: Vec<Entry>,
-    matches: Vec<(usize, Vec<usize>)>,
-    selected: usize,
-    scroll: ScrollHandle,
+    /// ⌘P: a tab (or suggestion) of the workspace you're on, so listed
+    /// when narrowed to it.
+    here: bool,
+    /// ⌘P: the name of the tab's workspace, shown beside it in the full list.
+    workspace: Option<SharedString>,
 }
 
 pub struct Palette {
@@ -92,13 +120,12 @@ pub struct Palette {
     /// Where focus goes back to, and where commands are dispatched.
     prev_focus: Option<FocusHandle>,
     scroll: ScrollHandle,
-    /// NewFolder: the made-up name an empty input stands for.
-    suggested: String,
-    /// Workspaces (⌘P): the selected workspace's tabs, beside the
-    /// workspaces.
-    tabs: Option<Column>,
-    /// Workspaces: the tabs column has the selection (Tab switches).
-    on_tabs: bool,
+    /// Workspaces (⌘P): what the list searches (Tab switches).
+    scope: Option<Scope>,
+    /// Prompt: the question.
+    pub(crate) prompt: Option<Prompt>,
+    /// What `filter` last matched against.
+    query: String,
 }
 
 /// A palette command: its title, subtitle, extra search words and action.
@@ -138,7 +165,62 @@ fn commands(project: Option<&Path>, cx: &App) -> Vec<Cmd> {
             }
             cmds
         });
-    let builtin = builtin.chain(plugins);
+    // Each server of Settings › Servers: a workspace or a tab there.
+    let servers = crate::servers::load()
+        .into_iter()
+        .flat_map(|s| -> Vec<Cmd> {
+            let words = || {
+                vec![
+                    "server".into(),
+                    "remote".into(),
+                    "ssh".into(),
+                    s.address.clone(),
+                ]
+            };
+            let on = |tab| -> Box<dyn Action> {
+                Box::new(keymap::OnServer {
+                    address: s.address.clone(),
+                    tab,
+                })
+            };
+            vec![
+                (
+                    format!("Open Workspaces from {}", s.name),
+                    Some("its workspaces that aren't open here".into()),
+                    words(),
+                    Box::new(keymap::OpenFromServer {
+                        address: s.address.clone(),
+                    }),
+                ),
+                (
+                    format!("New Workspace on {}", s.name),
+                    Some(s.address.clone()),
+                    words(),
+                    on(false),
+                ),
+                (
+                    format!("New Tab on {}", s.name),
+                    Some(s.address.clone()),
+                    words(),
+                    on(true),
+                ),
+            ]
+        });
+    // Dev servers that started on a host: forward them.
+    let offers = crate::forward::offers()
+        .into_iter()
+        .map(|(host, port)| -> Cmd {
+            (
+                format!("Forward Port {port} of {}", crate::servers::label(&host)),
+                Some(format!("127.0.0.1 here reaches {port} on {host}")),
+                vec!["forward".into(), "port".into(), port.to_string()],
+                Box::new(keymap::ForwardOffer {
+                    address: host.clone(),
+                    port,
+                }),
+            )
+        });
+    let builtin = builtin.chain(plugins).chain(servers).chain(offers);
     // A project file that doesn't parse shows its error as a command.
     let local = project.map(|p| (p, settings::read_project(p)));
     let local_titles: Vec<String> = match &local {
@@ -211,6 +293,8 @@ fn mr_entries(cx: &App) -> Vec<Entry> {
                 target: Target::Mr(m.key.clone()),
                 icon: Some(("gitlab", crate::links::Kind::Mr.color())),
                 current: false,
+                here: false,
+                workspace: None,
             }
         })
         .collect()
@@ -243,17 +327,16 @@ impl AbroMux {
         self.notifications_open = false;
         let entries = match mode {
             Mode::Commands => self.command_entries(window, cx),
-            Mode::Workspaces => self.workspace_entries(cx),
-            Mode::NewFolder | Mode::OpenLink(_) => vec![],
+            Mode::Workspaces => self.switcher_entries(cx),
+            Mode::OpenLink(_) | Mode::Prompt => vec![],
             Mode::MergeRequests => mr_entries(cx),
         };
-        let suggested = crate::folder::random_name();
         let placeholder = match mode {
             Mode::Commands => "Type a command".to_string(),
             Mode::Workspaces => "Search workspaces and tabs".to_string(),
-            Mode::NewFolder => suggested.clone(),
             Mode::OpenLink(_) => "Paste a link".to_string(),
             Mode::MergeRequests => "Search merge requests, or paste a link".to_string(),
+            Mode::Prompt => String::new(),
         };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         // A link of that kind on the clipboard is there to start with,
@@ -277,7 +360,7 @@ impl AbroMux {
                     if this
                         .palette
                         .as_ref()
-                        .is_some_and(|p| matches!(p.mode, Mode::NewFolder | Mode::OpenLink(_))) =>
+                        .is_some_and(|p| matches!(p.mode, Mode::OpenLink(_))) =>
                 {
                     // The line under the input follows what's typed.
                     cx.notify()
@@ -303,12 +386,6 @@ impl AbroMux {
         } else {
             input.update(cx, |i, cx| i.focus(window, cx));
         }
-        let tabs = (mode == Mode::Workspaces).then(|| Column {
-            entries: self.tab_entries(self.active, cx),
-            matches: vec![],
-            selected: 0,
-            scroll: ScrollHandle::new(),
-        });
         let mut palette = Palette {
             mode,
             input,
@@ -317,13 +394,89 @@ impl AbroMux {
             selected: 0,
             prev_focus,
             scroll: ScrollHandle::new(),
-            suggested,
-            tabs,
-            on_tabs: false,
+            scope: (mode == Mode::Workspaces).then_some(Scope::All),
+            prompt: None,
+            query: String::new(),
         };
         palette.filter("");
         self.palette = Some(palette);
         cx.notify();
+    }
+
+    /// Show a script's question in the palette, in place of whatever it
+    /// showed. Returns the prompt's id, for `close_prompt`.
+    pub(crate) fn open_prompt(
+        &mut self,
+        mut prompt: Prompt,
+        items: Vec<PromptItem>,
+        placeholder: Option<String>,
+        value: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> u64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        prompt.id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let id = prompt.id;
+        if self
+            .palette
+            .as_ref()
+            .is_some_and(|p| p.mode == Mode::Prompt)
+        {
+            // Toggling would only close it.
+            self.palette = None;
+        }
+        self.toggle_palette(Mode::Prompt, window, cx);
+        let Some(p) = &mut self.palette else {
+            return id;
+        };
+        p.entries = items
+            .into_iter()
+            .map(|(id, title, subtitle, detail)| Entry {
+                title: title.into(),
+                subtitle: subtitle.map(Into::into),
+                keywords: vec![id.clone()],
+                keys: detail.map(Into::into),
+                target: Target::Choice(id),
+                icon: None,
+                current: false,
+                here: false,
+                workspace: None,
+            })
+            .collect();
+        let input = p.input.clone();
+        // The title shows above the field, so the hint doesn't repeat it.
+        let hint = placeholder.unwrap_or_else(|| {
+            if prompt.pick {
+                "Type to filter".into()
+            } else {
+                String::new()
+            }
+        });
+        input.update(cx, |i, cx| {
+            i.set_placeholder(hint, window, cx);
+            if let Some(v) = &value {
+                i.set_value(v.clone(), window, cx);
+            }
+        });
+        p.prompt = Some(prompt);
+        let typed = input.read(cx).value().to_string();
+        p.filter(&typed);
+        cx.notify();
+        id
+    }
+
+    /// Close prompt `id` if it's still showing (its time ran out, or the
+    /// script went away); the asker hears it was cancelled.
+    pub(crate) fn close_prompt(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .palette
+            .as_ref()
+            .and_then(|p| p.prompt.as_ref())
+            .is_some_and(|q| q.id == id)
+        {
+            self.close_palette(window, cx);
+        }
     }
 
     pub(crate) fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -349,11 +502,34 @@ impl AbroMux {
         let Some(mut p) = self.palette.take() else {
             return;
         };
-        if p.mode == Mode::NewFolder {
-            let typed = crate::one_line(&p.input.read(cx).value());
-            let named = !typed.is_empty();
-            let name = if named { typed } else { p.suggested };
-            return self.new_folder_workspace(name, named, window, cx);
+        // Typed in the same moment as Enter: its filtering hasn't run yet.
+        let typed = p.input.read(cx).value().to_string();
+        if p.query != typed {
+            p.filter(&typed);
+        }
+        if p.mode == Mode::Prompt {
+            let chosen = p
+                .matches
+                .get(p.selected)
+                .map(|&(ix, _)| &p.entries[ix].target);
+            let answer = match (&p.prompt, chosen) {
+                (Some(q), _) if !q.pick => Some(serde_json::json!(typed)),
+                (Some(_), Some(Target::Choice(id))) => Some(serde_json::json!(id)),
+                (Some(q), None) if q.allow_other && !typed.trim().is_empty() => {
+                    Some(serde_json::json!({ "text": typed }))
+                }
+                _ => None,
+            };
+            let Some(answer) = answer else {
+                // Nothing to answer with yet: it stays.
+                self.palette = Some(p);
+                return;
+            };
+            if let Some(tx) = p.prompt.as_mut().and_then(|q| q.answer.take()) {
+                let _ = tx.send(serde_json::json!({ "answer": answer }));
+            }
+            self.restore_focus(p.prev_focus, window, cx);
+            return cx.notify();
         }
         if let Mode::OpenLink(id) = p.mode {
             let url = p.input.read(cx).value().trim().to_string();
@@ -364,23 +540,6 @@ impl AbroMux {
             }
             self.restore_focus(p.prev_focus, window, cx);
             return self.open_plugin_link(id, &url, window, cx);
-        }
-        // ⌘P with the tabs column selected: its row is the one chosen.
-        if p.on_tabs
-            && let Some(mut col) = p.tabs.take()
-        {
-            match col.matches.get(col.selected) {
-                Some(&(ix, _)) => {
-                    p.entries = vec![col.entries.swap_remove(ix)];
-                    p.matches = vec![(0, vec![])];
-                    p.selected = 0;
-                }
-                None => {
-                    p.tabs = Some(col);
-                    self.palette = Some(p);
-                    return;
-                }
-            }
         }
         let Some(&(ix, _)) = p.matches.get(p.selected) else {
             let typed = p.input.read(cx).value().to_string();
@@ -414,6 +573,8 @@ impl AbroMux {
                 None => self.restore_focus(p.prev_focus, window, cx),
             },
             Target::Mr(k) => self.open_mr(k, window, cx),
+            // Answered above.
+            Target::Choice(_) => {}
             Target::Tab(id) => {
                 if self.pin_workspace(id).is_some() {
                     self.reveal_tab(id, window, cx);
@@ -481,6 +642,8 @@ impl AbroMux {
                         target: Target::Tab(s.entity_id()),
                         icon: icon_of(s, link.as_ref()),
                         current: Some(s.entity_id()) == focused,
+                        here: false,
+                        workspace: None,
                     });
                 }
                 (None, Some(l)) => out.push(Entry {
@@ -491,6 +654,8 @@ impl AbroMux {
                     target: Target::Link(ws.id, l.clone()),
                     icon: Some((l.kind.icon(), l.kind.color())),
                     current: false,
+                    here: false,
+                    workspace: None,
                 }),
                 (None, None) => {}
             }
@@ -509,6 +674,8 @@ impl AbroMux {
                     target: Target::Tab(s.entity_id()),
                     icon: icon_of(s, link.as_ref()),
                     current: Some(s.entity_id()) == focused,
+                    here: false,
+                    workspace: None,
                 }
             })
             .collect();
@@ -571,6 +738,8 @@ impl AbroMux {
                     target: Target::Action(action),
                     icon: None,
                     current: false,
+                    here: false,
+                    workspace: None,
                 }
             })
             .collect()
@@ -581,17 +750,54 @@ impl AbroMux {
         self.workspaces
             .iter()
             .enumerate()
-            .map(|(i, ws)| Entry {
-                keywords: vec![],
-                title: ws.name(cx).into(),
-                subtitle: ws.cwd(cx).map(|c| tilde(&c).into()),
-                keys: shortcut_digit(i, n)
-                    .map(|d| crate::keymap::default_label(&format!("workspace{d}")).into()),
-                target: Target::Workspace(ws.id),
-                icon: Some(("folder", None)),
-                current: i == self.active,
+            .map(|(i, ws)| {
+                // A workspace on another machine says which, and is found
+                // by its server's name too.
+                let server = ws.host.as_deref().map(crate::servers::label);
+                let cwd = ws.cwd(cx).map(|c| tilde(&c));
+                let subtitle = match (&server, cwd) {
+                    (Some(s), Some(c)) => Some(format!("on {s} · {c}")),
+                    (Some(s), None) => Some(format!("on {s}")),
+                    (None, c) => c,
+                };
+                Entry {
+                    keywords: server.into_iter().chain(ws.host.clone()).collect(),
+                    title: ws.name(cx).into(),
+                    subtitle: subtitle.map(Into::into),
+                    keys: shortcut_digit(i, n)
+                        .map(|d| crate::keymap::default_label(&format!("workspace{d}")).into()),
+                    target: Target::Workspace(ws.id),
+                    icon: Some((if ws.host.is_some() { "globe" } else { "folder" }, None)),
+                    current: i == self.active,
+                    here: false,
+                    workspace: None,
+                }
             })
             .collect()
+    }
+
+    /// ⌘P's rows: every workspace, then the tabs of the one you're on, then
+    /// those of the others in sidebar order. A tab matches its workspace's
+    /// name too (below a match on its own title).
+    fn switcher_entries(&self, cx: &App) -> Vec<Entry> {
+        let mut out = self.workspace_entries(cx);
+        let others = (0..self.workspaces.len()).filter(|&wi| wi != self.active);
+        for wi in std::iter::once(self.active).chain(others) {
+            let here = wi == self.active;
+            let name = self.workspaces[wi].name(cx);
+            out.extend(self.tab_entries(wi, cx).into_iter().map(|mut e| {
+                e.here = here;
+                if !here {
+                    // ⌥⌘1…9 and the dot are this workspace's.
+                    e.keys = None;
+                    e.current = false;
+                }
+                e.keywords.push(name.clone());
+                e.workspace = Some(name.clone().into());
+                e
+            }));
+        }
+        out
     }
 
     /// Handlers for the palette's keys, put on the root element.
@@ -606,42 +812,39 @@ impl AbroMux {
                 cx.listener(|this, _: &Confirm, window, cx| this.confirm_palette(window, cx)),
             )
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.close_palette(window, cx)))
-            .on_action(cx.listener(|this, _: &SwitchColumn, _, cx| this.switch_column(cx)))
+            .on_action(cx.listener(|this, _: &ToggleScope, _, cx| this.toggle_scope(cx)))
     }
 
     fn move_selection(&mut self, by: isize, cx: &mut Context<Self>) {
         let Some(p) = &mut self.palette else { return };
-        let (matches, selected, scroll) = match (&mut p.tabs, p.on_tabs) {
-            (Some(c), true) => (&c.matches, &mut c.selected, &c.scroll),
-            _ => (&p.matches, &mut p.selected, &p.scroll),
-        };
-        let n = matches.len() as isize;
+        let n = p.matches.len() as isize;
         if n == 0 {
             return;
         }
-        *selected = (*selected as isize + by).rem_euclid(n) as usize;
-        scroll.scroll_to_item(*selected);
+        p.selected = (p.selected as isize + by).rem_euclid(n) as usize;
+        p.scroll.scroll_to_item(p.selected);
         cx.notify();
     }
 
-    /// Tab in ⌘P: the other column takes the selection.
-    fn switch_column(&mut self, cx: &mut Context<Self>) {
-        if let Some(p) = &mut self.palette
-            && p.tabs.is_some()
-        {
-            p.on_tabs = !p.on_tabs;
-            cx.notify();
-        }
+    /// Tab in ⌘P: search only this workspace's tabs, or everything again.
+    fn toggle_scope(&mut self, cx: &mut Context<Self>) {
+        let Some(p) = &mut self.palette else { return };
+        let Some(scope) = p.scope else { return };
+        p.scope = Some(match scope {
+            Scope::All => Scope::Here,
+            Scope::Here => Scope::All,
+        });
+        let query = p.input.read(cx).value().to_string();
+        p.filter(&query);
+        cx.notify();
     }
 
-    /// One column's rows. `active`: this column has the selection, so its
-    /// selected row is lit (the other's only faintly).
+    /// The list's rows. `show_workspace`: tag each tab with its workspace.
     fn palette_rows(
         entries: &[Entry],
         matches: &[(usize, Vec<usize>)],
         selected: usize,
-        active: bool,
-        tabs: bool,
+        show_workspace: bool,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         matches
@@ -649,14 +852,9 @@ impl AbroMux {
             .enumerate()
             .map(|(row, (ix, positions))| {
                 let e = &entries[*ix];
-                let lit = row == selected && active;
-                let id: ElementId = if tabs {
-                    ("palette-tab-row", row).into()
-                } else {
-                    ("palette-row", row).into()
-                };
+                let lit = row == selected;
                 div()
-                    .id(id)
+                    .id(("palette-row", row))
                     .mx(px(6.))
                     .px(px(10.))
                     .py(px(6.))
@@ -666,15 +864,10 @@ impl AbroMux {
                     .gap(px(10.))
                     .cursor_pointer()
                     .when(lit, |d| d.bg(tint(0x1a)))
-                    .when(row == selected && !active, |d| d.bg(tint(0x0a)))
                     .when(!lit, |d| d.hover(|s| s.bg(rgba(pal().hover))))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if let Some(p) = &mut this.palette {
-                            p.on_tabs = tabs;
-                            match (&mut p.tabs, tabs) {
-                                (Some(c), true) => c.selected = row,
-                                _ => p.selected = row,
-                            }
+                            p.selected = row;
                         }
                         this.confirm_palette(window, cx);
                     }))
@@ -708,6 +901,18 @@ impl AbroMux {
                                     .child(s)
                             })),
                     )
+                    .children(e.workspace.clone().filter(|_| show_workspace).map(|w| {
+                        div()
+                            .flex_none()
+                            .max_w(px(180.))
+                            .truncate()
+                            .px(px(6.))
+                            .rounded(px(4.))
+                            .bg(tint(0x0d))
+                            .text_size(px(11.))
+                            .text_color(rgb(pal().muted))
+                            .child(w)
+                    }))
                     .when(e.current, |d| {
                         d.child(
                             div()
@@ -729,11 +934,10 @@ impl AbroMux {
             .collect()
     }
 
-    /// A scrolling list of rows, with a heading when it's one of ⌘P's
-    /// columns (lit when it has the selection).
+    /// A scrolling list of rows, under a heading if it has one.
     fn palette_column(
         id: &'static str,
-        heading: Option<(&'static str, bool)>,
+        heading: Option<SharedString>,
         scroll: &ScrollHandle,
         rows: Vec<AnyElement>,
         empty: SharedString,
@@ -741,17 +945,13 @@ impl AbroMux {
         div()
             .flex()
             .flex_col()
-            .children(heading.map(|(h, lit)| {
+            .children(heading.map(|h| {
                 div()
                     .px(px(16.))
                     .pt(px(8.))
                     .text_size(px(11.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(if lit {
-                        rgb(pal().text)
-                    } else {
-                        rgb(pal().muted)
-                    })
+                    .text_color(rgb(pal().muted))
                     .child(h)
             }))
             .child(
@@ -777,35 +977,44 @@ impl AbroMux {
 
     pub(crate) fn render_palette(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = self.palette.as_ref()?;
-        let rows = Self::palette_rows(&p.entries, &p.matches, p.selected, !p.on_tabs, false, cx);
-        let tab_rows = p
-            .tabs
-            .as_ref()
-            .map(|c| Self::palette_rows(&c.entries, &c.matches, c.selected, p.on_tabs, true, cx));
+        let rows = Self::palette_rows(
+            &p.entries,
+            &p.matches,
+            p.selected,
+            p.scope == Some(Scope::All),
+            cx,
+        );
+        let heading: Option<SharedString> = p.scope.map(|s| match s {
+            Scope::All => "All workspaces and tabs".into(),
+            Scope::Here => format!("Tabs in {}", self.ws().name(cx)).into(),
+        });
         let empty: SharedString = match p.mode {
             Mode::Commands => "No commands match your search.".into(),
-            Mode::Workspaces => "No workspaces match your search.".into(),
+            Mode::Workspaces => match p.scope {
+                Some(Scope::Here) => "No tabs here match your search.".into(),
+                _ => "No workspaces or tabs match your search.".into(),
+            },
+            Mode::Prompt => {
+                let typed = p.input.read(cx).value().to_string();
+                let q = p.prompt.as_ref();
+                let confirm = q.and_then(|q| q.confirm.clone());
+                match q {
+                    Some(q) if !q.pick => {
+                        let what = confirm.unwrap_or_else(|| format!("Use “{}”", typed.trim()));
+                        format!("↵ {what}  ·  esc cancel").into()
+                    }
+                    Some(q) if q.allow_other && !typed.trim().is_empty() => {
+                        format!("↵ Use “{}”  ·  esc cancel", typed.trim()).into()
+                    }
+                    _ => "Nothing matches.  ·  esc cancel".into(),
+                }
+            }
             Mode::MergeRequests => {
                 if crate::gitlab::model::MrKey::parse(&p.input.read(cx).value()).is_some() {
                     "Enter to open this merge request".into()
                 } else {
                     "No cached merge requests match. Paste a link to open any.".into()
                 }
-            }
-            Mode::NewFolder => {
-                let typed = crate::one_line(&p.input.read(cx).value());
-                let name = if typed.is_empty() {
-                    &p.suggested
-                } else {
-                    &typed
-                };
-                let root = crate::folder::root(cx.global::<Settings>());
-                let dir = root.join(crate::folder::slug(name));
-                format!(
-                    "New workspace in {}  ·  Enter to create, Esc to cancel",
-                    tilde(&dir.to_string_lossy())
-                )
-                .into()
             }
             Mode::OpenLink(id) => {
                 let url = p.input.read(cx).value().trim().to_string();
@@ -852,7 +1061,7 @@ impl AbroMux {
                             div()
                                 .id("palette")
                                 .key_context(CONTEXT)
-                                .w(px(if p.tabs.is_some() { SWITCHER_WIDTH } else { WIDTH }))
+                                .w(px(if p.scope.is_some() { SWITCHER_WIDTH } else { WIDTH }))
                                 .max_w(relative(0.94))
                                 .flex()
                                 .flex_col()
@@ -866,6 +1075,17 @@ impl AbroMux {
                                 // Keep focus in the input when a row is clicked.
                                 .on_mouse_down(MouseButton::Left, |_, window, _| {
                                     window.prevent_default()
+                                })
+                                .when_some(p.prompt.as_ref().map(|q| q.title.clone()), |d, t| {
+                                    d.child(
+                                        div()
+                                            .px(px(14.))
+                                            .pt(px(9.))
+                                            .text_size(px(11.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(rgb(pal().muted))
+                                            .child(t),
+                                    )
                                 })
                                 .child(
                                     div()
@@ -884,57 +1104,50 @@ impl AbroMux {
                                                 .py_0(),
                                         ),
                                 )
-                                .child(match tab_rows {
-                                    None => Self::palette_column(
-                                        "palette-rows",
-                                        None,
-                                        &p.scroll,
-                                        rows,
-                                        empty,
-                                    )
-                                    .into_any_element(),
-                                    Some(tab_rows) => div()
-                                        .flex()
-                                        .child(
-                                            Self::palette_column(
-                                                "palette-rows",
-                                                Some(("Workspaces", !p.on_tabs)),
-                                                &p.scroll,
-                                                rows,
-                                                empty,
-                                            )
-                                            .flex_1()
-                                            .min_w_0()
-                                            .border_r_1()
-                                            .border_color(rgb(pal().border)),
+                                .child(Self::palette_column(
+                                    "palette-rows",
+                                    heading,
+                                    &p.scroll,
+                                    rows,
+                                    empty,
+                                ))
+                                .when_some(
+                                    p.prompt
+                                        .as_ref()
+                                        .filter(|q| q.pick && !p.matches.is_empty())
+                                        .map(|q| q.confirm.clone().unwrap_or("choose".into())),
+                                    |d, confirm| {
+                                        d.child(
+                                            div()
+                                                .px(px(14.))
+                                                .py(px(6.))
+                                                .border_t_1()
+                                                .border_color(rgb(pal().border))
+                                                .text_size(px(11.))
+                                                .text_color(rgb(pal().muted))
+                                                .child(format!(
+                                                    "↑↓ select  ·  ↵ {confirm}  ·  esc cancel"
+                                                )),
                                         )
-                                        .children(p.tabs.as_ref().map(|c| {
-                                            Self::palette_column(
-                                                "palette-tab-rows",
-                                                Some(("Tabs in this workspace", p.on_tabs)),
-                                                &c.scroll,
-                                                tab_rows,
-                                                "No tabs here match your search.".into(),
-                                            )
-                                            .flex_1()
-                                            .min_w_0()
-                                        }))
-                                        .into_any_element(),
-                                })
-                                .when(p.tabs.is_some(), |d| {
-                                    d.child(
-                                        div()
-                                            .px(px(14.))
-                                            .py(px(6.))
-                                            .border_t_1()
-                                            .border_color(rgb(pal().border))
-                                            .text_size(px(11.))
-                                            .text_color(rgb(pal().muted))
-                                            .child(
-                                                "⇥ switch column  ·  ↑↓ select  ·  ↵ go  ·  esc close",
-                                            ),
-                                    )
-                                }),
+                                    },
+                                )
+                                .children(p.scope.map(|scope| {
+                                    div()
+                                        .px(px(14.))
+                                        .py(px(6.))
+                                        .border_t_1()
+                                        .border_color(rgb(pal().border))
+                                        .text_size(px(11.))
+                                        .text_color(rgb(pal().muted))
+                                        .child(match scope {
+                                            Scope::All => {
+                                                "⇥ only this workspace  ·  ↑↓ select  ·  ↵ go  ·  esc close"
+                                            }
+                                            Scope::Here => {
+                                                "⇥ all workspaces  ·  ↑↓ select  ·  ↵ go  ·  esc close"
+                                            }
+                                        })
+                                }))
                         ),
                 )
                 .into_any_element(),
@@ -944,28 +1157,22 @@ impl AbroMux {
 
 impl Palette {
     fn filter(&mut self, query: &str) {
-        self.matches = rank(&self.entries, query);
+        self.query = query.to_string();
+        let here = self.scope == Some(Scope::Here);
+        self.matches = rank(&self.entries, query, |e| !here || e.here);
         self.selected = 0;
         self.scroll.scroll_to_item(0);
-        if let Some(c) = &mut self.tabs {
-            c.matches = rank(&c.entries, query);
-            c.selected = 0;
-            c.scroll.scroll_to_item(0);
-        }
-        // Typing that leaves only tabs: go to the tabs.
-        if self.matches.is_empty() && self.tabs.as_ref().is_some_and(|c| !c.matches.is_empty()) {
-            self.on_tabs = true;
-        }
     }
 }
 
-/// `entries` that match `query`, best first, with the matched character
-/// positions of each title.
-fn rank(entries: &[Entry], query: &str) -> Vec<(usize, Vec<usize>)> {
+/// `entries` that `keep` and that match `query`, best first, with the
+/// matched character positions of each title.
+fn rank(entries: &[Entry], query: &str, keep: impl Fn(&Entry) -> bool) -> Vec<(usize, Vec<usize>)> {
     {
         let mut scored: Vec<(i32, usize, Vec<usize>)> = entries
             .iter()
             .enumerate()
+            .filter(|(_, e)| keep(e))
             .filter_map(|(i, e)| match fuzzy_match(query, &e.title) {
                 Some((score, pos)) => Some((score, i, pos)),
                 // A keyword match ranks below any title match.
@@ -1146,8 +1353,50 @@ fn is_subsequence(needle: &[char], hay: &[char]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{fuzzy_match, linux_key_label, mac_key_label};
+    use super::{Entry, Target, fuzzy_match, linux_key_label, mac_key_label, rank};
     use gpui::Modifiers;
+
+    /// A ⌘P tab row: `title`, in workspace `ws`, `here` if that's the
+    /// workspace you're on.
+    fn tab(title: &str, ws: &str, here: bool) -> Entry {
+        Entry {
+            title: title.to_string().into(),
+            subtitle: None,
+            keywords: vec![ws.into()],
+            keys: None,
+            target: Target::Workspace(0),
+            icon: None,
+            current: false,
+            here,
+            workspace: Some(ws.to_string().into()),
+        }
+    }
+
+    fn titles(entries: &[Entry], query: &str, here_only: bool) -> Vec<String> {
+        rank(entries, query, |e| !here_only || e.here)
+            .into_iter()
+            .map(|(i, _)| entries[i].title.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn switcher_scope() {
+        let entries = [
+            tab("server logs", "billing", true),
+            tab("claude", "billing", true),
+            tab("server", "search", false),
+            tab("notes", "server-migration", false),
+        ];
+        // Every workspace's tabs, this one's first on a tie; a match on the
+        // workspace's name comes last.
+        assert_eq!(
+            titles(&entries, "server", false),
+            ["server logs", "server", "notes"]
+        );
+        // Narrowed to this workspace.
+        assert_eq!(titles(&entries, "server", true), ["server logs"]);
+        assert_eq!(titles(&entries, "", true), ["server logs", "claude"]);
+    }
 
     fn score(q: &str, t: &str) -> i32 {
         fuzzy_match(q, t).map(|(s, _)| s).unwrap_or(i32::MIN)

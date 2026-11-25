@@ -207,6 +207,11 @@ impl AbroMux {
             ))
         } else if let Some(e) = &st.error {
             Some((e.clone(), RED_TEXT))
+        } else if super::settings(cx).polling.factor().is_none() {
+            Some((
+                "Background checks off; Refresh checks once".into(),
+                pal().muted,
+            ))
         } else if st.slowdown() > 1.01 {
             Some((
                 format!("Checking {:.1}× less often (rate limit)", st.slowdown()),

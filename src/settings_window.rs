@@ -58,6 +58,7 @@ pub fn apply(s: Settings, cx: &mut App) {
     }
     keymap::apply(&s, cx);
     crate::theme::apply(s.app.appearance, cx);
+    crate::remote::apply(&s.remote);
     cx.set_global(s);
     menu::set_menus(cx);
     cx.refresh_windows();
@@ -113,6 +114,10 @@ struct SettingsView {
     needs_modifier: bool,
     /// The GitLab page's text fields, saved on Enter or leaving them.
     text_fields: Vec<(Key, Entity<InputState>)>,
+    /// Phone Access: a Tailscale login to let in, added on Enter.
+    allow_input: Entity<InputState>,
+    /// Servers: a new server's name and address, added on Enter.
+    server_inputs: (Entity<InputState>, Entity<InputState>),
     _subscriptions: Vec<Subscription>,
 }
 
@@ -164,6 +169,55 @@ impl SettingsView {
                 }
             }),
         ]);
+        let allow_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("name@example.com, then Return"));
+        _subscriptions.push(cx.subscribe_in(
+            &allow_input,
+            window,
+            |_, input, ev: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = ev {
+                    let login = input.read(cx).value().trim().to_string();
+                    if !login.is_empty() {
+                        allow_login(&login, true, window, cx);
+                        input.update(cx, |i, cx| i.set_value("", window, cx));
+                    }
+                }
+            },
+        ));
+        let server_name = cx.new(|cx| InputState::new(window, cx).placeholder("Name, like vps"));
+        let server_address =
+            cx.new(|cx| InputState::new(window, cx).placeholder("ssh://me@host, then Return"));
+        for input in [&server_name, &server_address] {
+            let (name, address) = (server_name.clone(), server_address.clone());
+            _subscriptions.push(cx.subscribe_in(
+                input,
+                window,
+                move |_, _, ev: &InputEvent, window, cx| {
+                    if let InputEvent::PressEnter { .. } = ev {
+                        add_server(&name, &address, window, cx);
+                    }
+                },
+            ));
+        }
+        // Phone access changes on its own (Tailscale answering, phones
+        // coming and going), and so do servers' checks: redraw when they do.
+        cx.spawn(async move |this, cx| {
+            let changes = || (crate::remote::changes(), crate::servers::changes());
+            let mut seen = changes();
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(700))
+                    .await;
+                let now = changes();
+                if now != seen {
+                    seen = now;
+                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                        return;
+                    }
+                }
+            }
+        })
+        .detach();
         _subscriptions.extend([
             cx.subscribe_in(&search, window, |this, _, ev: &InputEvent, _, cx| {
                 if let InputEvent::Change = ev {
@@ -173,13 +227,13 @@ impl SettingsView {
             }),
             // A reload (⌘⇧,) or a change made here.
             cx.observe_global_in::<Settings>(window, |this, _, cx| {
-                this.error = settings::load().err();
+                this.error = settings::app_error();
                 cx.notify();
             }),
             // Back from editing the file by hand.
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
-                    this.error = settings::load().err();
+                    this.error = settings::app_error();
                 } else {
                     this.stop_recording(cx);
                 }
@@ -196,10 +250,12 @@ impl SettingsView {
             search,
             scroll: ScrollHandle::new(),
             page: 0,
-            error: settings::load().err(),
+            error: settings::app_error(),
             recording: None,
             needs_modifier: false,
             text_fields,
+            allow_input,
+            server_inputs: (server_name, server_address),
             _subscriptions,
         }
     }
@@ -260,8 +316,8 @@ fn restore_keymap(cx: &mut App) {
 /// Save one key of the config file (`None` removes it) and apply the
 /// result, or say why it wasn't saved.
 fn save(key: &[&str], value: Option<Value>, window: &mut Window, cx: &mut App) {
-    match settings::edit(key, value) {
-        Ok(s) => apply(s, cx),
+    match save_key(key, value, cx) {
+        Ok(()) => {}
         Err(e) => window.push_notification(
             Notification::error(e)
                 .id::<SettingsView>()
@@ -270,6 +326,15 @@ fn save(key: &[&str], value: Option<Value>, window: &mut Window, cx: &mut App) {
             cx,
         ),
     }
+}
+
+/// Save one key of the config file (`None` removes it) and apply the
+/// result, with init.lua's commands and settings: the Settings window's
+/// and `settings.set`'s write.
+pub fn save_key(key: &[&str], value: Option<Value>, cx: &mut App) -> Result<(), String> {
+    let s = settings::edit(key, value)?;
+    apply(settings::with_lua(s), cx);
+    Ok(())
 }
 
 /// Set an action's keys to `keys` (`None` for its defaults). A shortcut
@@ -399,6 +464,18 @@ fn row<T: PartialEq + 'static>(
     }
 }
 
+/// Where the workspace folders script (`abromux.workspace_folders`) puts
+/// them: `$ABROMUX_WORKSPACES_DIR`, else `app.workspaceFoldersDirectory`,
+/// else the channel's `~/.abromux/ws`. The script reads them the same way.
+fn workspaces_dir(s: &Settings) -> std::path::PathBuf {
+    std::env::var("ABROMUX_WORKSPACES_DIR")
+        .ok()
+        .or_else(|| s.app.workspace_folders_directory.clone())
+        .filter(|d| !d.trim().is_empty())
+        .map(|d| crate::paths::expand_tilde(d.trim()))
+        .unwrap_or_else(crate::channel::workspaces_dir)
+}
+
 /// A folder setting: the folder it comes to, and Choose… for the Finder's
 /// folder picker. The reset arrow goes back to the default.
 fn folder_row(title: &'static str, description: impl Into<SharedString>, key: Key) -> Row {
@@ -408,7 +485,7 @@ fn folder_row(title: &'static str, description: impl Into<SharedString>, key: Ke
         key,
         |s| s.app.workspace_folders_directory.clone(),
         move |_, _, _, cx| {
-            let shown = crate::folder::root(cx.global::<Settings>());
+            let shown = workspaces_dir(cx.global::<Settings>());
             div()
                 .flex()
                 .items_center()
@@ -741,6 +818,8 @@ fn pages(
     recording: Option<&'static str>,
     needs_modifier: bool,
     text_fields: &[(Key, Entity<InputState>)],
+    allow_input: &Entity<InputState>,
+    server_inputs: &(Entity<InputState>, Entity<InputState>),
     cx: &App,
 ) -> Vec<Page> {
     vec![
@@ -750,8 +829,194 @@ fn pages(
         panes_page(),
         shortcuts_page(view, recording, needs_modifier),
         commands_page(cx),
+        scripts_page(cx),
         gitlab_page(text_fields),
+        phone_page(allow_input, cx),
+        servers_page(server_inputs),
     ]
+}
+
+/// Add the server the Servers page's fields describe, and clear them.
+fn add_server(
+    name: &Entity<InputState>,
+    address: &Entity<InputState>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let n = name.read(cx).value().trim().to_string();
+    let a = address.read(cx).value().trim().to_string();
+    if n.is_empty() && a.is_empty() {
+        return;
+    }
+    // A name alone: the host is the name (`vps` → ssh://vps).
+    let a = if a.is_empty() { n.clone() } else { a };
+    let n = if n.is_empty() {
+        abromux_term::remote::Endpoint::parse(&a).map_or(a.clone(), |e| e.label())
+    } else {
+        n
+    };
+    match crate::servers::add(&n, &a) {
+        Ok(s) => {
+            crate::servers::check(&s.address);
+            name.update(cx, |i, cx| i.set_value("", window, cx));
+            address.update(cx, |i, cx| i.set_value("", window, cx));
+            cx.refresh_windows();
+        }
+        Err(e) => window.push_notification(
+            Notification::error(e)
+                .id::<SettingsView>()
+                .title("Server not added"),
+            cx,
+        ),
+    }
+}
+
+/// A text field as the settings rows draw them.
+fn field(input: &Entity<InputState>, width: f32) -> AnyElement {
+    div()
+        .w(px(width))
+        .h(px(26.))
+        .px(px(8.))
+        .flex()
+        .items_center()
+        .rounded(px(6.))
+        .border_1()
+        .border_color(rgb(pal().border))
+        .bg(rgb(pal().input_bg))
+        .child(
+            Input::new(input)
+                .appearance(false)
+                .text_size(px(12.))
+                .h_full()
+                .px_0()
+                .py_0(),
+        )
+        .into_any_element()
+}
+
+/// Keep the servers on `home` (a server's name), or this app's own again:
+/// off the main thread (it asks the server), then the page again.
+fn set_servers_home(home: Option<String>, window: &mut Window, cx: &mut App) {
+    let task = cx
+        .background_executor()
+        .spawn(async move { crate::servers::set_home(home.as_deref()) });
+    let wh = window.window_handle();
+    cx.spawn(async move |cx| {
+        let r = task.await;
+        let _ = wh.update(cx, |_, window, cx| {
+            if let Err(e) = r {
+                window.push_notification(Notification::error(e).title("Servers"), cx);
+            }
+            cx.refresh_windows();
+        });
+    })
+    .detach();
+}
+
+fn servers_page(inputs: &(Entity<InputState>, Entity<InputState>)) -> Page {
+    use crate::servers::Status;
+    let list = crate::servers::load();
+    let home = crate::servers::home();
+    let rows = list.into_iter().map(|s| {
+        let status = match crate::servers::status(&s.address) {
+            None => String::new(),
+            Some(Status::Checking) => " · checking…".into(),
+            Some(Status::Up(about)) => format!(" · up: {about}"),
+            Some(Status::Down(e)) => format!(" · can't reach it: {e}"),
+            Some(Status::Moved(e)) => format!(" · {e}"),
+        };
+        let (check, remove) = (s.address.clone(), s.name.clone());
+        let is_home = home.as_deref() == Some(s.address.as_str());
+        let keeps = if is_home { " · keeps this list" } else { "" };
+        let name = s.name.clone();
+        info_row(
+            s.name.clone(),
+            format!("{}{status}{keeps}", s.address),
+            move |_, _| {
+                let (check, remove, name) = (check.clone(), remove.clone(), name.clone());
+                div()
+                    .flex()
+                    .gap(px(6.))
+                    .items_center()
+                    .when(!is_home, |d| {
+                        d.child(button("home-server", "Keep the List Here").on_click(
+                            move |_, window, cx| set_servers_home(Some(name.clone()), window, cx),
+                        ))
+                    })
+                    .child(button("check-server", "Check").on_click(move |_, _, cx| {
+                        crate::servers::check(&check);
+                        cx.refresh_windows();
+                    }))
+                    .child(
+                        icon_button("remove-server", "icons/x.svg", "Remove").on_click(
+                            move |_, window, cx| {
+                                if let Err(e) = crate::servers::remove(&remove) {
+                                    window.push_notification(Notification::error(e), cx);
+                                }
+                                cx.refresh_windows();
+                            },
+                        ),
+                    )
+                    .into_any_element()
+            },
+        )
+    });
+    let (name, address) = inputs.clone();
+    let add = info_row(
+        "Add a server",
+        "Its name, and how ssh reaches it: ssh://user@host[:port], or a name from ~/.ssh/config.",
+        move |_, _| {
+            let (n, a) = (name.clone(), address.clone());
+            div()
+                .flex()
+                .gap(px(6.))
+                .items_center()
+                .child(field(&name, 110.))
+                .child(field(&address, 200.))
+                .child(
+                    button("add-server", "Add")
+                        .on_click(move |_, window, cx| add_server(&n, &a, window, cx)),
+                )
+                .into_any_element()
+        },
+    );
+    let path = crate::servers::path();
+    Page {
+        title: "Servers",
+        icon: "icons/globe.svg",
+        description: Some(
+            "Other machines' abromux servers, such as a Linux VPS: workspaces and tabs \
+             there keep running whether or not this app is open. ⌘⇧P → New Workspace on … \
+             or New Tab on … opens one. The server needs abromux-server installed and ssh \
+             that logs in without asking (a key in your agent, or Tailscale SSH).",
+        ),
+        groups: vec![
+            group("Servers", rows.chain([add])),
+            group(
+                "Where They're Kept",
+                [match home {
+                    Some(h) => info_row(
+                        format!("On {}", crate::servers::label(&h)),
+                        "Shared: every app whose list is kept there has these servers, and a \
+                         change here is a change there (`abromux servers home`). This app \
+                         keeps a copy, brought up to date when it starts.",
+                        |_, _| {
+                            button("own-servers", "This App's Own")
+                                .on_click(|_, window, cx| set_servers_home(None, window, cx))
+                                .into_any_element()
+                        },
+                    ),
+                    None => info_row(
+                        crate::workspace::tilde(&path.to_string_lossy()),
+                        "Not in config.json, so other versions of the app sharing it don't \
+                         trip on them. `abromux servers` changes it too. Keep the List Here \
+                         on a server shares it with your other apps.",
+                        |_, _| div().into_any_element(),
+                    ),
+                }],
+            ),
+        ],
+    }
 }
 
 fn general_page() -> Page {
@@ -820,10 +1085,8 @@ fn general_page() -> Page {
                     ),
                     folder_row(
                         "Workspace folders",
-                        format!(
-                            "Where {} makes a workspace's own folder.",
-                            crate::keymap::default_label("newFolderWorkspace")
-                        ),
+                        "Where New Workspace Folder… (the workspace folders script in \
+                         init.lua) makes a workspace's own folder.",
                         &["app", "workspaceFoldersDirectory"],
                     ),
                 ],
@@ -1330,54 +1593,348 @@ fn gitlab_page(fields: &[(Key, Entity<InputState>)]) -> Page {
             ),
             group(
                 "Checking for Changes",
+                [choice(
+                    "Polling level",
+                    "How often merge requests are checked in the background.",
+                    &["gitlab", "polling"],
+                    &[
+                        ("off", "Off"),
+                        ("low", "Low"),
+                        ("medium", "Medium"),
+                        ("high", "High"),
+                    ],
+                    |s| s.gitlab.polling.key(),
+                )],
+            ),
+        ],
+    }
+}
+
+// MARK: Phone Access
+
+/// Let `login` in (or not), in `remote.allow`.
+fn allow_login(login: &str, allow: bool, window: &mut Window, cx: &mut App) {
+    let mut list = cx.global::<Settings>().remote.allow.clone();
+    list.retain(|a| !a.eq_ignore_ascii_case(login));
+    if allow {
+        list.push(login.to_string());
+    }
+    save(
+        &["remote", "allow"],
+        (!list.is_empty()).then(|| json!(list)),
+        window,
+        cx,
+    );
+}
+
+/// A URL in Tailscale's message, like the page that turns on Serve or
+/// HTTPS for the tailnet.
+fn link_in(text: &str) -> Option<String> {
+    text.split_whitespace()
+        .find(|w| w.starts_with("https://"))
+        .map(|w| w.trim_end_matches(['.', ',', ')']).to_string())
+}
+
+/// The URL as a QR code for the phone's camera: dark modules on white.
+fn qr_code(url: &str) -> Option<AnyElement> {
+    let code = qrcode::QrCode::new(url.as_bytes()).ok()?;
+    let w = code.width();
+    let colors = code.to_colors();
+    let cell = px(4.);
+    Some(
+        div()
+            .flex_none()
+            .p(px(10.))
+            .rounded(px(8.))
+            .bg(rgb(0xffffff))
+            .children((0..w).map(|y| {
+                div().flex().children((0..w).map(|x| {
+                    let dark = colors[y * w + x] == qrcode::Color::Dark;
+                    div().size(cell).when(dark, |d| d.bg(rgb(0x000000)))
+                }))
+            }))
+            .into_any_element(),
+    )
+}
+
+/// What phone access is doing: the address and its code, or what's wrong.
+fn phone_status() -> AnyElement {
+    let st = crate::remote::status();
+    let muted = rgb(pal().muted);
+    let line = |text: String| div().text_size(px(11.5)).text_color(muted).child(text);
+    let problem = st["error"]
+        .as_str()
+        .or(st["serve_error"].as_str())
+        .map(str::to_string);
+    if let Some(e) = problem {
+        let link = link_in(&e);
+        return div()
+            .flex()
+            .gap(px(10.))
+            .child(
+                svg()
+                    .path("icons/triangle-alert.svg")
+                    .flex_none()
+                    .size(px(16.))
+                    .text_color(rgb(crate::status::WARNING)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(div().text_size(px(12.5)).child(e.clone()))
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(6.))
+                            .when(e.contains("isn't installed"), |d| {
+                                d.child(button("get-tailscale", "Get Tailscale").on_click(
+                                    |_, _, cx| cx.open_url("https://tailscale.com/download"),
+                                ))
+                            })
+                            .when_some(link, |d, url| {
+                                d.child(
+                                    button("open-link", "Open in Browser")
+                                        .on_click(move |_, _, cx| cx.open_url(&url)),
+                                )
+                            })
+                            .child(
+                                button("retry", "Try Again")
+                                    .on_click(|_, _, _| crate::remote::retry()),
+                            ),
+                    ),
+            )
+            .into_any_element();
+    }
+    let Some(url) = st["url"].as_str().filter(|_| st["serve"].is_string()) else {
+        return line("Setting up tailscale serve…".into()).into_any_element();
+    };
+    let url = url.to_string();
+    let clients = st["clients"].as_u64().unwrap_or(0);
+    let copy = url.clone();
+    // Without the scheme, the address fits on a line beside the code.
+    let shown = url
+        .trim_start_matches("https://")
+        .trim_end_matches('/')
+        .to_string();
+    div()
+        .flex()
+        .items_start()
+        .gap(px(16.))
+        .children(qr_code(&url))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_size(px(12.5))
+                        .font_family(crate::terminal::mono_font())
+                        .child(shown),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .child(
+                            button("copy-url", "Copy Address").on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
+                            }),
+                        ),
+                )
+                .child(line(match clients {
+                    0 => "No phone connected.".into(),
+                    1 => "1 phone connected.".into(),
+                    n => format!("{n} phones connected."),
+                }))
+                .child(div().h(px(6.)))
+                .child(line(
+                    "On the phone, signed in to the same Tailscale account: scan the code \
+                     (or open the address in Safari), then Share › Add to Home Screen, and \
+                     open abromux from there."
+                        .into(),
+                ))
+                .child(line(
+                    "For alerts on the phone: Notifications in its sidebar › Turn On Alerts."
+                        .into(),
+                )),
+        )
+        .into_any_element()
+}
+
+fn phone_page(allow_input: &Entity<InputState>, cx: &App) -> Page {
+    let r = &cx.global::<Settings>().remote;
+    let on = r.enabled;
+    let st = crate::remote::status();
+    let owner = st["owner"].as_str().map(str::to_string);
+    let allow = r.allow.clone();
+    let input = allow_input.clone();
+    let mut access = vec![switch(
+        "Phone access",
+        "Use this Mac's abromux from your iPhone or iPad: the workspaces, terminals, \
+         Claude tabs and notifications. Over Tailscale, so only your tailnet can reach it.",
+        &["remote", "enabled"],
+        |s| s.remote.enabled,
+    )];
+    if on {
+        access.push(Row::Custom(Rc::new(|_, _| phone_status())));
+    }
+    let who = std::iter::once(info_row(
+        owner
+            .clone()
+            .unwrap_or_else(|| "This Mac's Tailscale user".into()),
+        if owner.is_some() {
+            "This Mac's Tailscale user, always let in."
+        } else {
+            "Always let in; Tailscale says who once it's running."
+        },
+        |_, _| div().into_any_element(),
+    ))
+    .chain(allow.into_iter().map(|login| {
+        let remove = login.clone();
+        info_row(login, "", move |_, _| {
+            let remove = remove.clone();
+            icon_button("remove-login", "icons/x.svg", "Remove")
+                .on_click(move |_, window, cx| allow_login(&remove, false, window, cx))
+                .into_any_element()
+        })
+    }))
+    .chain([info_row(
+        "Let someone else in",
+        "Their Tailscale login. They need to be on your tailnet too.",
+        move |_, _| {
+            div()
+                .w(px(240.))
+                .h(px(26.))
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(rgb(pal().border))
+                .bg(rgb(pal().input_bg))
+                .child(
+                    Input::new(&input)
+                        .appearance(false)
+                        .text_size(px(12.))
+                        .h_full()
+                        .px_0()
+                        .py_0(),
+                )
+                .into_any_element()
+        },
+    )]);
+    let phones = crate::remote::push_subscriptions().len();
+    let cfg = crate::remote::Config::from(r);
+    Page {
+        title: "Phone Access",
+        icon: "icons/smartphone.svg",
+        description: Some(
+            "Needs Tailscale on this Mac and on the phone, signed in to the same account. \
+             abromux puts itself on this Mac's tailnet address with tailscale serve while \
+             this is on, and takes it off when it's turned off.",
+        ),
+        groups: vec![
+            group("Phone Access", access),
+            group("Who Can Connect", who),
+            group(
+                "Alerts",
                 [
                     stepper(
-                        "On screen",
-                        "A merge request shown in a tab.",
-                        &["gitlab", "onScreenSeconds"],
-                        |s| s.gitlab.on_screen_seconds as f32,
-                        (5., 600., 5.),
-                        |v| format!("{v} s"),
+                        "Only when away for",
+                        "Alerts go to the phone when no phone has abromux open and the \
+                         Mac has had no keyboard or mouse use for this long.",
+                        &["remote", "pushWhenIdle"],
+                        |s| s.remote.push_when_idle as f32,
+                        (0., 3600., 15.),
+                        |v| {
+                            if v == 0. {
+                                "Always".into()
+                            } else if v >= 60. && v % 60. == 0. {
+                                format!("{} min", v / 60.)
+                            } else {
+                                format!("{v} s")
+                            }
+                        },
                     ),
-                    stepper(
-                        "Pipeline running",
-                        "One whose pipeline is still going.",
-                        &["gitlab", "runningPipelineSeconds"],
-                        |s| s.gitlab.running_pipeline_seconds as f32,
-                        (5., 600., 5.),
-                        |v| format!("{v} s"),
+                    switch(
+                        "Show the message",
+                        "The alert has what the agent said, not just which one it is.",
+                        &["remote", "pushPreview"],
+                        |s| s.remote.push_preview,
                     ),
-                    stepper(
-                        "Mine and workspaces'",
-                        "Yours, the workspaces', and the most recently opened ones below.",
-                        &["gitlab", "mineSeconds"],
-                        |s| s.gitlab.mine_seconds as f32,
-                        (15., 3600., 15.),
-                        |v| format!("{v} s"),
-                    ),
-                    stepper(
-                        "Checked as often as mine",
-                        "How many of the most recently opened ones.",
-                        &["gitlab", "frequentRecent"],
-                        |s| s.gitlab.frequent_recent as f32,
-                        (0., 100., 1.),
-                        n,
-                    ),
-                    stepper(
-                        "Other recent ones",
-                        "The rest of the recently opened.",
-                        &["gitlab", "recentSeconds"],
-                        |s| s.gitlab.recent_seconds as f32,
-                        (30., 3600., 30.),
-                        |v| format!("{v} s"),
+                    info_row(
+                        match phones {
+                            0 => "No phone gets alerts".to_string(),
+                            1 => "1 phone gets alerts".to_string(),
+                            n => format!("{n} phones get alerts"),
+                        },
+                        "Sent through Apple's push service, encrypted for each phone.",
+                        move |_, _| {
+                            div()
+                                .flex()
+                                .gap(px(6.))
+                                .when(phones > 0, |d| {
+                                    d.child(button("send-test", "Send Test").on_click(|_, _, _| {
+                                        std::thread::spawn(|| {
+                                            crate::remote::push_all(&json!({
+                                                "title": channel::app_name(),
+                                                "body": "Notifications from this Mac work.",
+                                            }))
+                                        });
+                                    }))
+                                    .child(
+                                        button("forget-phones", "Forget All").on_click(
+                                            |_, _, cx| {
+                                                let _ = crate::remote::push_clear();
+                                                cx.refresh_windows();
+                                            },
+                                        ),
+                                    )
+                                })
+                                .into_any_element()
+                        },
                     ),
                 ],
-            )
-            .description(
-                "A cheap check of many merge requests at once; details and diffs are \
-                 fetched only when it shows a change. When GitLab rate-limits, these \
-                 stretch on their own and recover slowly. All are three times longer \
-                 while the app is in the background.",
+            ),
+            group(
+                "This Mac",
+                [
+                    switch(
+                        "Stay awake while agents work",
+                        "While phone access is on and an agent is working, the Mac doesn't \
+                         go to sleep on its own (the display still does).",
+                        &["remote", "keepAwake"],
+                        |s| s.remote.keep_awake,
+                    ),
+                    switch(
+                        "Phones can do everything",
+                        "Also browser automation (your signed-in browser) and files. Off: \
+                         workspaces, terminals, Claude tabs and notifications.",
+                        &["remote", "allMethods"],
+                        |s| s.remote.all_methods,
+                    ),
+                    info_row(
+                        "Ports",
+                        "\"port\" and \"httpsPort\" under \"remote\" in the config file.",
+                        move |_, _| {
+                            div()
+                                .text_size(px(12.))
+                                .text_color(rgb(pal().muted))
+                                .child(format!(
+                                    "127.0.0.1:{} → tailnet :{}",
+                                    cfg.port, cfg.https_port
+                                ))
+                                .into_any_element()
+                        },
+                    ),
+                ],
             ),
         ],
     }
@@ -1628,6 +2185,169 @@ fn commands_page(cx: &App) -> Page {
     }
 }
 
+/// The settings init.lua declares (`abromux.setting`), grouped as it says.
+fn scripts_page(cx: &App) -> Page {
+    let s = cx.global::<Settings>();
+    let mut groups: Vec<Group> = vec![];
+    for def in s.script_settings.clone() {
+        let title = def.group.clone().unwrap_or_else(|| "Settings".into());
+        let row = script_row(def);
+        match groups.iter_mut().find(|g| g.title.as_ref() == title) {
+            Some(g) => g.rows.push(row),
+            None => groups.push(group(title, [row])),
+        }
+    }
+    if groups.is_empty() {
+        groups.push(group(
+            "Settings",
+            [info_row(
+                "No script settings yet",
+                "Declare them in init.lua with abromux.setting{...}.",
+                |_, _| {
+                    button("open-init", "Open init.lua")
+                        .on_click(|_, _, cx| cx.open_with_system(&crate::lua::ensure_init_file()))
+                        .into_any_element()
+                },
+            )],
+        ));
+    }
+    Page {
+        title: "Scripts",
+        icon: "icons/pencil.svg",
+        description: Some("Settings your init.lua scripts declare."),
+        groups,
+    }
+}
+
+/// One script setting's row; its value lives at `scripts.<key>`.
+fn script_row(def: crate::lua::SettingDef) -> Row {
+    use crate::lua::SettingKind;
+    let key = def.key.clone();
+    let value = {
+        let key = key.clone();
+        move |cx: &App| {
+            cx.global::<Settings>()
+                .script_value(&key)
+                .unwrap_or(Value::Null)
+        }
+    };
+    let default = def.default.clone();
+    let set = {
+        let key = key.clone();
+        let default = default.clone();
+        Rc::new(move |v: Value, window: &mut Window, cx: &mut App| {
+            save(&["scripts", &key], (v != default).then_some(v), window, cx)
+        })
+    };
+    let control: ControlFn = match def.kind {
+        SettingKind::Boolean => {
+            let value = value.clone();
+            Rc::new(move |_, cx| {
+                let on = value(cx).as_bool().unwrap_or(false);
+                let set = set.clone();
+                toggle(on)
+                    .on_click(move |_, window, cx| set(json!(!on), window, cx))
+                    .into_any_element()
+            })
+        }
+        SettingKind::Choice(options) => {
+            let value = value.clone();
+            let options = Rc::new(options);
+            Rc::new(move |_, cx| {
+                let current = value(cx).as_str().unwrap_or_default().to_string();
+                let label = options
+                    .iter()
+                    .find(|(v, _)| *v == current)
+                    .map_or(current.clone(), |(_, l)| l.clone());
+                let options = options.clone();
+                let set = set.clone();
+                Button::new("choice")
+                    .label(label)
+                    .dropdown_caret(true)
+                    .outline()
+                    .small()
+                    .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+                        options.iter().fold(menu, |menu, (v, l)| {
+                            let set = set.clone();
+                            let v = v.clone();
+                            menu.item(
+                                PopupMenuItem::new(l.clone())
+                                    .checked(v == current)
+                                    .on_click(move |_, window, cx| set(json!(v), window, cx)),
+                            )
+                        })
+                    })
+                    .into_any_element()
+            })
+        }
+        SettingKind::Number { min, max, step } => {
+            let value = value.clone();
+            Rc::new(move |_, cx| {
+                let n = value(cx).as_f64().unwrap_or(min);
+                let button = |id: &'static str, icon: &'static str, delta: f64| {
+                    let enabled = if delta < 0. { n > min } else { n < max };
+                    let set = set.clone();
+                    div()
+                        .id(id)
+                        .w(px(26.))
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(svg().path(icon).size(px(12.)).text_color(rgb(pal().text)))
+                        .when(!enabled, |d| d.opacity(0.3))
+                        .when(enabled, |d| {
+                            d.cursor_pointer()
+                                .hover(|s| s.bg(rgba(pal().hover)))
+                                .on_click(move |_, window, cx| {
+                                    let v = ((n + delta) / step).round() * step;
+                                    let v = (v.clamp(min, max) * 1000.).round() / 1000.;
+                                    let v = if v.fract() == 0. {
+                                        json!(v as i64)
+                                    } else {
+                                        json!(v)
+                                    };
+                                    set(v, window, cx)
+                                })
+                        })
+                };
+                div()
+                    .flex()
+                    .flex_none()
+                    .h(px(24.))
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(rgb(pal().border))
+                    .bg(rgb(pal().input_bg))
+                    .overflow_hidden()
+                    .child(button("less", "icons/minus.svg", -step))
+                    .child(
+                        div()
+                            .w(px(60.))
+                            .h_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .border_l_1()
+                            .border_r_1()
+                            .border_color(rgb(pal().border))
+                            .text_size(px(12.))
+                            .child(format!("{n}")),
+                    )
+                    .child(button("more", "icons/plus.svg", step))
+                    .into_any_element()
+            })
+        }
+    };
+    Row::Setting {
+        title: def.title.into(),
+        description: def.description.unwrap_or_default().into(),
+        is_default: Rc::new(move |cx| value(cx) == default),
+        reset: Rc::new(move |window, cx| save(&["scripts", &key], None, window, cx)),
+        control,
+    }
+}
+
 // MARK: Rendering
 
 /// A small icon that does something, with a tooltip.
@@ -1751,6 +2471,8 @@ impl Render for SettingsView {
             self.recording,
             self.needs_modifier,
             &self.text_fields,
+            &self.allow_input,
+            &self.server_inputs,
             cx,
         );
         self.page = self.page.min(pages.len() - 1);

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>abromux server</title>
+<link rel="stylesheet" href="/xterm.css">
+<style>
+  :root { --bg: #1e1d1b; --fg: #ece9e3; --muted: #a29d94; --line: #3a3935; --accent: #d97757; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f7f5f1; --fg: #22201d; --muted: #6d675f; --line: #ddd8cf; --accent: #c4613f; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    padding-top: max(12px, env(safe-area-inset-top)); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 16px; margin: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header button { background: none; border: 1px solid var(--line); color: var(--fg);
+    border-radius: 7px; padding: 5px 10px; font: inherit; font-size: 14px; }
+  #list { padding: 8px 16px; }
+  .term { display: block; width: 100%; text-align: left; background: none; color: inherit; font: inherit;
+    border: 1px solid var(--line); border-radius: 9px; padding: 11px 13px; margin: 8px 0; cursor: pointer; }
+  .term b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .term span { color: var(--muted); font-size: 13px; }
+  .note { color: var(--muted); font-size: 14px; padding: 16px; }
+  #view { position: fixed; inset: 0; display: none; flex-direction: column; background: var(--bg); }
+  #screen { flex: 1; min-height: 0; padding: 4px 6px; padding-bottom: max(4px, env(safe-area-inset-bottom)); }
+  #keys { display: flex; gap: 6px; padding: 6px 8px; border-top: 1px solid var(--line); overflow-x: auto; }
+  #keys button { flex: none; background: none; color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 10px; font: 13px ui-monospace, Menlo, monospace; }
+</style>
+</head>
+<body>
+<header><h1 id="title">Terminals</h1><button id="refresh">Refresh</button></header>
+<div id="list"></div>
+<div id="view">
+  <header><button id="back">‹ Back</button><h1 id="name"></h1></header>
+  <div id="screen"></div>
+  <div id="keys"></div>
+</div>
+<script src="/xterm.js"></script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let ws = null, term = null;
+
+async function list() {
+  const out = $("list");
+  out.innerHTML = '<p class="note">Loading…</p>';
+  try {
+    const r = await fetch("/api/terms", { cache: "no-store" });
+    const v = await r.json();
+    if (v.error) throw new Error(v.error);
+    $("title").textContent = "Terminals";
+    out.innerHTML = "";
+    if (!v.terms.length) out.innerHTML = '<p class="note">No terminals run on this server.</p>';
+    for (const t of v.terms.sort((a, b) => (a.surface || "").localeCompare(b.surface || ""))) {
+      const b = document.createElement("button");
+      b.className = "term";
+      const name = t.title || t.cwd || t.surface || t.id;
+      const how = t.held ? "open in the app" : t.streams ? `${t.streams} watching` : "running";
+      b.innerHTML = "<b></b><span></span>";
+      b.querySelector("b").textContent = name;
+      b.querySelector("span").textContent = [t.surface, t.cwd, how].filter(Boolean).join(" · ");
+      b.onclick = () => open(t.id, name);
+      out.append(b);
+      if (want === t.id) { want = null; open(t.id, name); }
+    }
+    if (want) { open(want, want); want = null; }
+  } catch (e) {
+    out.innerHTML = '<p class="note"></p>';
+    out.querySelector("p").textContent = "Couldn't list them: " + e.message;
+  }
+}
+
+function fit() {
+  if (!term) return;
+  const el = $("screen");
+  const cell = term._core?._renderService?.dimensions?.css?.cell;
+  const w = cell?.width || 7.8, h = cell?.height || 17;
+  const cols = Math.max(20, Math.floor((el.clientWidth - 12) / w));
+  const rows = Math.max(5, Math.floor((el.clientHeight - 8) / h));
+  if (cols !== term.cols || rows !== term.rows) term.resize(cols, rows);
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ resize: [cols, rows] }));
+}
+
+function open(id, name) {
+  history.replaceState(null, "", "#term=" + encodeURIComponent(id));
+  $("name").textContent = name;
+  $("view").style.display = "flex";
+  $("screen").innerHTML = "";
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  term = new Terminal({
+    fontSize: 13, cursorBlink: true, scrollback: 5000,
+    fontFamily: "ui-monospace, Menlo, monospace",
+    theme: dark ? { background: "#1e1d1b", foreground: "#ece9e3" } : { background: "#f7f5f1", foreground: "#22201d", cursor: "#22201d" },
+  });
+  term.open($("screen"));
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(id)}`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => setTimeout(fit, 50);
+  ws.onmessage = (m) => {
+    if (typeof m.data !== "string") return term.write(new Uint8Array(m.data));
+    const v = JSON.parse(m.data);
+    if ("exit" in v) term.write(`\r\n\x1b[2m[it ended${v.exit == null ? "" : ": " + v.exit}]\x1b[0m\r\n`);
+    if (v.error) term.write(`\r\n\x1b[31m${v.error}\x1b[0m\r\n`);
+  };
+  ws.onclose = () => term && term.write("\r\n\x1b[2m[disconnected]\x1b[0m\r\n");
+  term.onData((d) => ws.readyState === 1 && ws.send(JSON.stringify({ input: d })));
+  term.focus();
+}
+
+function close() {
+  if (ws) ws.close();
+  if (term) term.dispose();
+  ws = term = null;
+  $("view").style.display = "none";
+  history.replaceState(null, "", location.pathname);
+  list();
+}
+
+// Keys a phone keyboard doesn't have.
+for (const [label, seq] of [["esc", "\x1b"], ["tab", "\t"], ["ctrl-c", "\x03"], ["ctrl-d", "\x04"],
+    ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["←", "\x1b[D"], ["→", "\x1b[C"], ["ctrl-r", "\x12"]]) {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.onclick = () => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ input: seq })); term && term.focus(); };
+  $("keys").append(b);
+}
+$("back").onclick = close;
+$("refresh").onclick = list;
+addEventListener("resize", () => setTimeout(fit, 100));
+list();
+// #term=<id>: open it at once (a bookmark on the phone's home screen).
+let want = new URLSearchParams(location.hash.slice(1)).get("term");
+</script>
+</body>
+</html>

@@ -45,6 +45,16 @@ use std::{
 };
 use throttle::{Prio, Throttle};
 
+/// Seconds between checks at Medium polling (`gitlab.polling` scales them):
+/// a merge request on screen,
+const ON_SCREEN_SECS: u32 = 20;
+/// one whose pipeline is running,
+const RUNNING_SECS: u32 = 30;
+/// yours, the workspaces' and the `FREQUENT_RECENT` most recently opened,
+const MINE_SECS: u32 = 60;
+/// and the other recently opened ones.
+const RECENT_SECS: u32 = 300;
+const FREQUENT_RECENT: usize = 10;
 /// At most this many merge requests per cheap check.
 const BATCH: usize = 40;
 /// A failed fetch isn't tried again for this long (times the slowdown).
@@ -136,6 +146,8 @@ pub struct Store {
     pub lists_ok: bool,
     /// Refreshes asked for (Refresh, `abromux mr refresh`), in order.
     urgent: VecDeque<MrKey>,
+    /// Refresh pressed with polling off: one cheap check of everything.
+    check_once: bool,
     busy: HashSet<MrKey>,
     light_busy: bool,
     failed: HashMap<MrKey, Instant>,
@@ -216,8 +228,16 @@ fn limits(s: &GitlabSettings) -> cache::Limits {
     }
 }
 
+/// `secs` times the polling setting (as if Medium when it's off: then only
+/// Refresh checks, once).
+fn scaled(secs: u32, s: &GitlabSettings) -> u32 {
+    (secs as f64 * s.polling.factor().unwrap_or(1.)).round() as u32
+}
+
 pub fn init(cx: &mut App) {
     cache::init(cache_dir());
+    abromux_gitlab::viewed::init(crate::channel::support_dir().join("gitlab-viewed.json"));
+    cache::set_poll_factor(settings(cx).polling.factor());
     abromux_gitlab::local::init(crate::channel::support_dir().join("local-diffs"));
     cache::set_limits(Some(limits(settings(cx))));
     let index = load_index();
@@ -252,6 +272,7 @@ pub fn init(cx: &mut App) {
         lists_checked: None,
         lists_ok: false,
         urgent: VecDeque::new(),
+        check_once: false,
         busy: HashSet::new(),
         light_busy: false,
         failed: HashMap::new(),
@@ -274,6 +295,7 @@ pub fn init(cx: &mut App) {
         loop {
             let _ = cx.update(|cx| {
                 cache::set_limits(Some(limits(settings(cx))));
+                cache::set_poll_factor(settings(cx).polling.factor());
                 store(cx).update(cx, |s, cx| s.look_up_who(cx));
             });
             let Ok(Some(index)) = cx.update(|cx| {
@@ -463,17 +485,15 @@ impl Store {
     fn cadence(&self, m: &Mr, recent_rank: Option<usize>, s: &GitlabSettings) -> (Prio, u32) {
         let pinned = self.pinned.values().any(|v| v.contains(&m.key));
         let (prio, secs) = if self.on_screen.contains(&m.key) {
-            (Prio::OnScreen, s.on_screen_seconds)
+            (Prio::OnScreen, ON_SCREEN_SECS)
         } else if m.light.as_ref().is_some_and(|l| l.pipeline_active()) {
-            (Prio::Running, s.running_pipeline_seconds)
-        } else if pinned
-            || m.roles.any()
-            || recent_rank.is_some_and(|r| r < s.frequent_recent as usize)
-        {
-            (Prio::Mine, s.mine_seconds)
+            (Prio::Running, RUNNING_SECS)
+        } else if pinned || m.roles.any() || recent_rank.is_some_and(|r| r < FREQUENT_RECENT) {
+            (Prio::Mine, MINE_SECS)
         } else {
-            (Prio::Recent, s.recent_seconds)
+            (Prio::Recent, RECENT_SECS)
         };
+        let secs = scaled(secs, s);
         let secs = if self.app_active {
             secs
         } else {
@@ -572,17 +592,18 @@ impl Store {
                 }
             }
         }
-        // 3. The cheap check.
-        if self.light_busy {
+        // 3. The cheap check; with polling off, only once after Refresh.
+        let off = s.polling.factor().is_none();
+        if self.light_busy || (off && !self.check_once) {
             return None;
         }
         let lists_due = self.found_once
             && t.allows(Prio::Mine, now)
             && self.lists_checked.is_none_or(|c| {
                 let secs = if self.app_active {
-                    s.mine_seconds
+                    scaled(MINE_SECS, s)
                 } else {
-                    s.mine_seconds * INACTIVE_FACTOR
+                    scaled(MINE_SECS, s) * INACTIVE_FACTOR
                 };
                 now.duration_since(c) >= t.interval(secs)
             });
@@ -613,6 +634,10 @@ impl Store {
         if !lists_due && !due.iter().any(|(_, ripe, _)| *ripe) {
             return None;
         }
+        // The lists come once they can (after the first look for branches).
+        if !off || self.found_once {
+            self.check_once = false;
+        }
         let lists = lists_due.then(|| self.lists(s));
         // Nor, in a check that has the lists, the ones they bring back.
         due.retain(|(prio, _, k)| {
@@ -634,6 +659,8 @@ impl Store {
 
     /// The load of whatever changed since its recording, most urgent first.
     fn back_job(&mut self, s: &GitlabSettings, t: &Throttle, now: Instant) -> Option<Job> {
+        // Polling off: nothing loads in the background.
+        s.polling.factor()?;
         let ranks = self.recent_ranks();
         let mut todo: Vec<(Prio, &MrKey)> = vec![];
         for m in self.mrs.values() {
@@ -930,6 +957,7 @@ impl Store {
 
     /// Refresh in the panel: check everything now.
     pub fn refresh_all(&mut self, cx: &mut Context<Self>) {
+        self.check_once = true;
         self.checked.clear();
         self.lists_checked = None;
         self.failed.clear();
@@ -993,7 +1021,7 @@ impl Store {
 
     /// The workspaces and where their checkouts are. Looking for their
     /// projects and branches runs in the background, when they change or
-    /// once per `mineSeconds`.
+    /// once a minute.
     pub fn set_workspaces(&mut self, places: HashMap<usize, Vec<Place>>, cx: &mut Context<Self>) {
         let s = settings(cx).clone();
         if !s.enabled {
@@ -1001,7 +1029,7 @@ impl Store {
         }
         let stale = self
             .found_at
-            .is_none_or(|t| t.elapsed() >= Duration::from_secs(s.mine_seconds.max(15) as u64));
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(MINE_SECS as u64));
         if self.finding || self.host.is_empty() || (places == self.places && !stale) {
             return;
         }

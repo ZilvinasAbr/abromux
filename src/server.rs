@@ -34,7 +34,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-type Request = (Value, oneshot::Sender<Value>, Hangup);
+pub(crate) type Request = (Value, oneshot::Sender<Value>, Hangup);
 
 /// Resolves once the connection a request came on has closed.
 pub(crate) type Hangup = futures::future::Shared<oneshot::Receiver<()>>;
@@ -157,10 +157,17 @@ fn log_entries(list: &std::collections::VecDeque<Value>, p: &Value) -> anyhow::R
     Ok(out)
 }
 
-/// Bind the socket and start serving. Returns the path, or None if another
-/// abromux already owns it.
+/// Start serving the control socket: through the server, which owns it
+/// (crate::control_link), else by binding it here. Returns the path, or
+/// None if another abromux already owns it.
 pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> {
     let path = ipc::socket_path();
+    let (tx, rx) = mpsc::unbounded::<Request>();
+    crate::control_link::init(tx.clone());
+    if crate::control_link::attach_local(&path) {
+        serve_requests(rx, window, cx);
+        return Some(path);
+    }
     if path.exists() {
         if UnixStream::connect(&path).is_ok() {
             eprintln!(
@@ -182,14 +189,28 @@ pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> 
         }
     };
 
-    let (tx, mut rx) = mpsc::unbounded::<Request>();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let tx = tx.clone();
-            std::thread::spawn(move || serve(stream, tx));
+            std::thread::spawn(move || serve(stream, tx, None));
         }
     });
+    serve_requests(rx, window, cx);
+    let stale = path.clone();
+    cx.on_app_quit(move |_, _| {
+        let _ = std::fs::remove_file(&stale);
+        async {}
+    })
+    .detach();
+    Some(path)
+}
 
+/// Answer the control socket's requests on the main thread, as they come.
+fn serve_requests(
+    mut rx: mpsc::UnboundedReceiver<Request>,
+    window: &mut Window,
+    cx: &mut Context<AbroMux>,
+) {
     cx.spawn_in(window, async move |this, cx| {
         while let Some((req, reply, gone)) = rx.next().await {
             let id = req.get("id").cloned().unwrap_or(Value::Null);
@@ -222,16 +243,17 @@ pub fn start(window: &mut Window, cx: &mut Context<AbroMux>) -> Option<PathBuf> 
         }
     })
     .detach();
-    let stale = path.clone();
-    cx.on_app_quit(move |_, _| {
-        let _ = std::fs::remove_file(&stale);
-        async {}
-    })
-    .detach();
-    Some(path)
 }
 
-fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
+/// `origin`: the server on another machine the connection came through
+/// (its link): a command run there means that machine, so a new workspace
+/// with no host of its own opens there (`abromux new-workspace` or
+/// `abromux open <dir>` on a VPS makes a workspace on the VPS).
+pub(crate) fn serve(
+    stream: UnixStream,
+    tx: mpsc::UnboundedSender<Request>,
+    origin: Option<String>,
+) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
@@ -260,13 +282,48 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
                 stream_events(&mut writer, peer, events, &resp["result"]);
                 return;
             }
-            Ok(req) => {
+            Ok(req) if req["method"] == "surface.stream" => {
                 let (reply_tx, reply_rx) = oneshot::channel();
                 if tx.unbounded_send((req, reply_tx, gone.clone())).is_err() {
                     return;
                 }
-                futures::executor::block_on(reply_rx)
-                    .unwrap_or_else(|_| ipc::err(&Value::Null, "app closed"))
+                let resp = futures::executor::block_on(reply_rx)
+                    .unwrap_or_else(|_| ipc::err(&Value::Null, "app closed"));
+                let tap = resp["result"]["token"]
+                    .as_u64()
+                    .and_then(crate::stream::take);
+                if writer.write_all(format!("{resp}\n").as_bytes()).is_err() {
+                    return;
+                }
+                if let Some(tap) = tap {
+                    stream_output(&mut writer, peer, tap);
+                }
+                return;
+            }
+            Ok(mut req) => {
+                if let Some(o) = &origin
+                    && req["method"] == "workspace.create"
+                    && req["params"].get("host").is_none_or(Value::is_null)
+                {
+                    if !req["params"].is_object() {
+                        req["params"] = json!({});
+                    }
+                    req["params"]["host"] = json!(o);
+                }
+                let (reply_tx, reply_rx) = oneshot::channel();
+                // A question waits on a person, as long as it takes: notice
+                // the asker going away meanwhile, to take it down.
+                let watch = (req["method"] == "ui.prompt").then(|| watch_hangup(peer));
+                let req_gone = watch.as_ref().map_or_else(|| gone.clone(), |w| w.1.clone());
+                if tx.unbounded_send((req, reply_tx, req_gone)).is_err() {
+                    return;
+                }
+                let resp = futures::executor::block_on(reply_rx)
+                    .unwrap_or_else(|_| ipc::err(&Value::Null, "app closed"));
+                if let Some((done, _)) = watch {
+                    done.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                resp
             }
             Err(e) => ipc::err(&Value::Null, format!("bad request: {e}")),
         };
@@ -276,6 +333,141 @@ fn serve(stream: UnixStream, tx: mpsc::UnboundedSender<Request>) {
             return;
         }
     }
+}
+
+/// A `Hangup` for one request whose answer may take long: a thread watches
+/// `peer` until the flag is set, and resolves it if the caller hangs up
+/// first (`serve` reads nothing while it waits for an answer, so it wouldn't
+/// see that).
+fn watch_hangup(
+    peer: std::os::fd::RawFd,
+) -> (std::sync::Arc<std::sync::atomic::AtomicBool>, Hangup) {
+    use std::sync::atomic::Ordering;
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (hup, gone) = oneshot::channel::<()>();
+    let stop = done.clone();
+    std::thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            let mut fd = libc::pollfd {
+                fd: peer,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: polls one descriptor, for at most 200 ms.
+            if unsafe { libc::poll(&mut fd, 1, 200) } <= 0 {
+                continue;
+            }
+            let mut b = 0u8;
+            // SAFETY: peeks at most one byte into `b`, without blocking.
+            let n = unsafe {
+                libc::recv(
+                    peer,
+                    (&raw mut b).cast(),
+                    1,
+                    libc::MSG_PEEK | libc::MSG_DONTWAIT,
+                )
+            };
+            if n == 0 || (n < 0 && fd.revents & (libc::POLLHUP | libc::POLLERR) != 0) {
+                drop(hup);
+                return;
+            }
+            // More requests queued behind this one: not a hangup.
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+    (done, gone.shared())
+}
+
+/// Write a terminal's output (stream.rs) to `writer`, one JSON line per
+/// batch, until the terminal or the caller is gone:
+/// `{"output":"<base64>"}`, `{"resize":[cols,rows]}`, `{"closed":true}`.
+/// A tap that ends without `closed` was cut off for falling behind: the
+/// caller should start over.
+fn stream_output(
+    writer: &mut UnixStream,
+    peer: std::os::fd::RawFd,
+    tap: std::sync::mpsc::Receiver<crate::stream::Chunk>,
+) {
+    use crate::stream::Chunk;
+    use base64::Engine as _;
+    use std::sync::mpsc::RecvTimeoutError;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    loop {
+        let first = match tap.recv_timeout(Duration::from_secs(1)) {
+            Ok(c) => c,
+            Err(RecvTimeoutError::Timeout) => {
+                if hung_up(peer) {
+                    return;
+                }
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                let _ = writer.write_all(b"{\"behind\":true}\n");
+                return;
+            }
+        };
+        // Everything already queued goes in one line: a flood costs one write.
+        let mut out = String::new();
+        let mut bytes = Vec::new();
+        let mut next = Some(first);
+        while let Some(c) = next.take() {
+            match c {
+                Chunk::Output(b) => bytes.extend_from_slice(&b),
+                other => {
+                    if !bytes.is_empty() {
+                        out += &json!({ "output": b64.encode(&bytes) }).to_string();
+                        out.push('\n');
+                        bytes.clear();
+                    }
+                    if let Chunk::Events(batch) = &other {
+                        out += "{\"events\":";
+                        out += batch;
+                        out += "}\n";
+                        if out.len() < 1 << 20 {
+                            next = tap.try_recv().ok();
+                        }
+                        continue;
+                    }
+                    let line = match other {
+                        Chunk::Resize(c, r) => json!({ "resize": [c, r] }),
+                        Chunk::Owner(o) => json!({ "owner": o }),
+                        _ => json!({ "closed": true }),
+                    };
+                    out += &line.to_string();
+                    out.push('\n');
+                    if line["closed"] == true {
+                        let _ = writer.write_all(out.as_bytes());
+                        return;
+                    }
+                }
+            }
+            if bytes.len() < 1 << 20 {
+                next = tap.try_recv().ok();
+            }
+        }
+        if !bytes.is_empty() {
+            out += &json!({ "output": b64.encode(&bytes) }).to_string();
+            out.push('\n');
+        }
+        if writer.write_all(out.as_bytes()).is_err() {
+            return;
+        }
+    }
+}
+
+/// The peer closed its end (a non-blocking peek reads end of file).
+fn hung_up(peer: std::os::fd::RawFd) -> bool {
+    let mut b = 0u8;
+    // SAFETY: peeks at most one byte into `b`, without blocking.
+    let n = unsafe {
+        libc::recv(
+            peer,
+            (&raw mut b).cast(),
+            1,
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        )
+    };
+    n == 0
 }
 
 /// Write each event that passes `filter` to `writer` until the caller hangs up.
@@ -369,6 +561,32 @@ fn usize_param(p: &Value, key: &str) -> anyhow::Result<Option<usize>> {
             .map(|n| Some(n as usize))
             .with_context(|| format!("--{key} must be a number")),
     }
+}
+
+/// Give terminal `t`'s program `text` as if pasted, then press Return
+/// (`Terminal::submit`): what an agent's input box takes as one message.
+fn submit_to<V: 'static>(t: &Entity<crate::TerminalView>, text: &str, cx: &mut Context<V>) {
+    let sent = t.update(cx, |t, cx| {
+        cx.notify();
+        t.submit(text)
+    });
+    if sent {
+        return;
+    }
+    // No bracketed paste: Return on its own, a moment after the text, or a
+    // program reading it all at once takes it as a new line in what was
+    // typed.
+    let t = t.downgrade();
+    cx.spawn(async move |_, cx| {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(150))
+            .await;
+        let _ = t.update(cx, |t, cx| {
+            t.send(b"\r");
+            cx.notify();
+        });
+    })
+    .detach();
 }
 
 fn bool_param(p: &Value, key: &str, default: bool) -> bool {
@@ -522,6 +740,12 @@ impl AbroMux {
         let p = named.as_ref().unwrap_or(p);
         let v = match method {
             "system.ping" => json!("pong"),
+            "remote.status" => crate::remote::status(),
+            "remote.reload" => {
+                let s = crate::settings::load().map_err(anyhow::Error::msg)?;
+                crate::settings_window::apply(s, cx);
+                crate::remote::status()
+            }
             "system.methods" => crate::api::methods(p)?,
             "system.identify" => {
                 let caller = self.caller(p).map(
@@ -538,6 +762,19 @@ impl AbroMux {
                     },
                 })
             }
+
+            "action.list" => {
+                let init = crate::lua::init_path();
+                let actions = crate::lua::collect_cached(&init).map_err(anyhow::Error::msg)?;
+                json!(
+                    actions
+                        .iter()
+                        .map(|a| json!({ "name": a.name, "title": a.title,
+                                         "description": a.description, "palette": a.palette }))
+                        .collect::<Vec<_>>()
+                )
+            }
+            "action.run" => return self.run_action(p),
 
             "workspace.list" => json!(
                 (0..self.workspaces.len())
@@ -580,7 +817,31 @@ impl AbroMux {
                 self.describe_ws(wi, false, cx)
             }
             "workspace.create" => {
-                let cwd = str_param(p, "cwd").map(String::from);
+                let folder = str_param(p, "folder").map(std::path::PathBuf::from);
+                if let Some(f) = &folder {
+                    anyhow::ensure!(f.is_absolute(), "folder must be absolute: {}", f.display());
+                    anyhow::ensure!(f.is_dir(), "no such folder: {}", f.display());
+                }
+                let env: std::collections::BTreeMap<String, String> = match p.get("env") {
+                    None | Some(Value::Null) => Default::default(),
+                    Some(Value::Object(m)) => m
+                        .iter()
+                        .map(|(k, v)| match v {
+                            Value::String(s) => Ok((k.clone(), s.clone())),
+                            _ => Err(anyhow::anyhow!("env {k}: expected a string")),
+                        })
+                        .collect::<anyhow::Result<_>>()?,
+                    Some(_) => bail!("env: expected an object of strings"),
+                };
+                let cwd = str_param(p, "cwd")
+                    .map(String::from)
+                    .or_else(|| folder.as_ref().map(|f| f.to_string_lossy().into_owned()));
+                // On another machine's server: its terminals start there.
+                // A server's name (Settings › Servers) or an address.
+                let host = match str_param(p, "host") {
+                    Some(h) => crate::servers::resolve(h).map_err(|e| anyhow!(e))?,
+                    None => None,
+                };
                 let group = str_param(p, "group")
                     .map(|g| self.find_group(g))
                     .transpose()?;
@@ -590,12 +851,29 @@ impl AbroMux {
                     self.active = start;
                 }
                 let focus = bool_param(p, "focus", true);
+                // Its first terminal gets the folder, env and host too.
+                self.building_home = folder.clone();
+                self.building_env = env.clone();
+                self.building_host = host.clone();
                 let wi = self.create_workspace(cwd, focus, window, cx);
+                self.building_home = None;
+                self.building_env.clear();
+                self.building_host = None;
+                self.workspaces[wi].host = host;
                 if !focus {
                     self.active = prev.and_then(|id| self.ws_index(id)).unwrap_or(0);
                 }
+                let ws = &mut self.workspaces[wi];
+                ws.home = folder;
+                ws.env = env;
                 if let Some(name) = str_param(p, "name") {
-                    self.workspaces[wi].custom_name = Some(name.into());
+                    // A stand-in name (a made-up one) is the agents' to replace
+                    // (`naming`), until you name it yourself.
+                    if bool_param(p, "provisional", false) {
+                        ws.auto_title = Some(name.into());
+                    } else {
+                        ws.custom_name = Some(name.into());
+                    }
                 }
                 self.workspaces[wi].description =
                     str_param(p, "description").and_then(crate::sidebar::clean_description);
@@ -605,6 +883,12 @@ impl AbroMux {
                 ) {
                     t.update(cx, |t, _| t.send(format!("{cmd}\r").as_bytes()));
                 }
+                // On another machine: in its server's group (it may move).
+                let id = self.workspaces[wi].id;
+                if str_param(p, "group").is_none() {
+                    self.join_server_group(wi, cx);
+                }
+                let wi = self.ws_index(id).unwrap_or(wi);
                 self.describe_ws(wi, false, cx)
             }
             "workspace.select" => {
@@ -617,37 +901,6 @@ impl AbroMux {
                 let r = self.ws_ref(wi);
                 self.close_workspace(wi, window, cx);
                 json!({ "closed": r })
-            }
-            // `abromux folder remove`, which has checked for lost work: if a
-            // workspace has that folder, close it, then delete the folder.
-            "folder.remove" => {
-                let path = std::path::PathBuf::from(str_param(p, "path").context("missing path")?);
-                let same = |h: &std::path::Path| {
-                    h == path
-                        || h.canonicalize()
-                            .is_ok_and(|h| path.canonicalize().is_ok_and(|p| h == p))
-                };
-                match self
-                    .workspaces
-                    .iter()
-                    .position(|w| w.home.as_deref().is_some_and(same))
-                {
-                    Some(wi) => {
-                        let r = self.ws_ref(wi);
-                        let id = self.workspaces[wi].id;
-                        let gone = gone.clone();
-                        self.remove_folder_later(
-                            id,
-                            path,
-                            bool_param(p, "force", false),
-                            gone,
-                            window,
-                            cx,
-                        );
-                        json!({ "workspace": r })
-                    }
-                    None => json!({ "workspace": null }),
-                }
             }
             "workspace.rename" => {
                 let wi = self.workspace_target(p)?;
@@ -736,6 +989,227 @@ impl AbroMux {
                 json!(null)
             }
             "group.by_folder" => json!({ "created": self.group_by_folder(cx) }),
+            "group.by_server" => json!({ "created": self.group_by_server(cx) }),
+            // A port of a workspace's host, here (crate::forward).
+            "forward.add" => {
+                let wi = self.workspace_target(p)?;
+                let host = match str_param(p, "host") {
+                    Some(h) => crate::servers::resolve(h).map_err(|e| anyhow!(e))?,
+                    None => self.workspaces[wi].host.clone(),
+                }
+                .context("that workspace runs here: its ports are already this machine's (or give --host)")?;
+                let port = p["port"]
+                    .as_u64()
+                    .and_then(|p| u16::try_from(p).ok())
+                    .context("missing port")?;
+                let local = p["local"].as_u64().and_then(|p| u16::try_from(p).ok());
+                let id = self.workspaces[wi].id;
+                let list = self.forwards.entry(id).or_default();
+                if let Some(f) = list.iter().find(|f| f.port == port && f.host == host) {
+                    return Ok(Reply::Now(f.json()));
+                }
+                let f =
+                    crate::forward::Forward::start(&host, port, local).map_err(|e| anyhow!(e))?;
+                let out = f.json();
+                list.push(f);
+                out
+            }
+            // A server says something started listening there.
+            "forward.offer" => {
+                let host = str_param(p, "link").context("missing link")?.to_string();
+                for port in p["ports"].as_array().into_iter().flatten() {
+                    let Some(n) = port["port"].as_u64().and_then(|n| u16::try_from(n).ok()) else {
+                        continue;
+                    };
+                    crate::forward::offer(&host, n);
+                    gpui_component::WindowExt::push_notification(
+                        window,
+                        gpui_component::notification::Notification::info(format!(
+                            "Something listens on port {n} there: ⌘⇧P Forward Port {n} of {} (or `abromux forward {n}`).",
+                            crate::servers::label(&host)
+                        ))
+                        .title(format!("{}: port {n}", crate::servers::label(&host))),
+                        cx,
+                    );
+                }
+                json!(null)
+            }
+            "forward.list" => json!(
+                self.workspaces
+                    .iter()
+                    .flat_map(|w| {
+                        let r = format!("workspace:{}", w.id);
+                        self.forwards
+                            .get(&w.id)
+                            .into_iter()
+                            .flatten()
+                            .map(move |f| {
+                                let mut v = f.json();
+                                v["workspace"] = json!(r);
+                                v
+                            })
+                    })
+                    .collect::<Vec<_>>()
+            ),
+            "forward.remove" => {
+                let wi = self.workspace_target(p)?;
+                let port = p["port"].as_u64().context("missing port")?;
+                let id = self.workspaces[wi].id;
+                let list = self.forwards.entry(id).or_default();
+                let before = list.len();
+                list.retain(|f| u64::from(f.port) != port && u64::from(f.local) != port);
+                json!({ "removed": before - list.len() })
+            }
+            "forward.ports" => {
+                let wi = self.workspace_target(p)?;
+                let host = match str_param(p, "host") {
+                    Some(h) => crate::servers::resolve(h).map_err(|e| anyhow!(e))?,
+                    None => self.workspaces[wi].host.clone(),
+                }
+                .context("that workspace runs here (or give --host)")?;
+                let task = cx
+                    .background_executor()
+                    .spawn(async move { crate::forward::ports(&host) });
+                return Ok(Reply::Later(
+                    async move { task.await.map_err(|e| anyhow!(e)) }.boxed_local(),
+                ));
+            }
+            // A server's model (abromux_model), its changes, and the ones it
+            // made itself (its methods: abromux_server::owned), which the
+            // app mirrors in its views with its own handlers, then follows
+            // in its replica: the server is the source.
+            // A model method the server has the app carry out (it makes or
+            // closes views): the app's handler does it, and the server gets
+            // the result with the model change, to commit before answering.
+            "model.exec" => {
+                let link_name = str_param(p, "link").unwrap_or("local").to_string();
+                let link = crate::control_link::by_name(&link_name);
+                let mut exec = p["exec"].clone();
+                let method = exec["method"].as_str().unwrap_or_default().to_string();
+                let token = exec["token"].clone();
+                // Asked on another machine's server: a new workspace with no
+                // host of its own opens there (as `serve`'s `origin`).
+                if link_name != "local"
+                    && method == "workspace.create"
+                    && exec["params"].get("host").is_none_or(Value::is_null)
+                {
+                    if !exec["params"].is_object() {
+                        exec["params"] = json!({});
+                    }
+                    exec["params"]["host"] = json!(link_name);
+                }
+                let error = |e: &anyhow::Error| format!("{e:#}");
+                match self.handle(&method, &exec["params"], gone, window, cx) {
+                    Ok(Reply::Now(v)) => {
+                        if let Some(l) = link {
+                            l.done(&token, Ok(v), &self.model(cx));
+                        }
+                    }
+                    Ok(Reply::Later(fut)) => {
+                        cx.spawn(async move |this, cx| {
+                            let r = fut.await.map_err(|e| format!("{e:#}"));
+                            let model = this.update(cx, |this, cx| this.model(cx)).ok();
+                            if let (Some(l), Some(m)) = (link, model) {
+                                l.done(&token, r, &m);
+                            }
+                        })
+                        .detach();
+                    }
+                    Err(e) => {
+                        if let Some(l) = link {
+                            l.done(&token, Err(error(&e)), &self.model(cx));
+                        }
+                    }
+                }
+                json!(null)
+            }
+            "model.snapshot" => {
+                let link = crate::control_link::by_name(str_param(p, "link").unwrap_or("local"));
+                if let (Some(l), Ok(m)) = (link, serde_json::from_value(p["model"].clone())) {
+                    l.set_replica(m);
+                }
+                json!(null)
+            }
+            "model.applied" => {
+                let link = crate::control_link::by_name(str_param(p, "link").unwrap_or("local"));
+                let events: Vec<abromux_model::Stamped> =
+                    serde_json::from_value(p["events"].clone()).unwrap_or_default();
+                // Another client changed the server's model: the views follow,
+                // and what they became (the terminals' real surfaces) goes back
+                // to the server at once, whether or not the window draws.
+                let follow = p["from"].as_str().is_some_and(|f| f != "app");
+                if follow {
+                    self.follow_model(&events, window, cx);
+                }
+                if let Some(l) = link {
+                    l.apply_replica(&events);
+                }
+                if follow {
+                    self.propose_soon(cx);
+                }
+                json!(null)
+            }
+            "model.mirror" => {
+                let call = &p["call"];
+                let method = call["method"].as_str().unwrap_or_default().to_string();
+                let out = if crate::api::kind(&method) == crate::api::Kind::Model
+                    && abromux_server::owned::OWNED.contains(&method.as_str())
+                {
+                    self.handle(&method, &call["params"], gone, window, cx)
+                        .map(|_| ())
+                } else {
+                    Ok(())
+                };
+                let events: Vec<abromux_model::Stamped> =
+                    serde_json::from_value(p["events"].clone()).unwrap_or_default();
+                if let Some(l) =
+                    crate::control_link::by_name(str_param(p, "link").unwrap_or("local"))
+                {
+                    l.apply_replica(&events);
+                }
+                out?;
+                json!(null)
+            }
+            // The server wants a terminal this app holds shared with
+            // another app (crate::control_link): stream it instead.
+            "surface.restream" => {
+                let id = str_param(p, "held").context("missing held")?;
+                let t = self
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.all_surfaces())
+                    .find_map(|s| match s {
+                        Surface::Terminal(t) if t.read(cx).held_id().as_deref() == Some(id) => {
+                            Some(t.clone())
+                        }
+                        _ => None,
+                    });
+                match t {
+                    Some(t) => {
+                        t.update(cx, |t, cx| t.restream(cx));
+                        json!({ "restreamed": true })
+                    }
+                    None => json!({ "restreamed": false }),
+                }
+            }
+            // Nobody else streams it now: hold it again.
+            "surface.reclaim" => {
+                let id = str_param(p, "held").context("missing held")?;
+                let t = self
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.all_surfaces())
+                    .find_map(|s| match s {
+                        Surface::Terminal(t) if t.read(cx).held_id().as_deref() == Some(id) => {
+                            Some(t.clone())
+                        }
+                        _ => None,
+                    });
+                if let Some(t) = &t {
+                    t.update(cx, |t, cx| t.reclaim(cx));
+                }
+                json!({ "reclaimed": t.is_some() })
+            }
             "group.rename" | "group.color" | "group.collapse" | "group.expand"
             | "group.ungroup" => {
                 let g = match str_param(p, "group") {
@@ -968,17 +1442,152 @@ impl AbroMux {
                     .collect();
                 json!(list)
             }
+            "surface.stream" => {
+                // The connection thread (`serve`) takes the tap by its token
+                // and writes what comes on it (stream.rs).
+                let (_, _, s) = self.surface_target(p)?;
+                let r = self.sref(&s);
+                if let Surface::Browser(b) = &s {
+                    let (events, id) = b.update(cx, |b, _| (b.chat_mirror(), b.stream_id()));
+                    let events = events.context("that browser tab isn't a Claude tab")?;
+                    json!({
+                        "chat": true,
+                        "events": events,
+                        "token": crate::stream::open(id),
+                        "surface": r,
+                    })
+                } else if bool_param(p, "claude", false) {
+                    // The terminal's Claude Code session as a chat, read
+                    // from its transcript; typing still goes to the terminal.
+                    let t = self.terminal_target(p)?;
+                    let config = crate::settings::claude_config_dir(cx);
+                    let t = t.read(cx);
+                    let shell = t.shell_pid();
+                    let found = shell
+                        .and_then(|pid| crate::claude_chat::running_under(pid, config.as_deref()));
+                    let hooked = t
+                        .agent
+                        .as_ref()
+                        .filter(|a| a.kind == Kind::Claude.as_str() && a.alive());
+                    let mode = hooked.and_then(|a| a.permission_mode.clone());
+                    let follow = match (found, hooked) {
+                        (Some(r), _) => crate::claude_chat::Follow {
+                            shell,
+                            config,
+                            session: r.session,
+                            cwd: r.cwd,
+                            mode,
+                            busy: r.busy,
+                            watched: true,
+                        },
+                        (None, Some(a)) => crate::claude_chat::Follow {
+                            shell,
+                            config,
+                            session: a.session_id.clone(),
+                            cwd: std::path::PathBuf::from(if a.cwd.is_empty() {
+                                &t.cwd
+                            } else {
+                                &a.cwd
+                            }),
+                            mode,
+                            busy: t.claude_running(),
+                            watched: false,
+                        },
+                        (None, None) => bail!("no Claude Code session in that terminal"),
+                    };
+                    let key = crate::stream::private_key();
+                    let token = crate::stream::open(key);
+                    crate::claude_chat::follow(key, follow);
+                    json!({
+                        "chat": true,
+                        "terminal": true,
+                        "events": [],
+                        "token": token,
+                        "surface": r,
+                    })
+                } else {
+                    let t = self.terminal_target(p)?;
+                    // A phone (`client`, set by remote.rs) may claim the
+                    // size while this stream lasts (`surface.own`).
+                    let client = str_param(p, "client").map(String::from);
+                    let (mut start, id) = t.update(cx, |t, _| {
+                        if let Some(c) = &client {
+                            t.watch_size(c);
+                        }
+                        (t.stream_start(), t.stream_id())
+                    });
+                    start["token"] = json!(crate::stream::open(id));
+                    start["surface"] = json!(r);
+                    start["client"] = json!(client);
+                    if let Some(c) = client {
+                        let (t, gone) = (t.downgrade(), gone.clone());
+                        cx.spawn(async move |_, cx| {
+                            let _ = gone.await;
+                            let _ = t.update(cx, |t, cx| t.unwatch_size(&c, cx));
+                        })
+                        .detach();
+                    }
+                    start
+                }
+            }
+            "surface.own" => {
+                let t = self.terminal_target(p)?;
+                let client = str_param(p, "client").context("missing client")?;
+                let cols = p
+                    .get("cols")
+                    .and_then(Value::as_u64)
+                    .context("missing cols")?;
+                let rows = p
+                    .get("rows")
+                    .and_then(Value::as_u64)
+                    .context("missing rows")?;
+                let size = crate::size_owner::clamp(cols, rows);
+                let take = bool_param(p, "take", true);
+                t.update(cx, |t, cx| t.claim_size(client, size, take, cx))?;
+                let owner = t.read(cx).size_owner().map(String::from);
+                json!({ "owner": owner, "cols": size.0, "rows": size.1 })
+            }
+            "surface.chat" => {
+                // What a Claude tab's page would post, from a copy of it on
+                // a phone (`surface.stream` feeds that copy).
+                let b = self.browser_target(p)?;
+                let msg = p
+                    .get("message")
+                    .filter(|m| m.is_object())
+                    .context("missing message")?;
+                if msg["chat"] == "ready" {
+                    bail!("start with surface.stream");
+                }
+                let body = msg.to_string();
+                if !b.update(cx, |b, cx| b.chat_message(&body, cx)) {
+                    bail!("that browser tab isn't a Claude tab");
+                }
+                json!({ "ok": true })
+            }
             "surface.send_text" => {
                 let t = self.terminal_target(p)?;
-                let text = unescape(
-                    p.get("text")
-                        .and_then(Value::as_str)
-                        .context("missing text")?,
-                );
-                t.update(cx, |t, cx| {
-                    t.send(text.as_bytes());
-                    cx.notify();
-                });
+                let text = p
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .context("missing text")?;
+                // `raw`: exactly these characters (a phone's typing), no
+                // backslash escapes.
+                let text = if bool_param(p, "raw", false) {
+                    text.to_string()
+                } else {
+                    unescape(text)
+                };
+                if let Some(c) = str_param(p, "client") {
+                    t.update(cx, |t, cx| t.retake_size(c, cx));
+                }
+                if bool_param(p, "submit", false) {
+                    submit_to(&t, &text, cx);
+                } else {
+                    t.update(cx, |t, cx| {
+                        t.send(text.as_bytes());
+                        cx.notify();
+                    });
+                }
                 json!({ "bytes": text.len() })
             }
             "surface.send_key" => {
@@ -992,6 +1601,9 @@ impl AbroMux {
                     } else {
                         ks.key.clone()
                     });
+                }
+                if let Some(c) = str_param(p, "client") {
+                    t.update(cx, |t, cx| t.retake_size(c, cx));
                 }
                 if !t.update(cx, |t, cx| t.send_keystroke(&ks, cx)) {
                     bail!("key {key:?} doesn't map to terminal input");
@@ -1160,6 +1772,7 @@ impl AbroMux {
 
             // The connection becomes a stream of events (`serve` does the
             // streaming); this resolves its filters.
+            "ui.prompt" => return self.ui_prompt(p, gone, window, cx),
             "events.subscribe" => {
                 let workspace = str_param(p, "workspace")
                     .map(|w| self.find_workspace(w).map(|wi| self.ws_ref(wi)))
@@ -1685,6 +2298,72 @@ impl AbroMux {
                 json!(null)
             }
 
+            "settings.list" => {
+                let s = cx.global::<crate::settings::Settings>();
+                json!(
+                    s.script_settings
+                        .iter()
+                        .map(|d| json!({
+                            "key": d.key,
+                            "title": d.title,
+                            "description": d.description,
+                            "group": d.group,
+                            "default": d.default,
+                            "value": s.script_value(&d.key),
+                        }))
+                        .collect::<Vec<_>>()
+                )
+            }
+            "settings.get" => {
+                let s = cx.global::<crate::settings::Settings>();
+                match (str_param(p, "key"), str_param(p, "path")) {
+                    (Some(key), _) => s
+                        .script_value(key)
+                        .with_context(|| format!("init.lua declares no setting {key:?}"))?,
+                    (None, Some(path)) => {
+                        // As written in the file; null when it isn't.
+                        let text =
+                            std::fs::read_to_string(crate::settings::path()).unwrap_or_default();
+                        let root: Value = if text.trim().is_empty() {
+                            json!({})
+                        } else {
+                            serde_json::from_str(&text)?
+                        };
+                        path.split('.')
+                            .try_fold(&root, |v, k| v.get(k))
+                            .cloned()
+                            .unwrap_or(Value::Null)
+                    }
+                    (None, None) => anyhow::bail!("missing key or path"),
+                }
+            }
+            "settings.set" => {
+                let value = p.get("value").cloned().filter(|v| !v.is_null());
+                match (str_param(p, "key"), str_param(p, "path")) {
+                    (Some(key), _) => {
+                        let s = cx.global::<crate::settings::Settings>();
+                        let def = s
+                            .script_settings
+                            .iter()
+                            .find(|d| d.key == key)
+                            .with_context(|| format!("init.lua declares no setting {key:?}"))?;
+                        if let Some(v) = &value {
+                            anyhow::ensure!(def.accepts(v), "{v} isn't a value {key} takes");
+                        }
+                        // The default is left out of the file.
+                        let value = value.filter(|v| *v != def.default);
+                        crate::settings_window::save_key(&["scripts", key], value, cx)
+                            .map_err(anyhow::Error::msg)?;
+                    }
+                    (None, Some(path)) => {
+                        let key: Vec<&str> = path.split('.').collect();
+                        crate::settings_window::save_key(&key, value, cx)
+                            .map_err(anyhow::Error::msg)?;
+                    }
+                    (None, None) => anyhow::bail!("missing key or path"),
+                }
+                json!(null)
+            }
             "app.reload_config" => {
                 self.reload_settings(window, cx)
                     .map_err(anyhow::Error::msg)?;
@@ -1914,6 +2593,80 @@ impl AbroMux {
             _ => return Err(MethodNotFound(method.to_string()).into()),
         };
         Ok(Reply::Now(v))
+    }
+
+    /// `action.run`: an init.lua action, run as the palette runs one
+    /// (`abromux do <init.lua> --action`, in the background), but answered
+    /// with what it returned, or why it failed. Not on any tab: there's no
+    /// caller, so it acts on what's selected.
+    fn run_action(&self, p: &Value) -> anyhow::Result<Reply> {
+        let name = str_param(p, "action").context("missing action")?;
+        let init = crate::lua::init_path();
+        let actions = crate::lua::collect_cached(&init).map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            actions.iter().any(|a| a.name == name),
+            "init.lua has no action {name:?}"
+        );
+        let args = match p.get("args") {
+            None | Some(Value::Null) => serde_json::Map::new(),
+            Some(Value::Object(m)) => m.clone(),
+            Some(_) => bail!("args: expected an object"),
+        };
+        let mut cmd = std::process::Command::new(std::env::current_exe()?);
+        cmd.arg("do")
+            .arg(&init)
+            .args(["--action", name, "--args"])
+            .arg(Value::Object(args).to_string())
+            .env(
+                "ABROMUX_ACTION_ORIGIN",
+                str_param(p, "origin").unwrap_or("api"),
+            )
+            .env_remove("ABROMUX_SURFACE_ID")
+            .env_remove("ABROMUX_WORKSPACE_ID")
+            .current_dir(crate::paths::home())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if let Some(sock) = &self.socket {
+            cmd.env("ABROMUX_SOCKET_PATH", sock);
+        }
+        let child = cmd
+            .spawn()
+            .with_context(|| format!("{name}: couldn't start it"))?;
+        let (tx, rx) = oneshot::channel();
+        let name = name.to_string();
+        // Off the main thread: the action calls back into this socket.
+        std::thread::spawn(move || {
+            let r = match child.wait_with_output() {
+                Err(e) => Err(anyhow!("{name}: {e}")),
+                Ok(out) if !out.status.success() => {
+                    let err = String::from_utf8_lossy(&out.stderr);
+                    let err = err.trim().trim_start_matches("abromux: ");
+                    Err(anyhow!(
+                        "{}",
+                        if err.is_empty() {
+                            format!("{name} failed")
+                        } else {
+                            err.to_string()
+                        }
+                    ))
+                }
+                Ok(out) => {
+                    // What it returned is the last line `abromux do` printed.
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    let last = text.trim().lines().last().unwrap_or_default();
+                    Ok(serde_json::from_str(last).unwrap_or_else(|_| {
+                        if last.is_empty() {
+                            Value::Null
+                        } else {
+                            json!(text.trim())
+                        }
+                    }))
+                }
+            };
+            let _ = tx.send(r);
+        });
+        Ok(later(rx, Duration::from_secs(120), "action.run"))
     }
 
     /// `browser wait`: poll the page until the condition holds.
@@ -2334,6 +3087,108 @@ impl AbroMux {
     /// shell integration's marks; without them, until it closes), or with
     /// `close` until it closes. `after` waits for a command after that many
     /// had finished (`new-split --command … --wait`), not one already done.
+    /// `ui.prompt`: ask in the palette and answer once the person does,
+    /// cancels, the time runs out or the asker hangs up.
+    fn ui_prompt(
+        &mut self,
+        p: &Value,
+        gone: &Hangup,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Reply> {
+        let pick = match str_param(p, "kind") {
+            Some("input") => false,
+            Some("pick") => true,
+            _ => bail!("ui.prompt: kind must be input or pick"),
+        };
+        let title = str_param(p, "title")
+            .context("ui.prompt: title is required")?
+            .to_string();
+        let mut items: Vec<crate::palette::PromptItem> = vec![];
+        for it in p["items"].as_array().into_iter().flatten() {
+            let text = |v: &Value| match v {
+                Value::String(s) => Some(s.clone()),
+                Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            };
+            let item = match it {
+                Value::Object(o) => {
+                    let id = o
+                        .get("id")
+                        .and_then(text)
+                        .context("ui.prompt: each item needs an id")?;
+                    let title = o.get("title").and_then(text).unwrap_or_else(|| id.clone());
+                    let sub = o.get("subtitle").and_then(text);
+                    (id, title, sub, o.get("detail").and_then(text))
+                }
+                v => {
+                    let id =
+                        text(v).context("ui.prompt: an item is a string or a table with an id")?;
+                    (id.clone(), id, None, None)
+                }
+            };
+            if items.iter().any(|(id, ..)| *id == item.0) {
+                bail!("ui.prompt: two items have the id {:?}", item.0);
+            }
+            items.push(item);
+        }
+        if items.len() > 2000 {
+            bail!("ui.prompt: at most 2000 items");
+        }
+        if self
+            .palette
+            .as_ref()
+            .is_some_and(|q| q.mode == crate::palette::Mode::Prompt)
+        {
+            return Ok(Reply::Now(json!({ "reason": "busy" })));
+        }
+        let timeout = match p.get("timeout") {
+            None | Some(Value::Null) => 300.,
+            Some(v) => v.as_f64().context("ui.prompt: bad timeout")?,
+        }
+        .clamp(0., 3600.);
+        let (tx, rx) = oneshot::channel::<Value>();
+        let prompt = crate::palette::Prompt {
+            id: 0,
+            title,
+            pick,
+            allow_other: bool_param(p, "allow_other", false),
+            confirm: str_param(p, "confirm").map(String::from),
+            answer: Some(tx),
+        };
+        let id = self.open_prompt(
+            prompt,
+            items,
+            str_param(p, "placeholder").map(String::from),
+            str_param(p, "value").map(String::from),
+            window,
+            cx,
+        );
+        window.activate_window();
+        let this = cx.weak_entity();
+        let handle = window.window_handle();
+        let mut acx = cx.to_async();
+        let gone = gone.clone();
+        Ok(Reply::Later(
+            async move {
+                let limit = Timer::after(Duration::from_secs_f64(timeout));
+                let (reason, close) = match select(rx, select(limit, gone)).await {
+                    Either::Left((Ok(v), _)) => return Ok(v),
+                    Either::Left((Err(_), _)) => ("cancelled", false),
+                    Either::Right((Either::Left(_), _)) => ("timeout", true),
+                    Either::Right((Either::Right(_), _)) => ("cancelled", true),
+                };
+                if close {
+                    let _ = gpui::AppContext::update_window(&mut acx, handle, |_, window, cx| {
+                        this.update(cx, |this, cx| this.close_prompt(id, window, cx))
+                    });
+                }
+                Ok(json!({ "reason": reason }))
+            }
+            .boxed_local(),
+        ))
+    }
+
     fn wait_surface(&mut self, p: &Value, cx: &mut Context<Self>) -> anyhow::Result<Reply> {
         let (_, _, s) = self.surface_target(p)?;
         let close = bool_param(p, "close", false);
@@ -2591,11 +3446,11 @@ impl AbroMux {
 
     // ---- targets --------------------------------------------------------
 
-    fn ws_ref(&self, wi: usize) -> String {
+    pub(crate) fn ws_ref(&self, wi: usize) -> String {
         format!("workspace:{}", self.workspaces[wi].id)
     }
 
-    fn sref(&self, s: &Surface) -> String {
+    pub(crate) fn sref(&self, s: &Surface) -> String {
         format!(
             "surface:{}",
             self.surface_refs.get(&s.entity_id()).copied().unwrap_or(0)
@@ -2902,28 +3757,7 @@ impl AbroMux {
     ) -> anyhow::Result<()> {
         if let Some(to) = &run.send_to {
             let t = self.terminal_target(&json!({ "surface": to }))?;
-            let text = run.text.clone().unwrap_or_default();
-            let sent = t.update(cx, |t, cx| {
-                cx.notify();
-                t.submit(&text)
-            });
-            if sent {
-                return Ok(());
-            }
-            // No bracketed paste: Return on its own, a moment after the
-            // text, or a program reading it all at once takes it as a new
-            // line in what was typed.
-            let t = t.downgrade();
-            cx.spawn(async move |_, cx| {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(150))
-                    .await;
-                let _ = t.update(cx, |t, cx| {
-                    t.send(b"\r");
-                    cx.notify();
-                });
-            })
-            .detach();
+            submit_to(&t, &run.text.clone().unwrap_or_default(), cx);
             return Ok(());
         }
         let (wi, pane) = match run.beside.and_then(|id| Some((self.workspace_of(id)?, id))) {
@@ -3002,15 +3836,29 @@ impl AbroMux {
     ) -> anyhow::Result<Surface> {
         Ok(match str_param(p, "type").unwrap_or("terminal") {
             "terminal" => {
-                let cwd = str_param(p, "cwd")
-                    .map(String::from)
-                    .or_else(|| self.workspaces[wi].cwd(cx));
-                let s = self.make_terminal(
-                    self.workspaces[wi].id,
-                    crate::TerminalOpts::cwd(cwd),
-                    window,
-                    cx,
-                );
+                // `host`: another machine's server, or `local` for this one,
+                // whatever the workspace's is.
+                let host = match str_param(p, "host") {
+                    Some(h) => Some(
+                        crate::servers::resolve(h)
+                            .map_err(|e| anyhow!(e))?
+                            .unwrap_or_default(),
+                    ),
+                    None => None,
+                };
+                // The workspace's folder is this machine's; elsewhere the
+                // terminal starts in the host's home unless told.
+                let cwd = str_param(p, "cwd").map(String::from).or_else(|| {
+                    host.as_ref()
+                        .is_none_or(String::is_empty)
+                        .then(|| self.workspaces[wi].cwd(cx))
+                        .flatten()
+                });
+                let opts = crate::TerminalOpts {
+                    host,
+                    ..crate::TerminalOpts::cwd(cwd)
+                };
+                let s = self.make_terminal(self.workspaces[wi].id, opts, window, cx);
                 if let (Some(cmd), Surface::Terminal(t)) = (str_param(p, "command"), &s) {
                     t.update(cx, |t, _| t.send(format!("{cmd}\r").as_bytes()));
                 }
@@ -3049,7 +3897,7 @@ impl AbroMux {
                     path.display()
                 );
                 anyhow::ensure!(path.exists(), "no such file: {}", path.display());
-                let url = crate::markdown::url_for(path);
+                let url = crate::markdown::view_url_for(path);
                 if self.open_in_system_browser(&url, window, cx) {
                     anyhow::bail!(
                         "browser.engine is \"system\": {} opened in the default browser, \
@@ -3058,6 +3906,59 @@ impl AbroMux {
                     )
                 }
                 self.make_browser(&url, window, cx)
+            }
+            "claude" => {
+                let cwd = str_param(p, "cwd")
+                    .map(String::from)
+                    .or_else(|| self.workspaces[wi].cwd(cx))
+                    .map(PathBuf::from)
+                    .unwrap_or_else(abromux_core::paths::home);
+                anyhow::ensure!(
+                    cwd.is_absolute(),
+                    "the cwd must be absolute: {}",
+                    cwd.display()
+                );
+                use crate::claude_chat::{self as chat, Start};
+                let mut start = Start {
+                    session: str_param(p, "session")
+                        .or(str_param(p, "resume"))
+                        .map(String::from),
+                    ..Default::default()
+                };
+                if let Some(m) = str_param(p, "model") {
+                    anyhow::ensure!(chat::is_model_name(m), "not a model name: {m:?}");
+                    start.model = Some(m.into());
+                }
+                if let Some(e) = str_param(p, "effort") {
+                    let e = chat::effort_name(e).with_context(|| {
+                        format!("unknown effort {e:?} (low, medium, high, xhigh, max)")
+                    })?;
+                    start.effort = Some(e.into());
+                }
+                if let Some(m) = str_param(p, "mode") {
+                    let m = chat::mode_name(m).with_context(|| {
+                        format!(
+                            "unknown mode {m:?} (ask, accept-edits, plan, auto, dont-ask, bypass)"
+                        )
+                    })?;
+                    start.mode = Some(m.into());
+                }
+                if start.session.is_none() && bool_param(p, "continue", false) {
+                    let config = crate::settings::claude_config_dir(cx);
+                    start.session = chat::Chat::latest_session(&cwd, config.as_deref());
+                    anyhow::ensure!(
+                        start.session.is_some(),
+                        "no earlier conversation in {}",
+                        cwd.display()
+                    );
+                }
+                let s = self.make_browser(&chat::url_for(&cwd, &start), window, cx);
+                if let (Some(text), Surface::Browser(b)) = (str_param(p, "prompt"), &s)
+                    && !text.trim().is_empty()
+                {
+                    b.update(cx, |b, cx| b.chat_send(text, cx));
+                }
+                s
             }
             t if crate::plugins::find(t).is_some() => {
                 // GitLab turned off: its tab still shows local diffs.
@@ -3069,7 +3970,7 @@ impl AbroMux {
                 self.make_plugin(t, p, window, cx)?
             }
             t => {
-                let mut kinds = vec!["terminal", "browser", "markdown"];
+                let mut kinds = vec!["terminal", "browser", "markdown", "claude"];
                 kinds.extend(crate::plugins::all().iter().map(|p| p.id));
                 bail!("unknown surface type {t:?} ({})", kinds.join(", "))
             }
@@ -3124,14 +4025,29 @@ impl AbroMux {
                         "last_exit_code": t.commands.last_exit,
                     });
                 }
+                // Claude Code runs here (its hooks say, or its process is
+                // among the shell's): a phone may show it as a chat
+                // (`surface.stream` with `claude`).
+                if t.has_claude()
+                    || t.shell_pid().is_some_and(|pid| {
+                        let config = crate::settings::claude_config_dir(cx);
+                        crate::claude_chat::running_under(pid, config.as_deref()).is_some()
+                    })
+                {
+                    v["claude_session"] = json!(true);
+                }
                 let status = crate::events::program_status_json(t.program.shown().as_ref());
                 if !status.is_null() {
                     v["program_status"] = status;
                 }
             }
             Surface::Browser(b) => {
+                let b = b.read(cx);
                 v["type"] = json!("browser");
-                v["url"] = json!(b.read(cx).url);
+                v["url"] = json!(b.url);
+                if let Some(chat) = &b.chat {
+                    v["claude"] = json!({ "state": chat.state_name(), "cwd": chat.cwd });
+                }
             }
             Surface::Plugin(t) => {
                 v["type"] = json!(t.plugin());
@@ -3231,6 +4147,9 @@ impl AbroMux {
             "move-down" => self.nudge_workspace(wi, true, cx),
             "move-top" => self.workspace_to_top(wi, cx),
             "move-bottom" => self.workspace_to_bottom(wi, cx),
+            "move-to-cleanup" => {
+                self.move_to_cleanup(wi, cx);
+            }
             "close-others" => self.close_others(wi, window, cx),
             "close-above" | "close-below" => {
                 let ids: Vec<usize> = match action {
@@ -3263,8 +4182,8 @@ impl AbroMux {
             "pin" | "unpin" => bail!("abromux has no {action:?} yet"),
             a => bail!(
                 "unknown action {a:?}; expected rename, clear-name, set-description, clear-description, \
-                 set-color, clear-color, move-up, move-down, move-top, move-bottom, close-others, close-above, \
-                 close-below, mark-read or mark-unread"
+                 set-color, clear-color, move-up, move-down, move-top, move-bottom, move-to-cleanup, close-others, \
+                 close-above, close-below, mark-read or mark-unread"
             ),
         }
         cx.notify();
@@ -3273,6 +4192,619 @@ impl AbroMux {
             None => json!(null),
         };
         Ok(Reply::Now(v))
+    }
+
+    /// The workspaces as the model has them (abromux_model): what the app
+    /// drives its own copy and its server's replica with.
+    /// Changes another client made to the server's model (`{"op":"change"}`):
+    /// the app's views follow, the server being the model's source.
+    /// Workspaces come, go, move and are renamed; tabs open (a terminal,
+    /// attached to the server's if the model names one) and close; the
+    /// selection moves. A browser or plugin tab only the app can make.
+    pub(crate) fn follow_model(
+        &mut self,
+        events: &[abromux_model::Stamped],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use abromux_model::Event;
+        let at = |this: &Self, id: u64| this.workspaces.iter().position(|w| w.id as u64 == id);
+        // Tabs the change puts somewhere: a workspace it removes keeps them
+        // for that.
+        let wanted: std::collections::HashSet<u64> = events
+            .iter()
+            .filter_map(|s| match &s.event {
+                Event::Workspace { workspace, .. } => Some(workspace.layout.tabs()),
+                _ => None,
+            })
+            .flatten()
+            .map(|t| t.surface)
+            .collect();
+        for s in events {
+            match &s.event {
+                Event::Removed { id } => {
+                    if let Some(i) = at(self, *id) {
+                        let ws_id = self.workspaces[i].id;
+                        let keep: Vec<(u64, usize, EntityId)> = self.workspaces[i]
+                            .panes()
+                            .flat_map(|p| p.tabs.iter().map(move |t| (p.id, t)))
+                            .filter_map(|(pane, t)| {
+                                let n = *self.surface_refs.get(&t.entity_id())? as u64;
+                                wanted.contains(&n).then_some((n, pane, t.entity_id()))
+                            })
+                            .collect();
+                        for (n, pane, eid) in keep {
+                            let Some(p) = self.workspaces[i].pane_mut(pane) else {
+                                continue;
+                            };
+                            let Some(k) = p.tabs.iter().position(|t| t.entity_id() == eid) else {
+                                continue;
+                            };
+                            let t = p.tabs.remove(k);
+                            p.active = p.active.min(p.tabs.len().saturating_sub(1));
+                            self.set_aside.insert(n, (ws_id, t));
+                        }
+                        self.close_workspace(i, window, cx);
+                    }
+                }
+                Event::Selected { id: Some(id) } => {
+                    if let Some(i) = at(self, *id) {
+                        self.select_workspace(i, window, cx);
+                    }
+                }
+                Event::Selected { id: None } => {}
+                Event::Workspace { index, workspace } => {
+                    self.follow_workspace(*index, workspace, window, cx)
+                }
+            }
+        }
+        // Views no workspace took in the end close.
+        for (_, (wi_id, s)) in std::mem::take(&mut self.set_aside) {
+            self.discard_view(wi_id, s, cx);
+        }
+        cx.notify();
+    }
+
+    /// A view the model no longer has: gone, with what was kept for it.
+    fn discard_view(&mut self, ws_id: usize, s: Surface, cx: &mut Context<Self>) {
+        let id = s.entity_id();
+        self.forget_notifications(id);
+        self.forget_status(id);
+        self.agent_pending.remove(&id);
+        self.surface_refs.remove(&id);
+        if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == ws_id) {
+            ws.pinned.retain(|p| *p != id);
+            ws.pinned_for.remove(&id);
+        }
+        match s {
+            Surface::Terminal(t) => t.update(cx, |t, _| t.close()),
+            Surface::Browser(b) => b.update(cx, |b, cx| b.set_shown(false, cx)),
+            Surface::Plugin(_) => {}
+        }
+    }
+
+    fn follow_workspace(
+        &mut self,
+        index: usize,
+        m: &abromux_model::Workspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A client may name a server (`docker`) or give its address; the
+        // views take the address, as the handlers do.
+        let address = |h: &Option<String>| {
+            h.as_deref().and_then(|h| match crate::servers::resolve(h) {
+                Ok(a) => a,
+                // Not one it knows: the terminal says why it can't connect.
+                Err(_) => Some(h.to_string()),
+            })
+        };
+        let host = address(&m.host);
+        let mut fresh = None;
+        let wi = match self.workspaces.iter().position(|w| w.id as u64 == m.id) {
+            Some(i) => i,
+            None => {
+                // The id the client gave it (no workspace here has it), so
+                // the server's model and the views agree.
+                let next = self.next_ws;
+                self.next_ws = (m.id as usize).saturating_sub(1);
+                self.building_host = host.clone();
+                let wi = self.create_workspace(
+                    m.cwd.clone().filter(|_| host.is_none()),
+                    false,
+                    window,
+                    cx,
+                );
+                self.building_host = None;
+                self.next_ws = next.max(m.id as usize);
+                self.workspaces[wi].host = host.clone();
+                if host.is_some() {
+                    self.join_server_group(wi, cx);
+                }
+                fresh = self.workspaces[wi]
+                    .all_surfaces()
+                    .next()
+                    .map(|s| s.entity_id());
+                wi
+            }
+        };
+        if self.workspaces[wi].name(cx) != m.name && !m.name.is_empty() {
+            self.workspaces[wi].custom_name = Some(m.name.clone());
+        }
+        if self.workspaces[wi].description != m.description {
+            self.workspaces[wi].description = m.description.clone();
+        }
+        // The layout: the model's, with the views it names.
+        let fresh = fresh.and_then(|id| self.surface_refs.get(&id).map(|&n| n as u64));
+        let ctx = Build {
+            ws: self.workspaces[wi].id,
+            cwd: m.cwd.clone().filter(|_| host.is_none()),
+            address: &address,
+        };
+        self.rebuild_layout(wi, &m.layout, fresh, &ctx, window, cx);
+        // Where it goes in the list.
+        let Some(wi) = self.workspaces.iter().position(|w| w.id as u64 == m.id) else {
+            return;
+        };
+        let to = index.min(self.workspaces.len() - 1);
+        if to != wi {
+            let selected = self.workspaces.get(self.active).map(|w| w.id);
+            let w = self.workspaces.remove(wi);
+            self.workspaces.insert(to, w);
+            if let Some(i) = selected.and_then(|id| self.workspaces.iter().position(|w| w.id == id))
+            {
+                self.active = i;
+            }
+        }
+    }
+
+    /// Whether workspace `wi`'s panes are already `m`: the same splits,
+    /// panes, tabs in order and active tabs.
+    fn has_layout(&self, n: &crate::workspace::Node, m: &abromux_model::Node) -> bool {
+        use crate::workspace::Node as V;
+        use abromux_model::Node as M;
+        match (n, m) {
+            (V::Leaf(p), M::Pane { id, tabs, active }) => {
+                p.id as u64 == *id
+                    && p.active == *active
+                    && p.tabs.len() == tabs.len()
+                    && p.tabs.iter().zip(tabs).all(|(s, t)| {
+                        self.surface_refs.get(&s.entity_id()).map(|&n| n as u64) == Some(t.surface)
+                    })
+            }
+            (
+                V::Split {
+                    axis,
+                    ratio,
+                    children,
+                    ..
+                },
+                M::Split {
+                    vertical,
+                    ratio: r,
+                    children: c,
+                },
+            ) => {
+                matches!(axis, Axis::Vertical) == *vertical
+                    && (ratio - r).abs() < 1e-3
+                    && self.has_layout(&children[0], &c[0])
+                    && self.has_layout(&children[1], &c[1])
+            }
+            _ => false,
+        }
+    }
+
+    /// Make workspace `wi`'s panes the model's `layout`: the views it names
+    /// (by surface number) kept, taken from another workspace if a tab moved
+    /// here; terminals made for the ones it doesn't have (attached when the
+    /// server keeps one; `fresh`, a new workspace's first terminal, stands
+    /// for the first new one); pane ids kept; the views it no longer names
+    /// closed. A browser or plugin tab only the app makes, so one the model
+    /// names that isn't here is left out.
+    fn rebuild_layout(
+        &mut self,
+        wi: usize,
+        layout: &abromux_model::Node,
+        mut fresh: Option<u64>,
+        ctx: &Build,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.has_layout(&self.workspaces[wi].root, layout) {
+            return;
+        }
+        let number =
+            |this: &Self, s: &Surface| this.surface_refs.get(&s.entity_id()).map(|&n| n as u64);
+        let wanted: std::collections::HashSet<u64> =
+            layout.tabs().iter().map(|t| t.surface).collect();
+        let mut pool: std::collections::HashMap<u64, Surface> = std::collections::HashMap::new();
+        for s in self.workspaces[wi].panes().flat_map(|p| p.tabs.iter()) {
+            if let Some(n) = number(self, s) {
+                pool.insert(n, s.clone());
+            }
+        }
+        // Tabs moved here from another workspace: out of that one's panes.
+        let moved: Vec<(usize, usize, EntityId)> = self
+            .workspaces
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != wi)
+            .flat_map(|(j, w)| {
+                w.panes()
+                    .flat_map(move |p| p.tabs.iter().map(move |s| (j, p.id, s)))
+                    .collect::<Vec<_>>()
+            })
+            .filter_map(|(j, pane, s)| {
+                let n = number(self, s)?;
+                (wanted.contains(&n) && !pool.contains_key(&n)).then_some((j, pane, s.entity_id()))
+            })
+            .collect();
+        // Or set aside by an earlier event of the same change (a tab moved
+        // out of the workspace it was in before this one took it).
+        for n in &wanted {
+            if !pool.contains_key(n)
+                && let Some((_, s)) = self.set_aside.remove(n)
+            {
+                pool.insert(*n, s);
+            }
+        }
+        for (j, pane, id) in moved {
+            let w = &mut self.workspaces[j];
+            let Some(p) = w.pane_mut(pane) else { continue };
+            let Some(i) = p.tabs.iter().position(|s| s.entity_id() == id) else {
+                continue;
+            };
+            let s = p.tabs.remove(i);
+            p.active = p.active.min(p.tabs.len().saturating_sub(1));
+            if p.tabs.is_empty() {
+                w.remove_pane(pane);
+            }
+            if let Some(n) = number(self, &s) {
+                pool.insert(n, s);
+            }
+        }
+        let old_panes: std::collections::HashSet<usize> =
+            self.workspaces[wi].panes().map(|p| p.id).collect();
+        let Some(root) =
+            self.build_from_model(layout, &mut pool, &mut fresh, &old_panes, ctx, window, cx)
+        else {
+            // A model with no tabs: the workspace stays as it is.
+            return;
+        };
+        self.workspaces[wi].root = root;
+        // What it no longer names is set aside: another workspace in the
+        // same change may take it (follow_model closes the rest).
+        let ws_id = self.workspaces[wi].id;
+        for (n, s) in pool {
+            self.set_aside.insert(n, (ws_id, s));
+        }
+        let ws = &mut self.workspaces[wi];
+        if ws.pane_mut(ws.focused_pane).is_none() {
+            ws.focused_pane = ws.panes().next().map_or(0, |p| p.id);
+        }
+        if wi == self.active {
+            self.focus_active(window, cx);
+        }
+        cx.notify();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_from_model(
+        &mut self,
+        n: &abromux_model::Node,
+        pool: &mut std::collections::HashMap<u64, Surface>,
+        fresh: &mut Option<u64>,
+        old_panes: &std::collections::HashSet<usize>,
+        ctx: &Build,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<crate::workspace::Node> {
+        use crate::workspace::{Node as V, Pane};
+        match n {
+            abromux_model::Node::Pane { id, tabs, active } => {
+                let mut out = vec![];
+                for t in tabs {
+                    if let Some(s) = pool.remove(&t.surface) {
+                        out.push(s);
+                        continue;
+                    }
+                    // A page, or a plugin's tab, from what the model says. The
+                    // built-in browser, whatever `browser.engine` says: a
+                    // terminal-browser tab arranges its own panes, and this
+                    // one has to be where the model puts it.
+                    if t.kind == "browser" {
+                        let url = t.url.as_deref().unwrap_or(DEFAULT_URL);
+                        out.push(self.make_builtin_browser(url, window, cx));
+                        continue;
+                    }
+                    if t.kind == "plugin" {
+                        let Some(id) = t.plugin.as_deref() else {
+                            continue;
+                        };
+                        let state = t.state.clone().unwrap_or_else(|| json!({}));
+                        match self.make_plugin(id, &state, window, cx) {
+                            Ok(s) => out.push(s),
+                            Err(e) => eprintln!("a {id} tab from the model: {e:#}"),
+                        }
+                        continue;
+                    }
+                    if t.kind != "terminal" {
+                        continue;
+                    }
+                    if t.held.is_none()
+                        && let Some(s) = fresh.take().and_then(|f| pool.remove(&f))
+                    {
+                        out.push(s);
+                        continue;
+                    }
+                    let in_use =
+                        |this: &Self, n: usize| this.surface_refs.values().any(|&r| r == n);
+                    let attach = t.held.clone().map(|h| {
+                        let n = t.surface as usize;
+                        let n = if n == 0 || in_use(self, n) {
+                            self.next_surface + 1
+                        } else {
+                            n
+                        };
+                        (n, h)
+                    });
+                    let opts = crate::TerminalOpts {
+                        attach,
+                        host: (ctx.address)(&t.host),
+                        cwd: ctx.cwd.clone(),
+                        ..Default::default()
+                    };
+                    out.push(self.make_terminal(ctx.ws, opts, window, cx));
+                }
+                if out.is_empty() {
+                    return None;
+                }
+                let id = if *id != 0 && old_panes.contains(&(*id as usize)) {
+                    *id as usize
+                } else {
+                    self.pane_id()
+                };
+                Some(V::Leaf(Pane {
+                    id,
+                    active: (*active).min(out.len() - 1),
+                    tabs: out,
+                }))
+            }
+            abromux_model::Node::Split {
+                vertical,
+                ratio,
+                children,
+            } => {
+                let a =
+                    self.build_from_model(&children[0], pool, fresh, old_panes, ctx, window, cx);
+                let b =
+                    self.build_from_model(&children[1], pool, fresh, old_panes, ctx, window, cx);
+                match (a, b) {
+                    (Some(a), Some(b)) => Some(V::Split {
+                        id: self.id(),
+                        axis: if *vertical {
+                            Axis::Vertical
+                        } else {
+                            Axis::Horizontal
+                        },
+                        ratio: *ratio,
+                        children: Box::new([a, b]),
+                    }),
+                    (x, None) | (None, x) => x,
+                }
+            }
+        }
+    }
+
+    pub(crate) fn model(&self, cx: &App) -> abromux_model::Model {
+        use abromux_model as m;
+        let surface =
+            |s: &Surface| self.surface_refs.get(&s.entity_id()).copied().unwrap_or(0) as u64;
+        let tab = |s: &Surface| {
+            let mut t = m::Tab {
+                surface: surface(s),
+                title: s.title(cx),
+                ..Default::default()
+            };
+            match s {
+                Surface::Terminal(term) => {
+                    let term = term.read(cx);
+                    t.kind = "terminal".into();
+                    t.held = term.held_id();
+                    t.host = term.host.clone();
+                }
+                Surface::Browser(b) => {
+                    t.kind = "browser".into();
+                    t.url = Some(b.read(cx).url.clone()).filter(|u| !u.is_empty());
+                }
+                Surface::Plugin(p) => {
+                    t.kind = "plugin".into();
+                    t.plugin = Some(p.plugin().into());
+                    t.state = Some(p.save(cx));
+                }
+            }
+            t
+        };
+        fn node(n: &crate::workspace::Node, tab: &dyn Fn(&Surface) -> m::Tab) -> m::Node {
+            match n {
+                crate::workspace::Node::Leaf(p) => m::Node::Pane {
+                    id: p.id as u64,
+                    tabs: p.tabs.iter().map(tab).collect(),
+                    active: p.active,
+                },
+                crate::workspace::Node::Split {
+                    axis,
+                    ratio,
+                    children,
+                    ..
+                } => m::Node::Split {
+                    vertical: matches!(axis, Axis::Vertical),
+                    ratio: *ratio,
+                    children: Box::new([node(&children[0], tab), node(&children[1], tab)]),
+                },
+            }
+        }
+        m::Model {
+            seq: 0,
+            selected: self.workspaces.get(self.active).map(|w| w.id as u64),
+            workspaces: self
+                .workspaces
+                .iter()
+                .map(|w| m::Workspace {
+                    id: w.id as u64,
+                    name: w.name(cx),
+                    description: w.description.clone(),
+                    host: w.host.clone(),
+                    folder: w
+                        .home
+                        .as_ref()
+                        .map(|h| h.to_string_lossy().into_owned())
+                        .or_else(|| w.env.get("ABROMUX_WORKSPACE_DIR").cloned()),
+                    cwd: w.cwd(cx),
+                    group: w
+                        .group
+                        .and_then(|g| self.groups.iter().find(|x| x.id == g))
+                        .map(|g| g.name.clone()),
+                    layout: node(&w.root, &tab),
+                    status: w
+                        .status
+                        .iter()
+                        .map(|s| {
+                            let v = status::status_json(s);
+                            m::Status {
+                                key: v["key"].as_str().unwrap_or_default().into(),
+                                value: v["value"].as_str().unwrap_or_default().into(),
+                                color: v["color"].as_str().map(String::from),
+                                icon: v["icon"].as_str().map(String::from),
+                            }
+                        })
+                        .collect(),
+                    progress: w.progress.as_ref().map(|p| m::Progress {
+                        value: p.value as f64,
+                        label: p.label.clone(),
+                    }),
+                    unread: self.ws_unread(w) as u32,
+                    color: w.color.map(|c| format!("#{c:06x}")),
+                    // The sidebar's cached lookup: this is built often.
+                    branch: w.local_cwd(cx).as_deref().and_then(|c| self.branch(c)),
+                    log: w
+                        .log
+                        .iter()
+                        .map(|l| m::LogEntry {
+                            level: l.level.as_str().into(),
+                            source: l.source.clone(),
+                            message: l.message.clone(),
+                            at: l
+                                .at
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(0, |d| d.as_secs()),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Take an offer (crate::forward::offers): forward `port` of `host` in
+    /// its workspace there (the selected one if it's on that host).
+    pub(crate) fn forward_offer(
+        &mut self,
+        p: &Value,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Value> {
+        let host = str_param(p, "host").context("missing host")?.to_string();
+        let port = p["port"]
+            .as_u64()
+            .and_then(|n| u16::try_from(n).ok())
+            .context("missing port")?;
+        let on = |w: &crate::workspace::Workspace| w.host.as_deref() == Some(host.as_str());
+        let wi = if self.workspaces.get(self.active).is_some_and(on) {
+            self.active
+        } else {
+            self.workspaces
+                .iter()
+                .position(on)
+                .context("no workspace there any more")?
+        };
+        let id = self.workspaces[wi].id;
+        let list = self.forwards.entry(id).or_default();
+        let out = match list.iter().find(|f| f.port == port && f.host == host) {
+            Some(f) => f.json(),
+            None => {
+                let f =
+                    crate::forward::Forward::start(&host, port, None).map_err(|e| anyhow!(e))?;
+                let out = f.json();
+                list.push(f);
+                out
+            }
+        };
+        crate::forward::withdraw(&host, port);
+        cx.notify();
+        Ok(out)
+    }
+
+    /// The terminals this app holds of its own server, with what it parses
+    /// of them (title, folder), for the server to list to other apps.
+    pub(crate) fn held_terms(&self, cx: &App) -> Value {
+        json!(
+            self.workspaces
+                .iter()
+                .flat_map(|w| w.all_surfaces())
+                .filter_map(|s| match s {
+                    Surface::Terminal(t) => {
+                        let v = t.read(cx);
+                        let id = v.held_id().filter(|_| v.host.is_none())?;
+                        Some(json!({
+                            "id": id,
+                            "title": v.shown_title(),
+                            "cwd": v.live_cwd(),
+                            "surface": self.surface_refs.get(&t.entity_id()).map(|n| format!("surface:{n}")),
+                        }))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        )
+    }
+
+    /// What the server answers from while the app is closed
+    /// (crate::control_link): each workspace as `workspace.list` has it,
+    /// with its host and its tabs' refs, so it can tell whose an agent's
+    /// report is.
+    pub(crate) fn control_state(&self, cx: &App) -> Value {
+        json!(
+            (0..self.workspaces.len())
+                .map(|i| {
+                    let ws = &self.workspaces[i];
+                    let mut v = self.describe_ws(i, false, cx);
+                    let ids = ws
+                        .panes()
+                        .flat_map(|p| p.tabs.iter().map(|s| s.entity_id()))
+                        .chain(ws.hidden.iter().map(|h| h.surface.entity_id()));
+                    v["surfaces"] = json!(
+                        ids.filter_map(|id| self.surface_refs.get(&id))
+                            .map(|n| format!("surface:{n}"))
+                            .collect::<Vec<_>>()
+                    );
+                    v["host"] = json!(ws.host);
+                    // Every host it has something on: its own, and its
+                    // tabs' (`new-surface --host`).
+                    let mut hosts: Vec<String> = ws.host.iter().cloned().collect();
+                    for p in ws.panes() {
+                        for s in &p.tabs {
+                            if let Surface::Terminal(t) = s
+                                && let Some(h) = &t.read(cx).host
+                                && !hosts.contains(h)
+                            {
+                                hosts.push(h.clone());
+                            }
+                        }
+                    }
+                    v["hosts"] = json!(hosts);
+                    v
+                })
+                .collect::<Vec<_>>()
+        )
     }
 
     fn describe_ws(&self, wi: usize, panes: bool, cx: &App) -> Value {
@@ -3285,13 +4817,20 @@ impl AbroMux {
             "selected": wi == self.active,
             "unread": self.ws_unread(ws),
             "cwd": cwd,
-            "branch": cwd.as_deref().and_then(git_branch),
+            "branch": ws.local_cwd(cx).as_deref().and_then(git_branch),
             "pane_count": ws.panes().count(),
             "description": ws.description,
             "color": ws.color.map(|c| format!("#{c:06x}")),
             "group": ws.group.map(|g| format!("group:{g}")),
             "home": ws.home.as_ref().map(|h| h.to_string_lossy()),
-            "status": ws.status.iter().map(status::status_json).collect::<Vec<_>>(),
+            "status": ws.status.iter().map(|s| {
+                let mut v = status::status_json(s);
+                // An agent's pill: the tab it's about.
+                if let Some(n) = s.owner.and_then(|o| self.surface_refs.get(&o)) {
+                    v["surface"] = json!(format!("surface:{n}"));
+                }
+                v
+            }).collect::<Vec<_>>(),
             "progress": ws.progress.as_ref().map(|p| json!({ "value": (p.value as f64 * 1000.).round() / 1000., "label": p.label })),
         });
         if panes {
@@ -3299,6 +4838,13 @@ impl AbroMux {
         }
         v
     }
+}
+
+/// What making a workspace's terminals from the model needs.
+struct Build<'a> {
+    ws: usize,
+    cwd: Option<String>,
+    address: &'a dyn Fn(&Option<String>) -> Option<String>,
 }
 
 #[cfg(test)]
@@ -3309,7 +4855,7 @@ mod tests {
     fn hangup_waits_for_the_caller_to_close() {
         let (app_end, caller) = UnixStream::pair().unwrap();
         let (tx, mut rx) = mpsc::unbounded();
-        let served = std::thread::spawn(move || serve(app_end, tx));
+        let served = std::thread::spawn(move || serve(app_end, tx, None));
         let mut w = caller.try_clone().unwrap();
         w.write_all(b"{\"id\":1,\"method\":\"system.ping\"}\n")
             .unwrap();

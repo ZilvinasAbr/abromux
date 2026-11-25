@@ -5,10 +5,13 @@
 pub mod agent;
 pub mod cmux;
 pub mod color;
+pub mod dial;
 pub mod ipc;
 pub mod layout;
 pub mod link;
 pub mod links;
+pub mod methods;
+pub mod names;
 pub mod naming;
 pub mod notify_hook;
 pub mod osc99;
@@ -19,3 +22,4 @@ pub mod session;
 pub mod settings;
 pub mod status;
 pub mod text;
+pub mod wire;

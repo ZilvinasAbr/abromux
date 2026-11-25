@@ -79,9 +79,106 @@ pub struct Settings {
     pub notifications: NotificationSettings,
     pub gitlab: GitlabSettings,
     pub jira: JiraSettings,
+    pub claude: ClaudeSettings,
+    pub remote: RemoteSettings,
+    /// Values of the settings init.lua declares (`abromux.setting`), by key.
+    pub scripts: BTreeMap<String, serde_json::Value>,
+    /// Those settings, from init.lua: not in the file.
+    #[serde(skip)]
+    pub script_settings: Vec<crate::lua::SettingDef>,
+}
+
+impl Settings {
+    /// Script setting `key`'s value: the file's, if it's one the setting
+    /// takes, else its default. None for a key init.lua doesn't declare.
+    pub fn script_value(&self, key: &str) -> Option<serde_json::Value> {
+        let def = self.script_settings.iter().find(|d| d.key == key)?;
+        Some(
+            self.scripts
+                .get(key)
+                .filter(|v| def.accepts(v))
+                .cloned()
+                .unwrap_or_else(|| def.default.clone()),
+        )
+    }
 }
 
 impl Global for Settings {}
+
+/// Claude tabs (`crate::claude_chat`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct ClaudeSettings {
+    /// The Claude Code config folder Claude tabs use (its account, settings
+    /// and transcripts), as `CLAUDE_CONFIG_DIR`. None: what the login shell
+    /// sets, else `~/.claude`.
+    pub config_dir: Option<String>,
+    /// The permission mode a Claude tab starts in when none is asked for
+    /// (`ask`, `accept-edits`, `plan`, `auto`, `dont-ask`). None: auto.
+    pub default_mode: Option<String>,
+}
+
+/// The config folder Claude tabs use, if the config file names one.
+pub fn claude_config_dir(cx: &gpui::App) -> Option<PathBuf> {
+    let dir = cx
+        .try_global::<Settings>()?
+        .claude
+        .config_dir
+        .as_deref()?
+        .trim();
+    (!dir.is_empty()).then(|| abromux_core::paths::expand_tilde(dir))
+}
+
+/// The permission mode a new Claude tab starts in: the config file's
+/// `defaultMode`, else auto. Never bypass: that one you pick per tab.
+pub fn claude_default_mode(cx: &gpui::App) -> &'static str {
+    cx.try_global::<Settings>()
+        .and_then(|s| s.claude.default_mode.as_deref())
+        .and_then(crate::claude_chat::mode_name)
+        .filter(|m| *m != "bypassPermissions")
+        .unwrap_or("auto")
+}
+
+/// Phone access over Tailscale (`crate::remote`, `abromux remote`,
+/// Settings › Phone Access). The release and nightly apps share it, each on
+/// its own ports.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct RemoteSettings {
+    /// Serve the phone app on this Mac's tailnet address.
+    pub enabled: bool,
+    /// Tailscale logins let in besides this Mac's own user, who always is.
+    pub allow: Vec<String>,
+    /// Let phones call every method, browser automation and files too.
+    pub all_methods: bool,
+    /// Keep the Mac awake (not the display) while an agent is working.
+    pub keep_awake: bool,
+    /// Notify phones only after this long without keyboard or mouse use on
+    /// the Mac (seconds); 0: always.
+    pub push_when_idle: u64,
+    /// Show a notification's text on the phone, not just its title.
+    pub push_preview: bool,
+    /// The loopback port the app listens on. None: 7298 (the nightly 7299).
+    pub port: Option<u16>,
+    /// The tailnet HTTPS port `tailscale serve` uses: 443, 8443 or 10000.
+    /// None: 8443 (the nightly 10000).
+    pub https_port: Option<u16>,
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow: Vec::new(),
+            all_methods: false,
+            keep_awake: true,
+            push_when_idle: 60,
+            push_preview: true,
+            port: None,
+            https_port: None,
+        }
+    }
+}
 
 /// Jira, for tracked links (`crate::links`).
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -106,6 +203,10 @@ pub struct GitlabSettings {
     /// the one signed in to in a GitLab tab. Its token is the tab's (the
     /// Keychain). Workspace checkouts whose remote is elsewhere are left out.
     pub host: Option<String>,
+    /// How often merge requests are checked in the background
+    /// (`crate::gitlab`'s intervals, scaled together). Off: nothing is (tabs load what they open, and
+    /// Refresh still checks once).
+    pub polling: GitlabPolling,
     /// "Mine" also holds merge requests you're asked to review.
     pub include_review_requests: bool,
     /// "Mine" also holds merge requests assigned to you.
@@ -122,17 +223,6 @@ pub struct GitlabSettings {
     pub max_mr_diff_mb: u32,
     /// …or after this many files.
     pub max_mr_diff_files: u32,
-    /// How many of the most recently opened merge requests poll as often
-    /// as your own.
-    pub frequent_recent: u32,
-    /// Seconds between checks of a merge request on screen.
-    pub on_screen_seconds: u32,
-    /// …of one whose pipeline is running.
-    pub running_pipeline_seconds: u32,
-    /// …of yours, the workspaces' and the frequent recent ones.
-    pub mine_seconds: u32,
-    /// …of the other recent ones.
-    pub recent_seconds: u32,
 }
 
 impl Default for GitlabSettings {
@@ -140,6 +230,7 @@ impl Default for GitlabSettings {
         Self {
             enabled: true,
             host: None,
+            polling: GitlabPolling::default(),
             include_review_requests: true,
             include_assigned: false,
             recent_limit: 50,
@@ -147,11 +238,43 @@ impl Default for GitlabSettings {
             max_file_diff_kb: 1024,
             max_mr_diff_mb: 20,
             max_mr_diff_files: 3000,
-            frequent_recent: 10,
-            on_screen_seconds: 20,
-            running_pipeline_seconds: 30,
-            mine_seconds: 60,
-            recent_seconds: 300,
+        }
+    }
+}
+
+/// `gitlab.polling`: how often the background checks run.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum GitlabPolling {
+    /// Nothing in the background.
+    Off,
+    /// Every interval four times longer.
+    Low,
+    /// The intervals as they are.
+    #[default]
+    Medium,
+    /// Every interval halved.
+    High,
+}
+
+impl GitlabPolling {
+    /// Its value in the config file.
+    pub fn key(self) -> &'static str {
+        match self {
+            GitlabPolling::Off => "off",
+            GitlabPolling::Low => "low",
+            GitlabPolling::Medium => "medium",
+            GitlabPolling::High => "high",
+        }
+    }
+
+    /// What every interval is multiplied by; None when off.
+    pub fn factor(self) -> Option<f64> {
+        match self {
+            GitlabPolling::Off => None,
+            GitlabPolling::Low => Some(4.),
+            GitlabPolling::Medium => Some(1.),
+            GitlabPolling::High => Some(0.5),
         }
     }
 }
@@ -649,6 +772,16 @@ pub struct Command {
     pub url: Option<String>,
     #[serde(default)]
     pub workspace: Option<WorkspaceSpec>,
+    /// A Lua script to run with `abromux do` (`~/…`, absolute, or relative
+    /// to the config file's folder, or the project's).
+    #[serde(default)]
+    pub script: Option<String>,
+    /// With `script`: run this action of it (`abromux do <script> --action`).
+    #[serde(default)]
+    pub action: Option<String>,
+    /// With `script`: its arguments (`abromux.args`).
+    #[serde(default)]
+    pub args: Option<serde_json::Map<String, serde_json::Value>>,
     /// What a workspace command does when a workspace of its name is open.
     #[serde(default)]
     pub restart: Restart,
@@ -692,6 +825,12 @@ impl Command {
         if let Some(url) = &self.url {
             return format!("Opens {url}");
         }
+        if let Some(script) = &self.script {
+            return match &self.action {
+                Some(a) => format!("Runs the Lua action “{a}” of {script}"),
+                None => format!("Runs the Lua script {script}"),
+            };
+        }
         let Some(w) = &self.workspace else {
             return String::new();
         };
@@ -711,10 +850,17 @@ impl Command {
             self.run.is_some(),
             self.url.is_some(),
             self.workspace.is_some(),
+            self.script.is_some(),
         ];
         if kinds.iter().filter(|k| **k).count() != 1 {
             return Err(format!(
-                "command {:?} needs one of \"run\", \"url\" or \"workspace\"",
+                "command {:?} needs one of \"run\", \"url\", \"workspace\" or \"script\"",
+                self.title
+            ));
+        }
+        if self.script.is_none() && (self.action.is_some() || self.args.is_some()) {
+            return Err(format!(
+                "command {:?}: \"action\" and \"args\" go with \"script\"",
                 self.title
             ));
         }
@@ -975,6 +1121,66 @@ pub fn load() -> Result<Settings, String> {
     read(&path())
 }
 
+/// `load`, plus the actions init.lua (next to the file) defines, as
+/// commands after the file's own: what the app uses.
+pub fn load_app() -> Result<Settings, String> {
+    let mut s = load()?;
+    let init = crate::lua::init_path();
+    let declared = crate::lua::collect_all(&init)?;
+    s.commands.extend(commands_of(&init, declared.actions)?);
+    s.script_settings = declared.settings;
+    Ok(s)
+}
+
+/// `s` with init.lua's commands and settings as its last load had them,
+/// none if it failed: for a change made in the app (the Settings window,
+/// `settings.set`), which shouldn't fail over init.lua.
+pub fn with_lua(mut s: Settings) -> Settings {
+    let init = crate::lua::init_path();
+    if let Ok(d) = crate::lua::collect_all_cached(&init) {
+        s.commands
+            .extend(commands_of(&init, d.actions).unwrap_or_default());
+        s.script_settings = d.settings;
+    }
+    s
+}
+
+/// What's wrong with the config file or init.lua, if anything, for the
+/// Settings window. It asks often (each change, each time it comes to the
+/// front), so init.lua only runs again once it, or a file it `require`s,
+/// has changed.
+pub fn app_error() -> Option<String> {
+    let init = crate::lua::init_path();
+    load()
+        .and_then(|_| commands_of(&init, crate::lua::collect_cached(&init)?))
+        .err()
+}
+
+/// The actions of `init`, each a palette command that runs it.
+#[cfg(test)]
+pub fn lua_commands(init: &Path) -> Result<Vec<Command>, String> {
+    commands_of(init, crate::lua::collect(init)?)
+}
+
+fn commands_of(init: &Path, actions: Vec<crate::lua::ActionDef>) -> Result<Vec<Command>, String> {
+    let at = |e: serde_json::Error| format!("{}: {e}", init.display());
+    actions
+        .into_iter()
+        .filter(|a| a.palette)
+        .map(|a| {
+            serde_json::from_value::<Command>(serde_json::json!({
+                "title": a.title,
+                "description": a.description,
+                "keywords": a.keywords,
+                "script": init.to_string_lossy(),
+                "action": a.name,
+                "shortcut": a.key,
+            }))
+            .map_err(at)
+        })
+        .collect()
+}
+
 pub fn read(path: &Path) -> Result<Settings, String> {
     match std::fs::read_to_string(path) {
         Ok(text) => parse(&text).map_err(|e| format!("{}: {e}", path.display())),
@@ -1168,10 +1374,58 @@ mod tests {
     use super::*;
 
     #[test]
+    fn script_values() {
+        use crate::lua::{SettingDef, SettingKind};
+        let mut s = parse(r#"{"scripts": {"level": "off", "loud": "yes"}}"#).unwrap();
+        s.script_settings = vec![
+            SettingDef {
+                key: "level".into(),
+                title: "Level".into(),
+                description: None,
+                group: None,
+                kind: SettingKind::Choice(vec![
+                    ("off".into(), "Off".into()),
+                    ("on".into(), "On".into()),
+                ]),
+                default: serde_json::json!("on"),
+            },
+            SettingDef {
+                key: "loud".into(),
+                title: "Loud".into(),
+                description: None,
+                group: None,
+                kind: SettingKind::Boolean,
+                default: serde_json::json!(false),
+            },
+        ];
+        assert_eq!(s.script_value("level"), Some(serde_json::json!("off")));
+        // Not a value it takes: the default.
+        assert_eq!(s.script_value("loud"), Some(serde_json::json!(false)));
+        assert_eq!(s.script_value("nope"), None);
+    }
+
+    #[test]
     fn defaults() {
         assert_eq!(parse("").unwrap(), Settings::default());
         assert_eq!(parse("{}").unwrap(), Settings::default());
         assert_eq!(parse(r#"{"panes": {}}"#).unwrap(), Settings::default());
+    }
+
+    #[test]
+    fn gitlab_polling() {
+        assert_eq!(Settings::default().gitlab.polling, GitlabPolling::Medium);
+        for (v, want) in [
+            ("off", GitlabPolling::Off),
+            ("low", GitlabPolling::Low),
+            ("medium", GitlabPolling::Medium),
+            ("high", GitlabPolling::High),
+        ] {
+            let s = parse(&format!(r#"{{"gitlab": {{"polling": "{v}"}}}}"#)).unwrap();
+            assert_eq!(s.gitlab.polling, want);
+            assert_eq!(want.key(), v);
+        }
+        assert_eq!(GitlabPolling::Off.factor(), None);
+        assert!(parse(r#"{"gitlab": {"polling": "fast"}}"#).is_err());
     }
 
     #[test]
@@ -1276,6 +1530,48 @@ mod tests {
         );
         let e = err(r#"{"shortcuts": {"find": {"keys": "cmd-f", "when": "a &&"}}}"#);
         assert!(e.contains("key context"), "{e}");
+    }
+
+    #[test]
+    fn script_commands() {
+        let s = parse(
+            r#"{ "commands": [
+                { "title": "Ticket", "script": "~/scripts/ticket.lua", "args": { "board": "PAY" } },
+                { "title": "Tests", "script": "init.lua", "action": "tests", "shortcut": "cmd-alt-t" }
+            ] }"#,
+        )
+        .unwrap();
+        assert_eq!(s.commands[0].args.as_ref().unwrap()["board"], "PAY");
+        assert!(s.commands[1].describe().contains("action “tests”"));
+        assert!(s.commands[1].shortcut.is_some());
+        // One kind per command, and action/args only with a script.
+        assert!(
+            parse(r#"{ "commands": [{ "title": "X", "script": "a.lua", "run": "ls" }] }"#).is_err()
+        );
+        assert!(
+            parse(r#"{ "commands": [{ "title": "X", "run": "ls", "action": "a" }] }"#).is_err()
+        );
+
+        let dir = std::env::temp_dir().join(format!("abromux-lua-cmds-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let init = dir.join("init.lua");
+        std::fs::write(
+            &init,
+            r#"abromux.action{ name = "tests", title = "Run Tests", key = "cmd-alt-t", run = function() end }"#,
+        )
+        .unwrap();
+        let cmds = lua_commands(&init).unwrap();
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].title, "Run Tests");
+        assert_eq!(cmds[0].action.as_deref(), Some("tests"));
+        assert!(cmds[0].shortcut.is_some());
+        std::fs::write(
+            &init,
+            r#"abromux.action{ name = "x", title = "X", key = 42, run = print }"#,
+        )
+        .unwrap();
+        assert!(lua_commands(&init).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

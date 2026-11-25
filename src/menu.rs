@@ -7,11 +7,11 @@ use crate::{
     About, CloseTab, CloseWorkspace, CommandPalette, EditDescription, FlashPane, FocusAddressBar,
     FocusDown, FocusLeft, FocusRight, FocusUp, GroupByFolder, ImportCmuxSession, JumpToUnread,
     LastPane, MarkOldestUnreadAndJumpNext, MoveWorkspaceDown, MoveWorkspaceUp, NewBrowser,
-    NewFolderWorkspace, NewGroup, NewTerminal, NewWorkspace, NextTab, NextWorkspace, OpenConfig,
-    OpenSettings, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab, RenameWorkspace,
-    ReopenSession, SplitDown, SplitRight, ToggleGroup, ToggleNotifications, ToggleSidebar,
-    ToggleUnread, ToggleWorkspaceUnread, ToggleZoom, Ungroup, WorkspaceSwitcher, browser, channel,
-    terminal,
+    NewClaudeChat, NewGroup, NewTerminal, NewWorkspace, NextTab, NextWorkspace, OpenConfig,
+    OpenInitLua, OpenSettings, PrevTab, PrevWorkspace, Quit, ReloadConfig, RenameTab,
+    RenameWorkspace, ReopenSession, SplitDown, SplitRight, ToggleClaudeView, ToggleGroup,
+    ToggleNotifications, ToggleSidebar, ToggleUnread, ToggleWorkspaceUnread, ToggleZoom, Ungroup,
+    WorkspaceSwitcher, browser, channel, terminal,
 };
 use gpui::*;
 
@@ -110,6 +110,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
                 MenuItem::action("Open Configuration File", OpenConfig),
+                MenuItem::action("Open init.lua", OpenInitLua),
                 MenuItem::action("Reload Configuration", ReloadConfig),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
@@ -125,9 +126,13 @@ pub fn set_menus(cx: &mut App) {
             name: "File".into(),
             items: vec![
                 MenuItem::action("New Workspace", NewWorkspace),
-                MenuItem::action("New Workspace Folder", NewFolderWorkspace),
                 MenuItem::action("New Terminal Tab", NewTerminal),
                 MenuItem::action("New Browser Tab", NewBrowser),
+                MenuItem::action("New Claude Tab", NewClaudeChat),
+                MenuItem::action(
+                    "Switch Claude Code: Terminal ↔ Claude Tab",
+                    ToggleClaudeView,
+                ),
                 MenuItem::separator(),
                 MenuItem::action("Split Right", SplitRight),
                 MenuItem::action("Split Down", SplitDown),

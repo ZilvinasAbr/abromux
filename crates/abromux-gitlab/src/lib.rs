@@ -9,30 +9,45 @@
 //! The tab's [`Location`] is what it saves, so it comes back after a
 //! restart on the same host, list or merge request.
 
+mod actions;
 pub mod api;
 pub mod auth;
 mod avatars;
+mod bulk;
 pub mod cache;
 mod changes;
+mod checks;
+mod compose;
+mod context;
+mod create;
 pub mod diff;
 mod discussion;
+mod duo;
 mod edit;
 mod emoji;
+mod filter;
 mod gfm;
 pub mod highlight;
+mod jobs;
 pub mod local;
 mod mention;
 mod mr;
 mod optimistic;
+mod premium;
 mod projects;
+mod reports;
 pub mod review;
 mod search;
 mod select;
 mod side;
+mod slash;
 mod style;
+mod tasks;
 pub mod time;
 pub mod types;
 pub mod view;
+pub mod viewed;
+mod workitems;
 
 pub use edit::{draft_title, pipeline_active};
 
@@ -62,7 +77,7 @@ macro_rules! icons {
     };
 }
 
-static ASSETS: [(&str, &[u8]); 36] = icons!(
+static ASSETS: [(&str, &[u8]); 64] = icons!(
     "layers",
     "file-diff",
     "arrow-right",
@@ -98,7 +113,35 @@ static ASSETS: [(&str, &[u8]); 36] = icons!(
     "square-dot",
     "square-check",
     "square",
-    "merge"
+    "merge",
+    "at-sign",
+    "bell",
+    "bell-off",
+    "bold",
+    "cherry-pick",
+    "clock",
+    "code",
+    "download",
+    "edit",
+    "eye",
+    "git-branch",
+    "italic",
+    "list-ordered",
+    "lock",
+    "md-link",
+    "md-list",
+    "md-tasks",
+    "paperclip",
+    "plus",
+    "quote",
+    "retry",
+    "revert",
+    "strikethrough",
+    "suggest",
+    "table",
+    "todo-add",
+    "todo-done",
+    "unlock"
 );
 
 /// The host a tab opens on when nothing says otherwise.
@@ -166,6 +209,8 @@ pub enum Section {
     Changes,
     Commits,
     Pipelines,
+    /// The head pipeline's test and Code Quality reports.
+    Reports,
 }
 
 impl Section {
@@ -183,6 +228,7 @@ impl Section {
             Some("diffs") => Section::Changes,
             Some("commits") => Section::Commits,
             Some("pipelines") => Section::Pipelines,
+            Some("reports") => Section::Reports,
             _ => Section::Overview,
         }
     }
@@ -257,10 +303,14 @@ pub struct Location {
     /// The Changes tab side by side instead of inline.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub parallel: bool,
-    /// Files of the open merge request marked Viewed (GitLab keeps these in
-    /// the browser too).
+    /// Files of the open merge request marked Viewed. They're kept per merge
+    /// request too (`viewed.rs`), as GitLab keeps them in the browser.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub viewed: Vec<String>,
+    /// The list in pages of this many, as GitLab's "Show 20 items"; None:
+    /// the whole list (the tab's default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_page: Option<usize>,
 }
 
 impl Location {
@@ -341,6 +391,12 @@ pub fn load_review(c: &api::Client, project: u64, iid: u64) -> anyhow::Result<re
             first_page(&mrp("/resource_state_events")),
             first_page(&mrp("/resource_label_events")),
             first_page(&mrp("/resource_milestone_events")),
+            api::todos_path(project),
+            // A paid GitLab's: 404 on a free one, in the same round trip.
+            mrp("/approval_state"),
+            mrp("/blocks"),
+            api::project_path(project),
+            "metadata".to_string(),
         ]);
         (
             multiple.join().ok().and_then(Result::ok),
@@ -432,6 +488,10 @@ fn load_rest(
     r.awards = c.awards(project, iid).unwrap_or_default();
     r.closes = c.closes_issues(project, iid).unwrap_or_default();
     r.drafts = c.draft_notes(project, iid).unwrap_or_default();
+    r.todos = c
+        .todos(project, iid)
+        .map(|t| t.into_iter().map(|t| t.id).collect())
+        .unwrap_or_default();
     r.review_states = c
         .reviewers(project, iid)
         .unwrap_or_default()
@@ -439,6 +499,71 @@ fn load_rest(
         .map(|rv| (rv.user.id, rv.state))
         .collect();
     r.pipelines = c.pipelines(project, iid).unwrap_or_default();
+    // GitLab's merge checks, for the merge widget's list.
+    let full_path =
+        r.mr.references
+            .full
+            .split('!')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+    let mut checks = vec![];
+    let mut items = vec![];
+    let mut context = vec![];
+    // A paid GitLab's approval rules, merge train and dependencies: all
+    // answer 404 on a free one, and stay empty.
+    r.premium = std::thread::scope(|s| {
+        let got_checks = s.spawn(|| c.merge_checks(&full_path, iid).unwrap_or_default());
+        let got_items = s.spawn(|| c.work_items(&full_path, iid).unwrap_or_default());
+        let got_context = s.spawn(|| c.context_commits(project, iid).unwrap_or_default());
+        let rules = s.spawn(|| c.approval_state(project, iid).ok().flatten());
+        let blocks = s.spawn(|| c.blocks(project, iid).unwrap_or_default());
+        let duo = s.spawn(|| c.duo_available().unwrap_or(false));
+        let trains = c.merge_trains_enabled(project).unwrap_or(false);
+        let train = if trains {
+            c.train_entry(project, iid).ok().flatten()
+        } else {
+            None
+        };
+        types::Premium {
+            rules: rules.join().ok().flatten(),
+            trains_enabled: trains,
+            train,
+            blocks: blocks.join().unwrap_or_default(),
+            duo: {
+                checks = got_checks.join().unwrap_or_default();
+                items = got_items.join().unwrap_or_default();
+                context = got_context.join().unwrap_or_default();
+                duo.join().unwrap_or(false)
+            },
+        }
+    });
+    r.checks = checks;
+    r.work_items = items;
+    r.context_commits = context;
+    // The head pipeline's reports, once it has finished (GitLab's widgets).
+    if let Some(p) =
+        r.mr.head_pipeline
+            .as_ref()
+            .filter(|p| !crate::edit::pipeline_active(&p.status))
+    {
+        let full =
+            r.mr.references
+                .full
+                .split('!')
+                .next()
+                .unwrap_or_default()
+                .to_string();
+        let (tests, quality) = std::thread::scope(|s| {
+            let q = s.spawn(|| c.code_quality(&full, iid).ok().flatten());
+            let t = c
+                .test_report(project, p.id)
+                .ok()
+                .filter(|t| t.total_count > 0);
+            (t, q.join().ok().flatten())
+        });
+        r.reports = types::Reports { tests, quality };
+    }
     if let Some(sha) =
         r.mr.merge_commit_sha
             .clone()
@@ -804,6 +929,7 @@ mod tests {
             section: Section::Commits,
             parallel: true,
             viewed: vec!["src/a.rs".into()],
+            per_page: Some(20),
         };
         let v = serde_json::to_value(&loc).unwrap();
         assert_eq!(serde_json::from_value::<Location>(v).unwrap(), loc);

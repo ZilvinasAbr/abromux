@@ -189,6 +189,8 @@ struct HoverLink {
 
 pub struct TerminalView {
     term: ghostty::Terminal,
+    /// Its entity id, which phones watching it know it by (stream.rs).
+    stream_id: u64,
     pty: Pty,
     /// Where the program's output waits for the main thread.
     feed: Feed,
@@ -201,7 +203,12 @@ pub struct TerminalView {
     /// Shared with the paint that draws it, so a paint doesn't copy it.
     frame: Rc<Frame>,
     dirty: bool,
+    /// The size the PTY has: the owner's (size_owner.rs).
     grid: (u16, u16),
+    /// The size the pane has room for, the Mac's claim.
+    layout_grid: (u16, u16),
+    /// Who sets the size: the Mac pane, or a phone showing it.
+    sizing: crate::size_owner::Sizing,
     cell: Size<Pixels>,
     /// The cell size the program is told, in device pixels, so images it
     /// sends are sharp on Retina screens.
@@ -278,6 +285,9 @@ pub struct TerminalView {
     pub app: Option<Box<dyn TerminalApp>>,
     /// Kept to start the shell again the same way (`respawn-pane`).
     env: Vec<(String, String)>,
+    /// The server on another machine its program runs on
+    /// (`ssh://host`), None for this machine's.
+    pub host: Option<String>,
     /// Bumped on respawn so the old shell's output and exit are ignored.
     generation: usize,
     /// A task will repaint once the program's hold on the screen times out.
@@ -298,19 +308,29 @@ impl Focusable for TerminalView {
 
 impl TerminalView {
     /// A login shell in `cwd`; with a `command`, the shell runs it and the
-    /// terminal closes when it ends. With `attach`, the holder's terminal
+    /// terminal closes when it ends. With `attach`, the server's terminal
     /// from the last session, if it's still running (a new shell if not).
+    /// With `host`, on that machine's server instead of this one's.
     pub fn new(
         cwd: Option<String>,
         env: Vec<(String, String)>,
         command: Option<String>,
         attach: Option<&str>,
+        host: Option<String>,
         cx: &mut Context<Self>,
     ) -> Self {
         let (cols, rows) = (80, 24);
         let cwd = cwd.unwrap_or_else(|| crate::paths::home().to_string_lossy().into_owned());
-        let (opened, feed) =
-            spawn_shell(&cwd, &env, command.as_deref(), (cols, rows), 0, attach, cx);
+        let (opened, feed) = spawn_shell(
+            &cwd,
+            &env,
+            command.as_deref(),
+            (cols, rows),
+            0,
+            attach,
+            host.as_deref(),
+            cx,
+        );
         let (opened, failed) = match opened {
             Ok(o) => (o, None),
             Err(e) => (Opened::failed(), Some(e)),
@@ -318,6 +338,10 @@ impl TerminalView {
         let focus = cx.focus_handle();
         let config = cx.try_global::<Config>().cloned().unwrap_or_default();
         cx.on_release(Self::free_images).detach();
+        // A phone watching it (stream.rs) hears it's gone.
+        let id = cx.entity_id().as_u64();
+        cx.on_release(move |_, _| crate::stream::closed(id))
+            .detach();
         // The config changes with the app's appearance (`main::sync_appearance`).
         cx.observe_global::<Config>(|this, cx| {
             if let Some(c) = cx.try_global::<Config>().cloned() {
@@ -338,6 +362,7 @@ impl TerminalView {
         let _ = term.take_effects();
         Self {
             term,
+            stream_id: id,
             pty: opened.pty,
             attached: opened.attached,
             feed,
@@ -346,6 +371,8 @@ impl TerminalView {
             frame: Rc::default(),
             dirty: true,
             grid: (cols, rows),
+            layout_grid: (cols, rows),
+            sizing: Default::default(),
             cell: size(px(8.), px(16.)),
             cell_px: (0, 0),
             scale: 1.,
@@ -386,6 +413,7 @@ impl TerminalView {
             command,
             app: None,
             env,
+            host,
             generation: 0,
             hold_timer: false,
             scrolled_at: None,
@@ -460,6 +488,7 @@ impl TerminalView {
             self.grid,
             self.generation,
             None,
+            self.host.as_deref(),
             cx,
         );
         let (opened, failed) = match opened {
@@ -538,6 +567,7 @@ impl TerminalView {
             }
         }
         self.term.write(bytes);
+        crate::stream::output(self.stream_id, bytes);
         if std::mem::take(&mut self.clear_pending) {
             self.term.write(b"\x1b[3J");
         }
@@ -590,6 +620,89 @@ impl TerminalView {
         cx.notify();
     }
 
+    /// `surface.stream`'s start (stream.rs): the viewport as VT text that
+    /// paints it on a blank terminal of the same size, with its size and
+    /// default colors. Taken on the main thread, as output is processed, so
+    /// a tap opened in the same turn misses nothing between the two.
+    pub fn stream_start(&mut self) -> serde_json::Value {
+        let alt = self.term.alt_screen();
+        let frame = self.frame().clone();
+        let cursor = self.term.cursor_at();
+        let (cols, rows) = self.grid;
+        serde_json::json!({
+            "cols": cols,
+            "rows": rows,
+            // On the alternate screen the normal one isn't in `vt`: the
+            // client starts over when the program leaves it.
+            "alt": alt,
+            "vt": crate::stream::frame_vt(&frame, alt, cursor),
+            "fg": crate::stream::hex(frame.foreground),
+            "bg": crate::stream::hex(frame.background),
+            "cursor": frame.cursor_color.map(crate::stream::hex),
+            "title": self.shown_title(),
+            "owner": self.sizing.owner(),
+        })
+    }
+
+    pub fn stream_id(&self) -> u64 {
+        self.stream_id
+    }
+
+    /// The client that owns the size; None while the Mac's pane does.
+    pub fn size_owner(&self) -> Option<&str> {
+        self.sizing.owner()
+    }
+
+    /// `client` opened a stream of this terminal (`surface.stream`).
+    pub fn watch_size(&mut self, client: &str) {
+        self.sizing.watch(client);
+    }
+
+    /// One of `client`'s streams ended; with its last it gives up the size.
+    pub fn unwatch_size(&mut self, client: &str, cx: &mut Context<Self>) {
+        if self.sizing.unwatch(client) {
+            self.apply_owner(cx);
+        }
+    }
+
+    /// `client` asks for `cols`×`rows` (`surface.own`): with `take` it
+    /// owns the size now, else it keeps its place with the new size.
+    pub fn claim_size(
+        &mut self,
+        client: &str,
+        (cols, rows): (u16, u16),
+        take: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), crate::size_owner::NotOpen> {
+        if self.sizing.claim(client, (cols, rows), take)? {
+            self.apply_owner(cx);
+        }
+        Ok(())
+    }
+
+    /// `client` typed here: the size is its again, if it asked for one.
+    pub fn retake_size(&mut self, client: &str, cx: &mut Context<Self>) {
+        if self.sizing.retake(client) {
+            self.apply_owner(cx);
+        }
+    }
+
+    /// Someone typed in the Mac's pane: it sizes the terminal again.
+    fn take_size_local(&mut self, cx: &mut Context<Self>) {
+        if self.sizing.take_local() {
+            self.apply_owner(cx);
+        }
+    }
+
+    /// Size the PTY for the owner now, not at the next paint: the tab may
+    /// be hidden on the Mac, which doesn't paint it.
+    fn apply_owner(&mut self, cx: &mut Context<Self>) {
+        let (cols, rows) = self.sizing.size().unwrap_or(self.layout_grid);
+        self.resize(cols, rows);
+        crate::stream::owner(self.stream_id, self.sizing.owner());
+        cx.notify();
+    }
+
     /// The program's title for tabs and the sidebar: Claude Code's without
     /// its state glyph, which the tab shows with Claude's logo instead.
     pub fn shown_title(&self) -> &str {
@@ -597,6 +710,11 @@ impl TerminalView {
             Some(a) if a.kind == Kind::Claude.as_str() => agent::strip_status_glyph(&self.title),
             _ => &self.title,
         }
+    }
+
+    /// The shell's pid, while it runs.
+    pub fn shell_pid(&self) -> Option<u32> {
+        self.pty.pid()
     }
 
     /// A Claude Code session is open here, working or not.
@@ -648,9 +766,92 @@ impl TerminalView {
         self.pty.kill();
     }
 
-    /// The holder's id for this terminal, to take it back next launch.
-    pub fn held_id(&self) -> Option<&str> {
+    /// The server's id for this terminal, to take it back next launch.
+    pub fn held_id(&self) -> Option<String> {
         self.pty.held_id()
+    }
+
+    /// Start over from a whole screen (libghostty-vt's snapshot): the
+    /// server's, for a terminal this view had no screen of.
+    fn load_snapshot(&mut self, snap: &[u8], cx: &mut Context<Self>) {
+        let Ok(t) = ghostty::Terminal::from_snapshot(snap, crate::theme::is_dark()) else {
+            return;
+        };
+        let (cols, rows) = self.grid;
+        self.term = configure(t, &self.config);
+        self.term.resize(cols, rows, self.cell_px.0, self.cell_px.1);
+        self.dirty = true;
+        cx.notify();
+    }
+
+    /// Another app wants this terminal too (its server asked,
+    /// crate::control_link): let go of the PTY, leaving the screen for the
+    /// server, and stream it from the server from here on, which reads it
+    /// for both. Only a terminal this view holds.
+    pub fn restream(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.pty, Pty::Held { .. }) {
+            return;
+        }
+        let Some(id) = self.pty.held_id() else {
+            return;
+        };
+        self.freeze();
+        self.frozen = false;
+        self.generation += 1;
+        let (feed, wake) = Feed::new();
+        self.pty = crate::pty::stream_local(&id, self.grid, false, &feed);
+        self.feed = feed.clone();
+        drain(feed, wake, self.generation, cx);
+        self.pty.resize(PtySize {
+            rows: self.grid.1,
+            cols: self.grid.0,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+        cx.notify();
+    }
+
+    /// Nobody else streams this terminal now (its server says): hold its PTY
+    /// again, so the server is out of the way as before. Only one streamed
+    /// from this machine's server.
+    pub fn reclaim(&mut self, cx: &mut Context<Self>) {
+        let local = crate::hold::socket_path();
+        let ours = matches!(&self.pty, Pty::Remote(r) if std::path::Path::new(r.host()) == local);
+        let Some(id) = self.pty.held_id().filter(|_| ours) else {
+            return;
+        };
+        self.freeze();
+        let (feed, wake) = Feed::new();
+        let Some(opened) = crate::pty::reattach(&id, &feed) else {
+            // Still shared after all: stream it again.
+            self.frozen = false;
+            self.restream_from_server(&id, cx);
+            return;
+        };
+        self.frozen = false;
+        self.generation += 1;
+        if let Some(snap) = &opened.snapshot {
+            self.load_snapshot(snap, cx);
+        }
+        self.process(&opened.backlog, cx);
+        self.pty = opened.pty;
+        self.feed = feed.clone();
+        drain(feed, wake, self.generation, cx);
+        self.pty.resize(PtySize {
+            rows: self.grid.1,
+            cols: self.grid.0,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+        cx.notify();
+    }
+
+    fn restream_from_server(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.generation += 1;
+        let (feed, wake) = Feed::new();
+        self.pty = crate::pty::stream_local(id, self.grid, false, &feed);
+        self.feed = feed.clone();
+        drain(feed, wake, self.generation, cx);
     }
 
     /// Quitting: a held terminal stops reading, takes in what was already
@@ -771,6 +972,9 @@ impl TerminalView {
         );
         if (cols, rows) == self.grid && (cw, ch) == self.cell_px {
             return;
+        }
+        if (cols, rows) != self.grid {
+            crate::stream::resized(self.stream_id, cols, rows);
         }
         self.grid = (cols, rows);
         self.cell_px = (cw, ch);
@@ -1234,6 +1438,8 @@ impl TerminalView {
             && !m.platform
             && !m.function;
         if text_like && self.config.keybind(ks).is_none() && self.term.kitty_flags() == 0 {
+            // Typing here takes the size back from a phone.
+            self.take_size_local(cx);
             return;
         }
         let action = if ev.is_held {
@@ -1242,6 +1448,7 @@ impl TerminalView {
             ffi::GHOSTTY_KEY_ACTION_PRESS
         };
         if self.send_key(ks, action, cx) {
+            self.take_size_local(cx);
             cx.stop_propagation();
         } else if self.app.as_ref().is_some_and(|a| a.keeps_key(ks)) {
             // Not on to the menu, whose ⌘C copies the grid, not the page.
@@ -1848,6 +2055,64 @@ impl TerminalView {
     }
 }
 
+impl TerminalView {
+    /// While a phone owns the size: the room past its grid dimmed, and a
+    /// badge that gives the size back to the pane (as typing here does).
+    fn render_phone_sized(&self, cx: &mut Context<Self>) -> Option<Vec<AnyElement>> {
+        self.sizing.owner()?;
+        let (cols, rows) = self.grid;
+        let w = PADDING + f32::from(self.cell.width) * f32::from(cols);
+        let h = PADDING + f32::from(self.cell.height) * f32::from(rows);
+        let dim = rgba(0x00000059);
+        let right = div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(w))
+            .right_0()
+            .bg(dim);
+        let below = div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .top(px(h))
+            .bottom_0()
+            .bg(dim);
+        let badge = div()
+            .id("phone-sized")
+            .absolute()
+            .bottom(px(PADDING * 2.))
+            .right(px(PADDING * 2. + 4.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(8.))
+            .py(px(4.))
+            .rounded(px(6.))
+            .bg(rgba(0x000000c0))
+            .text_size(px(12.))
+            .text_color(rgb(0xd8d8d8))
+            .cursor_pointer()
+            .hover(|s| s.bg(rgba(0x000000e0)))
+            .child(
+                svg()
+                    .path("icons/smartphone.svg")
+                    .size(px(13.))
+                    .text_color(rgb(0xd0d0d0)),
+            )
+            .child(format!(
+                "Sized for a phone ({cols}×{rows}) · Type or click to take back"
+            ))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, _, cx| this.take_size_local(cx)));
+        Some(vec![
+            right.into_any_element(),
+            below.into_any_element(),
+            badge.into_any_element(),
+        ])
+    }
+}
+
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.hook_focus(window, cx);
@@ -1861,6 +2126,7 @@ impl Render for TerminalView {
             .as_deref()
             .map(|text| self.render_paste_prompt(text, cx));
         let scrollbar = self.render_scrollbar(cx);
+        let phone_sized = self.render_phone_sized(cx);
         // The find bar sits where the lock would.
         let lock = (!self.find.open && self.password_input()).then(|| {
             div()
@@ -1936,6 +2202,7 @@ impl Render for TerminalView {
                 let Some(item) = cx.read_from_clipboard() else {
                     return;
                 };
+                this.take_size_local(cx);
                 if let Some(text) = item.text() {
                     this.paste(&text, cx);
                 } else if item
@@ -1979,6 +2246,7 @@ impl Render for TerminalView {
             .child(TerminalElement { view: cx.entity() })
             .children(scrollbar)
             .children(lock)
+            .children(phone_sized.into_iter().flatten())
             .children(find_bar)
             .children(paste_prompt)
     }
@@ -2080,6 +2348,10 @@ impl Element for TerminalElement {
             v.cell = cell;
             v.scale = v.pixel_scale.unwrap_or_else(|| window.scale_factor());
             v.window = Some(window.window_handle());
+            // The pane's room is the Mac's claim; a phone that owns the
+            // size gets its own (size_owner.rs).
+            v.layout_grid = (cols, rows);
+            let (cols, rows) = v.sizing.size().unwrap_or((cols, rows));
             v.resize(cols, rows);
             v.animate(cx);
             let frame = v.frame().clone();
@@ -2559,18 +2831,60 @@ fn sprite_char(c: &ghostty::Cell) -> Option<char> {
 
 /// Start the user's login shell at `size` (running `command` if there is
 /// one), or take back `attach`, and drain its output into the view on the
-/// main thread. Output and the exit of a shell from an older `generation`
-/// (one `respawn` replaced) are dropped. When nothing could be started,
-/// the error, for the view to show in place of the shell.
+/// main thread. With `host`, on that machine's server. Output and the exit
+/// of a shell from an older `generation` (one `respawn` replaced) are
+/// dropped. When nothing could be started, the error, for the view to show
+/// in place of the shell.
+#[allow(clippy::too_many_arguments)]
 fn spawn_shell(
     cwd: &str,
-    env: &[(String, String)],
+    env_in: &[(String, String)],
     command: Option<&str>,
     size: (u16, u16),
     generation: usize,
     attach: Option<&str>,
+    host: Option<&str>,
     cx: &mut Context<TerminalView>,
 ) -> (anyhow::Result<Opened>, Feed) {
+    if let Some(host) = host {
+        // The host's own shell and environment: only what describes this
+        // terminal goes along. Its socket and CLI are the host's server's
+        // (which sets ABROMUX_SOCKET_PATH and ABROMUX_BIN there and hands
+        // what comes in to this app), so agent hooks there report to it.
+        let mut env: Vec<(String, String)> = [
+            ("TERM", "xterm-256color"),
+            ("COLORTERM", "truecolor"),
+            ("TERM_PROGRAM", "abromux"),
+        ]
+        .map(|(k, v)| (k.into(), v.into()))
+        .into();
+        env.extend(
+            env_in
+                .iter()
+                .filter(|(k, _)| {
+                    matches!(
+                        k.as_str(),
+                        "COMPOSE_PROJECT_NAME"
+                            | "ABROMUX_SURFACE_ID"
+                            | "ABROMUX_WORKSPACE_ID"
+                            | "ABROMUX_WORKSPACE_DIR"
+                    )
+                })
+                .cloned(),
+        );
+        let spec = abromux_term::remote::SpawnSpec {
+            command: command.map(String::from),
+            cwd: cwd.to_string(),
+            env,
+        };
+        let (feed, wake) = Feed::new();
+        let opened = crate::pty::open_remote(host, attach, spec, size, &feed);
+        if let Err(e) = &opened {
+            eprintln!("abromux: terminal on {host}: {e:#}");
+        }
+        drain(feed.clone(), wake, generation, cx);
+        return (opened, feed);
+    }
     let shell = abromux_core::paths::user_shell();
     let mut argv = vec![shell, "-l".into()];
     if let Some(c) = command {
@@ -2583,12 +2897,12 @@ fn spawn_shell(
     ]
     .map(|(k, v)| (k.into(), v.into()))
     .into();
-    vars.extend(env.iter().cloned());
+    vars.extend(env_in.iter().cloned());
     if cx
         .try_global::<Config>()
         .is_none_or(|c| c.shell_integration)
     {
-        vars.extend(crate::shell::inject(&mut argv, env));
+        vars.extend(crate::shell::inject(&mut argv, env_in));
     }
     // Held shells are for taking back next launch; a run that won't restore
     // a session (ABROMUX_NO_RESTORE, demos, scripted tests) would only leave
@@ -2626,10 +2940,13 @@ fn drain(
         loop {
             let woke = wake.next().await.is_some();
             let q = feed.take();
-            if !q.bytes.is_empty() {
+            if !q.bytes.is_empty() || q.reset.is_some() {
                 let live = this.update(cx, |this, cx| {
                     let live = this.generation == generation;
                     if live {
+                        if let Some(snap) = &q.reset {
+                            this.load_snapshot(snap, cx);
+                        }
                         this.process(&q.bytes, cx);
                     }
                     live

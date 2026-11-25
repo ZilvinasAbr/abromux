@@ -2,7 +2,8 @@
 //! whose default app is abromux; the app's `CFBundleDocumentTypes` are in
 //! `scripts/bundle-app.sh`), `abromux edit`, or a restored session. Each
 //! opens in a terminal running the editor `editor.program` names, in a new
-//! pane beside the focused one. Quitting the editor closes the pane.
+//! pane beside the focused one. Quitting the editor closes the pane. Images
+//! from Finder open in the Markdown viewer's tab instead, which shows them.
 //!
 //! `abromux default-app` makes abromux the default app for file
 //! extensions (`set_default_app`), so a double-click opens them here.
@@ -118,12 +119,33 @@ impl AbroMux {
             }
             let wi = self.workspace_for(&path, cx);
             let pane = self.workspaces[wi].focused_pane;
+            if crate::markdown::is_image(&path) {
+                self.view_image(wi, pane, &path, window, cx);
+                continue;
+            }
             if let Err(e) = self.edit_file(wi, pane, &path, true, window, cx) {
                 window.push_notification(Notification::warning(e).title("Can't open the file"), cx);
             }
         }
         cx.activate(true);
         window.activate_window();
+    }
+
+    /// Show image `file` in a viewer tab, in a new pane right of pane
+    /// `pane` of workspace `wi`, which is selected.
+    fn view_image(
+        &mut self,
+        wi: usize,
+        pane: usize,
+        file: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let s = self.make_browser(&crate::markdown::view_url_for(file), window, cx);
+        if wi != self.active {
+            self.select_workspace(wi, window, cx);
+        }
+        self.split_pane(wi, pane, Axis::Horizontal, false, s, true, window, cx);
     }
 
     /// The workspace a file belongs to: the one whose folder, or focused
