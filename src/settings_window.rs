@@ -316,13 +316,8 @@ fn restore_keymap(cx: &mut App) {
 /// Save one key of the config file (`None` removes it) and apply the
 /// result, or say why it wasn't saved.
 fn save(key: &[&str], value: Option<Value>, window: &mut Window, cx: &mut App) {
-    match settings::edit(key, value) {
-        Ok(mut s) => {
-            // init.lua's actions, as the last load had them.
-            s.commands
-                .extend(settings::lua_commands(&crate::lua::init_path()).unwrap_or_default());
-            apply(s, cx)
-        }
+    match save_key(key, value, cx) {
+        Ok(()) => {}
         Err(e) => window.push_notification(
             Notification::error(e)
                 .id::<SettingsView>()
@@ -331,6 +326,15 @@ fn save(key: &[&str], value: Option<Value>, window: &mut Window, cx: &mut App) {
             cx,
         ),
     }
+}
+
+/// Save one key of the config file (`None` removes it) and apply the
+/// result, with init.lua's commands and settings: the Settings window's
+/// and `settings.set`'s write.
+pub fn save_key(key: &[&str], value: Option<Value>, cx: &mut App) -> Result<(), String> {
+    let s = settings::edit(key, value)?;
+    apply(settings::with_lua(s), cx);
+    Ok(())
 }
 
 /// Set an action's keys to `keys` (`None` for its defaults). A shortcut
@@ -825,6 +829,7 @@ fn pages(
         panes_page(),
         shortcuts_page(view, recording, needs_modifier),
         commands_page(cx),
+        scripts_page(cx),
         gitlab_page(text_fields),
         phone_page(allow_input, cx),
         servers_page(server_inputs),
@@ -2169,6 +2174,169 @@ fn commands_page(cx: &App) -> Page {
              can add its own in .abromux/config.json.",
         ),
         groups: vec![group("Commands", rows)],
+    }
+}
+
+/// The settings init.lua declares (`abromux.setting`), grouped as it says.
+fn scripts_page(cx: &App) -> Page {
+    let s = cx.global::<Settings>();
+    let mut groups: Vec<Group> = vec![];
+    for def in s.script_settings.clone() {
+        let title = def.group.clone().unwrap_or_else(|| "Settings".into());
+        let row = script_row(def);
+        match groups.iter_mut().find(|g| g.title.as_ref() == title) {
+            Some(g) => g.rows.push(row),
+            None => groups.push(group(title, [row])),
+        }
+    }
+    if groups.is_empty() {
+        groups.push(group(
+            "Settings",
+            [info_row(
+                "No script settings yet",
+                "Declare them in init.lua with abromux.setting{...}.",
+                |_, _| {
+                    button("open-init", "Open init.lua")
+                        .on_click(|_, _, cx| cx.open_with_system(&crate::lua::ensure_init_file()))
+                        .into_any_element()
+                },
+            )],
+        ));
+    }
+    Page {
+        title: "Scripts",
+        icon: "icons/pencil.svg",
+        description: Some("Settings your init.lua scripts declare."),
+        groups,
+    }
+}
+
+/// One script setting's row; its value lives at `scripts.<key>`.
+fn script_row(def: crate::lua::SettingDef) -> Row {
+    use crate::lua::SettingKind;
+    let key = def.key.clone();
+    let value = {
+        let key = key.clone();
+        move |cx: &App| {
+            cx.global::<Settings>()
+                .script_value(&key)
+                .unwrap_or(Value::Null)
+        }
+    };
+    let default = def.default.clone();
+    let set = {
+        let key = key.clone();
+        let default = default.clone();
+        Rc::new(move |v: Value, window: &mut Window, cx: &mut App| {
+            save(&["scripts", &key], (v != default).then_some(v), window, cx)
+        })
+    };
+    let control: ControlFn = match def.kind {
+        SettingKind::Boolean => {
+            let value = value.clone();
+            Rc::new(move |_, cx| {
+                let on = value(cx).as_bool().unwrap_or(false);
+                let set = set.clone();
+                toggle(on)
+                    .on_click(move |_, window, cx| set(json!(!on), window, cx))
+                    .into_any_element()
+            })
+        }
+        SettingKind::Choice(options) => {
+            let value = value.clone();
+            let options = Rc::new(options);
+            Rc::new(move |_, cx| {
+                let current = value(cx).as_str().unwrap_or_default().to_string();
+                let label = options
+                    .iter()
+                    .find(|(v, _)| *v == current)
+                    .map_or(current.clone(), |(_, l)| l.clone());
+                let options = options.clone();
+                let set = set.clone();
+                Button::new("choice")
+                    .label(label)
+                    .dropdown_caret(true)
+                    .outline()
+                    .small()
+                    .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+                        options.iter().fold(menu, |menu, (v, l)| {
+                            let set = set.clone();
+                            let v = v.clone();
+                            menu.item(
+                                PopupMenuItem::new(l.clone())
+                                    .checked(v == current)
+                                    .on_click(move |_, window, cx| set(json!(v), window, cx)),
+                            )
+                        })
+                    })
+                    .into_any_element()
+            })
+        }
+        SettingKind::Number { min, max, step } => {
+            let value = value.clone();
+            Rc::new(move |_, cx| {
+                let n = value(cx).as_f64().unwrap_or(min);
+                let button = |id: &'static str, icon: &'static str, delta: f64| {
+                    let enabled = if delta < 0. { n > min } else { n < max };
+                    let set = set.clone();
+                    div()
+                        .id(id)
+                        .w(px(26.))
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(svg().path(icon).size(px(12.)).text_color(rgb(pal().text)))
+                        .when(!enabled, |d| d.opacity(0.3))
+                        .when(enabled, |d| {
+                            d.cursor_pointer()
+                                .hover(|s| s.bg(rgba(pal().hover)))
+                                .on_click(move |_, window, cx| {
+                                    let v = ((n + delta) / step).round() * step;
+                                    let v = (v.clamp(min, max) * 1000.).round() / 1000.;
+                                    let v = if v.fract() == 0. {
+                                        json!(v as i64)
+                                    } else {
+                                        json!(v)
+                                    };
+                                    set(v, window, cx)
+                                })
+                        })
+                };
+                div()
+                    .flex()
+                    .flex_none()
+                    .h(px(24.))
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(rgb(pal().border))
+                    .bg(rgb(pal().input_bg))
+                    .overflow_hidden()
+                    .child(button("less", "icons/minus.svg", -step))
+                    .child(
+                        div()
+                            .w(px(60.))
+                            .h_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .border_l_1()
+                            .border_r_1()
+                            .border_color(rgb(pal().border))
+                            .text_size(px(12.))
+                            .child(format!("{n}")),
+                    )
+                    .child(button("more", "icons/plus.svg", step))
+                    .into_any_element()
+            })
+        }
+    };
+    Row::Setting {
+        title: def.title.into(),
+        description: def.description.unwrap_or_default().into(),
+        is_default: Rc::new(move |cx| value(cx) == default),
+        reset: Rc::new(move |window, cx| save(&["scripts", &key], None, window, cx)),
+        control,
     }
 }
 

@@ -135,6 +135,80 @@ function A.action(def)
   actions[name] = def
 end
 
+-- Settings: values a script reads, shown on Settings › Scripts and kept
+-- under "scripts" in config.json. `abromux.setting{ key, title, ... }`
+-- declares one; `abromux.settings.get{ key = ... }` reads it (its default
+-- until set) and `abromux.settings.set{ key = ..., value = ... }` sets it.
+local settings, setting_order = {}, {}
+A._settings, A._setting_order = settings, setting_order
+
+local setting_types = { boolean = true, number = true, choice = true }
+
+function A.setting(def)
+  if type(def) ~= "table" then
+    error("abromux.setting: expected a table", 2)
+  end
+  local key = def.key
+  if type(key) ~= "string" or not key:match("^[a-z0-9_]+$") then
+    error("abromux.setting: key must be lowercase letters, digits and underscores", 2)
+  end
+  local function bad(msg)
+    error("abromux.setting " .. key .. ": " .. msg, 3)
+  end
+  if type(def.title) ~= "string" or def.title == "" then
+    bad("title is required")
+  end
+  local ty = def.type
+  if ty == nil then
+    ty = def.options ~= nil and "choice" or type(def.default) == "number" and "number" or "boolean"
+  end
+  if not setting_types[ty] then
+    bad("type must be boolean, number or choice")
+  end
+  local d = { key = key, title = def.title, description = def.description, group = def.group, type = ty }
+  if ty == "choice" then
+    if type(def.options) ~= "table" or #def.options == 0 then
+      bad("options must be a list")
+    end
+    d.options = {}
+    for i, o in ipairs(def.options) do
+      if type(o) == "string" then
+        o = { value = o, label = o }
+      elseif type(o) ~= "table" or type(o.value) ~= "string" then
+        bad("option " .. i .. " must be a string or { value = ..., label = ... }")
+      end
+      d.options[i] = { value = o.value, label = o.label or o.value }
+    end
+    d.default = def.default or d.options[1].value
+    local found = false
+    for _, o in ipairs(d.options) do
+      found = found or o.value == d.default
+    end
+    if not found then
+      bad("default isn't one of the options")
+    end
+  elseif ty == "number" then
+    d.min, d.max, d.step = def.min or 0, def.max or 100, def.step or 1
+    if type(d.min) ~= "number" or type(d.max) ~= "number" or type(d.step) ~= "number"
+      or d.min > d.max or d.step <= 0 then
+      bad("min, max and step must be numbers, min <= max, step > 0")
+    end
+    d.default = def.default or d.min
+    if type(d.default) ~= "number" then
+      bad("default must be a number")
+    end
+  else
+    d.default = def.default or false
+    if type(d.default) ~= "boolean" then
+      bad("default must be true or false")
+    end
+  end
+  if settings[key] == nil then
+    setting_order[#setting_order + 1] = key
+  end
+  settings[key] = d
+end
+
 local function is_array(v)
   if type(v) ~= "table" then
     return false

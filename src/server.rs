@@ -2298,6 +2298,72 @@ impl AbroMux {
                 json!(null)
             }
 
+            "settings.list" => {
+                let s = cx.global::<crate::settings::Settings>();
+                json!(
+                    s.script_settings
+                        .iter()
+                        .map(|d| json!({
+                            "key": d.key,
+                            "title": d.title,
+                            "description": d.description,
+                            "group": d.group,
+                            "default": d.default,
+                            "value": s.script_value(&d.key),
+                        }))
+                        .collect::<Vec<_>>()
+                )
+            }
+            "settings.get" => {
+                let s = cx.global::<crate::settings::Settings>();
+                match (str_param(p, "key"), str_param(p, "path")) {
+                    (Some(key), _) => s
+                        .script_value(key)
+                        .with_context(|| format!("init.lua declares no setting {key:?}"))?,
+                    (None, Some(path)) => {
+                        // As written in the file; null when it isn't.
+                        let text =
+                            std::fs::read_to_string(crate::settings::path()).unwrap_or_default();
+                        let root: Value = if text.trim().is_empty() {
+                            json!({})
+                        } else {
+                            serde_json::from_str(&text)?
+                        };
+                        path.split('.')
+                            .try_fold(&root, |v, k| v.get(k))
+                            .cloned()
+                            .unwrap_or(Value::Null)
+                    }
+                    (None, None) => anyhow::bail!("missing key or path"),
+                }
+            }
+            "settings.set" => {
+                let value = p.get("value").cloned().filter(|v| !v.is_null());
+                match (str_param(p, "key"), str_param(p, "path")) {
+                    (Some(key), _) => {
+                        let s = cx.global::<crate::settings::Settings>();
+                        let def = s
+                            .script_settings
+                            .iter()
+                            .find(|d| d.key == key)
+                            .with_context(|| format!("init.lua declares no setting {key:?}"))?;
+                        if let Some(v) = &value {
+                            anyhow::ensure!(def.accepts(v), "{v} isn't a value {key} takes");
+                        }
+                        // The default is left out of the file.
+                        let value = value.filter(|v| *v != def.default);
+                        crate::settings_window::save_key(&["scripts", key], value, cx)
+                            .map_err(anyhow::Error::msg)?;
+                    }
+                    (None, Some(path)) => {
+                        let key: Vec<&str> = path.split('.').collect();
+                        crate::settings_window::save_key(&key, value, cx)
+                            .map_err(anyhow::Error::msg)?;
+                    }
+                    (None, None) => anyhow::bail!("missing key or path"),
+                }
+                json!(null)
+            }
             "app.reload_config" => {
                 self.reload_settings(window, cx)
                     .map_err(anyhow::Error::msg)?;

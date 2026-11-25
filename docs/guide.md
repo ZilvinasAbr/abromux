@@ -821,6 +821,19 @@ Modules that come with AbroMux load with `require` too: `require("abromux.worksp
 
 A command in `config.json` (or a project's file) can run any script: `{ "title": "Start Ticket", "script": "scripts/ticket.lua", "args": { "board": "PAY" } }`, with `"action"` to pick one of its actions. A relative path is the config folder's, or the project's for a project command, which asks before it runs as other project commands do.
 
+### Settings in init.lua
+
+`abromux.setting{...}` in init.lua adds a setting to Settings › Scripts. Its value is kept under `"scripts"` in config.json, and the default is left out of the file.
+
+```lua
+abromux.setting{ key = "polling", title = "Polling level", group = "GitLab",
+                 options = { "off", "low", "medium", "high" }, default = "medium" }
+abromux.setting{ key = "greet", title = "Greet on start" }                       -- on/off
+abromux.setting{ key = "count", title = "Count", type = "number", min = 1, max = 9 }
+```
+
+`type` is `boolean`, `number` or `choice` (guessed from `options` or `default` when left out); an option is a string or `{ value = ..., label = ... }`. A script reads one with `abromux.settings.get{ key = "polling" }` (its default until set) and changes it with `abromux.settings.set{ key = "polling", value = "off" }` (`value = nil` resets it). With `path` instead of `key`, the same two read and write any config.json key: `abromux.settings.set{ path = "gitlab.enabled", value = false }`. A value that doesn't fit is refused. `abromux rpc settings.list` lists the script settings with their values.
+
 ## Keyboard and mouse
 
 | | Mouse | Keys |

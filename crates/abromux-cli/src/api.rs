@@ -902,6 +902,25 @@ pub const METHODS: &[Method] = &[
         "@workspace",
     ),
     m(
+        "settings.list",
+        "",
+        "The settings init.lua declares (abromux.setting), with their values.",
+        "",
+    ),
+    m(
+        "settings.get",
+        "",
+        "A setting init.lua declares (key), or a config.json value as the file has it (path).",
+        "key?:string An init.lua setting's key;path?:string A config.json key, dotted: gitlab.polling",
+    ),
+    m(
+        "settings.set",
+        "",
+        "Set a setting init.lua declares (key), or a config.json value (path), and apply it. \
+         A null value goes back to the default.",
+        "key?:string An init.lua setting's key;path?:string A config.json key, dotted: gitlab.polling;value?:any The new value",
+    ),
+    m(
         "app.reload_config",
         "reload-config",
         "Read the config file again.",
@@ -1049,6 +1068,8 @@ pub fn describe(m: &Method) -> Value {
         // A ref is a string: `kind:N`, a 0-based index, or a name.
         let mut schema = match ty.as_str() {
             "ref" => json!({ "type": "string" }),
+            // Any JSON value.
+            "any" => json!({}),
             t => json!({ "type": t }),
         };
         if !doc.is_empty() {
