@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering::Relaxed};
 
 /// The UI's colours, as `0xrrggbb` (or `0xrrggbbaa` where noted).
 pub struct Palette {
-    /// The sidebar, over the window's blur (rgba).
+    /// The sidebar, opaque (rgba).
     pub sidebar_bg: u32,
     pub pane_bg: u32,
     pub tabbar_bg: u32,
@@ -49,7 +49,7 @@ pub struct Palette {
 }
 
 pub const DARK: Palette = Palette {
-    sidebar_bg: 0x262624f4,
+    sidebar_bg: 0x262624ff,
     pane_bg: 0x1a1918,
     tabbar_bg: 0x1f1e1d,
     border: 0x3a3935,
@@ -73,7 +73,7 @@ pub const DARK: Palette = Palette {
 };
 
 pub const LIGHT: Palette = Palette {
-    sidebar_bg: 0xefede5f0,
+    sidebar_bg: 0xefede5ff,
     pane_bg: 0xfaf9f5,
     tabbar_bg: 0xf3f1ea,
     border: 0xdedcd1,
