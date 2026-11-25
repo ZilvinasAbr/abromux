@@ -1589,11 +1589,8 @@ fn gitlab_page(fields: &[(Key, Entity<InputState>)]) -> Page {
             group(
                 "Checking for Changes",
                 [choice(
-                    "Polling",
-                    "How often GitLab is checked in the background. Low: four times \
-                         less often than Medium; High: twice as often. Off: nothing is asked of \
-                         GitLab in the background, open tabs don't refresh by themselves, \
-                         and Refresh in the panel checks once.",
+                    "Polling level",
+                    "How often merge requests are checked in the background.",
                     &["gitlab", "polling"],
                     &[
                         ("off", "Off"),
@@ -1603,13 +1600,6 @@ fn gitlab_page(fields: &[(Key, Entity<InputState>)]) -> Page {
                     ],
                     |s| s.gitlab.polling.key(),
                 )],
-            )
-            .description(
-                "Medium checks the merge request on screen every 20 s, one with a \
-                 running pipeline every 30 s, yours and the workspaces' every minute, \
-                 and other recently opened ones every 5 minutes. A cheap check of many \
-                 at once; details and diffs are fetched only when it shows a change. \
-                 When GitLab rate-limits, it slows down on its own.",
             ),
         ],
     }
