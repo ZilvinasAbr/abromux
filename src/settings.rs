@@ -183,8 +183,8 @@ pub struct GitlabSettings {
     /// the one signed in to in a GitLab tab. Its token is the tab's (the
     /// Keychain). Workspace checkouts whose remote is elsewhere are left out.
     pub host: Option<String>,
-    /// How much is checked in the background, all the intervals below
-    /// scaled together. Off: nothing is (tabs load what they open, and
+    /// How often merge requests are checked in the background
+    /// (`crate::gitlab`'s intervals, scaled together). Off: nothing is (tabs load what they open, and
     /// Refresh still checks once).
     pub polling: GitlabPolling,
     /// "Mine" also holds merge requests you're asked to review.
@@ -203,17 +203,6 @@ pub struct GitlabSettings {
     pub max_mr_diff_mb: u32,
     /// …or after this many files.
     pub max_mr_diff_files: u32,
-    /// How many of the most recently opened merge requests poll as often
-    /// as your own.
-    pub frequent_recent: u32,
-    /// Seconds between checks of a merge request on screen.
-    pub on_screen_seconds: u32,
-    /// …of one whose pipeline is running.
-    pub running_pipeline_seconds: u32,
-    /// …of yours, the workspaces' and the frequent recent ones.
-    pub mine_seconds: u32,
-    /// …of the other recent ones.
-    pub recent_seconds: u32,
 }
 
 impl Default for GitlabSettings {
@@ -229,11 +218,6 @@ impl Default for GitlabSettings {
             max_file_diff_kb: 1024,
             max_mr_diff_mb: 20,
             max_mr_diff_files: 3000,
-            frequent_recent: 10,
-            on_screen_seconds: 20,
-            running_pipeline_seconds: 30,
-            mine_seconds: 60,
-            recent_seconds: 300,
         }
     }
 }
@@ -246,7 +230,7 @@ pub enum GitlabPolling {
     Off,
     /// Every interval four times longer.
     Low,
-    /// The intervals as set.
+    /// The intervals as they are.
     #[default]
     Medium,
     /// Every interval halved.

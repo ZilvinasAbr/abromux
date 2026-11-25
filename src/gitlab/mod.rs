@@ -45,6 +45,16 @@ use std::{
 };
 use throttle::{Prio, Throttle};
 
+/// Seconds between checks at Medium polling (`gitlab.polling` scales them):
+/// a merge request on screen,
+const ON_SCREEN_SECS: u32 = 20;
+/// one whose pipeline is running,
+const RUNNING_SECS: u32 = 30;
+/// yours, the workspaces' and the `FREQUENT_RECENT` most recently opened,
+const MINE_SECS: u32 = 60;
+/// and the other recently opened ones.
+const RECENT_SECS: u32 = 300;
+const FREQUENT_RECENT: usize = 10;
 /// At most this many merge requests per cheap check.
 const BATCH: usize = 40;
 /// A failed fetch isn't tried again for this long (times the slowdown).
@@ -475,16 +485,13 @@ impl Store {
     fn cadence(&self, m: &Mr, recent_rank: Option<usize>, s: &GitlabSettings) -> (Prio, u32) {
         let pinned = self.pinned.values().any(|v| v.contains(&m.key));
         let (prio, secs) = if self.on_screen.contains(&m.key) {
-            (Prio::OnScreen, s.on_screen_seconds)
+            (Prio::OnScreen, ON_SCREEN_SECS)
         } else if m.light.as_ref().is_some_and(|l| l.pipeline_active()) {
-            (Prio::Running, s.running_pipeline_seconds)
-        } else if pinned
-            || m.roles.any()
-            || recent_rank.is_some_and(|r| r < s.frequent_recent as usize)
-        {
-            (Prio::Mine, s.mine_seconds)
+            (Prio::Running, RUNNING_SECS)
+        } else if pinned || m.roles.any() || recent_rank.is_some_and(|r| r < FREQUENT_RECENT) {
+            (Prio::Mine, MINE_SECS)
         } else {
-            (Prio::Recent, s.recent_seconds)
+            (Prio::Recent, RECENT_SECS)
         };
         let secs = scaled(secs, s);
         let secs = if self.app_active {
@@ -594,9 +601,9 @@ impl Store {
             && t.allows(Prio::Mine, now)
             && self.lists_checked.is_none_or(|c| {
                 let secs = if self.app_active {
-                    scaled(s.mine_seconds, s)
+                    scaled(MINE_SECS, s)
                 } else {
-                    scaled(s.mine_seconds, s) * INACTIVE_FACTOR
+                    scaled(MINE_SECS, s) * INACTIVE_FACTOR
                 };
                 now.duration_since(c) >= t.interval(secs)
             });
@@ -1014,7 +1021,7 @@ impl Store {
 
     /// The workspaces and where their checkouts are. Looking for their
     /// projects and branches runs in the background, when they change or
-    /// once per `mineSeconds`.
+    /// once a minute.
     pub fn set_workspaces(&mut self, places: HashMap<usize, Vec<Place>>, cx: &mut Context<Self>) {
         let s = settings(cx).clone();
         if !s.enabled {
@@ -1022,7 +1029,7 @@ impl Store {
         }
         let stale = self
             .found_at
-            .is_none_or(|t| t.elapsed() >= Duration::from_secs(s.mine_seconds.max(15) as u64));
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(MINE_SECS as u64));
         if self.finding || self.host.is_empty() || (places == self.places && !stale) {
             return;
         }

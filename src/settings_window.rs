@@ -1588,69 +1588,28 @@ fn gitlab_page(fields: &[(Key, Entity<InputState>)]) -> Page {
             ),
             group(
                 "Checking for Changes",
-                [
-                    choice(
-                        "Polling",
-                        "How much is checked in the background. Low: every interval \
-                         below four times longer; High: halved. Off: nothing is asked of \
+                [choice(
+                    "Polling",
+                    "How often GitLab is checked in the background. Low: four times \
+                         less often than Medium; High: twice as often. Off: nothing is asked of \
                          GitLab in the background, open tabs don't refresh by themselves, \
                          and Refresh in the panel checks once.",
-                        &["gitlab", "polling"],
-                        &[
-                            ("off", "Off"),
-                            ("low", "Low"),
-                            ("medium", "Medium"),
-                            ("high", "High"),
-                        ],
-                        |s| s.gitlab.polling.key(),
-                    ),
-                    stepper(
-                        "On screen",
-                        "A merge request shown in a tab.",
-                        &["gitlab", "onScreenSeconds"],
-                        |s| s.gitlab.on_screen_seconds as f32,
-                        (5., 600., 5.),
-                        |v| format!("{v} s"),
-                    ),
-                    stepper(
-                        "Pipeline running",
-                        "One whose pipeline is still going.",
-                        &["gitlab", "runningPipelineSeconds"],
-                        |s| s.gitlab.running_pipeline_seconds as f32,
-                        (5., 600., 5.),
-                        |v| format!("{v} s"),
-                    ),
-                    stepper(
-                        "Mine and workspaces'",
-                        "Yours, the workspaces', and the most recently opened ones below.",
-                        &["gitlab", "mineSeconds"],
-                        |s| s.gitlab.mine_seconds as f32,
-                        (15., 3600., 15.),
-                        |v| format!("{v} s"),
-                    ),
-                    stepper(
-                        "Checked as often as mine",
-                        "How many of the most recently opened ones.",
-                        &["gitlab", "frequentRecent"],
-                        |s| s.gitlab.frequent_recent as f32,
-                        (0., 100., 1.),
-                        n,
-                    ),
-                    stepper(
-                        "Other recent ones",
-                        "The rest of the recently opened.",
-                        &["gitlab", "recentSeconds"],
-                        |s| s.gitlab.recent_seconds as f32,
-                        (30., 3600., 30.),
-                        |v| format!("{v} s"),
-                    ),
-                ],
+                    &["gitlab", "polling"],
+                    &[
+                        ("off", "Off"),
+                        ("low", "Low"),
+                        ("medium", "Medium"),
+                        ("high", "High"),
+                    ],
+                    |s| s.gitlab.polling.key(),
+                )],
             )
             .description(
-                "A cheap check of many merge requests at once; details and diffs are \
-                 fetched only when it shows a change. When GitLab rate-limits, these \
-                 stretch on their own and recover slowly. All are three times longer \
-                 while the app is in the background.",
+                "Medium checks the merge request on screen every 20 s, one with a \
+                 running pipeline every 30 s, yours and the workspaces' every minute, \
+                 and other recently opened ones every 5 minutes. A cheap check of many \
+                 at once; details and diffs are fetched only when it shows a change. \
+                 When GitLab rate-limits, it slows down on its own.",
             ),
         ],
     }
