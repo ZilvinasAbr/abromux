@@ -502,12 +502,12 @@ impl AbroMux {
         let Some(mut p) = self.palette.take() else {
             return;
         };
+        // Typed in the same moment as Enter: its filtering hasn't run yet.
+        let typed = p.input.read(cx).value().to_string();
+        if p.query != typed {
+            p.filter(&typed);
+        }
         if p.mode == Mode::Prompt {
-            let typed = p.input.read(cx).value().to_string();
-            // Typed in the same moment as Enter: its filtering hasn't run yet.
-            if p.query != typed {
-                p.filter(&typed);
-            }
             let chosen = p
                 .matches
                 .get(p.selected)
