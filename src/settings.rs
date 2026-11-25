@@ -77,7 +77,9 @@ pub struct Settings {
     pub browser: BrowserSettings,
     pub editor: EditorSettings,
     pub notifications: NotificationSettings,
-    pub gitlab: GitlabSettings,
+    /// The GitLab plugin's section, as the file has it: what it may hold is
+    /// the plugin's to say (`Plugin::settings`, checked in `parse`).
+    pub gitlab: serde_json::Value,
     pub jira: JiraSettings,
     pub claude: ClaudeSettings,
     pub remote: RemoteSettings,
@@ -89,6 +91,14 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Plugin `id`'s section of the file (None: no field for it).
+    pub fn plugin_section(&self, id: &str) -> Option<&serde_json::Value> {
+        match id {
+            "gitlab" => Some(&self.gitlab),
+            _ => None,
+        }
+    }
+
     /// Script setting `key`'s value: the file's, if it's one the setting
     /// takes, else its default. None for a key init.lua doesn't declare.
     pub fn script_value(&self, key: &str) -> Option<serde_json::Value> {
@@ -187,96 +197,6 @@ pub struct JiraSettings {
     /// The Jira a bare ticket key (`abromux link add PAY-1423`) is on, e.g.
     /// `acme.atlassian.net`. None: the one a tracked ticket is on.
     pub host: Option<String>,
-}
-
-/// The GitLab merge requests panel and cache (`crate::gitlab`).
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub struct GitlabSettings {
-    /// GitLab in abromux at all: its tabs for merge request links, the
-    /// merge requests panel and its background cache, and the workspaces'
-    /// merge requests in the sidebar. Off: merge request links are web
-    /// pages like any other, and nothing asks GitLab anything. Local diffs
-    /// (`abromux diff`) work either way.
-    pub enabled: bool,
-    /// The GitLab the panel and cache use, e.g. `gitlab.example.com`. None:
-    /// the one signed in to in a GitLab tab. Its token is the tab's (the
-    /// Keychain). Workspace checkouts whose remote is elsewhere are left out.
-    pub host: Option<String>,
-    /// How often merge requests are checked in the background
-    /// (`crate::gitlab`'s intervals, scaled together). Off: nothing is (tabs load what they open, and
-    /// Refresh still checks once).
-    pub polling: GitlabPolling,
-    /// "Mine" also holds merge requests you're asked to review.
-    pub include_review_requests: bool,
-    /// "Mine" also holds merge requests assigned to you.
-    pub include_assigned: bool,
-    /// Merge requests you opened that stay cached, newest first.
-    pub recent_limit: u32,
-    /// Disk space for cached merge requests, in MB. Past it, the
-    /// longest-unopened ones' go first; they stay listed.
-    pub cache_size_mb: u32,
-    /// A file whose diff is bigger (KB) is fetched when it's shown.
-    pub max_file_diff_kb: u32,
-    /// Past this much of a merge request's diff (MB), files are fetched
-    /// when they're shown.
-    pub max_mr_diff_mb: u32,
-    /// …or after this many files.
-    pub max_mr_diff_files: u32,
-}
-
-impl Default for GitlabSettings {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            host: None,
-            polling: GitlabPolling::default(),
-            include_review_requests: true,
-            include_assigned: false,
-            recent_limit: 50,
-            cache_size_mb: 500,
-            max_file_diff_kb: 1024,
-            max_mr_diff_mb: 20,
-            max_mr_diff_files: 3000,
-        }
-    }
-}
-
-/// `gitlab.polling`: how often the background checks run.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum GitlabPolling {
-    /// Nothing in the background.
-    Off,
-    /// Every interval four times longer.
-    Low,
-    /// The intervals as they are.
-    #[default]
-    Medium,
-    /// Every interval halved.
-    High,
-}
-
-impl GitlabPolling {
-    /// Its value in the config file.
-    pub fn key(self) -> &'static str {
-        match self {
-            GitlabPolling::Off => "off",
-            GitlabPolling::Low => "low",
-            GitlabPolling::Medium => "medium",
-            GitlabPolling::High => "high",
-        }
-    }
-
-    /// What every interval is multiplied by; None when off.
-    pub fn factor(self) -> Option<f64> {
-        match self {
-            GitlabPolling::Off => None,
-            GitlabPolling::Low => Some(4.),
-            GitlabPolling::Medium => Some(1.),
-            GitlabPolling::High => Some(0.5),
-        }
-    }
 }
 
 pub use abromux_core::pending::TurnComplete;
@@ -1276,6 +1196,7 @@ fn parse(text: &str) -> Result<Settings, serde_json::Error> {
     for c in &s.commands {
         c.check().map_err(serde::de::Error::custom)?;
     }
+    crate::plugins::check_sections(&s).map_err(serde::de::Error::custom)?;
     if !abromux_platform::MACOS && s.browser.engine == Some(BrowserEngine::BuiltIn) {
         return Err(serde::de::Error::custom(
             "browser.engine \"builtIn\" (the WebKit browser) is macOS-only; \
@@ -1411,21 +1332,21 @@ mod tests {
         assert_eq!(parse(r#"{"panes": {}}"#).unwrap(), Settings::default());
     }
 
+    /// The GitLab section is checked against what the plugin declares.
+    #[cfg(feature = "gitlab")]
     #[test]
-    fn gitlab_polling() {
-        assert_eq!(Settings::default().gitlab.polling, GitlabPolling::Medium);
-        for (v, want) in [
-            ("off", GitlabPolling::Off),
-            ("low", GitlabPolling::Low),
-            ("medium", GitlabPolling::Medium),
-            ("high", GitlabPolling::High),
-        ] {
-            let s = parse(&format!(r#"{{"gitlab": {{"polling": "{v}"}}}}"#)).unwrap();
-            assert_eq!(s.gitlab.polling, want);
-            assert_eq!(want.key(), v);
-        }
-        assert_eq!(GitlabPolling::Off.factor(), None);
-        assert!(parse(r#"{"gitlab": {"polling": "fast"}}"#).is_err());
+    fn plugin_sections() {
+        let s = parse(r#"{"gitlab": {"polling": "off", "host": "gitlab.example.com"}}"#).unwrap();
+        assert_eq!(s.plugin_section("gitlab").unwrap()["polling"], "off");
+        let e = parse(r#"{"gitlab": {"onScreenSeconds": 20}}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("gitlab: unknown field `onScreenSeconds`"), "{e}");
+        let e = parse(r#"{"gitlab": {"polling": "fast"}}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("gitlab.polling"), "{e}");
+        assert!(parse(r#"{"gitlab": {"recentLimit": 1}}"#).is_err());
     }
 
     #[test]

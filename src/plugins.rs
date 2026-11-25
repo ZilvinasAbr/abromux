@@ -42,9 +42,36 @@ fn jira(cx: &App) -> Option<String> {
     view.read(cx).jira_base(cx)
 }
 
-/// Plugin `id` is in use: GitLab's can be turned off (`gitlab.enabled`).
+/// Plugin `id` is in use: one that declares an `enabled` setting (GitLab's
+/// `gitlab.enabled`) can be turned off.
 pub fn enabled(id: &str, cx: &App) -> bool {
-    id != "gitlab" || cx.global::<crate::settings::Settings>().gitlab.enabled
+    abromux_plugin::setting::section(id, cx)
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
+/// What's wrong with a plugin's section of `s`'s file, if anything.
+pub fn check_sections(s: &crate::settings::Settings) -> Result<(), String> {
+    for p in all() {
+        if let (Some(page), Some(section)) = (p.settings, s.plugin_section(p.id)) {
+            page().check(p.id, section)?;
+        }
+    }
+    Ok(())
+}
+
+/// Hand each plugin its section of `s`'s file, with its defaults filled
+/// in (`abromux_plugin::setting::section`).
+pub fn set_sections(s: &crate::settings::Settings, cx: &mut App) {
+    let sections = all()
+        .iter()
+        .filter_map(|p| {
+            let section = s.plugin_section(p.id)?;
+            Some((p.id.to_string(), (p.settings?)().filled(section)))
+        })
+        .collect();
+    cx.set_global(abromux_plugin::setting::Sections(sections));
 }
 
 /// The plugin that shows `url` itself, if one that's in use does.

@@ -4140,6 +4140,7 @@ fn run_app(cwd: Option<String>) {
         if let Err(e) = terminal_browser_panes::set(settings.browser.terminal_browser_panes) {
             eprintln!("abromux: {e}");
         }
+        plugins::set_sections(&settings, cx);
         cx.set_global(settings);
         update::init(cx);
         gitlab::init(cx);

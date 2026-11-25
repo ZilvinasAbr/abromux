@@ -833,7 +833,9 @@ abromux.setting{ key = "greet", title = "Greet on start" }                      
 abromux.setting{ key = "count", title = "Count", type = "number", min = 1, max = 9 }
 ```
 
-`type` is `boolean`, `number` or `choice` (guessed from `options` or `default` when left out); an option is a string or `{ value = ..., label = ... }`. A script reads one with `abromux.settings.get{ key = "polling" }` (its default until set) and changes it with `abromux.settings.set{ key = "polling", value = "off" }` (`value = nil` resets it). With `path` instead of `key`, the same two read and write any config.json key: `abromux.settings.set{ path = "gitlab.enabled", value = false }`. A value that doesn't fit is refused. `abromux rpc settings.list` lists the script settings with their values.
+`type` is `boolean`, `number` (with `min`, `max`, `step` and an optional `unit`, e.g. `"MB"`) or `choice` (guessed from `options` or `default` when left out); an option is a string or `{ value = ..., label = ... }`. A script reads one with `abromux.settings.get{ key = "polling" }` (its default until set) and changes it with `abromux.settings.set{ key = "polling", value = "off" }` (`value = nil` resets it). With `path` instead of `key`, the same two read and write any config.json key: `abromux.settings.set{ path = "gitlab.enabled", value = false }`. A value that doesn't fit is refused. `abromux rpc settings.list` lists the script settings with their values.
+
+Plugins declare their settings the same way (`Plugin::settings` in `crates/abromux-plugin`): GitLab's page in Settings and what `"gitlab"` in config.json may hold both come from the list in `crates/abromux-gitlab/src/settings.rs`.
 
 ## Keyboard and mouse
 

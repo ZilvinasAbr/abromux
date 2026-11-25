@@ -39,6 +39,7 @@ mod reports;
 pub mod review;
 mod search;
 mod select;
+pub mod settings;
 mod side;
 mod slash;
 mod style;
@@ -63,6 +64,7 @@ pub const PLUGIN: Plugin = Plugin {
     assets: &ASSETS,
     claims,
     open_link: Some("Open GitLab Merge Request…"),
+    settings: Some(settings::page),
 };
 
 /// A merge request's page on any GitLab (`…/-/merge_requests/12`), or a
