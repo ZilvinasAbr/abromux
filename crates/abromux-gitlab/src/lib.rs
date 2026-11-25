@@ -46,6 +46,7 @@ mod tasks;
 pub mod time;
 pub mod types;
 pub mod view;
+pub mod viewed;
 mod workitems;
 
 pub use edit::{draft_title, pipeline_active};
@@ -302,8 +303,8 @@ pub struct Location {
     /// The Changes tab side by side instead of inline.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub parallel: bool,
-    /// Files of the open merge request marked Viewed (GitLab keeps these in
-    /// the browser too).
+    /// Files of the open merge request marked Viewed. They're kept per merge
+    /// request too (`viewed.rs`), as GitLab keeps them in the browser.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub viewed: Vec<String>,
     /// The list in pages of this many, as GitLab's "Show 20 items"; None:

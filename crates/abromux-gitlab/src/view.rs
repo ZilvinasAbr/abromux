@@ -256,6 +256,10 @@ pub struct GitLabView {
     _list_task: Option<Task<()>>,
     _review_task: Option<Task<()>>,
     _replay_task: Option<Task<()>>,
+    /// The merge request whose Viewed marks `loc.viewed` holds, and the
+    /// check of which of them a newer push changed (`viewed.rs`).
+    pub(crate) viewed_of: Option<(u64, u64)>,
+    pub(crate) _viewed_task: Option<Task<()>>,
     /// The `cache::Shared` generation of the review showing (0: its own).
     review_serial: u64,
     refreshing: bool,
@@ -451,6 +455,8 @@ impl GitLabView {
             _list_task: None,
             _review_task: None,
             _replay_task: None,
+            viewed_of: None,
+            _viewed_task: None,
             review_serial: 0,
             refreshing: false,
             _sign_in_task: None,
