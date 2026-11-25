@@ -989,7 +989,7 @@ pub const METHODS: &[Method] = &[
         "debug.input",
         "",
         "Debugging: replay input steps.",
-        "steps:array The steps",
+        "steps:string The steps as in ABROMUX_SCRIPT, separated by semicolons (key:cmd-p, type:abc, ui:…), without wait",
     ),
 ];
 
