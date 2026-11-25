@@ -805,6 +805,31 @@ pub struct Panes {
     /// The border around the focused pane when a workspace has splits.
     #[serde(deserialize_with = "color")]
     pub focus_border_color: Rgba,
+    /// Where a terminal's ⌘-clicked link (a web page or Markdown file)
+    /// opens.
+    pub open_links_in: OpenLinksIn,
+}
+
+/// `panes.openLinksIn`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum OpenLinksIn {
+    /// A pane to the right of the terminal (a new tab there if it already
+    /// shows that kind of tab).
+    NewPane,
+    /// A new tab in the terminal's own pane.
+    #[default]
+    SamePane,
+}
+
+impl OpenLinksIn {
+    /// Its value in the config file.
+    pub fn key(self) -> &'static str {
+        match self {
+            OpenLinksIn::NewPane => "newPane",
+            OpenLinksIn::SamePane => "samePane",
+        }
+    }
 }
 
 impl Panes {
@@ -820,6 +845,7 @@ impl Default for Panes {
             resize_step: 20.,
             divider_color: None,
             focus_border_color: rgba(pal().accent << 8 | 0xb0),
+            open_links_in: OpenLinksIn::SamePane,
         }
     }
 }
@@ -1191,13 +1217,16 @@ mod tests {
         let s = parse(
             r##"{
               "$schema": "https://example.com/schema.json",
-              "panes": { "resizeStep": 35.5, "dividerColor": "#ff0000", "focusBorderColor": "#00ff0080" }
+              "panes": { "resizeStep": 35.5, "dividerColor": "#ff0000", "focusBorderColor": "#00ff0080",
+                         "openLinksIn": "newPane" }
             }"##,
         )
         .unwrap();
         assert_eq!(s.panes.resize_step, 35.5);
         assert_eq!(s.panes.divider_color, Some(rgb(0xff0000)));
         assert_eq!(s.panes.focus_border_color, rgba(0x00ff0080));
+        assert_eq!(s.panes.open_links_in, OpenLinksIn::NewPane);
+        assert_eq!(Panes::default().open_links_in, OpenLinksIn::SamePane);
     }
 
     #[test]

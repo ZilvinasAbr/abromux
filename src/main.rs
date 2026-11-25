@@ -1192,8 +1192,9 @@ impl AbroMux {
         Surface::Browser(browser)
     }
 
-    /// ⌘-click on a terminal link: web URLs open in a browser to the right
-    /// of the terminal (a new tab there if that pane already shows one), and
+    /// ⌘-click on a terminal link: web URLs open in a browser tab in the
+    /// terminal's pane (with `panes.openLinksIn: "newPane"`, to the right of
+    /// it, a new tab there if that pane already shows one), and
     /// so do Markdown files, as Markdown tabs; other local files and folders
     /// open with their default app, and anything that could run code only
     /// in Finder (see `link::local`). Other schemes do nothing.
@@ -1260,6 +1261,11 @@ impl AbroMux {
             // It couldn't: the page, as before.
             _ => self.make_browser(&url, window, cx),
         };
+        if cx.global::<settings::Settings>().panes.open_links_in == settings::OpenLinksIn::SamePane
+        {
+            self.add_tab_to(wi, pane, surface, true, window, cx);
+            return;
+        }
         match right {
             Some(r) => self.add_tab_to(wi, r, surface, true, window, cx),
             None => {

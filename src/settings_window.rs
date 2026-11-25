@@ -1414,6 +1414,14 @@ fn panes_page() -> Page {
                     &["panes", "focusBorderColor"],
                     |s| Some(s.panes.focus_border_color),
                 ),
+                choice(
+                    "Open links in",
+                    "Where a web page or Markdown file ⌘-clicked in a terminal opens: \
+                     a new tab in the terminal's own pane, or a pane to the right of it.",
+                    &["panes", "openLinksIn"],
+                    &[("samePane", "Same pane"), ("newPane", "New pane beside")],
+                    |s| s.panes.open_links_in.key(),
+                ),
             ],
         )],
     }
