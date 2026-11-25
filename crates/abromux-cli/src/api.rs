@@ -963,12 +963,6 @@ pub const METHODS: &[Method] = &[
         "ref?:string This one",
     ),
     m(
-        "mr.panel",
-        "mr panel",
-        "Show or hide the merge requests panel.",
-        "state?:string toggle (default), show or hide",
-    ),
-    m(
         "link.list",
         "link list",
         "A workspace's sidebar list: its pinned tabs, then suggested links.",

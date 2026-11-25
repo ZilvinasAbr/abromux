@@ -186,10 +186,9 @@ Commands:
   link add <url|PAY-123|group/project!iid>                   (open it in a pinned tab, hidden, unless a tab shows it)
   link remove <n|key|url|surface>                            (unpin it, or stop suggesting it; not pinned again on its own)
   link open <n|key|url> | --all [--focus <true|false>]       (show its tab, else open it in a new pinned one)
-  mr list [mine|recent|workspace]                            (cached GitLab merge requests: the panel's, or one group)
+  mr list [mine|recent|workspace]                            (cached GitLab merge requests: all, or one group)
   mr open <url|group/project!iid>                            (in a tab of this workspace, from the cache, then refetched)
   mr refresh [<url|group/project!iid>]                       (check now: everything, or refetch one)
-  mr panel [toggle|show|hide]                                (the merge requests panel on the right, {key:toggleMergeRequests})
   reload-config                                              (read the config file again, like {key:reloadConfig})
   config path                                                (where abromux's config.json lives)
   config open                                                (open config.json in its default app; made empty if missing)
@@ -1236,10 +1235,9 @@ fn dispatch(
                 })
             }
             "refresh" => ("mr.refresh", |_| "OK".into()),
-            "panel" => ("mr.panel", |v| format!("OK visible={}", v["visible"])),
             s => {
                 return Err(format!(
-                    "mr: unknown subcommand {s:?} (list, open, refresh, panel)"
+                    "mr: unknown subcommand {s:?} (list, open, refresh)"
                 ));
             }
         },

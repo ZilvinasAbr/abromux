@@ -11,12 +11,12 @@ use serde::Deserialize;
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     /// GitLab in abromux at all: its tabs for merge request links, the
-    /// merge requests panel and its background cache, and the workspaces'
+    /// background merge requests cache, and the workspaces'
     /// merge requests in the sidebar. Off: merge request links are web
     /// pages like any other, and nothing asks GitLab anything. Local diffs
     /// (`abromux diff`) work either way.
     pub enabled: bool,
-    /// The GitLab the panel and cache use, e.g. `gitlab.example.com`. None:
+    /// The GitLab the cache uses, e.g. `gitlab.example.com`. None:
     /// the one signed in to in a GitLab tab. Its token is the tab's (the
     /// Keychain). Workspace checkouts whose remote is elsewhere are left out.
     pub host: Option<String>,
@@ -104,15 +104,15 @@ pub fn page() -> SettingsPage {
         title: "GitLab",
         icon: "icons/git-pull-request.svg",
         description: Some(
-            "Merge requests in the panel on the right (⌥⌘B), kept cached and checked \
-             in the background, so they open at once in a GitLab tab (⇧⌘M finds one).",
+            "Merge requests kept cached and checked in the background, so they open \
+             at once in a GitLab tab (⇧⌘M finds one).",
         ),
         settings: vec![
             SettingDef::boolean("enabled", "Use GitLab", d.enabled)
                 .group("GitLab")
                 .description(
-                    "Merge request links open in GitLab tabs, the merge requests panel and \
-                     its background checks run, and workspaces list their merge requests. \
+                    "Merge request links open in GitLab tabs, merge requests are checked \
+                     in the background, and workspaces list their merge requests. \
                      Off: those links are web pages like any other and nothing asks GitLab \
                      anything. Local diffs (abromux diff) work either way.",
                 ),

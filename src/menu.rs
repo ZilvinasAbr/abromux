@@ -186,7 +186,6 @@ pub fn set_menus(cx: &mut App) {
             name: "View".into(),
             items: vec![
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
-                MenuItem::action("Toggle Merge Requests Panel", crate::ToggleMergeRequests),
                 MenuItem::action("Toggle Pane Zoom", ToggleZoom),
                 MenuItem::action("Flash Focused Pane", FlashPane),
                 MenuItem::separator(),

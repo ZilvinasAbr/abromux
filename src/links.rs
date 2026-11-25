@@ -14,8 +14,8 @@
 //!
 //! Tabs showing tickets and merge requests are pinned on their own;
 //! `abromux link add` opens anything in a hidden pinned tab, ⌥⌘T pins any
-//! tab. Its merge requests from its branches (the merge requests panel's
-//! "This workspace") and links tracked before tabs were pinned (`links`)
+//! tab. Its merge requests from its branches (the merge requests
+//! cache's "This workspace") and links tracked before tabs were pinned (`links`)
 //! are suggested under them. Unpinning one, or dismissing a suggestion,
 //! keeps it from coming back on its own.
 
@@ -35,7 +35,7 @@ pub fn surface_link(s: &Surface, cx: &App) -> Option<(Kind, String, String)> {
     let url = match s {
         Surface::Plugin(_) => {
             let st = gitlab::store(cx).read(cx);
-            let k = gitlab::panel::tab_mr(s, st, cx)?;
+            let k = gitlab::views::tab_mr(s, st, cx)?;
             return Some((Kind::Mr, k.reference(), st.web_url(&k)));
         }
         Surface::Browser(b) => b.read(cx).url.clone(),

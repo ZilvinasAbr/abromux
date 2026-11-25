@@ -1,6 +1,6 @@
 //! GitLab merge requests kept fresh in the background, so any of them opens
-//! at once in a GitLab tab (the `abromux-gitlab` plugin), and the right-hand
-//! panel listing them (`panel.rs`).
+//! at once in a GitLab tab (the `abromux-gitlab` plugin); which ones tabs
+//! show, and opening one, is `views.rs`.
 //!
 //! What's kept and when it's dropped is in `model.rs`. Keeping it fresh is
 //! two steps: a cheap GraphQL check of many merge requests in one request
@@ -25,9 +25,9 @@
 
 pub mod api;
 pub mod model;
-pub mod panel;
 pub mod remote;
 pub mod throttle;
+pub mod views;
 
 use abromux_gitlab::settings::Settings as GitlabSettings;
 use abromux_gitlab::{api::Client, cache, review::Review};
@@ -173,11 +173,6 @@ pub fn store(cx: &App) -> Entity<Store> {
 
 fn settings(cx: &App) -> GitlabSettings {
     abromux_gitlab::settings::get(cx)
-}
-
-/// Signed in (or not looked up yet), so the panel lists rather than asks.
-pub fn configured(cx: &App) -> bool {
-    store(cx).read(cx).signed_in != Some(false)
 }
 
 fn cache_dir() -> std::path::PathBuf {
@@ -955,7 +950,7 @@ impl Store {
         self.wake();
     }
 
-    /// Refresh in the panel: check everything now.
+    /// `abromux mr refresh`: check everything now.
     pub fn refresh_all(&mut self, cx: &mut Context<Self>) {
         self.check_once = true;
         self.checked.clear();
@@ -1067,38 +1062,9 @@ impl Store {
         .detach();
     }
 
-    // ---- for the panel ----------------------------------------------------
-
     /// Its load is under way or waiting.
     pub fn refreshing(&self, k: &MrKey) -> bool {
         self.urgent.contains(k) || self.busy.contains(k)
-    }
-
-    /// While paused for a 429: how long is left.
-    pub fn paused(&self) -> Option<Duration> {
-        self.throttle.lock().unwrap().paused(Instant::now())
-    }
-
-    pub fn slowdown(&self) -> f64 {
-        self.throttle.lock().unwrap().slow
-    }
-
-    /// Mine, newest update first.
-    pub fn mine(&self) -> Vec<&Mr> {
-        let mut v: Vec<&Mr> = self.mrs.values().filter(|m| m.roles.any()).collect();
-        v.sort_by(|a, b| updated(b).cmp(updated(a)));
-        v
-    }
-
-    /// Recently opened, newest first.
-    pub fn recent(&self) -> Vec<&Mr> {
-        let mut v: Vec<&Mr> = self
-            .mrs
-            .values()
-            .filter(|m| m.inspected_at.is_some())
-            .collect();
-        v.sort_by_key(|m| std::cmp::Reverse(m.inspected_at));
-        v
     }
 
     /// Its page on GitLab.
@@ -1109,23 +1075,5 @@ impl Store {
             .map(|l| l.web_url.clone())
             .filter(|u| !u.is_empty())
             .unwrap_or_else(|| format!("{}/{}/-/merge_requests/{}", self.host, k.project, k.iid))
-    }
-}
-
-fn updated(m: &Mr) -> &str {
-    m.light.as_ref().map_or("", |l| l.updated_at.as_str())
-}
-
-// ---- dates --------------------------------------------------------------
-
-/// "just now", "5m ago", "3h ago", "2d ago" for GitLab's time `s` ("" if
-/// it isn't one).
-pub fn ago_iso(s: &str) -> String {
-    let Some(t) = abromux_gitlab::time::parse(s) else {
-        return String::new();
-    };
-    match abromux_gitlab::time::ago_short(now_secs() as i64 - t).as_str() {
-        "now" => "just now".into(),
-        a => format!("{a} ago"),
     }
 }

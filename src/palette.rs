@@ -140,13 +140,7 @@ fn commands(project: Option<&Path>, cx: &App) -> Vec<Cmd> {
     let gitlab = crate::plugins::enabled("gitlab", cx);
     let builtin = keymap::ACTIONS
         .iter()
-        .filter(|a| {
-            gitlab
-                || !matches!(
-                    a.name,
-                    "toggleMergeRequests" | "goToMergeRequest" | "refreshMergeRequests"
-                )
-        })
+        .filter(|a| gitlab || !matches!(a.name, "goToMergeRequest" | "refreshMergeRequests"))
         .filter_map(|a| a.title.map(|t| (t.to_string(), None, vec![], (a.action)())));
     let plugins = crate::plugins::all()
         .iter()
