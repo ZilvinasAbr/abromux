@@ -59,6 +59,7 @@ pub fn apply(s: Settings, cx: &mut App) {
     keymap::apply(&s, cx);
     crate::theme::apply(s.app.appearance, cx);
     crate::remote::apply(&s.remote);
+    crate::plugins::set_sections(&s, cx);
     cx.set_global(s);
     menu::set_menus(cx);
     cx.refresh_windows();
@@ -112,8 +113,9 @@ struct SettingsView {
     recording: Option<&'static str>,
     /// The recorder got a key that can't be a shortcut.
     needs_modifier: bool,
-    /// The GitLab page's text fields, saved on Enter or leaving them.
-    text_fields: Vec<(Key, Entity<InputState>)>,
+    /// Plugins' text settings' fields (by path, e.g. `gitlab.host`), saved
+    /// on Enter or leaving them.
+    text_fields: Vec<(Path, Entity<InputState>)>,
     /// Phone Access: a Tailscale login to let in, added on Enter.
     allow_input: Entity<InputState>,
     /// Servers: a new server's name and address, added on Enter.
@@ -126,29 +128,28 @@ impl SettingsView {
         let focus = cx.focus_handle();
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         window.focus(&search.focus_handle(cx));
-        let text_fields: Vec<(Key, Entity<InputState>)> = TEXT_FIELDS
-            .iter()
-            .map(|(key, placeholder, masked, get)| {
-                let value = get(cx.global::<Settings>()).unwrap_or_default();
+        let text_fields: Vec<(Path, Entity<InputState>)> = text_settings()
+            .into_iter()
+            .map(|(path, placeholder)| {
+                let value = text_value(&path, cx.global::<Settings>());
                 let input = cx.new(|cx| {
                     InputState::new(window, cx)
-                        .placeholder(*placeholder)
-                        .masked(*masked)
+                        .placeholder(placeholder)
                         .default_value(value)
                 });
-                (*key, input)
+                (path, input)
             })
             .collect();
         let mut _subscriptions: Vec<Subscription> = text_fields
             .iter()
-            .map(|(key, input)| {
-                let key: Key = key;
+            .map(|(path, input)| {
+                let path = path.clone();
                 cx.subscribe_in(
                     input,
                     window,
                     move |_, input, ev: &InputEvent, window, cx| {
                         if matches!(ev, InputEvent::Blur | InputEvent::PressEnter { .. }) {
-                            save_text(key, input.read(cx).value().trim(), window, cx);
+                            save_text(&path, input.read(cx).value().trim(), window, cx);
                         }
                     },
                 )
@@ -157,11 +158,8 @@ impl SettingsView {
         _subscriptions.extend([
             // A reload (⌘⇧,) or hand edit shows in fields not being typed in.
             cx.observe_global_in::<Settings>(window, |this: &mut Self, window, cx| {
-                for (key, input) in &this.text_fields {
-                    let Some((.., get)) = TEXT_FIELDS.iter().find(|f| f.0 == *key) else {
-                        continue;
-                    };
-                    let value = get(cx.global::<Settings>()).unwrap_or_default();
+                for (path, input) in &this.text_fields {
+                    let value = text_value(path, cx.global::<Settings>());
                     let focused = input.focus_handle(cx).is_focused(window);
                     if !focused && input.read(cx).value().trim() != value {
                         input.update(cx, |i, cx| i.set_value(value, window, cx));
@@ -817,12 +815,12 @@ fn pages(
     view: &WeakEntity<SettingsView>,
     recording: Option<&'static str>,
     needs_modifier: bool,
-    text_fields: &[(Key, Entity<InputState>)],
+    text_fields: &[(Path, Entity<InputState>)],
     allow_input: &Entity<InputState>,
     server_inputs: &(Entity<InputState>, Entity<InputState>),
     cx: &App,
 ) -> Vec<Page> {
-    vec![
+    let mut pages = vec![
         general_page(),
         sidebar_page(),
         workspace_colors_page(cx),
@@ -830,10 +828,14 @@ fn pages(
         shortcuts_page(view, recording, needs_modifier),
         commands_page(cx),
         scripts_page(cx),
-        gitlab_page(text_fields),
-        phone_page(allow_input, cx),
-        servers_page(server_inputs),
-    ]
+    ];
+    pages.extend(
+        crate::plugins::all()
+            .iter()
+            .filter_map(|p| Some(plugin_page(p.id, (p.settings?)(), text_fields))),
+    );
+    pages.extend([phone_page(allow_input, cx), servers_page(server_inputs)]);
+    pages
 }
 
 /// Add the server the Servers page's fields describe, and clear them.
@@ -1442,171 +1444,85 @@ fn workspace_colors_page(cx: &App) -> Page {
     }
 }
 
-/// The GitLab page's text settings: key, placeholder, masked, value.
-type TextField = (Key, &'static str, bool, fn(&Settings) -> Option<String>);
-const TEXT_FIELDS: &[TextField] = &[(&["gitlab", "host"], "the GitLab tab's", false, |s| {
-    s.gitlab.host.clone()
-})];
+/// A setting's place in the file, e.g. `["gitlab", "host"]`.
+type Path = Vec<String>;
 
-/// Save a text field: empty, or the default, removes the key.
-fn save_text(key: Key, value: &str, window: &mut Window, cx: &mut App) {
-    let Some((.., get)) = TEXT_FIELDS.iter().find(|f| f.0 == key) else {
-        return;
+/// Every plugin's text settings: their paths and placeholders.
+fn text_settings() -> Vec<(Path, String)> {
+    use abromux_plugin::setting::SettingKind;
+    crate::plugins::all()
+        .iter()
+        .filter_map(|p| Some((p.id, (p.settings?)())))
+        .flat_map(|(id, page)| {
+            page.settings.into_iter().filter_map(move |d| match d.kind {
+                SettingKind::Text { placeholder } => {
+                    Some((vec![id.to_string(), d.key], placeholder.unwrap_or_default()))
+                }
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+/// A plugin text setting's value in `s` ("" for none).
+fn text_value(path: &[String], s: &Settings) -> String {
+    let [id, key] = path else {
+        return String::new();
     };
-    let current = get(cx.global::<Settings>()).unwrap_or_default();
-    if value == current {
+    s.plugin_section(id)
+        .and_then(|v| v.get(key))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Save a text field: empty removes the key.
+fn save_text(path: &[String], value: &str, window: &mut Window, cx: &mut App) {
+    if value == text_value(path, cx.global::<Settings>()) {
         return;
     }
-    let default = get(&Settings::default()).unwrap_or_default();
-    let json = (!value.is_empty() && value != default).then(|| json!(value));
-    save(key, json, window, cx);
+    let key: Vec<&str> = path.iter().map(String::as_str).collect();
+    save(&key, (!value.is_empty()).then(|| json!(value)), window, cx);
 }
 
-/// A text setting's row. The view's own fields are passed in: this runs
-/// while it renders, so it can't be read.
-fn text_row(
-    title: &'static str,
-    description: impl Into<SharedString>,
-    key: Key,
-    fields: &[(Key, Entity<InputState>)],
-) -> Option<Row> {
-    let input = fields.iter().find(|(k, _)| *k == key)?.1.clone();
-    let get = TEXT_FIELDS.iter().find(|f| f.0 == key)?.3;
-    Some(row(title, description, key, get, move |_, _, _, _| {
-        div()
-            .w(px(260.))
-            .h(px(26.))
-            .px(px(8.))
-            .flex()
-            .items_center()
-            .rounded(px(6.))
-            .border_1()
-            .border_color(rgb(pal().border))
-            .bg(rgb(pal().input_bg))
-            .child(
-                Input::new(&input)
-                    .appearance(false)
-                    .text_size(px(12.))
-                    .h_full()
-                    .px_0()
-                    .py_0(),
-            )
-            .into_any_element()
-    }))
-}
-
-fn gitlab_page(fields: &[(Key, Entity<InputState>)]) -> Page {
-    let n = |v: f32| format!("{v}");
+/// A plugin's page: its declared settings, grouped as it says, each saved
+/// in its section of the file (`"<id>": {…}`).
+fn plugin_page(
+    id: &'static str,
+    page: abromux_plugin::setting::SettingsPage,
+    fields: &[(Path, Entity<InputState>)],
+) -> Page {
+    let mut groups: Vec<Group> = vec![];
+    for def in page.settings {
+        let title = def.group.clone().unwrap_or_else(|| "Settings".into());
+        let key = def.key.clone();
+        let value: ValueFn = {
+            let (page_def, key) = (def.clone(), key.clone());
+            Rc::new(move |cx: &App| {
+                cx.global::<Settings>()
+                    .plugin_section(id)
+                    .and_then(|s| s.get(&key))
+                    .filter(|v| page_def.accepts(v))
+                    .cloned()
+                    .unwrap_or_else(|| page_def.default.clone())
+            })
+        };
+        let path = vec![id.to_string(), key];
+        let field = fields
+            .iter()
+            .find(|(p, _)| *p == path)
+            .map(|(_, f)| f.clone());
+        let row = declared_row(def, path, value, field);
+        match groups.iter_mut().find(|g| g.title.as_ref() == title) {
+            Some(g) => g.rows.push(row),
+            None => groups.push(group(title, [row])),
+        }
+    }
     Page {
-        title: "GitLab",
-        icon: "icons/git-pull-request.svg",
-        description: Some(
-            "Merge requests in the panel on the right (⌥⌘B), kept cached and checked \
-             in the background, so they open at once in a GitLab tab (⇧⌘M finds one).",
-        ),
-        groups: vec![
-            group(
-                "GitLab",
-                [switch(
-                    "Use GitLab",
-                    "Merge request links open in GitLab tabs, the merge requests panel and \
-                     its background checks run, and workspaces list their merge requests. \
-                     Off: those links are web pages like any other and nothing asks GitLab \
-                     anything. Local diffs (abromux diff) work either way.",
-                    &["gitlab", "enabled"],
-                    |s| s.gitlab.enabled,
-                )],
-            ),
-            group(
-                "Connection",
-                [text_row(
-                    "Host",
-                    "Your GitLab, e.g. gitlab.example.com. Empty: the one you signed in \
-                         to in a GitLab tab, with its token. Workspace checkouts whose \
-                         remote is elsewhere are left out.",
-                    &["gitlab", "host"],
-                    fields,
-                )]
-                .into_iter()
-                .flatten()
-                .chain([
-                    switch(
-                        "Review requests",
-                        "\"Mine\" also lists merge requests you're asked to review.",
-                        &["gitlab", "includeReviewRequests"],
-                        |s| s.gitlab.include_review_requests,
-                    ),
-                    switch(
-                        "Assigned to me",
-                        "\"Mine\" also lists merge requests assigned to you.",
-                        &["gitlab", "includeAssigned"],
-                        |s| s.gitlab.include_assigned,
-                    ),
-                ]),
-            ),
-            group(
-                "Cache",
-                [
-                    stepper(
-                        "Recently opened",
-                        "How many merge requests you opened stay cached. Merged and \
-                         closed ones are dropped at once.",
-                        &["gitlab", "recentLimit"],
-                        |s| s.gitlab.recent_limit as f32,
-                        (5., 500., 5.),
-                        n,
-                    ),
-                    stepper(
-                        "Disk space",
-                        "For cached merge requests. Past it, the longest-unopened ones' \
-                         go first; they stay listed.",
-                        &["gitlab", "cacheSizeMb"],
-                        |s| s.gitlab.cache_size_mb as f32,
-                        (50., 20000., 50.),
-                        |v| format!("{v} MB"),
-                    ),
-                    stepper(
-                        "Largest file diff",
-                        "Bigger files' diffs are fetched when they're shown.",
-                        &["gitlab", "maxFileDiffKb"],
-                        |s| s.gitlab.max_file_diff_kb as f32,
-                        (64., 65536., 64.),
-                        |v| format!("{v} KB"),
-                    ),
-                    stepper(
-                        "Largest merge request diff",
-                        "Past it, files' diffs are fetched when they're shown.",
-                        &["gitlab", "maxMrDiffMb"],
-                        |s| s.gitlab.max_mr_diff_mb as f32,
-                        (1., 500., 1.),
-                        |v| format!("{v} MB"),
-                    ),
-                    stepper(
-                        "Most files per diff",
-                        "…or after this many files.",
-                        &["gitlab", "maxMrDiffFiles"],
-                        |s| s.gitlab.max_mr_diff_files as f32,
-                        (100., 50000., 100.),
-                        n,
-                    ),
-                ],
-            ),
-            group(
-                "Checking for Changes",
-                [choice(
-                    "Polling level",
-                    "How often merge requests are checked in the background.",
-                    &["gitlab", "polling"],
-                    &[
-                        ("off", "Off"),
-                        ("low", "Low"),
-                        ("medium", "Medium"),
-                        ("high", "High"),
-                    ],
-                    |s| s.gitlab.polling.key(),
-                )],
-            ),
-        ],
+        title: page.title,
+        icon: page.icon,
+        description: page.description,
+        groups,
     }
 }
 
@@ -2183,7 +2099,14 @@ fn scripts_page(cx: &App) -> Page {
     let mut groups: Vec<Group> = vec![];
     for def in s.script_settings.clone() {
         let title = def.group.clone().unwrap_or_else(|| "Settings".into());
-        let row = script_row(def);
+        let key = def.key.clone();
+        let value: ValueFn = Rc::new(move |cx: &App| {
+            cx.global::<Settings>()
+                .script_value(&key)
+                .unwrap_or(Value::Null)
+        });
+        let path = vec!["scripts".to_string(), def.key.clone()];
+        let row = declared_row(def, path, value, None);
         match groups.iter_mut().find(|g| g.title.as_ref() == title) {
             Some(g) => g.rows.push(row),
             None => groups.push(group(title, [row])),
@@ -2211,24 +2134,31 @@ fn scripts_page(cx: &App) -> Page {
     }
 }
 
-/// One script setting's row; its value lives at `scripts.<key>`.
-fn script_row(def: crate::lua::SettingDef) -> Row {
-    use crate::lua::SettingKind;
-    let key = def.key.clone();
-    let value = {
-        let key = key.clone();
-        move |cx: &App| {
-            cx.global::<Settings>()
-                .script_value(&key)
-                .unwrap_or(Value::Null)
+/// A declared setting's current value (its default when the file has none).
+type ValueFn = Rc<dyn Fn(&App) -> Value>;
+
+/// The row of a declared setting (a script's or a plugin's), kept at
+/// `path` in the file; a text one's field is made with the view (`field`).
+fn declared_row(
+    def: abromux_plugin::setting::SettingDef,
+    path: Path,
+    value: ValueFn,
+    field: Option<Entity<InputState>>,
+) -> Row {
+    use abromux_plugin::setting::SettingKind;
+    let default = def.default.clone();
+    let save_at = {
+        let path = path.clone();
+        move |v: Option<Value>, window: &mut Window, cx: &mut App| {
+            let key: Vec<&str> = path.iter().map(String::as_str).collect();
+            save(&key, v, window, cx)
         }
     };
-    let default = def.default.clone();
     let set = {
-        let key = key.clone();
         let default = default.clone();
+        let save_at = save_at.clone();
         Rc::new(move |v: Value, window: &mut Window, cx: &mut App| {
-            save(&["scripts", &key], (v != default).then_some(v), window, cx)
+            save_at((v != default).then_some(v), window, cx)
         })
     };
     let control: ControlFn = match def.kind {
@@ -2272,7 +2202,37 @@ fn script_row(def: crate::lua::SettingDef) -> Row {
                     .into_any_element()
             })
         }
-        SettingKind::Number { min, max, step } => {
+        SettingKind::Text { .. } => {
+            let field = field.clone();
+            Rc::new(move |_, _| match &field {
+                Some(input) => div()
+                    .w(px(260.))
+                    .h(px(26.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(rgb(pal().border))
+                    .bg(rgb(pal().input_bg))
+                    .child(
+                        Input::new(input)
+                            .appearance(false)
+                            .text_size(px(12.))
+                            .h_full()
+                            .px_0()
+                            .py_0(),
+                    )
+                    .into_any_element(),
+                None => div().into_any_element(),
+            })
+        }
+        SettingKind::Number {
+            min,
+            max,
+            step,
+            unit,
+        } => {
             let value = value.clone();
             Rc::new(move |_, cx| {
                 let n = value(cx).as_f64().unwrap_or(min);
@@ -2324,7 +2284,10 @@ fn script_row(def: crate::lua::SettingDef) -> Row {
                             .border_r_1()
                             .border_color(rgb(pal().border))
                             .text_size(px(12.))
-                            .child(format!("{n}")),
+                            .child(match &unit {
+                                Some(u) => format!("{n} {u}"),
+                                None => format!("{n}"),
+                            }),
                     )
                     .child(button("more", "icons/plus.svg", step))
                     .into_any_element()
@@ -2335,7 +2298,7 @@ fn script_row(def: crate::lua::SettingDef) -> Row {
         title: def.title.into(),
         description: def.description.unwrap_or_default().into(),
         is_default: Rc::new(move |cx| value(cx) == default),
-        reset: Rc::new(move |window, cx| save(&["scripts", &key], None, window, cx)),
+        reset: Rc::new(move |window, cx| save_at(None, window, cx)),
         control,
     }
 }

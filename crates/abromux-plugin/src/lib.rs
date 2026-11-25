@@ -9,6 +9,7 @@
 
 pub mod color;
 pub mod git;
+pub mod setting;
 
 use gpui::{AnyView, App, Entity, EntityId, FocusHandle, Focusable, Render, Window};
 use serde_json::Value;
@@ -180,6 +181,9 @@ pub struct Plugin {
     /// A command palette entry that asks for one of those links and opens
     /// it, e.g. "Open GitLab Merge Request…" (None: no such entry).
     pub open_link: Option<&'static str>,
+    /// Its settings: its page in the Settings window, and what its section
+    /// of config.json (`"<id>": {…}`) may hold (None: it has none).
+    pub settings: Option<fn() -> setting::SettingsPage>,
 }
 
 /// A plugin tab, as abromux holds it.

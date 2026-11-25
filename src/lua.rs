@@ -99,45 +99,9 @@ pub struct ActionDef {
     pub palette: bool,
 }
 
-/// A setting `abromux.setting` declared: shown on Settings › Scripts, its
-/// value kept under `"scripts"` in config.json.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SettingDef {
-    pub key: String,
-    pub title: String,
-    pub description: Option<String>,
-    /// The group it's listed under on the page.
-    pub group: Option<String>,
-    pub kind: SettingKind,
-    pub default: Value,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum SettingKind {
-    Boolean,
-    Number {
-        min: f64,
-        max: f64,
-        step: f64,
-    },
-    /// `(value, label)`s.
-    Choice(Vec<(String, String)>),
-}
-
-impl SettingDef {
-    /// `v`, if it's a value this setting can take.
-    pub fn accepts(&self, v: &Value) -> bool {
-        match &self.kind {
-            SettingKind::Boolean => v.is_boolean(),
-            SettingKind::Number { min, max, .. } => {
-                v.as_f64().is_some_and(|n| n >= *min && n <= *max)
-            }
-            SettingKind::Choice(options) => v
-                .as_str()
-                .is_some_and(|s| options.iter().any(|(o, _)| o == s)),
-        }
-    }
-}
+/// A setting `abromux.setting` declares: shown on Settings › Scripts, its
+/// value kept under `"scripts"` in config.json. The same as a plugin's.
+pub use abromux_plugin::setting::{SettingDef, SettingKind};
 
 /// What init.lua declares.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -946,6 +910,7 @@ fn settings_of(lua: &Lua) -> mlua::Result<Vec<SettingDef>> {
                     min: d.get("min")?,
                     max: d.get("max")?,
                     step: d.get("step")?,
+                    unit: d.get("unit")?,
                 },
                 "choice" => SettingKind::Choice(
                     d.get::<Table>("options")?
@@ -1577,7 +1542,8 @@ mod tests {
                     kind: SettingKind::Number {
                         min: 1.,
                         max: 9.,
-                        step: 1.
+                        step: 1.,
+                        unit: None,
                     },
                     default: json!(3),
                 },

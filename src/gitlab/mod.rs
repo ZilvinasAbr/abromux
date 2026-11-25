@@ -29,7 +29,7 @@ pub mod panel;
 pub mod remote;
 pub mod throttle;
 
-use crate::settings::{GitlabSettings, Settings};
+use abromux_gitlab::settings::Settings as GitlabSettings;
 use abromux_gitlab::{api::Client, cache, review::Review};
 use api::{Error, Lists};
 use futures::{FutureExt as _, StreamExt as _, channel::mpsc};
@@ -171,8 +171,8 @@ pub fn store(cx: &App) -> Entity<Store> {
     cx.global::<StoreGlobal>().0.clone()
 }
 
-fn settings(cx: &App) -> &GitlabSettings {
-    &cx.global::<Settings>().gitlab
+fn settings(cx: &App) -> GitlabSettings {
+    abromux_gitlab::settings::get(cx)
 }
 
 /// Signed in (or not looked up yet), so the panel lists rather than asks.
@@ -239,7 +239,7 @@ pub fn init(cx: &mut App) {
     abromux_gitlab::viewed::init(crate::channel::support_dir().join("gitlab-viewed.json"));
     cache::set_poll_factor(settings(cx).polling.factor());
     abromux_gitlab::local::init(crate::channel::support_dir().join("local-diffs"));
-    cache::set_limits(Some(limits(settings(cx))));
+    cache::set_limits(Some(limits(&settings(cx))));
     let index = load_index();
     let (front_tx, front_rx) = mpsc::unbounded();
     let (back_tx, back_rx) = mpsc::unbounded();
@@ -294,7 +294,7 @@ pub fn init(cx: &mut App) {
     cx.spawn(async move |cx| {
         loop {
             let _ = cx.update(|cx| {
-                cache::set_limits(Some(limits(settings(cx))));
+                cache::set_limits(Some(limits(&settings(cx))));
                 cache::set_poll_factor(settings(cx).polling.factor());
                 store(cx).update(cx, |s, cx| s.look_up_who(cx));
             });
