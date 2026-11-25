@@ -95,6 +95,14 @@ mod tests {
     }
 
     #[test]
+    fn debug_input_takes_a_string() {
+        // The server splits it on `;`, as ABROMUX_SCRIPT is.
+        let s = &describe(find("debug.input").unwrap())["input_schema"];
+        assert_eq!(s["properties"]["steps"]["type"], "string");
+        assert_eq!(s["required"], json!(["steps"]));
+    }
+
+    #[test]
     fn describes_parameters_as_json_schema() {
         let v = describe(find("surface.split").unwrap());
         assert_eq!(v["cli"], "abromux new-split");
