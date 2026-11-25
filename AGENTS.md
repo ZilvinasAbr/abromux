@@ -13,6 +13,8 @@ Every commit has its own version automatically. Don't bump anything by hand per 
 
 To check a change in the real app, build it with `scripts/nightly.sh` (AbroMux Nightly.app), not `scripts/bundle-app.sh`/`update-app.sh`, which replace the user's release AbroMux.app. Details are in `docs/guide.md` under "Nightly build".
 
+After a change you can see or use in the app (UI, behaviour), build it and run it for the user without being asked: `scripts/nightly.sh --name <workspace-or-topic>` so you don't replace another agent's shared nightly, then open it (`open "/Applications/AbroMux Nightly <name>.app"`). Test it yourself where you can, e.g. a screenshot of its window (`screencapture -l <window-id>`) or driving it through `abromux-nightly-<name>` / `scripts/drive.sh`, and tell the user what you saw. A worktree has no `vendor/ghostty-vt-out` yet: copy it from the main checkout rather than rebuilding it.
+
 In code, use `channel::app_name()` for the user-visible app name and `channel::support_dir()` for files under Application Support, never a hardcoded "AbroMux" or `abromux/` path, so the two apps stay apart.
 
 ## OS calls
