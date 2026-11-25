@@ -350,7 +350,7 @@ What's listed:
 - Under "Suggested": its merge requests from its branches (the merge requests panel's "This workspace") that no tab shows yet, and links tracked before tabs were pinned. A click opens one in a pinned tab; its × stops suggesting it.
 - From a terminal: `abromux tab pin|unpin [--surface <ref>]` and `abromux tab list`; `abromux link add <url|PAY-123|group/project!iid>` opens a link in a hidden pinned tab (unless a tab shows it already), `abromux link remove <n|key|url|surface>` unpins it, `abromux link [list]`, `abromux link open <n|key|url>` (`--focus false` leaves focus where it is), and `abromux link open --all` for every one. `abromux close-surface` hides a pinned tab; `--unpin` closes it for good. Workspace folders' `AGENTS.md` asks agents to pin what they work on this way.
 
-⌘P shows two columns: every workspace on the left (with its ⌘1…9), and the selected workspace's tabs on the right: the pinned ones first (hidden ones too, with their ⌥⌘1…9), then its other tabs, then the suggested links. What you type filters both columns; Tab or ⇧Tab moves between them, ↑ ↓ pick a row, Enter goes there. The workspace and tab you're on are marked with a dot.
+⌘P searches everything in one list: every workspace (with its ⌘1…9), then the tabs of the workspace you're on, then the tabs of the others. Each workspace's tabs come as the sidebar lists them: the pinned ones first (hidden ones too; this workspace's with their ⌥⌘1…9), then its other tabs, then the suggested links. Every tab is tagged with its workspace, and typing a workspace's name finds its tabs too, below the tabs whose own title matches. Tab or ⇧Tab narrows the list to the tabs of the workspace you're on, and widens it again; ↑ ↓ pick a row, Enter goes there, switching workspace if it's in another one. The workspace and tab you're on are marked with a dot.
 
 A bare key like `PAY-1423` needs to know its Jira: `"jira": { "host": "acme.atlassian.net" }` in the config file, else the one a ticket opened before is on. `"sidebar": { "showLinks": false }` hides the list. Pinned tabs, hidden ones with them, are saved with the session.
 
@@ -855,7 +855,7 @@ A command in `config.json` (or a project's file) can run any script: `{ "title":
 | Flash focused pane | | ⌘⇧H |
 | Zoom focused pane to fill the workspace, or unzoom | | ⌘⇧↩ (focusing another pane unzooms) |
 | Command palette: every command that applies to the focused terminal or browser, with its shortcut | | ⌘⇧P, type to filter, ↑/↓ or ⌃N/⌃P, Enter runs, Esc closes |
-| Switch workspace or tab (Tab moves between the columns) | | ⌘P |
+| Switch workspace or tab, in any workspace (Tab: only this workspace's tabs) | | ⌘P |
 | Notifications list | bell icon in the titlebar | ⌘I (Esc closes) |
 | Jump to newest unread notification | click it in the list or the menu-bar bell | ⌘⇧U |
 | Mark the focused terminal unread, or read | | ⌥⌘U |
