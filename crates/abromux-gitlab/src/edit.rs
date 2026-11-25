@@ -299,6 +299,7 @@ impl GitLabView {
                 .shown
                 .retain(|s| s.mr != key || s.landed.is_none_or(|l| l > at));
         }
+        self.restore_viewed(&r, cx);
         self.writes.base = Some(r);
         self.present(cx);
     }

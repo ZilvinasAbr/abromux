@@ -2778,9 +2778,96 @@ impl GitLabView {
         } else {
             self.loc.viewed.push(path.to_string());
         }
+        self.save_viewed();
         // Viewed folds the file, unviewed unfolds it.
         self.folded.remove(path);
         self.rebuild_rows(cx);
+    }
+
+    /// The merge request showing and its head commit, when its Viewed marks
+    /// are kept (`viewed.rs`; not a local diff's: git has no head for it).
+    fn viewed_key(&self, r: &Review) -> Option<(u64, u64, String)> {
+        if self.is_local() {
+            return None;
+        }
+        let head = r.mr.diff_refs.as_ref()?.head_sha.clone();
+        Some((r.mr.project_id, r.mr.iid, head)).filter(|k| !k.2.is_empty())
+    }
+
+    fn save_viewed(&mut self) {
+        let Some(r) = self.review.ready().cloned() else {
+            return;
+        };
+        if let Some((p, iid, head)) = self.viewed_key(&r) {
+            crate::viewed::set(&self.host(), p, iid, &head, &self.loc.viewed);
+            self.viewed_of = Some((p, iid));
+        }
+    }
+
+    /// `r` is about to show: its kept Viewed marks, less those on files a
+    /// push since changed (asked of GitLab, so they unmark a moment later).
+    pub(crate) fn restore_viewed(&mut self, r: &Review, cx: &mut Context<Self>) {
+        let Some((p, iid, head)) = self.viewed_key(r) else {
+            return;
+        };
+        let host = self.host();
+        let fresh = self.viewed_of != Some((p, iid));
+        let Some(kept) = crate::viewed::get(&host, p, iid) else {
+            // None kept: the tab's first merge request may bring its own,
+            // from a tab saved before they were kept; else there are none.
+            if self.viewed_of.is_none() {
+                crate::viewed::set(&host, p, iid, &head, &self.loc.viewed);
+            } else if fresh {
+                self.loc.viewed.clear();
+            }
+            self.viewed_of = Some((p, iid));
+            return;
+        };
+        self.viewed_of = Some((p, iid));
+        self.loc.viewed = kept.files.keys().cloned().collect();
+        let stale = kept.stale(&head);
+        if stale.is_empty() {
+            return;
+        }
+        let Some(c) = self.client.clone() else { return };
+        self._viewed_task = Some(cx.spawn(async move |this, cx| {
+            let h = host.clone();
+            let head2 = head.clone();
+            let changed = cx
+                .background_spawn(async move {
+                    stale
+                        .into_iter()
+                        .map(|from| {
+                            let files = c.compare(p, &from, &head2)?;
+                            let paths: Vec<String> = files
+                                .into_iter()
+                                .flat_map(|f| [f.old_path, f.new_path])
+                                .collect();
+                            anyhow::Ok((from, paths))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |v, cx| {
+                let mut now = None;
+                // One that fails (a commit GitLab no longer has) keeps its
+                // marks, to try again next time.
+                for (from, paths) in changed.into_iter().flatten() {
+                    now = Some(crate::viewed::moved(&h, p, iid, &from, &head, &paths));
+                }
+                let (Some(now), Some((_, _, shown))) = (
+                    now,
+                    v.review.ready().cloned().and_then(|r| v.viewed_key(&r)),
+                ) else {
+                    return;
+                };
+                if v.viewed_of == Some((p, iid)) && shown == head && now != v.loc.viewed {
+                    v.loc.viewed = now;
+                    v.rebuild_rows(cx);
+                }
+            })
+            .ok();
+        }));
     }
 
     /// Recompute the rows after folding or opening something, keeping the
