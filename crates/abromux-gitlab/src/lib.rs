@@ -32,6 +32,7 @@ mod jobs;
 pub mod local;
 mod mention;
 mod mr;
+pub mod mrs;
 mod optimistic;
 mod premium;
 mod projects;

@@ -168,7 +168,6 @@ actions!(
         ToggleGroup,
         ReopenSession,
         ImportCmuxSession,
-        ToggleMergeRequests,
         GoToMergeRequest,
         RefreshMergeRequests,
         ReviewChanges,
@@ -358,8 +357,6 @@ struct AbroMux {
     /// that may be out of view).
     sidebar_scroll: ScrollHandle,
     reveal_active: std::cell::Cell<bool>,
-    /// The merge requests panel on the right (⌥⌘B, `crate::gitlab`).
-    mr_panel: bool,
     split_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     dragging: Option<(usize, Axis)>,
     /// Where a dragged tab would land: the pane under the cursor, the
@@ -453,7 +450,6 @@ impl AbroMux {
             resizing_sidebar: false,
             sidebar_scroll: ScrollHandle::new(),
             reveal_active: Default::default(),
-            mr_panel: false,
             split_bounds: Default::default(),
             dragging: None,
             tab_drop: None,
@@ -500,7 +496,7 @@ impl AbroMux {
             }
         })
         .detach();
-        // The merge requests panel follows the cache.
+        // The sidebar's suggested merge requests follow the cache.
         cx.observe(&gitlab::store(cx), |_, _, cx| cx.notify())
             .detach();
         let mut banner_clicks = abromux_platform::notify::init();
@@ -1143,7 +1139,7 @@ impl AbroMux {
     /// those its tabs are in, each once, in path order.
     fn workspace_repos(&self, wi: usize, cx: &App) -> Vec<std::path::PathBuf> {
         let ws = &self.workspaces[wi];
-        let places = gitlab::remote::places(
+        let places = gitlab::places(
             ws.home.as_deref(),
             &ws.surfaces()
                 .filter(|s| !s.is_remote(cx))
@@ -3332,8 +3328,8 @@ impl Render for AbroMux {
         let rounded = !window.is_fullscreen();
         let corners = Corners {
             top_left: false,
-            top_right: rounded && self.sidebar && !self.mr_panel,
-            bottom_right: rounded && !self.mr_panel,
+            top_right: rounded && self.sidebar,
+            bottom_right: rounded,
             bottom_left: rounded && !self.sidebar,
         };
         let main = match ws.zoom.and_then(|z| ws.panes().find(|p| p.id == z)) {
@@ -3346,8 +3342,6 @@ impl Render for AbroMux {
             None
         };
         let title = self.ws().name(cx);
-        let mr_panel =
-            (self.mr_panel && plugins::enabled("gitlab", cx)).then(|| self.render_mr_panel(cx));
 
         div()
             .id("abromux")
@@ -3472,12 +3466,6 @@ impl Render for AbroMux {
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
                 this.sidebar = !this.sidebar;
                 cx.notify()
-            }))
-            .on_action(cx.listener(|this, _: &ToggleMergeRequests, window, cx| {
-                if this.gitlab_on(window, cx) {
-                    this.mr_panel = !this.mr_panel;
-                    cx.notify()
-                }
             }))
             .on_action(cx.listener(|this, _: &GoToMergeRequest, window, cx| {
                 if this.gitlab_on(window, cx) {
@@ -3803,7 +3791,6 @@ impl Render for AbroMux {
                             })
                     }),
             )
-            .children(mr_panel)
             .relative()
             .children(notifications)
             .children(updates)
@@ -4143,7 +4130,7 @@ fn run_app(cwd: Option<String>) {
         plugins::set_sections(&settings, cx);
         cx.set_global(settings);
         update::init(cx);
-        gitlab::init(cx);
+        gitlab::init(channel::support_dir(), cx);
         cx.on_action(|_: &Quit, cx| {
             match cx.active_window().or_else(|| cx.windows().first().copied()) {
                 Some(w) => w

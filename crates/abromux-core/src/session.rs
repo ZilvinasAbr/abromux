@@ -18,9 +18,6 @@ pub struct Session {
     pub sidebar: bool,
     #[serde(default = "sidebar_width")]
     pub sidebar_width: f32,
-    /// The merge requests panel is showing.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub mr_panel: bool,
     pub workspaces: Vec<WorkspaceState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<GroupState>,
@@ -344,7 +341,6 @@ mod tests {
             active: 1,
             sidebar: false,
             sidebar_width: 300.,
-            mr_panel: true,
             workspaces: vec![WorkspaceState {
                 id: Some(4),
                 name: Some("api".into()),

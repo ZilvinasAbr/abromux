@@ -118,8 +118,6 @@ pub const ACTIONS: &[Act] = {
         "flashPane", Some("Flash Focused Pane"), FlashPane, [(None, ["cmd-shift-h"])];
         "toggleZoom", Some("Toggle Pane Zoom"), ToggleZoom, [(None, ["cmd-shift-enter"])];
         "toggleSidebar", Some("Toggle Sidebar"), ToggleSidebar, [(None, ["cmd-b"])];
-        "toggleMergeRequests", Some("Toggle Merge Requests Panel"), ToggleMergeRequests,
-            [(None, ["alt-cmd-b"])];
         "trackTab", Some("Pin or Unpin Tab"), TrackTab, [(None, ["alt-cmd-t"])];
         "openAllLinks", Some("Open All of This Workspace's Links"), OpenAllLinks, [(None, [])];
         "goToMergeRequest", Some("Go to Merge Request…"), GoToMergeRequest,
@@ -251,7 +249,6 @@ pub const LINUX: &[(&str, Keys)] = &[
     ("flashPane", &[(None, &["ctrl-alt-h"])]),
     ("toggleZoom", &[(None, &["ctrl-shift-enter"])]),
     ("toggleSidebar", &[(None, &["ctrl-shift-b"])]),
-    ("toggleMergeRequests", &[(None, &["ctrl-alt-m"])]),
     ("trackTab", &[(None, &["ctrl-alt-t"])]),
     ("goToMergeRequest", &[(None, &["ctrl-shift-m"])]),
     ("reviewChanges", &[(None, &["ctrl-alt-d"])]),

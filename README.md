@@ -40,7 +40,7 @@ AbroMux follows cmux closely: the same sidebar of workspaces, split panes of ter
 | **Memory, idle / per extra terminal** | 72 MB / 0.4 MB | 201 MB / 4.0 MB |
 | **CPU while idle** | 0.0 % | 1.7 % |
 | **Quitting the app** | shells keep running and come back as they were | shells start fresh |
-| **GitLab merge requests** | built-in panel and review tab | |
+| **GitLab merge requests** | built-in review tab | |
 | **Jira tickets** | tracked per workspace, in the sidebar | |
 | **Workspace folders** | git worktree per task, one-command cleanup incl. Docker | |
 | **Reviewing local changes** | `abromux diff`: comment on a line, an agent picks it up | |
@@ -143,9 +143,9 @@ Each workspace keeps the Jira tickets and merge requests it's about, listed unde
 - Agents pin what they work on: `abromux link add PAY-1423`, `abromux tab pin`.
 - ⌘-click a ticket or MR link in a terminal and it opens in the existing tab.
 
-### 🦊 GitLab merge requests panel
+### 🦊 GitLab merge requests
 
-**⌥⌘B** opens a panel with this workspace's MRs, yours and those waiting for your review, and the ones you opened lately. They're cached and kept fresh in the background, so any of them opens at once, even after a restart. **⇧⌘M** jumps to any cached MR, or opens one from a pasted link.
+This workspace's MRs, yours and those waiting for your review, and the ones you opened lately are cached and kept fresh in the background, so any of them opens at once, even after a restart. **⇧⌘M** jumps to any cached MR, or opens one from a pasted link.
 
 </td>
 </tr>
@@ -218,7 +218,7 @@ Run `abromux --help` for every command.
 | ⌘⇧P | Command palette |
 | ⌘⇧U | Jump to the newest unread notification |
 | ⌘⇧↩ | Zoom the focused pane |
-| ⌥⌘B / ⇧⌘M | Merge requests panel / go to a merge request |
+| ⇧⌘M | Go to a merge request |
 | ⌥⌘1…9 | Show a workspace's pinned tab |
 | ⌥⌘T | Pin or unpin the focused tab |
 | ⇧⌘W | Close and unpin the focused tab |

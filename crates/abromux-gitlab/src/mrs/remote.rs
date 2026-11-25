@@ -1,7 +1,7 @@
-//! Which GitLab projects and branches a workspace has checked out: each
-//! checkout in its folder (`crate::folder`) and each terminal's repo, by
-//! their `origin` remote and current branch (plus the branch the checkout
-//! was made on, in case the agent moved off it before pushing).
+//! Which GitLab projects and branches a workspace has checked out, from
+//! the places the host gives (`Store::set_workspaces`): each one's repo, by
+//! its `origin` remote and current branch (plus the branch the checkout was
+//! made on, in case the agent moved off it before pushing).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -65,12 +65,7 @@ pub fn discover(places: &[Place], host: &str) -> Vec<(String, Vec<String>)> {
         }
         let branches = found.entry(project).or_default();
         let current = fresh
-            .then(
-                || match crate::workspace::git_head(&top.to_string_lossy()) {
-                    Some(crate::workspace::Head::Branch(b)) => Some(b),
-                    _ => None,
-                },
-            )
+            .then(|| git(top, &["symbolic-ref", "--short", "-q", "HEAD"]))
             .flatten();
         for b in current.into_iter().chain(p.branch.clone()) {
             if !branches.contains(&b) {
@@ -80,50 +75,6 @@ pub fn discover(places: &[Place], host: &str) -> Vec<(String, Vec<String>)> {
     }
     found.retain(|_, b| !b.is_empty());
     found.into_iter().collect()
-}
-
-/// A checkout in a workspace folder, as `.abromux/workspace.json` lists it
-/// (the workspace folders script writes it).
-#[derive(serde::Deserialize)]
-struct Checkout {
-    path: String,
-    #[serde(default)]
-    branch: Option<String>,
-}
-
-fn checkouts(home: &Path) -> Vec<Checkout> {
-    #[derive(serde::Deserialize)]
-    struct Meta {
-        #[serde(default)]
-        checkouts: Vec<Checkout>,
-    }
-    std::fs::read_to_string(home.join(".abromux/workspace.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str::<Meta>(&t).ok())
-        .map(|m| m.checkouts)
-        .unwrap_or_default()
-}
-
-/// The places of a workspace: its folder's checkouts, and terminal cwds.
-pub fn places(home: Option<&Path>, cwds: &[String]) -> Vec<Place> {
-    let mut out = vec![];
-    if let Some(home) = home {
-        for c in checkouts(home) {
-            out.push(Place {
-                dir: home.join(&c.path),
-                branch: c.branch,
-            });
-        }
-    }
-    for c in cwds {
-        out.push(Place {
-            dir: PathBuf::from(c),
-            branch: None,
-        });
-    }
-    out.sort();
-    out.dedup();
-    out
 }
 
 #[cfg(test)]

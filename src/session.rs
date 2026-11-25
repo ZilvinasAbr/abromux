@@ -194,7 +194,6 @@ impl AbroMux {
             active: self.active,
             sidebar: self.sidebar,
             sidebar_width: self.sidebar_width,
-            mr_panel: self.mr_panel,
             workspaces,
             groups: self
                 .groups
@@ -233,7 +232,6 @@ impl AbroMux {
         }
         self.launch_session = Some((kept, ids));
         self.sidebar = session.sidebar;
-        self.mr_panel = session.mr_panel;
         self.sidebar_width = session
             .sidebar_width
             .clamp(crate::SIDEBAR_MIN, crate::SIDEBAR_MAX);

@@ -2534,15 +2534,6 @@ impl AbroMux {
                     .collect();
                 json!({ "surfaces": refs })
             }
-            "mr.panel" => {
-                self.mr_panel = match str_param(p, "state").unwrap_or("toggle") {
-                    "show" => true,
-                    "hide" => false,
-                    _ => !self.mr_panel,
-                };
-                cx.notify();
-                json!({ "visible": self.mr_panel })
-            }
             "window.focus" => {
                 cx.activate(true);
                 window.activate_window();

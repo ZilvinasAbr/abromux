@@ -1,11 +1,11 @@
 //! Talking to GitLab through the GitLab plugin's client
-//! (`abromux_gitlab::api`: `/usr/bin/curl`, token on stdin), every request
+//! (`crate::api`: `/usr/bin/curl`, token on stdin), every request
 //! paced by the shared [`Throttle`]: a request made while it's paused fails
 //! at once without going out, and each answer's rate-limit headers go to it.
 
 use super::model::{Light, MrKey};
 use super::throttle::Throttle;
-use abromux_gitlab::api::{ApiError, Client, Response, Transport};
+use crate::api::{ApiError, Client, Response, Transport};
 use serde_json::{Value, json};
 use std::{
     sync::{Arc, Mutex},
