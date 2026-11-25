@@ -919,6 +919,99 @@ pub fn move_workspace(
     ws.iter().position(|w| w.id == id).expect("still there")
 }
 
+/// Where [`move_group`] takes a group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupMove {
+    Up,
+    Down,
+    Top,
+    Bottom,
+}
+
+/// The sidebar's units around group `group`: how many come before it, and
+/// how many in all, not counting it or the cleanup group. A unit is a
+/// whole group or one ungrouped workspace.
+fn group_units(ws: &[Workspace], groups: &[Group], group: usize) -> (Vec<usize>, usize) {
+    let cleanup = |w: &Workspace| {
+        w.group
+            .is_some_and(|g| groups.iter().any(|x| x.id == g && x.cleanup))
+    };
+    // Each unit's first index, in `ws` without the group.
+    let mut starts = vec![];
+    let mut at = 0;
+    let mut i = 0;
+    while i < ws.len() {
+        let w = &ws[i];
+        let len = match w.group {
+            Some(g) => ws[i..].iter().take_while(|x| x.group == Some(g)).count(),
+            None => 1,
+        };
+        if w.group != Some(group) {
+            if cleanup(w) {
+                break;
+            }
+            starts.push(at);
+            at += len;
+        }
+        i += len;
+    }
+    let before = ws
+        .iter()
+        .position(|w| w.group == Some(group))
+        .map_or(0, |s| starts.iter().filter(|&&u| u < s).count());
+    (starts, before)
+}
+
+/// Whether group `group` can move up and down: never the cleanup group,
+/// and never below it.
+pub fn group_can_move(ws: &[Workspace], groups: &[Group], group: usize) -> (bool, bool) {
+    if groups.iter().any(|g| g.id == group && g.cleanup) || group_span(ws, group).is_none() {
+        return (false, false);
+    }
+    let (units, before) = group_units(ws, groups, group);
+    (before > 0, before < units.len())
+}
+
+/// Move group `group` as a block past one neighbor (a workspace or a whole
+/// group), or to the top or bottom of the list (above the cleanup group,
+/// which stays last). Returns whether it moved.
+pub fn move_group(
+    ws: &mut Vec<Workspace>,
+    groups: &mut Vec<Group>,
+    group: usize,
+    to: GroupMove,
+) -> bool {
+    let (up, down) = group_can_move(ws, groups, group);
+    let ok = match to {
+        GroupMove::Up | GroupMove::Top => up,
+        GroupMove::Down | GroupMove::Bottom => down,
+    };
+    if !ok {
+        return false;
+    }
+    let (units, before) = group_units(ws, groups, group);
+    let (start, end) = group_span(ws, group).expect("can move");
+    let block: Vec<Workspace> = ws.drain(start..end).collect();
+    let unit = match to {
+        GroupMove::Up => before - 1,
+        GroupMove::Down => before + 1,
+        GroupMove::Top => 0,
+        GroupMove::Bottom => units.len(),
+    };
+    // Past the last unit is the cleanup group's start, or the end.
+    let at = units.get(unit).copied().unwrap_or_else(|| {
+        ws.iter()
+            .position(|w| {
+                w.group
+                    .is_some_and(|g| groups.iter().any(|x| x.id == g && x.cleanup))
+            })
+            .unwrap_or(ws.len())
+    });
+    ws.splice(at..at, block);
+    tidy_groups(ws, groups);
+    true
+}
+
 pub fn tilde(path: &str) -> String {
     let home = crate::paths::home_var().map(|h| h.to_string_lossy().into_owned());
     match home {
@@ -1201,6 +1294,44 @@ mod tests {
             order(&ws),
             [(3, Some(7)), (1, Some(7)), (2, None), (0, None)]
         );
+    }
+
+    #[test]
+    fn moving_groups() {
+        let mut groups = vec![
+            group(7),
+            group(8),
+            Group {
+                cleanup: true,
+                ..group(9)
+            },
+        ];
+        // 0 | [1 2]=7 | 3 | [4]=8 | [5]=cleanup
+        let mut ws = wss(&[None, Some(7), Some(7), None, Some(8), Some(9)]);
+        assert_eq!(group_can_move(&ws, &groups, 7), (true, true));
+        assert_eq!(group_can_move(&ws, &groups, 8), (true, false));
+        assert_eq!(group_can_move(&ws, &groups, 9), (false, false));
+
+        assert!(move_group(&mut ws, &mut groups, 7, GroupMove::Down));
+        let ids = |ws: &[Workspace]| ws.iter().map(|w| w.id).collect::<Vec<_>>();
+        assert_eq!(ids(&ws), [0, 3, 1, 2, 4, 5], "past one workspace");
+        assert!(move_group(&mut ws, &mut groups, 7, GroupMove::Down));
+        assert_eq!(ids(&ws), [0, 3, 4, 1, 2, 5], "past a whole group");
+        assert!(!move_group(&mut ws, &mut groups, 7, GroupMove::Down));
+        assert!(move_group(&mut ws, &mut groups, 7, GroupMove::Top));
+        assert_eq!(ids(&ws), [1, 2, 0, 3, 4, 5]);
+        assert!(!move_group(&mut ws, &mut groups, 7, GroupMove::Up));
+        assert!(move_group(&mut ws, &mut groups, 7, GroupMove::Bottom));
+        assert_eq!(ids(&ws), [0, 3, 4, 1, 2, 5], "above the cleanup group");
+        assert!(move_group(&mut ws, &mut groups, 7, GroupMove::Up));
+        assert_eq!(ids(&ws), [0, 3, 1, 2, 4, 5]);
+        assert!(!move_group(&mut ws, &mut groups, 9, GroupMove::Top));
+
+        // Without a cleanup group, the bottom is the end.
+        let mut groups = vec![group(7)];
+        let mut ws = wss(&[Some(7), None, None]);
+        assert!(move_group(&mut ws, &mut groups, 7, GroupMove::Bottom));
+        assert_eq!(ids(&ws), [1, 2, 0]);
     }
 
     #[test]
