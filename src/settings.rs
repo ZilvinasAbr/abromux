@@ -81,6 +81,26 @@ pub struct Settings {
     pub jira: JiraSettings,
     pub claude: ClaudeSettings,
     pub remote: RemoteSettings,
+    /// Values of the settings init.lua declares (`abromux.setting`), by key.
+    pub scripts: BTreeMap<String, serde_json::Value>,
+    /// Those settings, from init.lua: not in the file.
+    #[serde(skip)]
+    pub script_settings: Vec<crate::lua::SettingDef>,
+}
+
+impl Settings {
+    /// Script setting `key`'s value: the file's, if it's one the setting
+    /// takes, else its default. None for a key init.lua doesn't declare.
+    pub fn script_value(&self, key: &str) -> Option<serde_json::Value> {
+        let def = self.script_settings.iter().find(|d| d.key == key)?;
+        Some(
+            self.scripts
+                .get(key)
+                .filter(|v| def.accepts(v))
+                .cloned()
+                .unwrap_or_else(|| def.default.clone()),
+        )
+    }
 }
 
 impl Global for Settings {}
@@ -1053,8 +1073,24 @@ pub fn load() -> Result<Settings, String> {
 /// commands after the file's own: what the app uses.
 pub fn load_app() -> Result<Settings, String> {
     let mut s = load()?;
-    s.commands.extend(lua_commands(&crate::lua::init_path())?);
+    let init = crate::lua::init_path();
+    let declared = crate::lua::collect_all(&init)?;
+    s.commands.extend(commands_of(&init, declared.actions)?);
+    s.script_settings = declared.settings;
     Ok(s)
+}
+
+/// `s` with init.lua's commands and settings as its last load had them,
+/// none if it failed: for a change made in the app (the Settings window,
+/// `settings.set`), which shouldn't fail over init.lua.
+pub fn with_lua(mut s: Settings) -> Settings {
+    let init = crate::lua::init_path();
+    if let Ok(d) = crate::lua::collect_all_cached(&init) {
+        s.commands
+            .extend(commands_of(&init, d.actions).unwrap_or_default());
+        s.script_settings = d.settings;
+    }
+    s
 }
 
 /// What's wrong with the config file or init.lua, if anything, for the
@@ -1069,6 +1105,7 @@ pub fn app_error() -> Option<String> {
 }
 
 /// The actions of `init`, each a palette command that runs it.
+#[cfg(test)]
 pub fn lua_commands(init: &Path) -> Result<Vec<Command>, String> {
     commands_of(init, crate::lua::collect(init)?)
 }
@@ -1283,6 +1320,37 @@ pub fn trust(file: &Path, raw: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn script_values() {
+        use crate::lua::{SettingDef, SettingKind};
+        let mut s = parse(r#"{"scripts": {"level": "off", "loud": "yes"}}"#).unwrap();
+        s.script_settings = vec![
+            SettingDef {
+                key: "level".into(),
+                title: "Level".into(),
+                description: None,
+                group: None,
+                kind: SettingKind::Choice(vec![
+                    ("off".into(), "Off".into()),
+                    ("on".into(), "On".into()),
+                ]),
+                default: serde_json::json!("on"),
+            },
+            SettingDef {
+                key: "loud".into(),
+                title: "Loud".into(),
+                description: None,
+                group: None,
+                kind: SettingKind::Boolean,
+                default: serde_json::json!(false),
+            },
+        ];
+        assert_eq!(s.script_value("level"), Some(serde_json::json!("off")));
+        // Not a value it takes: the default.
+        assert_eq!(s.script_value("loud"), Some(serde_json::json!(false)));
+        assert_eq!(s.script_value("nope"), None);
+    }
 
     #[test]
     fn defaults() {

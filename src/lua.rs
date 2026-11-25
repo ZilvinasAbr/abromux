@@ -99,6 +99,53 @@ pub struct ActionDef {
     pub palette: bool,
 }
 
+/// A setting `abromux.setting` declared: shown on Settings › Scripts, its
+/// value kept under `"scripts"` in config.json.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SettingDef {
+    pub key: String,
+    pub title: String,
+    pub description: Option<String>,
+    /// The group it's listed under on the page.
+    pub group: Option<String>,
+    pub kind: SettingKind,
+    pub default: Value,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SettingKind {
+    Boolean,
+    Number {
+        min: f64,
+        max: f64,
+        step: f64,
+    },
+    /// `(value, label)`s.
+    Choice(Vec<(String, String)>),
+}
+
+impl SettingDef {
+    /// `v`, if it's a value this setting can take.
+    pub fn accepts(&self, v: &Value) -> bool {
+        match &self.kind {
+            SettingKind::Boolean => v.is_boolean(),
+            SettingKind::Number { min, max, .. } => {
+                v.as_f64().is_some_and(|n| n >= *min && n <= *max)
+            }
+            SettingKind::Choice(options) => v
+                .as_str()
+                .is_some_and(|s| options.iter().any(|(o, _)| o == s)),
+        }
+    }
+}
+
+/// What init.lua declares.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Declared {
+    pub actions: Vec<ActionDef>,
+    pub settings: Vec<SettingDef>,
+}
+
 struct Timer {
     id: u64,
     due: Instant,
@@ -766,7 +813,7 @@ fn stamp(path: &Path) -> Stamp {
 
 /// The last load of each actions file: the files it read (itself and what
 /// it `require`d, or would have) as they were then, and what it gave.
-type Loaded = (Vec<(PathBuf, Stamp)>, Result<Vec<ActionDef>, String>);
+type Loaded = (Vec<(PathBuf, Stamp)>, Result<Declared, String>);
 
 fn loads() -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, Loaded>> {
     static LOADS: std::sync::OnceLock<
@@ -779,6 +826,11 @@ fn loads() -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, Loade
 /// can call out, `os.exit` can't end the app, and it has `LOAD_LIMIT` to
 /// finish. The actions it defines, in order; none if there's no file.
 pub fn collect(path: &Path) -> Result<Vec<ActionDef>, String> {
+    collect_all(path).map(|d| d.actions)
+}
+
+/// [`collect`]'s actions and the settings declared beside them.
+pub fn collect_all(path: &Path) -> Result<Declared, String> {
     let mut files = vec![path.to_path_buf()];
     let result = load_actions(path, &mut files);
     let stamps = files.into_iter().map(|f| {
@@ -795,20 +847,25 @@ pub fn collect(path: &Path) -> Result<Vec<ActionDef>, String> {
 /// changed since: for checking the file often (the Settings window shows
 /// its error) without running it each time.
 pub fn collect_cached(path: &Path) -> Result<Vec<ActionDef>, String> {
+    collect_all_cached(path).map(|d| d.actions)
+}
+
+/// [`collect_all`], cached as [`collect_cached`] is.
+pub fn collect_all_cached(path: &Path) -> Result<Declared, String> {
     if let Ok(l) = loads().lock()
         && let Some((files, result)) = l.get(path)
         && files.iter().all(|(f, s)| stamp(f) == *s)
     {
         return result.clone();
     }
-    collect(path)
+    collect_all(path)
 }
 
 /// [`collect`]'s work. `files` gets each file `require` looked for in
 /// init.lua's folder, found or not.
-fn load_actions(path: &Path, files: &mut Vec<PathBuf>) -> Result<Vec<ActionDef>, String> {
+fn load_actions(path: &Path, files: &mut Vec<PathBuf>) -> Result<Declared, String> {
     let Ok(src) = std::fs::read_to_string(path) else {
-        return Ok(vec![]);
+        return Ok(Declared::default());
     };
     let at = |e: &mlua::Error| format!("{}: {}", path.display(), error_text(e));
     let st: Shared = Rc::new(RefCell::new(State {
@@ -868,7 +925,49 @@ fn load_actions(path: &Path, files: &mut Vec<PathBuf>) -> Result<Vec<ActionDef>,
             .map(PathBuf::from),
     );
     ran.map_err(|e| at(&e))?;
-    actions_of(&lua).map_err(|e| at(&e))
+    Ok(Declared {
+        actions: actions_of(&lua).map_err(|e| at(&e))?,
+        settings: settings_of(&lua).map_err(|e| at(&e))?,
+    })
+}
+
+/// The settings `abromux.setting` declared (checked there), in order.
+fn settings_of(lua: &Lua) -> mlua::Result<Vec<SettingDef>> {
+    let a: Table = lua.globals().get("abromux")?;
+    let order: Vec<String> = a.get("_setting_order")?;
+    let defs: Table = a.get("_settings")?;
+    order
+        .into_iter()
+        .map(|key| {
+            let d: Table = defs.get(key.as_str())?;
+            let ty: String = d.get("type")?;
+            let kind = match ty.as_str() {
+                "number" => SettingKind::Number {
+                    min: d.get("min")?,
+                    max: d.get("max")?,
+                    step: d.get("step")?,
+                },
+                "choice" => SettingKind::Choice(
+                    d.get::<Table>("options")?
+                        .sequence_values::<Table>()
+                        .map(|o| {
+                            let o = o?;
+                            Ok((o.get("value")?, o.get("label")?))
+                        })
+                        .collect::<mlua::Result<_>>()?,
+                ),
+                _ => SettingKind::Boolean,
+            };
+            Ok(SettingDef {
+                title: d.get("title")?,
+                description: d.get("description")?,
+                group: d.get("group")?,
+                default: from_lua(lua, d.get("default")?)?,
+                kind,
+                key,
+            })
+        })
+        .collect()
 }
 
 fn actions_of(lua: &Lua) -> mlua::Result<Vec<ActionDef>> {
@@ -1430,6 +1529,75 @@ mod tests {
                 "no action named nope"
             ])
         );
+    }
+
+    #[test]
+    fn collecting_settings() {
+        let dir = std::env::temp_dir().join(format!("abromux-lua-set-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let init = dir.join("init.lua");
+        std::fs::write(
+            &init,
+            r#"
+            abromux.setting{ key = "level", title = "Level", group = "GitLab",
+                             options = { "off", { value = "low", label = "Low" } }, default = "low" }
+            abromux.setting{ key = "loud", title = "Loud", description = "Say more" }
+            abromux.setting{ key = "count", title = "Count", type = "number", min = 1, max = 9, default = 3 }
+            "#,
+        )
+        .unwrap();
+        let got = collect_all(&init).unwrap().settings;
+        assert_eq!(
+            got,
+            [
+                SettingDef {
+                    key: "level".into(),
+                    title: "Level".into(),
+                    description: None,
+                    group: Some("GitLab".into()),
+                    kind: SettingKind::Choice(vec![
+                        ("off".into(), "off".into()),
+                        ("low".into(), "Low".into())
+                    ]),
+                    default: json!("low"),
+                },
+                SettingDef {
+                    key: "loud".into(),
+                    title: "Loud".into(),
+                    description: Some("Say more".into()),
+                    group: None,
+                    kind: SettingKind::Boolean,
+                    default: json!(false),
+                },
+                SettingDef {
+                    key: "count".into(),
+                    title: "Count".into(),
+                    description: None,
+                    group: None,
+                    kind: SettingKind::Number {
+                        min: 1.,
+                        max: 9.,
+                        step: 1.
+                    },
+                    default: json!(3),
+                },
+            ]
+        );
+        assert!(got[0].accepts(&json!("off")) && !got[0].accepts(&json!("high")));
+        assert!(got[1].accepts(&json!(true)) && !got[1].accepts(&json!("yes")));
+        assert!(got[2].accepts(&json!(9)) && !got[2].accepts(&json!(10)));
+
+        std::fs::write(
+            &init,
+            r#"abromux.setting{ key = "x", title = "X", options = { "a" }, default = "b" }"#,
+        )
+        .unwrap();
+        assert!(
+            collect_all(&init)
+                .unwrap_err()
+                .contains("default isn't one of the options")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
