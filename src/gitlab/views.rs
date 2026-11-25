@@ -1,7 +1,7 @@
 //! Which merge requests GitLab tabs show, and opening one in a tab.
 
 use super::model::MrKey;
-use super::{Store, remote::places, store};
+use super::{Store, places, store};
 use crate::{AbroMux, workspace::Surface};
 use gpui::{prelude::*, *};
 use std::collections::{HashMap, HashSet};

@@ -1139,7 +1139,7 @@ impl AbroMux {
     /// those its tabs are in, each once, in path order.
     fn workspace_repos(&self, wi: usize, cx: &App) -> Vec<std::path::PathBuf> {
         let ws = &self.workspaces[wi];
-        let places = gitlab::remote::places(
+        let places = gitlab::places(
             ws.home.as_deref(),
             &ws.surfaces()
                 .filter(|s| !s.is_remote(cx))
@@ -4130,7 +4130,7 @@ fn run_app(cwd: Option<String>) {
         plugins::set_sections(&settings, cx);
         cx.set_global(settings);
         update::init(cx);
-        gitlab::init(cx);
+        gitlab::init(channel::support_dir(), cx);
         cx.on_action(|_: &Quit, cx| {
             match cx.active_window().or_else(|| cx.windows().first().copied()) {
                 Some(w) => w

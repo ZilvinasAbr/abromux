@@ -83,6 +83,7 @@ dependencies = [
  "abromux-core",
  "abromux-plugin",
  "anyhow",
+ "futures",
  "gpui",
  "gpui-component",
  "image",

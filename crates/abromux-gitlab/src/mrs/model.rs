@@ -9,8 +9,8 @@
 //! - **open**: a GitLab tab shows it.
 //!
 //! Merged and closed ones go at once (unless a tab still shows them).
-//! What a tab shows of one (its [`Review`](abromux_gitlab::review::Review))
-//! is recorded on disk by `abromux_gitlab::cache`; past the space limit the
+//! What a tab shows of one (its [`Review`](crate::review::Review))
+//! is recorded on disk by `crate::cache`; past the space limit the
 //! recordings of the longest-unopened ones go first, and they stay listed.
 
 use serde::{Deserialize, Serialize};
@@ -51,9 +51,9 @@ impl Light {
     }
 
     /// What says whether a recorded review is still this one
-    /// (`abromux_gitlab::cache::signature`).
+    /// (`crate::cache::signature`).
     pub fn signature(&self) -> String {
-        abromux_gitlab::cache::signature(
+        crate::cache::signature(
             &self.updated_at,
             self.head_sha.as_deref().unwrap_or_default(),
             self.pipeline.as_deref().unwrap_or_default(),
@@ -63,7 +63,7 @@ impl Light {
 
     /// From a loaded review: what the cheap check would say now. GitLab's
     /// REST has no `approved`, so `before`'s stays.
-    pub fn of_review(r: &abromux_gitlab::review::Review, before: Option<&Light>) -> Light {
+    pub fn of_review(r: &crate::review::Review, before: Option<&Light>) -> Light {
         let mr = &r.mr;
         let refs = mr.diff_refs.as_ref();
         Light {
@@ -108,7 +108,7 @@ impl Light {
     }
 }
 
-/// Its review as recorded on disk (`abromux_gitlab::cache`).
+/// Its review as recorded on disk (`crate::cache`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Recorded {
     /// [`Light::signature`] of what was recorded.
