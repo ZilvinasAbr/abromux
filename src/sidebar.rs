@@ -11,7 +11,7 @@ use crate::{
     shortcut_digit, terminal,
     theme::*,
     titlebar,
-    workspace::{self, Group, Workspace, group_span, tilde},
+    workspace::{self, Group, GroupMove, Workspace, group_span, tilde},
 };
 use gpui::{prelude::*, *};
 use gpui_component::{
@@ -317,6 +317,14 @@ impl AbroMux {
         };
         self.rearrange(cx, |ws, groups| {
             workspace::move_workspace(ws, groups, index, to, group)
+        });
+    }
+
+    /// Move group `group` as a block: past one neighbor, or to the top or
+    /// bottom (above the cleanup group).
+    pub(crate) fn move_group(&mut self, group: usize, to: GroupMove, cx: &mut Context<Self>) {
+        self.rearrange(cx, |ws, groups| {
+            workspace::move_group(ws, groups, group, to);
         });
     }
 
@@ -846,6 +854,10 @@ impl AbroMux {
             return menu;
         };
         let (color, collapsed) = (g.color, g.collapsed);
+        let (up, down) = {
+            let app = app.read(cx);
+            workspace::group_can_move(&app.workspaces, &app.groups, gid)
+        };
         let act = |f: fn(&mut AbroMux, usize, &mut Window, &mut Context<AbroMux>)| {
             let this = this.clone();
             move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -878,6 +890,27 @@ impl AbroMux {
         .item(
             PopupMenuItem::new(if collapsed { "Expand" } else { "Collapse" })
                 .on_click(act(|t, g, _, cx| t.toggle_group(g, cx))),
+        )
+        .separator()
+        .item(
+            PopupMenuItem::new("Move Up")
+                .disabled(!up)
+                .on_click(act(|t, g, _, cx| t.move_group(g, GroupMove::Up, cx))),
+        )
+        .item(
+            PopupMenuItem::new("Move Down")
+                .disabled(!down)
+                .on_click(act(|t, g, _, cx| t.move_group(g, GroupMove::Down, cx))),
+        )
+        .item(
+            PopupMenuItem::new("Move to Top")
+                .disabled(!up)
+                .on_click(act(|t, g, _, cx| t.move_group(g, GroupMove::Top, cx))),
+        )
+        .item(
+            PopupMenuItem::new("Move to Bottom")
+                .disabled(!down)
+                .on_click(act(|t, g, _, cx| t.move_group(g, GroupMove::Bottom, cx))),
         )
         .separator()
         .item(PopupMenuItem::new("Ungroup").on_click(act(|t, g, _, cx| t.ungroup(g, cx))))
