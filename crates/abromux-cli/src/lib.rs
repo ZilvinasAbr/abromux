@@ -177,11 +177,11 @@ Commands:
                                                              prints what code covers)
   focus-window [--window <ref>]                              (bring abromux to the front; there is one window)
   sidebar <toggle|show|hide>
-  tab pin [--surface <ref>]                                  (pin a tab to its workspace: listed in the sidebar, under
-                                                             the workspace, and ⌘W hides it rather than closing it)
+  tab pin [--surface <ref>]                                  (pin a tab to its workspace: listed by link and ⌘P, and
+                                                             ⌘W hides it rather than closing it)
   tab unpin [--surface <ref>]                                (a hidden one closes)
   tab list [--workspace <ref>]                               (the workspace's pinned tabs, hidden ones too)
-  link [list]                                                (the sidebar's list: pinned tabs, then suggested links
+  link [list]                                                (the workspace's links: pinned tabs, then suggested links
                                                              (merge requests from its branches); {key:link1}…9)
   link add <url|PAY-123|group/project!iid>                   (open it in a pinned tab, hidden, unless a tab shows it)
   link remove <n|key|url|surface>                            (unpin it, or stop suggesting it; not pinned again on its own)

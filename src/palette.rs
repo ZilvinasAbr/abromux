@@ -613,8 +613,8 @@ impl AbroMux {
                 _ => s.title(cx),
             }
         };
-        // As the sidebar draws it: a ticket's or merge request's mark, else
-        // the tab's own (an agent's logo, a terminal, a page).
+        // A ticket's or merge request's mark, else the tab's own (an agent's
+        // logo, a terminal, a page).
         let icon_of = |s: &Surface, link: Option<&crate::links::Link>| match link {
             Some(l) if l.kind != crate::links::Kind::Web => Some((l.kind.icon(), l.kind.color())),
             _ => Some((s.icon(cx), None)),

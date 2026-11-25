@@ -111,7 +111,7 @@ pub struct WorkspaceState {
     pub links: Vec<crate::links::Link>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_links: Vec<String>,
-    /// Its pinned tabs, in the sidebar's order.
+    /// Its pinned tabs, in the links list's order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pinned: Vec<PinState>,
 }

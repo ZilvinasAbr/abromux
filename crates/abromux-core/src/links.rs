@@ -325,8 +325,8 @@ pub fn mr_title(title: &str) -> (String, bool, Option<String>) {
 /// Merge requests stacked on one another (one's target branch is
 /// another's source, in the same project): `branches[i]` is link i's
 /// project, source and target branch if it's a merge request. Returns the
-/// links in order, each after the one it's stacked on, with its depth.
-pub fn stack_order(branches: &[Option<(&str, &str, &str)>]) -> Vec<(usize, usize)> {
+/// links' indices in order, each after the one it's stacked on.
+pub fn stack_order(branches: &[Option<(&str, &str, &str)>]) -> Vec<usize> {
     let n = branches.len();
     let parent: Vec<Option<usize>> = (0..n)
         .map(|i| {
@@ -336,21 +336,15 @@ pub fn stack_order(branches: &[Option<(&str, &str, &str)>]) -> Vec<(usize, usize
             })
         })
         .collect();
-    fn visit(
-        i: usize,
-        depth: usize,
-        parent: &[Option<usize>],
-        seen: &mut [bool],
-        out: &mut Vec<(usize, usize)>,
-    ) {
+    fn visit(i: usize, parent: &[Option<usize>], seen: &mut [bool], out: &mut Vec<usize>) {
         if seen[i] {
             return;
         }
         seen[i] = true;
-        out.push((i, depth));
+        out.push(i);
         for j in 0..parent.len() {
             if parent[j] == Some(i) {
-                visit(j, depth + 1, parent, seen, out);
+                visit(j, parent, seen, out);
             }
         }
     }
@@ -358,12 +352,12 @@ pub fn stack_order(branches: &[Option<(&str, &str, &str)>]) -> Vec<(usize, usize
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
         if parent[i].is_none() {
-            visit(i, 0, &parent, &mut seen, &mut out);
+            visit(i, &parent, &mut seen, &mut out);
         }
     }
     // A loop (a → b → a) has no first one: start it where the list does.
     for i in 0..n {
-        visit(i, 0, &parent, &mut seen, &mut out);
+        visit(i, &parent, &mut seen, &mut out);
     }
     out
 }
@@ -382,10 +376,10 @@ mod tests {
             mr("feat-2", "feat-1"),
             None,
         ]);
-        assert_eq!(order, [(0, 0), (2, 1), (1, 2), (3, 0)]);
+        assert_eq!(order, [0, 2, 1, 3]);
         // Another project's branch of the same name isn't the base.
-        let order = stack_order(&[Some(("x/y", "feat-1", "main")), mr("feat-2", "feat-1")]);
-        assert_eq!(order, [(0, 0), (1, 0)]);
+        let order = stack_order(&[mr("feat-2", "feat-1"), Some(("x/y", "feat-1", "main"))]);
+        assert_eq!(order, [0, 1]);
         // A loop still lists each once.
         let order = stack_order(&[mr("a", "b"), mr("b", "a")]);
         assert_eq!(order.len(), 2);

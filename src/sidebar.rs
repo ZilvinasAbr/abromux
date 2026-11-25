@@ -983,9 +983,6 @@ impl AbroMux {
             }
             if i == self.active {
                 active_row = Some(rows.len() - 1);
-                if let Some(links) = self.render_links(i, cx) {
-                    rows.push(links);
-                }
             }
         }
         if let Some(row) = active_row
@@ -1262,12 +1259,8 @@ impl AbroMux {
         let active = i == self.active;
         let name = ws.name(cx);
         let claude_running = ws.claude_running(cx);
-        // The selected workspace's links list marks the page on screen, so
-        // a focused link isn't named here too (and the row keeps its height
-        // going from one link to another).
         let subtitle = ws
             .focused_surface()
-            .filter(|s| !(active && self.is_listed_tab(i, s, cx)))
             .map(|s| s.title(cx))
             .unwrap_or_default();
         let cwd = ws.cwd(cx);

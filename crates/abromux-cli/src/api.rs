@@ -965,7 +965,7 @@ pub const METHODS: &[Method] = &[
     m(
         "link.list",
         "link list",
-        "A workspace's sidebar list: its pinned tabs, then suggested links.",
+        "A workspace's links: its pinned tabs, then suggested links.",
         "@workspace",
     ),
     m(

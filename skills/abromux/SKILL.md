@@ -130,7 +130,7 @@ Clear status pills and progress you set once they no longer apply.
 
 ## Pin the tickets, merge requests and tabs you work on
 
-The user's sidebar lists your workspace's pinned tabs under its row (⌥⌘1…9 and ⌘P show one). Closing a pinned tab only hides it: it keeps running and comes back from the sidebar. When you start on a ticket, or open a merge request, pin it:
+Your workspace's pinned tabs are what ⌥⌘1…9 and ⌘P show first. Closing a pinned tab only hides it: it keeps running and comes back from ⌘P. When you start on a ticket, or open a merge request, pin it:
 
 ```bash
 abromux link add PAY-1423                  # opens it in a hidden pinned tab (a Jira key, a Jira or GitLab URL, or group/project!12)

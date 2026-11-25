@@ -1,7 +1,6 @@
 //! A workspace's links: the Jira tickets, GitLab merge requests and pages
-//! its pinned tabs (`crate::pins`) show, and the suggested ones. The
-//! selected workspace lists them in the sidebar, under its row; ⌥⌘1…9 (or
-//! a click) shows one, in the tab already showing it if there is one
+//! its pinned tabs (`crate::pins`) show, and the suggested ones. ⌥⌘1…9,
+//! ⌘P or `abromux link open` shows one, in the tab already showing it if there is one
 //! (hidden or not), else in a new pinned tab in the workspace's link pane
 //! (the one its pages are in). So opening the same ticket again never makes
 //! a second tab.
@@ -23,7 +22,7 @@ pub use abromux_core::links::*;
 
 // ---- in the app ------------------------------------------------------------
 
-use crate::{AbroMux, Hints, gitlab, hint_pill, settings::Settings, theme::*, workspace::Surface};
+use crate::{AbroMux, gitlab, settings::Settings, workspace::Surface};
 use gpui::{prelude::*, *};
 use std::collections::HashSet;
 
@@ -117,11 +116,11 @@ impl AbroMux {
         )
     }
 
-    /// Workspace `wi`'s sidebar list: its pinned tabs, then the suggested
-    /// links (the merge requests from its branches, and links tracked
-    /// before tabs were pinned) that no tab shows. A merge request stacked
-    /// on another comes right after it, within each part.
-    pub(crate) fn sidebar_items(&self, wi: usize, cx: &App) -> Vec<(Item, usize)> {
+    /// Workspace `wi`'s links list (`abromux link`, ⌥⌘1…9, ⌘P): its pinned
+    /// tabs, then the suggested links (the merge requests from its branches,
+    /// and links tracked before tabs were pinned) that no tab shows. A merge
+    /// request stacked on another comes right after it, within each part.
+    pub(crate) fn items(&self, wi: usize, cx: &App) -> Vec<Item> {
         let ws = &self.workspaces[wi];
         let st = gitlab::store(cx).read(cx);
         let mr_title = |key: &str| {
@@ -186,7 +185,7 @@ impl AbroMux {
                 link: Some(l),
             })
             .collect();
-        let stack = |items: Vec<Item>| -> Vec<(Item, usize)> {
+        let stack = |items: Vec<Item>| -> Vec<Item> {
             let branches: Vec<Option<(String, String, String)>> = items
                 .iter()
                 .map(|it| {
@@ -209,35 +208,12 @@ impl AbroMux {
                 .collect();
             stack_order(&refs)
                 .into_iter()
-                .map(|(i, depth)| (items[i].clone(), depth))
+                .map(|i| items[i].clone())
                 .collect()
         };
         let mut out = stack(pinned);
         out.extend(stack(suggested));
         out
-    }
-
-    /// `sidebar_items` without their depths.
-    pub(crate) fn items(&self, wi: usize, cx: &App) -> Vec<Item> {
-        self.sidebar_items(wi, cx)
-            .into_iter()
-            .map(|(it, _)| it)
-            .collect()
-    }
-
-    /// Tab `s` is one the sidebar lists under workspace `wi`.
-    pub(crate) fn is_listed_tab(&self, wi: usize, s: &Surface, cx: &App) -> bool {
-        cx.global::<Settings>().sidebar.show_links && self.workspaces[wi].is_pinned(s.entity_id())
-    }
-
-    /// The tabs workspace `wi`'s panes show now.
-    fn visible_tabs(&self, wi: usize) -> HashSet<EntityId> {
-        let ws = &self.workspaces[wi];
-        ws.panes()
-            .filter(|p| ws.shows(p.id))
-            .filter_map(|p| p.active_surface())
-            .map(|s| s.entity_id())
-            .collect()
     }
 
     /// Stop suggesting the link with `key` in workspace `wi`.
@@ -467,7 +443,7 @@ impl AbroMux {
         Some(id)
     }
 
-    /// Show sidebar item `item` of workspace `wi`: its tab, or the
+    /// Show item `item` of workspace `wi`: its tab, or the
     /// suggested link in a new pinned one.
     pub(crate) fn open_item(
         &mut self,
@@ -519,227 +495,9 @@ impl AbroMux {
         }
         ids
     }
-
-    /// The selected workspace's pinned tabs and suggested links, under its
-    /// row in the sidebar.
-    pub(crate) fn render_links(&self, wi: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let items = self.sidebar_items(wi, cx);
-        if items.is_empty() || !cx.global::<Settings>().sidebar.show_links {
-            return None;
-        }
-        let z = cx.global::<Settings>().sidebar.font_size / 12.5;
-        let visible = self.visible_tabs(wi);
-        let hints = self.hints == Some(Hints::Links);
-        let ws = &self.workspaces[wi];
-        let grouped = ws.group.is_some();
-        let first_suggestion = items.iter().position(|(it, _)| it.tab.is_none());
-        let mut rows: Vec<AnyElement> = vec![];
-        for (i, (item, depth)) in items.into_iter().enumerate() {
-            if Some(i) == first_suggestion && i > 0 {
-                rows.push(
-                    div()
-                        .px(px(6.))
-                        .pt(px(4.))
-                        .text_size(px(10. * z))
-                        .text_color(rgb(pal().muted))
-                        .child("Suggested")
-                        .into_any_element(),
-                );
-            }
-            let tab = item.tab.as_ref().map(|(s, h)| (s.entity_id(), *h));
-            let shown = tab.is_some_and(|(id, _)| visible.contains(&id));
-            let hidden = tab.is_some_and(|(_, h)| h);
-            let suggested = tab.is_none();
-            let group: SharedString = format!("link-{i}").into();
-            let fg = if shown {
-                rgb(pal().text)
-            } else {
-                rgb(pal().muted)
-            };
-            // What a terminal reports of itself: an agent's state, say.
-            let status = tab.and_then(|(id, _)| {
-                ws.status
-                    .iter()
-                    .find(|st| st.owner == Some(id))
-                    .map(|st| st.value.clone())
-            });
-            let (icon_name, icon_color) = match (&item.link, &item.tab) {
-                (Some(l), _) if l.kind != Kind::Web => (l.kind.icon(), l.kind.color()),
-                (_, Some((s, _))) => (s.icon(cx), None),
-                (Some(l), None) => (l.kind.icon(), l.kind.color()),
-                (None, None) => ("globe", None),
-            };
-            let tab_title = item.tab.as_ref().map(|(s, _)| s.title(cx));
-            let tooltip: SharedString = {
-                let what = match (&item.link, &tab_title) {
-                    (Some(l), _) if l.kind != Kind::Web => match l.label() {
-                        Some(t) => format!("{} · {t}", l.key),
-                        None => l.key.clone(),
-                    },
-                    (_, Some(t)) => t.clone(),
-                    (Some(l), None) => l.key.clone(),
-                    (None, None) => String::new(),
-                };
-                match (hidden, suggested) {
-                    (true, _) => format!("{what} (hidden)").into(),
-                    (_, true) => {
-                        format!("{what} (suggested: from this workspace's branches)").into()
-                    }
-                    _ => what.into(),
-                }
-            };
-            let open = item.clone();
-            rows.push(
-                div()
-                    .id(("link", i))
-                    .group(group.clone())
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .px(px(6.))
-                    .h(px(22. * z))
-                    .rounded(px(5.))
-                    .cursor_pointer()
-                    .when(shown, |d| d.bg(rgba(pal().hover)))
-                    .when(hidden || suggested, |d| d.opacity(0.75))
-                    .hover(|d| d.bg(rgba(pal().hover)))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        let wi = this.active;
-                        this.open_item(wi, &open, true, window, cx);
-                    }))
-                    .tooltip(move |window, cx| {
-                        gpui_component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
-                    })
-                    // Stacked on the one above: in from it, with a turn.
-                    .when(depth > 0, |d| {
-                        d.ml(px(14. * (depth - 1) as f32 * z)).child(
-                            icon("corner-down-right")
-                                .size(px(11. * z))
-                                .text_color(rgb(pal().muted)),
-                        )
-                    })
-                    .child(
-                        icon(icon_name)
-                            .size(px(12. * z))
-                            .text_color(icon_color.map_or(fg, rgb)),
-                    )
-                    .map(|d| match (&item.link, tab_title.clone()) {
-                        // A merge request: just what it's about, without the draft
-                        // marker, the ticket or its number (the tooltip has them).
-                        (Some(l), _) if l.kind == Kind::Mr && l.label().is_some() => d.child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(11. * z))
-                                .text_color(fg)
-                                .child(mr_title(l.label().unwrap()).0),
-                        ),
-                        (Some(l), _) if l.kind == Kind::Jira || tab_title.is_none() => d
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .max_w(px(130. * z))
-                                    .truncate()
-                                    .text_size(px(11. * z))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(fg)
-                                    .child(l.short_key()),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(px(11. * z))
-                                    .text_color(rgb(pal().muted))
-                                    .children(l.label().map(str::to_string)),
-                            ),
-                        (_, title) => d.child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(11. * z))
-                                .text_color(fg)
-                                .child(title.unwrap_or_default()),
-                        ),
-                    })
-                    .children(status.map(|st| {
-                        div()
-                            .flex_none()
-                            .max_w(px(70. * z))
-                            .truncate()
-                            .text_size(px(10. * z))
-                            .text_color(rgb(pal().muted))
-                            .child(st)
-                    }))
-                    .when(hints && i < DIGITS, |d| {
-                        d.child(hint_pill(crate::keymap::default_label(&format!(
-                            "link{}",
-                            i + 1
-                        ))))
-                    })
-                    .when(!hints, |d| {
-                        let item = item.clone();
-                        d.child(
-                            div()
-                                .id(("link-untrack", i))
-                                .invisible()
-                                .group_hover(group.clone(), |s| s.visible())
-                                .flex_none()
-                                .rounded(px(4.))
-                                .p(px(2.))
-                                .hover(|s| s.bg(tint(0x22)))
-                                .tooltip(move |window, cx| {
-                                    gpui_component::tooltip::Tooltip::new(if suggested {
-                                        "Hide (from this workspace's branches)"
-                                    } else if hidden {
-                                        "Close and unpin"
-                                    } else {
-                                        "Unpin"
-                                    })
-                                    .build(window, cx)
-                                })
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    let wi = this.active;
-                                    match (&item.tab, &item.link) {
-                                        (Some((s, true)), _) => {
-                                            this.request_close_and_unpin(s.entity_id(), window, cx)
-                                        }
-                                        (Some((s, false)), _) => {
-                                            this.unpin_tab(s.entity_id(), window, cx);
-                                        }
-                                        (None, Some(l)) => this.dismiss_link(wi, &l.key, cx),
-                                        (None, None) => {}
-                                    }
-                                    cx.stop_propagation();
-                                }))
-                                .child(icon("x").size(px(10. * z)).text_color(rgb(pal().muted))),
-                        )
-                    })
-                    .into_any_element(),
-            );
-        }
-        Some(
-            div()
-                .id("links")
-                .mx(px(8.))
-                .when(grouped, |d| d.ml(px(8. + 18.)))
-                .pl(px(10.))
-                .pb(px(4.))
-                .flex()
-                .flex_col()
-                .children(rows)
-                .into_any_element(),
-        )
-    }
 }
 
-/// A row of a workspace's sidebar list: a pinned tab, or a suggested link.
+/// An entry of a workspace's links list: a pinned tab, or a suggested link.
 #[derive(Clone)]
 pub(crate) struct Item {
     /// The pinned tab, and whether it's hidden. None for a suggestion.

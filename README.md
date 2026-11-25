@@ -82,7 +82,7 @@ Split panes with tabs of terminals (libghostty) and browsers (native WebKit). Dr
 <td valign="top">
 
 ### 🎫 Tickets and MRs with the work
-Pin a workspace's Jira tickets, merge requests and any other tab. They show under the workspace and open with ⌥⌘1…9 or ⌘P; closing a pinned tab only hides it.
+Pin a workspace's Jira tickets, merge requests and any other tab. They open with ⌥⌘1…9 or ⌘P; closing a pinned tab only hides it.
 
 </td>
 <td valign="top">
