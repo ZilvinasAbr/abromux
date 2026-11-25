@@ -136,6 +136,8 @@ pub struct Store {
     pub lists_ok: bool,
     /// Refreshes asked for (Refresh, `abromux mr refresh`), in order.
     urgent: VecDeque<MrKey>,
+    /// Refresh pressed with polling off: one cheap check of everything.
+    check_once: bool,
     busy: HashSet<MrKey>,
     light_busy: bool,
     failed: HashMap<MrKey, Instant>,
@@ -216,9 +218,16 @@ fn limits(s: &GitlabSettings) -> cache::Limits {
     }
 }
 
+/// `secs` times the polling setting (as if Medium when it's off: then only
+/// Refresh checks, once).
+fn scaled(secs: u32, s: &GitlabSettings) -> u32 {
+    (secs as f64 * s.polling.factor().unwrap_or(1.)).round() as u32
+}
+
 pub fn init(cx: &mut App) {
     cache::init(cache_dir());
     abromux_gitlab::viewed::init(crate::channel::support_dir().join("gitlab-viewed.json"));
+    cache::set_poll_factor(settings(cx).polling.factor());
     abromux_gitlab::local::init(crate::channel::support_dir().join("local-diffs"));
     cache::set_limits(Some(limits(settings(cx))));
     let index = load_index();
@@ -253,6 +262,7 @@ pub fn init(cx: &mut App) {
         lists_checked: None,
         lists_ok: false,
         urgent: VecDeque::new(),
+        check_once: false,
         busy: HashSet::new(),
         light_busy: false,
         failed: HashMap::new(),
@@ -275,6 +285,7 @@ pub fn init(cx: &mut App) {
         loop {
             let _ = cx.update(|cx| {
                 cache::set_limits(Some(limits(settings(cx))));
+                cache::set_poll_factor(settings(cx).polling.factor());
                 store(cx).update(cx, |s, cx| s.look_up_who(cx));
             });
             let Ok(Some(index)) = cx.update(|cx| {
@@ -475,6 +486,7 @@ impl Store {
         } else {
             (Prio::Recent, s.recent_seconds)
         };
+        let secs = scaled(secs, s);
         let secs = if self.app_active {
             secs
         } else {
@@ -573,17 +585,18 @@ impl Store {
                 }
             }
         }
-        // 3. The cheap check.
-        if self.light_busy {
+        // 3. The cheap check; with polling off, only once after Refresh.
+        let off = s.polling.factor().is_none();
+        if self.light_busy || (off && !self.check_once) {
             return None;
         }
         let lists_due = self.found_once
             && t.allows(Prio::Mine, now)
             && self.lists_checked.is_none_or(|c| {
                 let secs = if self.app_active {
-                    s.mine_seconds
+                    scaled(s.mine_seconds, s)
                 } else {
-                    s.mine_seconds * INACTIVE_FACTOR
+                    scaled(s.mine_seconds, s) * INACTIVE_FACTOR
                 };
                 now.duration_since(c) >= t.interval(secs)
             });
@@ -614,6 +627,10 @@ impl Store {
         if !lists_due && !due.iter().any(|(_, ripe, _)| *ripe) {
             return None;
         }
+        // The lists come once they can (after the first look for branches).
+        if !off || self.found_once {
+            self.check_once = false;
+        }
         let lists = lists_due.then(|| self.lists(s));
         // Nor, in a check that has the lists, the ones they bring back.
         due.retain(|(prio, _, k)| {
@@ -635,6 +652,8 @@ impl Store {
 
     /// The load of whatever changed since its recording, most urgent first.
     fn back_job(&mut self, s: &GitlabSettings, t: &Throttle, now: Instant) -> Option<Job> {
+        // Polling off: nothing loads in the background.
+        s.polling.factor()?;
         let ranks = self.recent_ranks();
         let mut todo: Vec<(Prio, &MrKey)> = vec![];
         for m in self.mrs.values() {
@@ -931,6 +950,7 @@ impl Store {
 
     /// Refresh in the panel: check everything now.
     pub fn refresh_all(&mut self, cx: &mut Context<Self>) {
+        self.check_once = true;
         self.checked.clear();
         self.lists_checked = None;
         self.failed.clear();

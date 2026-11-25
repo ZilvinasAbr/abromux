@@ -1372,15 +1372,23 @@ impl GitLabView {
         }
     }
 
-    /// Every two minutes, the merge request showing is fetched again,
-    /// quietly: new comments and pushes appear as on GitLab's page.
+    /// Every two minutes (times the app's polling setting; never when it's
+    /// off), the merge request showing is fetched again, quietly: new
+    /// comments and pushes appear as on GitLab's page.
     fn poll(cx: &mut Context<Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
+            let mut last = std::time::Instant::now();
             loop {
+                // A short tick, so a changed setting applies within seconds.
                 cx.background_executor()
-                    .timer(std::time::Duration::from_secs(120))
+                    .timer(std::time::Duration::from_secs(10))
                     .await;
+                let every = crate::cache::poll_factor()
+                    .map(|f| std::time::Duration::from_secs_f64(120. * f));
+                let due = every.filter(|e| last.elapsed() >= *e);
                 let alive = this.update(cx, |v, cx| {
+                    let Some(every) = due else { return };
+                    last = std::time::Instant::now();
                     if let (Some(p), Some(iid), Some(_)) =
                         (v.loc.project, v.loc.iid, v.review.ready())
                     {
@@ -1390,7 +1398,8 @@ impl GitLabView {
                             .and_then(|s| s.get(&v.host(), p, iid))
                             .is_some_and(|e| {
                                 !e.replayed
-                                    && e.fetched.elapsed() < std::time::Duration::from_secs(110)
+                                    && e.fetched.elapsed()
+                                        < every.saturating_sub(std::time::Duration::from_secs(10))
                             });
                         if !fresh {
                             v.fetch_review(Target::Id(p, iid), true, cx);

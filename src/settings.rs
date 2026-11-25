@@ -183,6 +183,10 @@ pub struct GitlabSettings {
     /// the one signed in to in a GitLab tab. Its token is the tab's (the
     /// Keychain). Workspace checkouts whose remote is elsewhere are left out.
     pub host: Option<String>,
+    /// How much is checked in the background, all the intervals below
+    /// scaled together. Off: nothing is (tabs load what they open, and
+    /// Refresh still checks once).
+    pub polling: GitlabPolling,
     /// "Mine" also holds merge requests you're asked to review.
     pub include_review_requests: bool,
     /// "Mine" also holds merge requests assigned to you.
@@ -217,6 +221,7 @@ impl Default for GitlabSettings {
         Self {
             enabled: true,
             host: None,
+            polling: GitlabPolling::default(),
             include_review_requests: true,
             include_assigned: false,
             recent_limit: 50,
@@ -229,6 +234,43 @@ impl Default for GitlabSettings {
             running_pipeline_seconds: 30,
             mine_seconds: 60,
             recent_seconds: 300,
+        }
+    }
+}
+
+/// `gitlab.polling`: how often the background checks run.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum GitlabPolling {
+    /// Nothing in the background.
+    Off,
+    /// Every interval four times longer.
+    Low,
+    /// The intervals as set.
+    #[default]
+    Medium,
+    /// Every interval halved.
+    High,
+}
+
+impl GitlabPolling {
+    /// Its value in the config file.
+    pub fn key(self) -> &'static str {
+        match self {
+            GitlabPolling::Off => "off",
+            GitlabPolling::Low => "low",
+            GitlabPolling::Medium => "medium",
+            GitlabPolling::High => "high",
+        }
+    }
+
+    /// What every interval is multiplied by; None when off.
+    pub fn factor(self) -> Option<f64> {
+        match self {
+            GitlabPolling::Off => None,
+            GitlabPolling::Low => Some(4.),
+            GitlabPolling::Medium => Some(1.),
+            GitlabPolling::High => Some(0.5),
         }
     }
 }
@@ -1289,6 +1331,23 @@ mod tests {
         assert_eq!(parse("").unwrap(), Settings::default());
         assert_eq!(parse("{}").unwrap(), Settings::default());
         assert_eq!(parse(r#"{"panes": {}}"#).unwrap(), Settings::default());
+    }
+
+    #[test]
+    fn gitlab_polling() {
+        assert_eq!(Settings::default().gitlab.polling, GitlabPolling::Medium);
+        for (v, want) in [
+            ("off", GitlabPolling::Off),
+            ("low", GitlabPolling::Low),
+            ("medium", GitlabPolling::Medium),
+            ("high", GitlabPolling::High),
+        ] {
+            let s = parse(&format!(r#"{{"gitlab": {{"polling": "{v}"}}}}"#)).unwrap();
+            assert_eq!(s.gitlab.polling, want);
+            assert_eq!(want.key(), v);
+        }
+        assert_eq!(GitlabPolling::Off.factor(), None);
+        assert!(parse(r#"{"gitlab": {"polling": "fast"}}"#).is_err());
     }
 
     #[test]

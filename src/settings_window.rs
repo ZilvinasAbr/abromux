@@ -1589,6 +1589,21 @@ fn gitlab_page(fields: &[(Key, Entity<InputState>)]) -> Page {
             group(
                 "Checking for Changes",
                 [
+                    choice(
+                        "Polling",
+                        "How much is checked in the background. Low: every interval \
+                         below four times longer; High: halved. Off: nothing is asked of \
+                         GitLab in the background, open tabs don't refresh by themselves, \
+                         and Refresh in the panel checks once.",
+                        &["gitlab", "polling"],
+                        &[
+                            ("off", "Off"),
+                            ("low", "Low"),
+                            ("medium", "Medium"),
+                            ("high", "High"),
+                        ],
+                        |s| s.gitlab.polling.key(),
+                    ),
                     stepper(
                         "On screen",
                         "A merge request shown in a tab.",

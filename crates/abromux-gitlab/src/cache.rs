@@ -56,6 +56,18 @@ pub fn set_limits(limits: Option<Limits>) {
     *LIMITS.lock().unwrap_or_else(|e| e.into_inner()) = limits;
 }
 
+/// The app's polling setting, as a factor on the tab's own two-minute
+/// refresh; None: the tab doesn't refresh by itself.
+static POLL: Mutex<Option<f64>> = Mutex::new(Some(1.));
+
+pub fn set_poll_factor(factor: Option<f64>) {
+    *POLL.lock().unwrap_or_else(|e| e.into_inner()) = factor;
+}
+
+pub fn poll_factor() -> Option<f64> {
+    *POLL.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn limits() -> Option<Limits> {
     *LIMITS.lock().unwrap_or_else(|e| e.into_inner())
 }
