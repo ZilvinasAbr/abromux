@@ -17,6 +17,7 @@ pub mod notify_hook;
 pub mod osc99;
 pub mod paths;
 pub mod pending;
+pub mod program_resume;
 pub mod program_status;
 pub mod session;
 pub mod settings;

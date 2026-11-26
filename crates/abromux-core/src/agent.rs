@@ -22,6 +22,7 @@
 //! so they run here (`src/shell/zsh/abromux.zsh`).
 
 use crate::ipc;
+use crate::program_resume::Restart;
 use anyhow::{Context as _, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -246,17 +247,18 @@ impl Kind {
         format!("{PLUGIN_MARK}\n{SEND_JS}{src}").replace("EXE", &exe)
     }
 
-    /// What to type to resume session `id`.
-    fn resume(self, id: &str) -> String {
-        match self {
-            Kind::Claude => format!("claude --resume {id}"),
-            Kind::Codex => format!("codex resume {id}"),
-            Kind::Gemini => format!("gemini --resume {id}"),
-            Kind::Droid => format!("droid --resume {id}"),
-            Kind::Cursor => format!("cursor-agent --resume {id}"),
-            Kind::OpenCode => format!("opencode --session {id}"),
-            Kind::Pi => format!("pi --session {id}"),
-        }
+    /// The command that resumes session `id`.
+    fn resume(self, id: &str) -> Vec<String> {
+        let (program, flag) = match self {
+            Kind::Claude => ("claude", "--resume"),
+            Kind::Codex => ("codex", "resume"),
+            Kind::Gemini => ("gemini", "--resume"),
+            Kind::Droid => ("droid", "--resume"),
+            Kind::Cursor => ("cursor-agent", "--resume"),
+            Kind::OpenCode => ("opencode", "--session"),
+            Kind::Pi => ("pi", "--session"),
+        };
+        vec![program.into(), flag.into(), id.into()]
     }
 }
 
@@ -439,22 +441,33 @@ impl Agent {
         self.pid.is_none_or(|p| unsafe { kill(p as i32, 0) } == 0)
     }
 
-    /// What to type into a fresh shell in `shell_cwd` to get this session back.
-    pub fn resume_command(&self, shell_cwd: &str) -> Option<String> {
+    /// The command that gets this session back, and where it runs: what
+    /// the shell integration runs on restore (`program_resume`).
+    pub fn restart(&self) -> Option<Restart> {
         let kind = Kind::parse(&self.kind)?;
         if !safe(&self.session_id) {
             return None;
         }
-        let mut cmd = String::new();
-        if !self.cwd.is_empty() && self.cwd != shell_cwd {
-            cmd += &format!("cd -- {} && ", quote(&self.cwd));
-        }
-        cmd += &kind.resume(&self.session_id);
+        let mut argv = kind.resume(&self.session_id);
         if kind == Kind::Claude
             && let Some(mode) = self.permission_mode.as_deref().filter(|m| safe(m))
         {
-            cmd += &format!(" --permission-mode {mode}");
+            argv.extend(["--permission-mode".into(), mode.into()]);
         }
+        let cwd = Some(self.cwd.clone()).filter(|c| c.starts_with('/'));
+        Some(Restart { argv, cwd })
+    }
+
+    /// What to type into a fresh shell in `shell_cwd` to get this session
+    /// back, for a shell without abromux's integration. Every element of
+    /// `restart` is `safe` but the folder, which is quoted.
+    pub fn resume_command(&self, shell_cwd: &str) -> Option<String> {
+        let Restart { argv, cwd } = self.restart()?;
+        let mut cmd = String::new();
+        if let Some(cwd) = cwd.filter(|c| c != shell_cwd) {
+            cmd += &format!("cd -- {} && ", quote(&cwd));
+        }
+        cmd += &argv.join(" ");
         Some(cmd)
     }
 }
@@ -1185,6 +1198,28 @@ mod tests {
         assert!(a.alive());
         a.pid = Some(999_999);
         assert!(!a.alive());
+    }
+
+    #[test]
+    fn restart_is_the_resume_command_as_argv() {
+        let a = Agent {
+            kind: "claude".into(),
+            session_id: "abc-1".into(),
+            cwd: "/it's here".into(),
+            permission_mode: Some("auto".into()),
+            pid: None,
+        };
+        let r = a.restart().unwrap();
+        assert_eq!(
+            r.argv,
+            ["claude", "--resume", "abc-1", "--permission-mode", "auto"]
+        );
+        assert_eq!(r.cwd.as_deref(), Some("/it's here"));
+        let bad = Agent {
+            session_id: "a;rm".into(),
+            ..a
+        };
+        assert!(bad.restart().is_none());
     }
 
     #[test]

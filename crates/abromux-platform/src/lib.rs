@@ -12,7 +12,7 @@
 //! - [`files`]: the open-files limit, raised at launch so tabs don't run out.
 //! - [`prefs`]: small preferences, such as the "Don't ask again" boxes.
 //! - [`opener`]: files and URLs to their default apps; [`process`]: other
-//!   processes' working folders and children.
+//!   processes' working folders, children, parents, users and start times.
 //! - [`browser_native`], [`cursor`], [`webauthn`]: the browser pane's native
 //!   parts.
 

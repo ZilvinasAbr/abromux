@@ -12,6 +12,7 @@ use crate::{
     },
     link,
     osc99::{self, Found},
+    program_resume::{self, Restart},
     program_status,
     settings::{Persistence, Settings},
     sprite,
@@ -268,6 +269,14 @@ pub struct TerminalView {
     osc99: osc99::Scanner,
     /// What programs here report about themselves (OSC 7501, OSC 9;4).
     pub program: program_status::Records,
+    /// The token its shell has in `OSC7577_TOKEN` (empty for a remote one,
+    /// which has none), and the resume commands programs reported with it.
+    pub resume_token: String,
+    pub resume: program_resume::Records,
+    /// A task checks that the records' owners still run.
+    owner_watch: bool,
+    /// The restore command went to the shell's integration, which runs it.
+    resume_handed: bool,
     pub commands: Commands,
     /// The program's exit status, once it has exited (None if unknown).
     pub exit_code: Option<i32>,
@@ -317,11 +326,13 @@ impl TerminalView {
         command: Option<String>,
         attach: Option<&str>,
         host: Option<String>,
+        resume: Option<&Restart>,
         cx: &mut Context<Self>,
     ) -> Self {
         let (cols, rows) = (80, 24);
         let cwd = cwd.unwrap_or_else(|| crate::paths::home().to_string_lossy().into_owned());
-        let (opened, feed) = spawn_shell(
+        let resume_token = resume_token(host.as_deref());
+        let (opened, feed, resume_handed) = spawn_shell(
             &cwd,
             &env,
             command.as_deref(),
@@ -329,6 +340,8 @@ impl TerminalView {
             0,
             attach,
             host.as_deref(),
+            &resume_token,
+            resume,
             cx,
         );
         let (opened, failed) = match opened {
@@ -404,6 +417,10 @@ impl TerminalView {
             agent: None,
             osc99: Default::default(),
             program: Default::default(),
+            resume_token,
+            resume: Default::default(),
+            owner_watch: false,
+            resume_handed,
             commands: Commands::default(),
             exit_code: None,
             pointer: None,
@@ -481,7 +498,9 @@ impl TerminalView {
         let cwd = self.live_cwd();
         self.pty.kill();
         self.generation += 1;
-        let (opened, feed) = spawn_shell(
+        self.resume_token = resume_token(self.host.as_deref());
+        self.resume = Default::default();
+        let (opened, feed, _) = spawn_shell(
             &cwd,
             &self.env,
             self.command.as_deref(),
@@ -489,6 +508,8 @@ impl TerminalView {
             self.generation,
             None,
             self.host.as_deref(),
+            &self.resume_token,
+            None,
             cx,
         );
         let (opened, failed) = match opened {
@@ -553,7 +574,11 @@ impl TerminalView {
                     self.commands.marked = true;
                     self.commands.running = true;
                 }
+                Found::Resume(body) => self.resume_report(&body, cx),
                 Found::CommandDone(code) => {
+                    // The command resumed at the first prompt ended
+                    // without reporting itself (the integration marks it).
+                    self.resume.restored_ended();
                     let c = &mut self.commands;
                     // A D with no C before it (the first prompt, a ⌃C at
                     // the prompt) ran nothing.
@@ -1081,14 +1106,78 @@ impl TerminalView {
         (!kept.trim().is_empty()).then_some(kept)
     }
 
+    /// Take an OSC 7577 report: checked against this terminal's token, from
+    /// a process of this user's under its shell.
+    fn resume_report(&mut self, body: &[u8], cx: &mut Context<Self>) {
+        if self.resume_token.is_empty() {
+            return;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let parsed = program_resume::parse(body, &self.resume_token, now);
+        let shell = self.pty.pid();
+        if self.resume.apply(parsed, |pid| reporter(pid, shell?)) {
+            self.watch_owners(cx);
+        }
+    }
+
+    /// Records saved with a terminal that kept running (held), and the
+    /// token its shell has.
+    pub fn load_resume(&mut self, saved: program_resume::Saved, cx: &mut Context<Self>) {
+        if let Some(token) = saved.token {
+            self.resume_token = token;
+        }
+        self.resume = program_resume::Records::load(saved.records);
+        self.watch_owners(cx);
+    }
+
+    /// What the session keeps of the records: the token too while the
+    /// shell keeps running without the app.
+    pub fn saved_resume(&self) -> Option<program_resume::Saved> {
+        let token = (self.held_id().is_some() && !self.resume_token.is_empty())
+            .then(|| self.resume_token.clone());
+        let records = self.resume.list().to_vec();
+        (token.is_some() || !records.is_empty()).then_some(program_resume::Saved { token, records })
+    }
+
+    /// Check now and then that the records' owners still run, and drop a
+    /// record a moment after its owner is gone.
+    fn watch_owners(&mut self, cx: &mut Context<Self>) {
+        if self.owner_watch {
+            return;
+        }
+        self.owner_watch = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
+                let more = this.update(cx, |this, _| {
+                    this.resume
+                        .check_owners(std::time::Instant::now(), owner_alive);
+                    this.owner_watch = this.resume.list().iter().any(|r| r.owner.is_some());
+                    this.owner_watch
+                });
+                if !more.unwrap_or(false) {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
     /// Replay saved output above the new shell's prompt, reapply zoom, and
-    /// resume the agent that was running (typed ahead; the shell reads it
-    /// once it starts).
+    /// resume what was running: `restart`, which the shell integration runs
+    /// if the terminal was started with it (it's kept as this terminal's
+    /// record until the program reports or ends), else the agent's command,
+    /// typed ahead for the shell to read once it starts.
     pub fn restore(
         &mut self,
         scrollback: Option<&str>,
         font_size: Option<f32>,
         agent: Option<Agent>,
+        restart: Option<&Restart>,
         cx: &mut Context<Self>,
     ) {
         if let Some(vt) = scrollback {
@@ -1102,11 +1191,18 @@ impl TerminalView {
         if let Some(size) = font_size {
             self.set_font_size(size, cx);
         }
-        if let Some(agent) = agent
+        if std::mem::take(&mut self.resume_handed) {
+            if let Some(r) = restart
+                && agent.is_none()
+            {
+                self.resume.restored(r);
+            }
+            // Kept until its hooks report in, so a quick quit doesn't drop it.
+            self.agent = agent;
+        } else if let Some(agent) = agent
             && let Some(cmd) = agent.resume_command(&self.cwd)
         {
             self.send(format!("{cmd}\r").as_bytes());
-            // Kept until its hooks report in, so a quick quit doesn't drop it.
             self.agent = Some(agent);
         }
     }
@@ -2844,8 +2940,10 @@ fn spawn_shell(
     generation: usize,
     attach: Option<&str>,
     host: Option<&str>,
+    token: &str,
+    resume: Option<&Restart>,
     cx: &mut Context<TerminalView>,
-) -> (anyhow::Result<Opened>, Feed) {
+) -> (anyhow::Result<Opened>, Feed, bool) {
     if let Some(host) = host {
         // The host's own shell and environment: only what describes this
         // terminal goes along. Its socket and CLI are the host's server's
@@ -2883,7 +2981,7 @@ fn spawn_shell(
             eprintln!("abromux: terminal on {host}: {e:#}");
         }
         drain(feed.clone(), wake, generation, cx);
-        return (opened, feed);
+        return (opened, feed, false);
     }
     let shell = abromux_core::paths::user_shell();
     let mut argv = vec![shell, "-l".into()];
@@ -2898,11 +2996,33 @@ fn spawn_shell(
     .map(|(k, v)| (k.into(), v.into()))
     .into();
     vars.extend(env_in.iter().cloned());
+    // Its own token, never one this app was given by the terminal it was
+    // started from.
+    if !token.is_empty() {
+        vars.push((program_resume::ENV.into(), token.into()));
+    }
+    let mut integrated = false;
     if cx
         .try_global::<Config>()
         .is_none_or(|c| c.shell_integration)
     {
-        vars.extend(crate::shell::inject(&mut argv, env_in));
+        let more = crate::shell::inject(&mut argv, env_in);
+        integrated = !more.is_empty();
+        vars.extend(more);
+    }
+    // The command to resume, for the integration to run at the first prompt.
+    let resume_file = resume
+        .filter(|_| integrated && command.is_none())
+        .and_then(|r| {
+            crate::shell::resume_file(r)
+                .inspect_err(|e| eprintln!("abromux: resume: {e}"))
+                .ok()
+        });
+    if let Some(f) = &resume_file {
+        vars.push((
+            "ABROMUX_RESUME_FILE".into(),
+            f.to_string_lossy().into_owned(),
+        ));
     }
     // Held shells are for taking back next launch; a run that won't restore
     // a session (ABROMUX_NO_RESTORE, demos, scripted tests) would only leave
@@ -2919,8 +3039,56 @@ fn spawn_shell(
     if let Err(e) = &opened {
         eprintln!("abromux: terminal: {e:#}");
     }
+    // The shell that was kept running, or none, won't read it.
+    let handed = resume_file.is_some_and(|f| {
+        let read = opened.as_ref().is_ok_and(|o| !o.attached);
+        if !read {
+            let _ = std::fs::remove_file(f);
+        }
+        read
+    });
     drain(feed.clone(), wake, generation, cx);
-    (opened, feed)
+    (opened, feed, handed)
+}
+
+/// A new shell's OSC 7577 token. None (empty) for one on another machine,
+/// whose processes this app can't check, or when abromux runs as root,
+/// which the spec says shouldn't take reports.
+fn resume_token(host: Option<&str>) -> String {
+    if host.is_some() || abromux_platform::process::uid() == 0 {
+        return String::new();
+    }
+    program_resume::new_token()
+}
+
+/// What to know of a process reporting to a terminal whose shell is
+/// `shell`: only this user's, from the shell or below it.
+fn reporter(pid: u32, shell: u32) -> Option<program_resume::Checked> {
+    use abromux_platform::process;
+    let me = process::info(pid)?;
+    if me.uid != process::uid() {
+        return None;
+    }
+    let (mut at, mut info, mut depth) = (pid, me, 0);
+    while at != shell {
+        if depth >= 64 || info.parent <= 1 {
+            return None;
+        }
+        depth += 1;
+        at = info.parent;
+        info = process::info(at)?;
+    }
+    Some(program_resume::Checked {
+        started: Some(me.started),
+        depth,
+        cwd: process::cwd(pid),
+    })
+}
+
+/// The record's owner is still the process that reported (not gone, and
+/// its pid not taken by another).
+fn owner_alive(o: &program_resume::Owner) -> bool {
+    abromux_platform::process::info(o.pid).is_some_and(|i| o.started.is_none_or(|s| s == i.started))
 }
 
 /// Why a terminal has no shell, in red, as its screen shows it.
@@ -3208,6 +3376,43 @@ mod tests {
             "/x/it\\'s\\ \\(1\\)\\$.md"
         );
         assert_eq!(super::shell_escape("/x/a\nb"), "/x/a?b");
+    }
+
+    /// A report is taken from the shell or a process under it, with how
+    /// deep it is, and not from one elsewhere.
+    #[test]
+    fn reporters_are_under_the_shell() {
+        // This test stands in for the shell; `sh` runs `sleep` under it.
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "sleep 5; true"])
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let me = std::process::id();
+        let sh = child.id();
+        let sleep = abromux_platform::process::children(sh)[0];
+        assert_eq!(super::reporter(me, me).unwrap().depth, 0);
+        assert_eq!(super::reporter(sh, me).unwrap().depth, 1);
+        let r = super::reporter(sleep, me).unwrap();
+        assert_eq!(r.depth, 2);
+        let owner = super::program_resume::Owner {
+            pid: sleep,
+            started: r.started,
+        };
+        assert!(super::owner_alive(&owner));
+        // Not under `sh`'s child, or reused.
+        assert!(super::reporter(me, sleep).is_none());
+        assert!(!super::owner_alive(&super::program_resume::Owner {
+            started: r.started.map(|s| s + 1),
+            ..owner.clone()
+        }));
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::process::Command::new("kill")
+            .arg(sleep.to_string())
+            .status();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!super::owner_alive(&owner));
     }
 
     #[test]

@@ -30,6 +30,9 @@ _abromux_precmd() {
         _abromux_state=0
     fi
 
+    # The command abromux resumes here, once, at the first prompt.
+    (( ! $+ABROMUX_RESUME_FILE )) || _abromux_resume
+
     [[ -o prompt_percent ]] || builtin return 0
     # Start from the unmarked prompt unless something replaced it.
     [[ $PS1 != $_abromux_marked_ps1 ]] || PS1=$_abromux_ps1
@@ -52,6 +55,34 @@ _abromux_preexec() {
     [[ $PS2 != $_abromux_marked_ps2 ]] || PS2=$_abromux_ps2
     builtin print -n "\e]133;C\a"
     _abromux_state=1
+}
+
+# Session restore (program_resume.rs): run the command a program here
+# reported with OSC 7577, or a coding agent's resume command, after the
+# startup files. abromux writes it to a file only this user can read: a
+# format version, the folder, then each argument, each ending in NUL. It's
+# read and removed, and the arguments run as they are, never as shell code:
+# `command` finds only a program, not a function or builtin of the name.
+# The C and D marks around it tell abromux when it ends.
+_abromux_resume() {
+    builtin emulate -L zsh -o no_aliases
+    builtin local f=$ABROMUX_RESUME_FILE v dir x
+    builtin local -a a
+    builtin unset ABROMUX_RESUME_FILE
+    [[ -f $f && -O $f ]] || builtin return 0
+    {
+        IFS= builtin read -r -d '' v && IFS= builtin read -r -d '' dir &&
+            while IFS= builtin read -r -d '' x; do a+=("$x"); done
+    } < $f
+    builtin command rm -f -- $f
+    [[ $v == 1 ]] && (( $#a )) || builtin return 0
+    if [[ -n $dir ]]; then
+        # Its folder is gone: nothing to resume.
+        [[ -d $dir ]] && builtin cd -- $dir || builtin return 0
+    fi
+    builtin print -n "\e]133;C\a"
+    builtin command -- "${a[@]}"
+    builtin print -n "\e]133;D;$?\a"
 }
 
 builtin typeset -ag precmd_functions preexec_functions

@@ -116,6 +116,41 @@ fn dir(
     .as_deref()
 }
 
+/// Write the command to resume in a new shell where its integration reads
+/// it (`_abromux_resume`, which removes it): a file only this user can
+/// read, named by a fresh random token.
+pub fn resume_file(r: &abromux_core::program_resume::Restart) -> std::io::Result<PathBuf> {
+    use std::io::Write as _;
+    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+    let dir = crate::channel::support_dir().join("resume");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    // Ones a shell never got to (it was closed before its first prompt).
+    static SWEPT: std::sync::Once = std::sync::Once::new();
+    SWEPT.call_once(|| {
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            if e.metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > day))
+            {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    });
+    let path = dir.join(abromux_core::program_resume::new_token());
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    f.write_all(&r.file_bytes())?;
+    Ok(path)
+}
+
 fn write_files(dir: &Path, files: &[(&str, &str)]) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     for (name, text) in files {
@@ -268,6 +303,108 @@ mod tests {
         // last wrapped row only, so one copy can stay until the pane widens.
         assert!(with.iter().all(|&n| n <= 2), "{with:?}");
         assert_eq!(with.last(), Some(&1));
+    }
+
+    /// What a login `shell` with the integration prints, raw, when started
+    /// with a resume file for `argv`: it should run it at the first prompt,
+    /// after the startup files (which put the fake program on PATH), and
+    /// remove the file.
+    fn resumed(shell: &str, argv: &[&str]) -> (String, bool) {
+        let home = std::env::temp_dir().join(format!(
+            "abromux-resume-test-{shell}-{}",
+            std::process::id()
+        ));
+        let dir = home.join("integration");
+        write_files(&dir, if shell == "zsh" { ZSH } else { BASH }).unwrap();
+        let bin = home.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let fake = bin.join("show");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nprintf 'in=%s\\n' \"$PWD\"; for a; do printf '[%s]\\n' \"$a\"; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let path = format!(
+            "export PATH={}:$PATH\nshow() {{ echo FUNCTION; }}\n",
+            bin.display()
+        );
+        let rc = if shell == "zsh" {
+            ".zshrc"
+        } else {
+            ".bash_profile"
+        };
+        std::fs::write(home.join(rc), path).unwrap();
+        let work = home.join("a dir");
+        std::fs::create_dir_all(&work).unwrap();
+        let file = home.join("resume-file");
+        let r = abromux_core::program_resume::Restart {
+            argv: argv.iter().map(|a| a.to_string()).collect(),
+            cwd: Some(work.to_string_lossy().into_owned()),
+        };
+        std::fs::write(&file, r.file_bytes()).unwrap();
+
+        let pty = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 200,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut cmd = CommandBuilder::new(shell);
+        cmd.env("HOME", &home);
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("ABROMUX_RESUME_FILE", &file);
+        if shell == "zsh" {
+            cmd.env("ZDOTDIR", &dir);
+        } else {
+            cmd.arg("--posix");
+            cmd.env("ENV", dir.join("abromux.bash"));
+            cmd.env("ABROMUX_BASH_INJECT", "1");
+        }
+        cmd.arg("-l");
+        let mut child = pty.slave.spawn_command(cmd).unwrap();
+        drop(pty.slave);
+        let mut reader = pty.master.try_clone_reader().unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = reader.read(&mut buf) {
+                if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut out = vec![];
+        let end = Instant::now() + Duration::from_millis(1500);
+        while let Ok(b) = rx.recv_timeout(end.saturating_duration_since(Instant::now())) {
+            out.extend(b);
+        }
+        let _ = child.kill();
+        let left = file.exists();
+        let _ = std::fs::remove_dir_all(&home);
+        (String::from_utf8_lossy(&out).into_owned(), left)
+    }
+
+    #[test]
+    #[ignore = "runs a real zsh and bash"]
+    fn shells_resume_the_command_at_the_first_prompt() {
+        for shell in ["zsh", "bash"] {
+            let (out, left) = resumed(shell, &["show", "", "a b", "$(echo no)", ";x"]);
+            let out = out.replace("\r\n", "\n");
+            assert!(!left, "{shell} left the file");
+            assert!(!out.contains("FUNCTION"), "{shell}: {out}");
+            assert!(
+                out.contains("a dir\n[]\n[a b]\n[$(echo no)]\n[;x]\n"),
+                "{shell}: {out}"
+            );
+            // Marked as a command, so the app knows when it ends.
+            let c = out.find("\x1b]133;C\x07").expect("C mark");
+            let d = out.find("\x1b]133;D;0\x07").expect("D mark");
+            assert!(c < out.find("[a b]").unwrap() && out.find("[a b]").unwrap() < d);
+        }
     }
 
     /// What an interactive bash with the integration prints for `line`, raw

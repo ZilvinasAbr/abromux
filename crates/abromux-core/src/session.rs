@@ -182,6 +182,10 @@ pub enum TabState {
         /// A coding agent to resume (see `crate::agent`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent: Option<Agent>,
+        /// What programs in it said resumes them (OSC 7577), and its shell's
+        /// token while that keeps running (`crate::program_resume`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resume: Option<crate::program_resume::Saved>,
         /// The tab's name from `rename-tab`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
@@ -407,6 +411,10 @@ mod tests {
                                     cwd: "/tmp".into(),
                                     permission_mode: None,
                                     pid: None,
+                                }),
+                                resume: Some(crate::program_resume::Saved {
+                                    token: Some("tok".into()),
+                                    records: vec![],
                                 }),
                                 name: Some("server".into()),
                                 held: Some("4242-3".into()),

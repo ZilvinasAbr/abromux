@@ -13,3 +13,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 # OSC 99 scan for ESC (already a dependency of several crates)
 memchr = "2"
+# OSC 7577 (program_resume): the MAC, argv elements and the token; all
+# already in the build
+sha2 = "0.10"
+base64 = "0.22"
+getrandom = "0.2"
