@@ -43,10 +43,8 @@
 //! `.abromux/config.json` (see `PROJECT_FILES`); they ask before their first
 //! run.
 
-use crate::{
-    layout::WorkspaceSpec,
-    theme::{Appearance, pal},
-};
+use crate::theme::pal;
+use abromux_core::{layout::WorkspaceSpec, settings::Appearance};
 use gpui::Keystroke;
 use gpui::{Global, Rgba, rgb, rgba};
 use gpui_component::notification::Notification;
@@ -628,8 +626,8 @@ impl Default for NotificationSettings {
 }
 
 impl NotificationSettings {
-    pub fn alert(&self, kind: crate::notification::Kind) -> Alert {
-        use crate::notification::Kind;
+    pub fn alert(&self, kind: abromux_core::notify_hook::Kind) -> Alert {
+        use abromux_core::notify_hook::Kind;
         match kind {
             Kind::NeedsInput => self.needs_input,
             Kind::Done => self.done,
@@ -1009,7 +1007,7 @@ pub fn browser_engine(cx: &gpui::App) -> BrowserEngine {
 pub fn default_engine() -> BrowserEngine {
     if abromux_platform::MACOS {
         BrowserEngine::BuiltIn
-    } else if crate::terminal_browser::installed() {
+    } else if crate::paths::find_program("terminal-browser").is_some() {
         BrowserEngine::TerminalBrowser
     } else {
         BrowserEngine::System
@@ -1583,7 +1581,7 @@ pub(crate) mod tests {
 
     #[test]
     fn notification_kinds() {
-        use crate::notification::Kind;
+        use abromux_core::notify_hook::Kind;
         let d = NotificationSettings::default();
         assert_eq!(d.alert(Kind::NeedsInput), Alert::Banner);
         assert_eq!(d.alert(Kind::Done), Alert::Unread);

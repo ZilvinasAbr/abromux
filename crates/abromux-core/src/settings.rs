@@ -3,6 +3,27 @@
 
 use serde::{Deserialize, Deserializer};
 
+/// The app's appearance setting (`app.appearance`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Appearance {
+    /// Follow macOS.
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Appearance {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+}
+
 /// How terminals come back after abromux quits. Applies to terminals opened
 /// after it's set; ones already running in the holder are taken back
 /// whatever it says.

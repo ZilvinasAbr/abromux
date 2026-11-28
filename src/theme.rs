@@ -120,26 +120,7 @@ pub fn tint(alpha: u8) -> Rgba {
     rgba(pal().overlay << 8 | a as u32)
 }
 
-/// The app's appearance setting.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Appearance {
-    /// Follow macOS.
-    #[default]
-    System,
-    Light,
-    Dark,
-}
-
-impl Appearance {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::System => "system",
-            Self::Light => "light",
-            Self::Dark => "dark",
-        }
-    }
-}
+pub use abromux_core::settings::Appearance;
 
 /// Set macOS's appearance for the app (`NSApp.appearance`): its windows,
 /// their blur, menus and web views follow it. System clears it, so they
