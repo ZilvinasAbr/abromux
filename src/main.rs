@@ -283,6 +283,9 @@ struct TerminalOpts {
     env: Vec<(String, String)>,
     /// Run this instead of a shell session.
     command: Option<String>,
+    /// Keep `command` running in the server across a quit, as a shell is
+    /// (a terminal-browser tab).
+    hold: bool,
     /// Take back a terminal the server kept from the last session: its
     /// surface number and the server's id.
     attach: Option<(usize, String)>,
@@ -897,6 +900,7 @@ impl AbroMux {
             cwd,
             mut env,
             command,
+            hold,
             attach,
             host,
             resume,
@@ -944,8 +948,8 @@ impl AbroMux {
             ));
         }
         let held = attach.as_ref().map(|(_, a)| a.as_str());
-        let term =
-            cx.new(|cx| TerminalView::new(cwd, env, command, held, host, resume.as_ref(), cx));
+        let term = cx
+            .new(|cx| TerminalView::new(cwd, env, command, hold, held, host, resume.as_ref(), cx));
         // Its env names `surface` even when the shell is a new one; restore
         // reserved the numbers the last session used, so it's free.
         self.surface_refs.insert(term.entity_id(), surface);
@@ -1015,6 +1019,31 @@ impl AbroMux {
         Surface::Terminal(term)
     }
 
+    /// A terminal-browser tab on `url` in workspace `ws`, or None if it isn't
+    /// installed. The server keeps it running across a quit; with `attach`
+    /// (restore), it's the one the server kept, if that still runs (its
+    /// page as it was), else a new one on `url`.
+    fn make_terminal_browser(
+        &mut self,
+        ws: usize,
+        url: &str,
+        attach: Option<(usize, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Surface> {
+        let opts = TerminalOpts {
+            command: Some(terminal_browser::command(url)?),
+            hold: true,
+            attach,
+            ..Default::default()
+        };
+        let s = self.make_terminal(ws, opts, window, cx);
+        if let Surface::Terminal(t) = &s {
+            terminal_browser::attach(t, url, cx);
+        }
+        Some(s)
+    }
+
     /// A browser tab for `url`: the built-in one, or with `browser.engine`
     /// set to `terminalBrowser`, a terminal running `terminal-browser`
     /// (the built-in one, with a warning, if it isn't installed).
@@ -1034,19 +1063,9 @@ impl AbroMux {
         };
         // Markdown tabs are the built-in browser's.
         if settings::terminal_browser(cx) && !markdown::is_markdown_url(url) {
-            match terminal_browser::command(url) {
-                Some(cmd) => {
-                    let ws = self.workspaces.get(self.active).map_or(0, |w| w.id);
-                    let opts = TerminalOpts {
-                        command: Some(cmd),
-                        ..Default::default()
-                    };
-                    let s = self.make_terminal(ws, opts, window, cx);
-                    if let Surface::Terminal(t) = &s {
-                        terminal_browser::attach(t, url, cx);
-                    }
-                    return s;
-                }
+            let ws = self.workspaces.get(self.active).map_or(0, |w| w.id);
+            match self.make_terminal_browser(ws, url, None, window, cx) {
+                Some(s) => return s,
                 None => window.push_notification(
                     Notification::warning(if abromux_platform::MACOS {
                         "`browser.engine` is terminalBrowser, but terminal-browser isn't on \

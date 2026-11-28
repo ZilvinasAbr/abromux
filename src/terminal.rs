@@ -289,6 +289,9 @@ pub struct TerminalView {
     pending_paste: Option<String>,
     /// What the shell runs instead of an interactive session (`$SHELL -l -c`).
     command: Option<String>,
+    /// Keep `command` running in abromux's server too, as a shell is
+    /// (a terminal-browser tab, taken back next launch).
+    hold_command: bool,
     /// An app this terminal was opened to run, which presents the tab
     /// (`terminal_browser::Tab`); None for a shell.
     pub app: Option<Box<dyn TerminalApp>>,
@@ -319,11 +322,14 @@ impl TerminalView {
     /// A login shell in `cwd`; with a `command`, the shell runs it and the
     /// terminal closes when it ends. With `attach`, the server's terminal
     /// from the last session, if it's still running (a new shell if not).
-    /// With `host`, on that machine's server instead of this one's.
+    /// With `host`, on that machine's server instead of this one's. With
+    /// `hold_command`, the server keeps `command` running across a quit.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cwd: Option<String>,
         env: Vec<(String, String)>,
         command: Option<String>,
+        hold_command: bool,
         attach: Option<&str>,
         host: Option<String>,
         resume: Option<&Restart>,
@@ -336,6 +342,7 @@ impl TerminalView {
             &cwd,
             &env,
             command.as_deref(),
+            hold_command,
             (cols, rows),
             0,
             attach,
@@ -428,6 +435,7 @@ impl TerminalView {
             custom_title: None,
             pending_paste: None,
             command,
+            hold_command,
             app: None,
             env,
             host,
@@ -504,6 +512,7 @@ impl TerminalView {
             &cwd,
             &self.env,
             self.command.as_deref(),
+            self.hold_command,
             self.grid,
             self.generation,
             None,
@@ -789,6 +798,35 @@ impl TerminalView {
     pub fn close(&mut self) {
         self.frozen = true;
         self.pty.kill();
+    }
+
+    /// Make the program draw its screen again by changing its size for a
+    /// moment: for one taken back from the server whose screen the snapshot
+    /// can't give back whole (terminal-browser's page, an image), at a size
+    /// it already had, so the resize at layout told it nothing.
+    pub fn nudge_size(&mut self, cx: &mut Context<Self>) {
+        let (cols, rows) = self.grid;
+        if rows < 2 {
+            return;
+        }
+        let (cw, ch) = (self.cell_px.0 as u16, self.cell_px.1 as u16);
+        let size = move |rows: u16| PtySize {
+            rows,
+            cols,
+            pixel_width: cols * cw,
+            pixel_height: rows * ch,
+        };
+        self.pty.resize(size(rows - 1));
+        cx.spawn(async move |this, cx| {
+            Timer::after(std::time::Duration::from_millis(150)).await;
+            let _ = this.update(cx, |t, _| {
+                // A layout since then sized it already.
+                if t.grid == (cols, rows) {
+                    t.pty.resize(size(rows));
+                }
+            });
+        })
+        .detach();
     }
 
     /// The server's id for this terminal, to take it back next launch.
@@ -2931,7 +2969,8 @@ fn sprite_char(c: &ghostty::Cell) -> Option<char> {
 
 /// Start the user's login shell at `size` (running `command` if there is
 /// one), or take back `attach`, and drain its output into the view on the
-/// main thread. With `host`, on that machine's server. Output and the exit
+/// main thread. With `host`, on that machine's server; with `hold_command`,
+/// a `command` is kept running in the server as a shell is. Output and the exit
 /// of a shell from an older `generation` (one `respawn` replaced) are
 /// dropped. When nothing could be started, the error, for the view to show
 /// in place of the shell.
@@ -2940,6 +2979,7 @@ fn spawn_shell(
     cwd: &str,
     env_in: &[(String, String)],
     command: Option<&str>,
+    hold_command: bool,
     size: (u16, u16),
     generation: usize,
     attach: Option<&str>,
@@ -3030,10 +3070,11 @@ fn spawn_shell(
     }
     // Held shells are for taking back next launch; a run that won't restore
     // a session (ABROMUX_NO_RESTORE, demos, scripted tests) would only leave
-    // them running unseen. A terminal running a command (a terminal-browser
-    // tab) is made again each launch, so it isn't held either.
+    // them running unseen. A terminal running a command (an editor) is made
+    // again each launch, so it isn't held either, unless it asks to be (a
+    // terminal-browser tab, taken back with its page as it was).
     let persistence = match crate::session::path() {
-        Some(_) if command.is_none() => cx
+        Some(_) if command.is_none() || hold_command => cx
             .try_global::<Settings>()
             .map_or(Persistence::default(), |s| s.persistence),
         _ => Persistence::CmuxLike,

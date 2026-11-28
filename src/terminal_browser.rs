@@ -217,6 +217,20 @@ pub struct Tab {
     adopted: bool,
 }
 
+/// The command a new shell runs to open `url` in terminal-browser again, as
+/// one started from it was (restore, when its shell didn't keep running).
+pub fn reopen(url: &str) -> Option<abromux_core::program_resume::Restart> {
+    let mut argv = vec![find()?.to_string_lossy().into_owned(), "open".into()];
+    if !url.is_empty() && url != "about:blank" {
+        argv.push(url.into());
+    }
+    Some(abromux_core::program_resume::Restart {
+        argv,
+        cwd: None,
+        cwd_required: false,
+    })
+}
+
 /// The key context of a terminal-browser tab: `KEYS` are bound to nothing
 /// there, so they reach terminal-browser.
 pub const KEY_CONTEXT: &str = "TerminalBrowser";
@@ -423,12 +437,15 @@ impl crate::terminal::TerminalApp for Tab {
 
 /// Keep `term`'s page title and URL up to date while it runs
 /// terminal-browser: often while the first page loads, then once a second.
-/// An adopted one's shell gets its tab back once the browser is gone.
+/// An adopted one's shell gets its tab back once the browser is gone. One
+/// taken back from the server is made to draw its page again once it
+/// answers: the screen the server gave back doesn't have it.
 fn watch(term: &Entity<TerminalView>, known: Option<PathBuf>, cx: &mut gpui::App) {
     let term = term.downgrade();
     cx.spawn(async move |cx: &mut AsyncApp| {
         let mut known = known;
         let mut misses = 0;
+        let mut drawn = false;
         for tick in 0usize.. {
             let delay = if tick < 20 { 250 } else { 1000 };
             Timer::after(Duration::from_millis(delay)).await;
@@ -462,6 +479,9 @@ fn watch(term: &Entity<TerminalView>, known: Option<PathBuf>, cx: &mut gpui::App
             let alive = term.update(cx, |t, cx| {
                 if t.app_mut::<Tab>().is_some_and(|tab| tab.update(page)) {
                     t.app_changed(cx);
+                }
+                if !std::mem::replace(&mut drawn, true) && t.attached {
+                    t.nudge_size(cx);
                 }
             });
             if alive.is_err() {

@@ -560,7 +560,26 @@ impl AbroMux {
                 host,
                 surface,
                 edit,
+                page,
+                page_in_shell,
             } => {
+                // A browser tab: the server's terminal-browser if it still
+                // runs (its page as it was), else one on its page, in
+                // whichever engine is set now.
+                if let Some(url) = page.as_deref().filter(|_| !page_in_shell) {
+                    let keep = host.is_none()
+                        && crate::settings::terminal_browser(cx)
+                        && !crate::markdown::is_markdown_url(url);
+                    let s = surface
+                        .zip(held)
+                        .filter(|_| keep)
+                        .and_then(|a| self.make_terminal_browser(ws, url, Some(a), window, cx))
+                        .unwrap_or_else(|| self.make_browser(url, window, cx));
+                    if name.is_some() {
+                        s.set_custom_title(name, cx);
+                    }
+                    return s;
+                }
                 // A remote terminal's folder is on its host: the server
                 // checks it there.
                 let cwd = (host.is_some() || std::path::Path::new(&cwd).is_dir()).then_some(cwd);
@@ -591,7 +610,13 @@ impl AbroMux {
                     .and_then(|r| r.best())
                     .filter(|r| !(r.under_agent && agent_restart.is_some()))
                     .map(abromux_core::program_resume::Restart::from);
-                let restart = program.clone().or(agent_restart);
+                // A terminal-browser started in it opens its page again, in
+                // front of whatever ran under it.
+                let browser = page
+                    .as_deref()
+                    .filter(|_| page_in_shell)
+                    .and_then(crate::terminal_browser::reopen);
+                let restart = browser.clone().or(program.clone()).or(agent_restart);
                 let opts = crate::TerminalOpts {
                     cwd,
                     attach,
@@ -611,7 +636,7 @@ impl AbroMux {
                                 t.load_resume(r, cx);
                             }
                         } else {
-                            let agent = agent.filter(|_| program.is_none());
+                            let agent = agent.filter(|_| program.is_none() && browser.is_none());
                             t.restore(
                                 scrollback.as_deref(),
                                 font_size,
@@ -757,22 +782,24 @@ fn tab_state(s: &Surface, scrollback: bool, refs: &Refs, cx: &App) -> TabState {
         Surface::Terminal(t) => {
             let surface = refs.get(&t.entity_id()).copied();
             let t = t.read(cx);
-            // A tab whose app shows a page (terminal-browser) comes back as a
-            // browser tab on that page, in whichever engine is set then.
-            if let Some(url) = t
-                .app
-                .as_ref()
-                .filter(|a| a.saves_as_page())
-                .and_then(|a| a.page_url())
+            let held = t.held_id();
+            // The page terminal-browser shows in it, and whether it ran in
+            // the tab's shell rather than being the tab.
+            let page = t.app.as_ref().and_then(|a| a.page_url()).map(String::from);
+            let page_in_shell = t.app.as_ref().is_some_and(|a| !a.saves_as_page());
+            // A browser tab the server isn't keeping comes back as a browser
+            // tab on that page, in whichever engine is set then.
+            if let Some(url) = &page
+                && !page_in_shell
+                && (held.is_none() || t.host.is_some())
             {
                 return TabState::Browser {
-                    url: url.into(),
+                    url: url.clone(),
                     name: t.custom_title.clone(),
                     history: None,
                     zoom: None,
                 };
             }
-            let held = t.held_id();
             let edit = t
                 .app
                 .as_ref()
@@ -786,10 +813,13 @@ fn tab_state(s: &Surface, scrollback: bool, refs: &Refs, cx: &App) -> TabState {
                 font_size: Some(t.font_size()),
                 // An editor draws its screen again; its old one would only
                 // show under it.
-                scrollback: (scrollback && edit.is_none())
+                // So does a page.
+                scrollback: (scrollback && edit.is_none() && page.is_none())
                     .then(|| t.scrollback_vt(SCROLLBACK_LINES))
                     .flatten(),
                 edit,
+                page,
+                page_in_shell,
                 agent: t.agent.clone().filter(crate::agent::Agent::alive),
                 resume: t.saved_resume(),
                 name: t.custom_title.clone(),
