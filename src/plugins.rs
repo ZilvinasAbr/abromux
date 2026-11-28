@@ -1,7 +1,7 @@
 //! The plugins built in (crates/, each behind a Cargo feature). Each adds a
 //! kind of tab, `Surface::Plugin`; see crates/abromux-plugin.
 
-pub use abromux_plugin::{Plugin, TabHandle};
+pub use abromux_plugin::Plugin;
 use gpui::{App, Global, WeakEntity, Window};
 
 /// The app window's view, for what plugins ask of it.

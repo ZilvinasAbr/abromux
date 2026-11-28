@@ -1,9 +1,8 @@
 //! Workspace model: each workspace owns a tree of split panes; each pane
 //! holds tabs ("surfaces") that are either terminals or browsers.
 
-use crate::{
-    agent::Kind, browser::BrowserView, paths::tilde, plugins::TabHandle, terminal::TerminalView,
-};
+use crate::{agent::Kind, browser::BrowserView, paths::tilde, terminal::TerminalView};
+use abromux_plugin::TabHandle;
 use gpui::{App, Axis, Entity, EntityId, Focusable, Window};
 
 #[derive(Clone)]
