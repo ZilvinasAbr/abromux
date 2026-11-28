@@ -11,7 +11,7 @@ use crate::{
     paths::tilde,
     select_all_on_double_click,
     settings::{IndicatorStyle, Placement, Settings},
-    shortcut_digit, terminal,
+    shortcut_digit,
     theme::*,
     titlebar,
     workspace::{self, Group, GroupMove, Workspace, group_span},
@@ -1694,12 +1694,7 @@ impl AbroMux {
                         .when(is_branch, |s| {
                             s.child(icon("git-branch").size(px(10. * z)).text_color(sub))
                         })
-                        .child(
-                            div()
-                                .truncate()
-                                .font_family(terminal::mono_font())
-                                .child(text),
-                        )
+                        .child(div().truncate().font_family(mono_font()).child(text))
                 }))
             })
             .context_menu(move |menu, window, cx| {

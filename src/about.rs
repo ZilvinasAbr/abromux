@@ -129,7 +129,7 @@ impl Render for About {
                             .flex()
                             .flex_col()
                             .gap(px(4.))
-                            .font_family(crate::terminal::mono_font())
+                            .font_family(crate::theme::mono_font())
                             .text_color(rgb(pal().muted))
                             .child(version.to_string())
                             .when(!build.is_empty(), |d| d.child(build))

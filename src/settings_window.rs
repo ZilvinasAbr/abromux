@@ -57,7 +57,7 @@ pub fn apply(s: Settings, cx: &mut App) {
         });
     }
     keymap::apply(&s, cx);
-    crate::theme::apply(s.app.appearance, cx);
+    crate::appearance::apply(s.app.appearance, cx);
     crate::remote::apply(&s.remote);
     crate::plugins::set_sections(&s, cx);
     cx.set_global(s);
@@ -88,7 +88,7 @@ pub fn show(cx: &mut App) {
             ..Default::default()
         },
         |window, cx| {
-            crate::theme::follow(window);
+            crate::appearance::follow(window);
             let view = cx.new(|cx| SettingsView::new(window, cx));
             let layer = cx.new(|cx| crate::alert::Layer::new(view, window, cx));
             cx.new(|cx| Root::new(layer, window, cx))
@@ -1652,7 +1652,7 @@ fn phone_status() -> AnyElement {
                     div()
                         .min_w_0()
                         .text_size(px(12.5))
-                        .font_family(crate::terminal::mono_font())
+                        .font_family(crate::theme::mono_font())
                         .child(shown),
                 )
                 .child(

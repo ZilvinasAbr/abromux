@@ -3,7 +3,8 @@
 //!
 //! The app's appearance setting (`app.appearance`: system, light or dark)
 //! sets macOS's appearance for the app ([`apply_appearance`]); the windows'
-//! effective appearance then picks the palette ([`set_dark`]), so "system"
+//! effective appearance then picks the palette ([`set_dark`], from
+//! `crate::appearance`, which also recolours the terminals), so "system"
 //! follows macOS as it changes. On Linux the windows' appearance is the
 //! desktop's (xdg-desktop-portal's `color-scheme`, which gpui watches), and
 //! a light or dark setting overrides it ([`resolve`]).
@@ -142,8 +143,8 @@ impl Appearance {
 
 /// Set macOS's appearance for the app (`NSApp.appearance`): its windows,
 /// their blur, menus and web views follow it. System clears it, so they
-/// follow macOS's. The palette follows in [`sync`], when the windows
-/// report their new appearance.
+/// follow macOS's. The palette follows in `crate::appearance::sync`, when
+/// the windows report their new appearance.
 pub fn apply_appearance(a: Appearance) {
     use abromux_platform::appearance::{Look, set};
     SETTING.store(a as u8, Relaxed);
@@ -181,30 +182,6 @@ pub fn set_dark(dark: bool, cx: &mut App) -> bool {
     changed
 }
 
-/// Make the app's setting macOS's appearance for the app, and follow it.
-pub fn apply(a: Appearance, cx: &mut App) {
-    apply_appearance(a);
-    sync(resolve(cx.window_appearance()), cx);
-}
-
-/// Follow a window's appearance (it changed, or the setting did): the
-/// palette, the terminals' colors (a Ghostty `theme = light:A,dark:B` has
-/// one for each), and every window redrawn.
-pub fn sync(dark: bool, cx: &mut App) {
-    if !set_dark(dark, cx) {
-        return;
-    }
-    cx.set_global(crate::config::Config::load());
-    cx.refresh_windows();
-}
-
-/// Keep the palette following `window`'s appearance as macOS's changes.
-pub fn follow(window: &Window) {
-    window
-        .observe_window_appearance(|window, cx| sync(resolve(window.appearance()), cx))
-        .detach();
-}
-
 /// gpui-component's theme in the palette: its own light and dark themes are
 /// cold greys, so its menus, popovers and fields get our warm neutrals.
 fn style_components(cx: &mut App) {
@@ -219,7 +196,7 @@ fn style_components(cx: &mut App) {
     let theme = Theme::global_mut(cx);
     theme.background = rgba(0x00000000).into();
     theme.font_family = abromux_platform::fonts::ui().into();
-    theme.mono_font_family = crate::terminal::mono_font().into();
+    theme.mono_font_family = mono_font().into();
     theme.popover = rgb(p.menu_bg).into();
     theme.popover_foreground = rgb(p.text).into();
     theme.foreground = rgb(p.text).into();
@@ -227,6 +204,12 @@ fn style_components(cx: &mut App) {
     theme.border = rgb(p.menu_border).into();
     theme.accent = rgb(p.menu_hover).into();
     theme.accent_foreground = rgb(p.text).into();
+}
+
+/// UI monospace font (sidebar metadata); terminals use the Ghostty config's,
+/// which defaults to the same.
+pub fn mono_font() -> String {
+    abromux_platform::fonts::monospace()
 }
 
 pub fn icon(name: &str) -> Svg {

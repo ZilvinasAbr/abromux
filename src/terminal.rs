@@ -30,12 +30,6 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// UI monospace font (sidebar metadata); terminals use the Ghostty config's,
-/// which defaults to the same.
-pub fn mono_font() -> String {
-    abromux_platform::fonts::monospace()
-}
-
 /// Fonts for characters the terminal's face lacks, before macOS's own: the
 /// Ghostty config's further `font-family` lines, then the Nerd Fonts
 /// installed. Ghostty has Nerd Font symbols built in, so programs that draw

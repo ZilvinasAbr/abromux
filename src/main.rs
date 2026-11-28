@@ -2,6 +2,7 @@ mod about;
 mod actions;
 mod alert;
 mod api;
+mod appearance;
 mod bench;
 mod browser;
 mod channel;
@@ -4275,7 +4276,7 @@ fn run_app(cwd: Option<String>) {
                     ..Default::default()
                 },
                 |window, cx| {
-                    theme::follow(window);
+                    appearance::follow(window);
                     if let Some(e) = settings_error {
                         window.defer(cx, move |window, cx| {
                             window.push_notification(settings::error_notification(e), cx)
