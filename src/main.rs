@@ -21,6 +21,7 @@ mod gitlab;
 mod icon;
 mod ipc;
 mod keymap;
+mod keys;
 mod layout;
 mod link;
 mod links;
@@ -3956,6 +3957,8 @@ fn main() {
     // runtime folder.
     hold::set_dir(channel::state_dir(), channel::runtime_dir());
     pty::on_output(abromux_platform::power::output);
+    // Before anything reads config.json, whose "shortcuts" name actions.
+    settings::set_shortcut_names(|name| keymap::find(name).is_some());
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "bench-vt") {
         std::process::exit(bench::vt(&args[1..]));

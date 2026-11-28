@@ -822,23 +822,37 @@ impl TryFrom<Option<RawShortcut>> for Shortcut {
             RawKeys::Many(ks) => ks,
         };
         if let Some(w) = &when {
-            crate::keymap::check_context(w)?;
+            crate::keys::check_context(w)?;
         }
         Ok(Shortcut {
             keys: keys
                 .iter()
-                .map(|k| crate::keymap::parse_seq(k))
+                .map(|k| crate::keys::parse_seq(k))
                 .collect::<Result<_, _>>()?,
             when,
         })
     }
 }
 
+/// Whether a name is an action's (`keymap::ACTIONS`), for the keys of
+/// `"shortcuts"`: the keymap knows its actions, the settings only their
+/// names. [`set_shortcut_names`] sets it.
+static SHORTCUT_NAMES: std::sync::OnceLock<fn(&str) -> bool> = std::sync::OnceLock::new();
+
+/// Say which names `"shortcuts"` takes, before anything reads the file
+/// (main.rs does, first thing). Only the first call counts.
+pub fn set_shortcut_names(known: fn(&str) -> bool) {
+    let _ = SHORTCUT_NAMES.set(known);
+}
+
 fn shortcuts<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<String, Shortcut>, D::Error> {
     let raw = BTreeMap::<String, Option<RawShortcut>>::deserialize(d)?;
+    let known = SHORTCUT_NAMES
+        .get()
+        .expect("settings::set_shortcut_names runs before the config file is read");
     raw.into_iter()
         .map(|(name, s)| {
-            if crate::keymap::find(&name).is_none() {
+            if !known(&name) {
                 return Err(format!(
                     "unknown shortcut `{name}`; `abromux config shortcuts` lists them"
                 ));
@@ -1293,8 +1307,14 @@ pub fn trust(file: &Path, raw: &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// The names main.rs gives [`set_shortcut_names`], for tests that read
+    /// `"shortcuts"`.
+    pub(crate) fn know_shortcuts() {
+        set_shortcut_names(|name| crate::keymap::find(name).is_some());
+    }
 
     #[test]
     fn script_values() {
@@ -1423,6 +1443,7 @@ mod tests {
 
     #[test]
     fn shortcuts() {
+        know_shortcuts();
         let s = parse(
             r#"{
               "shortcuts": {
@@ -1443,6 +1464,7 @@ mod tests {
 
     #[test]
     fn shortcut_errors() {
+        know_shortcuts();
         let err = |text: &str| parse(text).unwrap_err().to_string();
         let e = err(r#"{"shortcuts": {"splitLeft": "cmd-d"}}"#);
         assert!(e.contains("unknown shortcut `splitLeft`"), "{e}");

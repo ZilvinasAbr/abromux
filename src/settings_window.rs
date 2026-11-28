@@ -346,7 +346,7 @@ fn save_shortcut(name: &'static str, keys: Option<String>, window: &mut Window, 
     let mut taken = None;
     let mut value = keys.as_ref().map(|k| json!(k));
     if let Some(k) = &keys {
-        let seq = keymap::parse_seq(k).unwrap_or_default();
+        let seq = crate::keys::parse_seq(k).unwrap_or_default();
         // The default key again: back to the default.
         let (defaults, _) = keymap::keys_for(&Settings::default(), act);
         if defaults == [seq.clone()] {
