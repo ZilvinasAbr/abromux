@@ -59,10 +59,43 @@ fn inject_zsh(env: &[(String, String)]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Whether the bash at `path` is 4 or later. An older one (macOS's
+/// `/bin/bash` is 3.2) doesn't read `$ENV` as an interactive login shell in
+/// POSIX mode, so the integration would never load and the shell would stay
+/// in POSIX mode (Ghostty skips it too). Asked once per path.
+fn bash_takes_integration(path: &str) -> bool {
+    static SEEN: std::sync::Mutex<Vec<(String, bool)>> = std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, ok)) = seen.iter().find(|(p, _)| p == path) {
+        return *ok;
+    }
+    let ok = bash_major(path).is_some_and(|v| v >= 4);
+    seen.push((path.to_string(), ok));
+    ok
+}
+
+/// The major version of the bash at `path`, from `BASH_VERSINFO`.
+fn bash_major(path: &str) -> Option<u32> {
+    let out = std::process::Command::new(path)
+        .args([
+            "--norc",
+            "--noprofile",
+            "-c",
+            "echo \"${BASH_VERSINFO[0]}\"",
+        ])
+        .env_remove("BASH_ENV")
+        .env_remove("ENV")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
 /// Only an interactive login shell (`bash -l`, as terminals start it); one
 /// running a command (`-c`) needs no prompt marks.
 fn inject_bash(argv: &mut Vec<String>, env: &[(String, String)]) -> Vec<(String, String)> {
-    if argv.len() != 2 || argv[1] != "-l" {
+    if argv.len() != 2 || argv[1] != "-l" || !bash_takes_integration(&argv[0]) {
         return vec![];
     }
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
@@ -305,6 +338,22 @@ mod tests {
         assert_eq!(with.last(), Some(&1));
     }
 
+    /// False (and says so) when the `bash` on PATH is too old for the
+    /// integration, which abromux then doesn't load (macOS's 3.2).
+    fn bash_new_enough() -> bool {
+        let ok = super::bash_takes_integration("bash");
+        if !ok {
+            eprintln!("skipped: bash on PATH is older than 4");
+        }
+        ok
+    }
+
+    #[test]
+    fn asks_bash_its_version() {
+        assert_eq!(super::bash_major("/no/such/bash"), None);
+        assert!(super::bash_major("bash").is_some_and(|v| v >= 3));
+    }
+
     /// What a login `shell` with the integration prints, raw, when started
     /// with a resume file for `argv`: it should run it at the first prompt,
     /// after the startup files (which put the fake program on PATH), and
@@ -342,6 +391,7 @@ mod tests {
         let r = abromux_core::program_resume::Restart {
             argv: argv.iter().map(|a| a.to_string()).collect(),
             cwd: Some(work.to_string_lossy().into_owned()),
+            cwd_required: true,
         };
         std::fs::write(&file, r.file_bytes()).unwrap();
 
@@ -392,6 +442,9 @@ mod tests {
     #[ignore = "runs a real zsh and bash"]
     fn shells_resume_the_command_at_the_first_prompt() {
         for shell in ["zsh", "bash"] {
+            if shell == "bash" && !bash_new_enough() {
+                continue;
+            }
             let (out, left) = resumed(shell, &["show", "", "a b", "$(echo no)", ";x"]);
             let out = out.replace("\r\n", "\n");
             assert!(!left, "{shell} left the file");
@@ -466,6 +519,9 @@ mod tests {
     #[test]
     #[ignore = "runs a real bash"]
     fn bash_reads_startup_files_and_marks_prompts() {
+        if !bash_new_enough() {
+            return;
+        }
         let out = bash_output(
             &[
                 (".bash_profile", "export FROM=profile; PS1='p> '\n"),
@@ -499,6 +555,9 @@ mod tests {
     #[test]
     #[ignore = "runs a real bash"]
     fn bash_runs_codex_without_its_daemon() {
+        if !bash_new_enough() {
+            return;
+        }
         let home = std::env::temp_dir().join(format!("abromux-bash-codex-{}", std::process::id()));
         let bin = home.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -537,6 +596,9 @@ mod tests {
     #[test]
     #[ignore = "runs a real bash"]
     fn bash_prompt_survives_squeezing() {
+        if !bash_new_enough() {
+            return;
+        }
         let prompts = |s: &String| s.matches("zilvinas@Zilvinas-MacBook-Pro").count();
         let without: Vec<_> = squeeze("bash", false).iter().map(prompts).collect();
         let with: Vec<_> = squeeze("bash", true).iter().map(prompts).collect();

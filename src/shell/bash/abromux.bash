@@ -75,9 +75,10 @@ _abromux_prompt() {
 # format version, the folder, then each argument, each ending in NUL. It's
 # read and removed, and the arguments run as they are, never as shell code:
 # the program is looked up on PATH, so no function or builtin of the name
-# runs instead. The C and D marks around it tell abromux when it ends.
+# runs instead. The C and D marks around it tell abromux when it ends (after
+# a ^C too).
 _abromux_resume() {
-    builtin local f=$ABROMUX_RESUME_FILE v dir x p
+    builtin local f=$ABROMUX_RESUME_FILE v dir x p trap_int
     builtin local -a a
     a=()
     builtin unset ABROMUX_RESUME_FILE
@@ -97,9 +98,19 @@ _abromux_resume() {
     else
         p=$(builtin type -P -- "${a[0]}") && [[ -n $p ]] || builtin return 0
     fi
+    # A ^C that ends the program would end this function too, before the D
+    # mark and the prompt's marks, unless INT has a trap meanwhile (the
+    # program itself gets the default action). bash keeps $? over a trap.
+    trap_int=$(builtin trap -p INT)
+    builtin trap : INT
     builtin printf '\e]133;C\a'
     builtin command -- "$p" "${a[@]:1}"
     builtin printf '\e]133;D;%s\a' "$?"
+    if [[ -n $trap_int ]]; then
+        builtin eval -- "$trap_int"
+    else
+        builtin trap - INT
+    fi
 }
 
 # Last in PROMPT_COMMAND, so the marks go around the PS1 the rest set. An

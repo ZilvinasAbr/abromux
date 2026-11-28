@@ -455,14 +455,18 @@ impl Agent {
             argv.extend(["--permission-mode".into(), mode.into()]);
         }
         let cwd = Some(self.cwd.clone()).filter(|c| c.starts_with('/'));
-        Some(Restart { argv, cwd })
+        Some(Restart {
+            argv,
+            cwd,
+            cwd_required: true,
+        })
     }
 
     /// What to type into a fresh shell in `shell_cwd` to get this session
     /// back, for a shell without abromux's integration. Every element of
     /// `restart` is `safe` but the folder, which is quoted.
     pub fn resume_command(&self, shell_cwd: &str) -> Option<String> {
-        let Restart { argv, cwd } = self.restart()?;
+        let Restart { argv, cwd, .. } = self.restart()?;
         let mut cmd = String::new();
         if let Some(cwd) = cwd.filter(|c| c != shell_cwd) {
             cmd += &format!("cd -- {} && ", quote(&cwd));

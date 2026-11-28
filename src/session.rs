@@ -582,12 +582,16 @@ impl AbroMux {
                 let attach = surface.zip(held);
                 // What a new shell runs: the command a program here reported
                 // (OSC 7577), else the agent's. One program comes back in
-                // the shell's foreground, so the agent goes when a program
-                // wins (one nearer the shell: the agent ran under it).
-                let program = resume.as_ref().and_then(|r| r.best());
-                let restart = program
-                    .clone()
-                    .or_else(|| agent.as_ref().and_then(|a| a.restart()));
+                // the shell's foreground, so the nearest the shell wins: the
+                // agent when the program ran under it, else the program (the
+                // agent ran under it, or was a stopped job beside it).
+                let agent_restart = agent.as_ref().and_then(|a| a.restart());
+                let program = resume
+                    .as_ref()
+                    .and_then(|r| r.best())
+                    .filter(|r| !(r.under_agent && agent_restart.is_some()))
+                    .map(abromux_core::program_resume::Restart::from);
+                let restart = program.clone().or(agent_restart);
                 let opts = crate::TerminalOpts {
                     cwd,
                     attach,

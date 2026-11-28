@@ -96,9 +96,9 @@ pub fn parse(body: &[u8], token: &str, now: u64) -> Parsed {
     {
         return Parsed::Ignored;
     }
-    let Ok(signed) = std::str::from_utf8(signed) else {
-        return Parsed::Ignored;
-    };
+    // Bytes that aren't UTF-8 become U+FFFD, which no key or value allows:
+    // the report is signed, so it's rejected, not ignored.
+    let signed = String::from_utf8_lossy(signed);
     // Read every pair, noting what's wrong, so pid and time are known
     // (to ignore or reject) even when something else isn't.
     let mut bad = false;
@@ -154,6 +154,7 @@ pub fn parse(body: &[u8], token: &str, now: u64) -> Parsed {
                 (Some(argv), cwd)
                     if argv.len() <= MAX_ARGV
                         && !argv[0].is_empty()
+                        && !argv[0].starts_with('-')
                         && (!argv[0].contains('/') || argv[0].starts_with('/')) =>
                 {
                     Parsed::Report {
@@ -171,13 +172,15 @@ pub fn parse(body: &[u8], token: &str, now: u64) -> Parsed {
 }
 
 /// One base64 element as text: valid UTF-8 with no control characters.
+/// Padding is optional, but when there is some it has to be all of it.
 fn text(b64: &str) -> Option<String> {
-    const LENIENT: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
-        &base64::alphabet::STANDARD,
-        base64::engine::GeneralPurposeConfig::new()
-            .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
-    );
-    let s = String::from_utf8(LENIENT.decode(b64).ok()?).ok()?;
+    use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
+    let engine = if b64.ends_with('=') {
+        STANDARD
+    } else {
+        STANDARD_NO_PAD
+    };
+    let s = String::from_utf8(engine.decode(b64).ok()?).ok()?;
     (!s.chars().any(char::is_control)).then_some(s)
 }
 
@@ -204,6 +207,15 @@ pub struct Record {
     pub argv: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// `cwd` is the report's own (`cwd` key), not the owner's folder read
+    /// from the OS: if it's gone the record isn't resumed, where another
+    /// folder that's gone just means the shell's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cwd_reported: bool,
+    /// Its owner ran under the terminal's coding agent, which then is the
+    /// one to resume (an ancestor wins over its descendants).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub under_agent: bool,
     /// When its owner was first seen gone.
     #[serde(skip)]
     gone: Option<Instant>,
@@ -217,6 +229,8 @@ pub struct Checked {
     pub depth: u32,
     /// Its folder now, for a report without `cwd`.
     pub cwd: Option<String>,
+    /// It runs under the terminal's coding agent.
+    pub under_agent: bool,
 }
 
 /// A terminal's records.
@@ -252,6 +266,8 @@ impl Records {
             depth: 1,
             argv: r.argv.clone(),
             cwd: r.cwd.clone(),
+            cwd_reported: r.cwd_required,
+            under_agent: false,
             gone: None,
         });
     }
@@ -276,11 +292,15 @@ impl Records {
         if self.last.get(&pid).is_some_and(|&t| time < t) {
             return false;
         }
+        let n = self.list.len();
         let Some(proc) = check(pid) else {
-            return false;
+            // Signed, but not from a process to take reports from: it
+            // counts as rejected, so whatever that pid had goes.
+            self.list
+                .retain(|r| r.owner.as_ref().is_none_or(|o| o.pid != pid));
+            return self.list.len() != n;
         };
         self.last.insert(pid, time);
-        let n = self.list.len();
         // The program resumed here (a child of the shell) speaks for itself
         // from now on.
         let takes_restored = proc.depth <= 1;
@@ -296,7 +316,9 @@ impl Records {
                 }),
                 depth: proc.depth,
                 argv,
+                cwd_reported: cwd.is_some(),
                 cwd: cwd.or(proc.cwd),
+                under_agent: proc.under_agent,
                 gone: None,
             });
             return true;
@@ -331,14 +353,25 @@ impl Records {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Restart {
     pub argv: Vec<String>,
+    /// The folder to run it in. The shell integration doesn't run it when
+    /// this is gone, so one that isn't required is only kept if it's there.
     pub cwd: Option<String>,
+    /// The program said it needs `cwd` (or an agent's session belongs to it).
+    pub cwd_required: bool,
 }
 
 impl From<&Record> for Restart {
+    /// Made at restore: a folder the program didn't ask for that's gone by
+    /// now leaves the new shell's.
     fn from(r: &Record) -> Self {
+        let cwd = r
+            .cwd
+            .clone()
+            .filter(|c| r.cwd_reported || std::path::Path::new(c).is_dir());
         Restart {
             argv: r.argv.clone(),
-            cwd: r.cwd.clone(),
+            cwd,
+            cwd_required: r.cwd_reported,
         }
     }
 }
@@ -370,12 +403,9 @@ pub struct Saved {
 }
 
 impl Saved {
-    pub fn best(&self) -> Option<Restart> {
-        self.records
-            .iter()
-            .rev()
-            .min_by_key(|r| r.depth)
-            .map(Restart::from)
+    /// The record to resume, as [`Records::best`].
+    pub fn best(&self) -> Option<&Record> {
+        self.records.iter().rev().min_by_key(|r| r.depth)
     }
 }
 
@@ -399,6 +429,7 @@ mod tests {
                 started: Some(7),
                 depth,
                 cwd: Some("/os".into()),
+                under_agent: false,
             })
         }
     }
@@ -549,6 +580,7 @@ mod tests {
         r.restored(&Restart {
             argv: vec!["nvim".into()],
             cwd: None,
+            cwd_required: false,
         });
         // Something deeper (lazygit inside nvim) doesn't take it.
         r.apply(report(20, 5, "lazygit"), here(2));
@@ -572,10 +604,83 @@ mod tests {
     }
 
     #[test]
+    fn rejects_options_short_padding_and_bytes_that_arent_text() {
+        let rejected = Parsed::Rejected {
+            pid: 12,
+            time: 1000,
+        };
+        for body in [
+            format!("pid=12:time=1000:argv={}", b64("-x")),
+            // "nvim" needs two `=`.
+            "pid=12:time=1000:argv=bnZpbQ=".to_string(),
+            format!("pid=12:time=1000:argv={},LVM==", b64("x")),
+        ] {
+            assert_eq!(parse(&signed(&body), TOKEN, 1000), rejected, "{body}");
+        }
+        let mut body = b"pid=12:time=1000:argv=\xff".to_vec();
+        let m = mac(&body, TOKEN);
+        body.extend_from_slice(format!(":mac={m}").as_bytes());
+        assert_eq!(parse(&body, TOKEN, 1000), rejected);
+        // A later element may still go without padding, or start with `-`.
+        let body = format!("pid=12:time=1000:argv={},LVM,LVM=", b64("x"));
+        assert!(matches!(
+            parse(&signed(&body), TOKEN, 1000),
+            Parsed::Report { argv, .. } if argv == ["x", "-S", "-S"]
+        ));
+    }
+
+    #[test]
+    fn a_process_the_check_refuses_loses_its_records() {
+        let mut r = Records::default();
+        r.apply(report(10, 5, "nvim"), here(1));
+        r.apply(report(20, 5, "lazygit"), here(2));
+        assert!(r.apply(report(10, 6, "x"), |_| None));
+        assert_eq!(r.best().unwrap().argv, ["lazygit"]);
+    }
+
+    #[test]
+    fn only_a_reported_folder_is_required() {
+        let mut r = Records::default();
+        let gone = "/no/such/folder/abromux";
+        r.apply(report(10, 5, "nvim"), |_| {
+            Some(Checked {
+                started: None,
+                depth: 1,
+                cwd: Some(gone.into()),
+                under_agent: false,
+            })
+        });
+        // The OS's folder for it is gone: the shell's instead.
+        let x = Restart::from(r.best().unwrap());
+        assert_eq!((x.cwd, x.cwd_required), (None, false));
+        let reported = Parsed::Report {
+            pid: 10,
+            time: 6,
+            argv: vec!["nvim".into()],
+            cwd: Some(gone.into()),
+        };
+        r.apply(reported, here(1));
+        // It asked for that one: kept, so the shell doesn't run it.
+        let x = Restart::from(r.best().unwrap());
+        assert_eq!((x.cwd.as_deref(), x.cwd_required), (Some(gone), true));
+        assert_eq!(
+            Restart::from(&Record {
+                cwd_reported: false,
+                cwd: Some("/".into()),
+                ..r.best().unwrap().clone()
+            })
+            .cwd
+            .as_deref(),
+            Some("/")
+        );
+    }
+
+    #[test]
     fn the_file_the_shell_reads() {
         let r = Restart {
             argv: vec!["nvim".into(), "".into(), "a b".into()],
             cwd: None,
+            cwd_required: false,
         };
         assert_eq!(r.file_bytes(), b"1\0\0nvim\0\0a b\0");
     }

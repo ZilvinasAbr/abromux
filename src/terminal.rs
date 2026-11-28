@@ -1117,7 +1117,11 @@ impl TerminalView {
             .map_or(0, |d| d.as_secs());
         let parsed = program_resume::parse(body, &self.resume_token, now);
         let shell = self.pty.pid();
-        if self.resume.apply(parsed, |pid| reporter(pid, shell?)) {
+        let agent = self.agent.as_ref().and_then(|a| a.pid);
+        if self
+            .resume
+            .apply(parsed, |pid| reporter(pid, shell?, agent))
+        {
             self.watch_owners(cx);
         }
     }
@@ -3062,26 +3066,29 @@ fn resume_token(host: Option<&str>) -> String {
 }
 
 /// What to know of a process reporting to a terminal whose shell is
-/// `shell`: only this user's, from the shell or below it.
-fn reporter(pid: u32, shell: u32) -> Option<program_resume::Checked> {
+/// `shell`: only this user's, from the shell or below it. `agent` is the
+/// pid of the terminal's coding agent, to note one running under it.
+fn reporter(pid: u32, shell: u32, agent: Option<u32>) -> Option<program_resume::Checked> {
     use abromux_platform::process;
     let me = process::info(pid)?;
     if me.uid != process::uid() {
         return None;
     }
-    let (mut at, mut info, mut depth) = (pid, me, 0);
+    let (mut at, mut info, mut depth, mut under_agent) = (pid, me, 0, false);
     while at != shell {
         if depth >= 64 || info.parent <= 1 {
             return None;
         }
         depth += 1;
         at = info.parent;
+        under_agent |= agent == Some(at) && at != shell;
         info = process::info(at)?;
     }
     Some(program_resume::Checked {
         started: Some(me.started),
         depth,
         cwd: process::cwd(pid),
+        under_agent,
     })
 }
 
@@ -3391,9 +3398,13 @@ mod tests {
         let me = std::process::id();
         let sh = child.id();
         let sleep = abromux_platform::process::children(sh)[0];
-        assert_eq!(super::reporter(me, me).unwrap().depth, 0);
-        assert_eq!(super::reporter(sh, me).unwrap().depth, 1);
-        let r = super::reporter(sleep, me).unwrap();
+        assert_eq!(super::reporter(me, me, None).unwrap().depth, 0);
+        assert_eq!(super::reporter(sh, me, None).unwrap().depth, 1);
+        let r = super::reporter(sleep, me, None).unwrap();
+        assert!(!r.under_agent);
+        // `sh` as the agent: `sleep` runs under it, `sh` itself doesn't.
+        assert!(super::reporter(sleep, me, Some(sh)).unwrap().under_agent);
+        assert!(!super::reporter(sh, me, Some(sh)).unwrap().under_agent);
         assert_eq!(r.depth, 2);
         let owner = super::program_resume::Owner {
             pid: sleep,
@@ -3401,7 +3412,7 @@ mod tests {
         };
         assert!(super::owner_alive(&owner));
         // Not under `sh`'s child, or reused.
-        assert!(super::reporter(me, sleep).is_none());
+        assert!(super::reporter(me, sleep, None).is_none());
         assert!(!super::owner_alive(&super::program_resume::Owner {
             started: r.started.map(|s| s + 1),
             ..owner.clone()

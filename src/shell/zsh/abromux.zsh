@@ -63,7 +63,7 @@ _abromux_preexec() {
 # format version, the folder, then each argument, each ending in NUL. It's
 # read and removed, and the arguments run as they are, never as shell code:
 # `command` finds only a program, not a function or builtin of the name.
-# The C and D marks around it tell abromux when it ends.
+# The C and D marks around it tell abromux when it ends (after a ^C too).
 _abromux_resume() {
     builtin emulate -L zsh -o no_aliases
     builtin local f=$ABROMUX_RESUME_FILE v dir x
@@ -81,8 +81,13 @@ _abromux_resume() {
         [[ -d $dir ]] && builtin cd -- $dir || builtin return 0
     fi
     builtin print -n "\e]133;C\a"
-    builtin command -- "${a[@]}"
-    builtin print -n "\e]133;D;$?\a"
+    # The D mark even after a ^C, and the rest of the prompt's hooks then.
+    {
+        builtin command -- "${a[@]}"
+    } always {
+        builtin print -n "\e]133;D;$?\a"
+        (( TRY_BLOCK_INTERRUPT = 0 ))
+    }
 }
 
 builtin typeset -ag precmd_functions preexec_functions
