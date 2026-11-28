@@ -17,9 +17,33 @@ pub fn clean_description(s: &str) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// `secs` of age in the short form lists use: "now", "5m", "3h", "2d".
+pub fn ago_short(secs: i64) -> String {
+    match secs.max(0) {
+        s if s < 60 => "now".into(),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86400),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ages() {
+        assert_eq!(
+            [
+                ago_short(-1),
+                ago_short(5),
+                ago_short(120),
+                ago_short(7200),
+                ago_short(200_000)
+            ],
+            ["now", "now", "2m", "2h", "2d"]
+        );
+    }
 
     #[test]
     fn descriptions() {

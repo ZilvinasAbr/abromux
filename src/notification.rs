@@ -783,7 +783,7 @@ fn banner_title(title: &str) -> &str {
 
 /// "now", "5m", "3h", "2d".
 fn ago(d: Duration) -> String {
-    abromux_gitlab::time::ago_short(d.as_secs() as i64)
+    abromux_core::text::ago_short(d.as_secs() as i64)
 }
 
 #[cfg(test)]

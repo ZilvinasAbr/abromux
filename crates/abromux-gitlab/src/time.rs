@@ -79,15 +79,7 @@ pub fn ago(iso: &str, now: i64) -> String {
     }
 }
 
-/// `secs` of age in the short form lists use: "now", "5m", "3h", "2d".
-pub fn ago_short(secs: i64) -> String {
-    match secs.max(0) {
-        s if s < 60 => "now".into(),
-        s if s < 3600 => format!("{}m", s / 60),
-        s if s < 86400 => format!("{}h", s / 3600),
-        s => format!("{}d", s / 86400),
-    }
-}
+pub use abromux_core::text::ago_short;
 
 /// GitLab's hover text for a time, in UTC: `Nov 5, 2026, 7:36 PM UTC`.
 pub fn exact(iso: &str) -> String {
