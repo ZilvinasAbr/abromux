@@ -205,8 +205,6 @@ const DROP_EDGE: f32 = 32.;
 enum Hints {
     Command,
     Control,
-    /// ⌥⌘: the selected workspace's links (`links.rs`).
-    Links,
 }
 
 struct Assets;
@@ -2716,14 +2714,12 @@ impl AbroMux {
     }
 
     /// Show hints after the digit shortcuts' modifiers have been held for
-    /// `HINT_DELAY` (⌘ for workspaces, ⌃ for tabs, ⌥⌘ for links on macOS);
+    /// `HINT_DELAY` (⌘ for workspaces, ⌃ for tabs on macOS);
     /// any other modifier change hides them.
     fn modifiers_changed(&mut self, m: &Modifiers, window: &mut Window, cx: &mut Context<Self>) {
         let held = |name: &str| keymap::default_modifiers(name).is_some_and(|d| d == *m);
         let want = if held("workspace1") {
             Some(Hints::Command)
-        } else if held("link1") {
-            Some(Hints::Links)
         } else if held("tab1") {
             Some(Hints::Control)
         } else {

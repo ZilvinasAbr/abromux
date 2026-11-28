@@ -1,9 +1,8 @@
-//! Pinned tabs: the tabs a workspace keeps. The sidebar lists them under
-//! the workspace's row, and ⌘P finds them. ⌘W on a pinned tab hides it
-//! rather than closing it: it leaves the layout and keeps running (a
-//! terminal's program, a page), and showing it again (from the sidebar, ⌘P,
-//! ⌥⌘1…9 or opening its link again) puts it back where it was. ⇧⌘W closes
-//! and unpins.
+//! Pinned tabs: the tabs a workspace keeps. ⌘P finds them and `abromux
+//! link` lists them. ⌘W on a pinned tab hides it rather than closing it: it
+//! leaves the layout and keeps running (a terminal's program, a page), and
+//! showing it again (⌘P, ⌥⌘1…9 or opening its link again) puts it back
+//! where it was. ⇧⌘W closes and unpins.
 //!
 //! Tabs showing a Jira ticket or a GitLab merge request are pinned on their
 //! own (`links::sync_links`); unpinning one stops that for its key.
@@ -198,8 +197,8 @@ impl AbroMux {
         }
     }
 
-    /// ⇧⌘W, and the × on a hidden tab's sidebar row: close tab `id` and
-    /// unpin it, asking first if something runs in it.
+    /// ⇧⌘W: close tab `id` and unpin it, asking first if something runs in
+    /// it.
     pub(crate) fn request_close_and_unpin(
         &mut self,
         id: EntityId,

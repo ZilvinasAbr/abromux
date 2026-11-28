@@ -416,8 +416,10 @@ pub struct SidebarSettings {
     /// Let long names wrap instead of cutting them off.
     pub wrap_workspace_titles: bool,
     pub show_workspace_description: bool,
-    /// The selected workspace's tracked links under its row (`crate::links`).
-    pub show_links: bool,
+    /// The selected workspace's links under its row, until 0.47: removed,
+    /// but still accepted so a config that set it isn't refused.
+    #[serde(rename = "showLinks")]
+    _show_links: serde::de::IgnoredAny,
     #[serde(deserialize_with = "opt_color")]
     pub workspace_description_color: Option<Rgba>,
     pub show_notification_message: bool,
@@ -443,7 +445,7 @@ impl Default for SidebarSettings {
             hide_all_details: false,
             wrap_workspace_titles: false,
             show_workspace_description: true,
-            show_links: true,
+            _show_links: serde::de::IgnoredAny,
             workspace_description_color: None,
             show_notification_message: true,
             show_branch_directory: true,
@@ -1577,7 +1579,8 @@ mod tests {
             r##"{
               "app": { "workspaceInheritWorkingDirectory": false, "newWorkspacePlacement": "afterCurrent",
                        "keepWorkspaceOpenWhenClosingLastSurface": true },
-              "sidebar": { "fontSize": 14, "hideAllDetails": true, "selectionColor": "#336699" },
+              "sidebar": { "fontSize": 14, "hideAllDetails": true, "selectionColor": "#336699",
+                           "showLinks": false },
               "sidebarAppearance": { "tintColor": "#000", "tintOpacity": 0.3 },
               "workspaceColors": { "indicatorStyle": "solidFill", "colors": { "Ocean": "#0066aa" } },
               "workspaceGroups": { "newWorkspacePlacement": "top", "groupByAgentStatus": true },

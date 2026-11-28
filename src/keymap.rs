@@ -541,7 +541,7 @@ pub fn default_label(name: &str) -> String {
 }
 
 /// The modifiers of action `name`'s first default key: what to hold to see
-/// the digit hints (`workspace1`, `tab1`, `link1`).
+/// the digit hints (`workspace1`, `tab1`).
 pub fn default_modifiers(name: &str) -> Option<gpui::Modifiers> {
     default_key(name).map(|k| k.modifiers)
 }

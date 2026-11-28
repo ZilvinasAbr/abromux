@@ -461,7 +461,7 @@ pub struct Workspace {
     pub hidden_links: Vec<String>,
     /// The pane its links open in, once one has.
     pub link_pane: Option<usize>,
-    /// Its pinned tabs, in the sidebar's order: in the layout or in
+    /// Its pinned tabs, in the links list's order: in the layout or in
     /// `hidden`. Closing one (⌘W) hides it rather than closing it.
     pub pinned: Vec<EntityId>,
     /// Pinned tabs closed with ⌘W: out of the layout, still running.

@@ -61,8 +61,8 @@ Commit in the worktrees as usual: the commits land in the original repo.
 
 ## Tickets and merge requests
 
-Pin the Jira tickets and GitLab merge requests this work is for, so they
-show under the workspace in the sidebar. Each opens in a pinned tab, hidden
+Pin the Jira tickets and GitLab merge requests this work is for, so the
+user finds them with ⌘P and ⌥⌘1…9. Each opens in a pinned tab, hidden
 until the user shows it:
 
     abromux link add PAY-1423
