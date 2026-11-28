@@ -92,6 +92,8 @@ Commands:
   close-surface [--surface <ref>] [--workspace <ref>] [--unpin]   (a pinned tab is hidden, still running;
                                                              --unpin closes it for good)
   focus-surface --surface <ref>
+  confirm [--surface <ref>] [--info <text>] [--button <label>] <message>   (a sheet over the tab; waits for
+                                                             the answer: OK confirmed or OK cancelled)
   rename-tab [--surface <ref>] [--workspace <ref>] [<title>]  (no title: back to the program's own)
   tab-action [--tab <ref>] [--workspace <ref>] <action> [<title>] [--url <url>] [--focus <true|false>]
                                                              (rename, clear-name, close-left, close-right, close-others,
@@ -992,6 +994,18 @@ fn dispatch(
             }
         }
         "focus-surface" => ("surface.focus", |v| format!("OK {}", s(&v["ref"]))),
+        "confirm" => {
+            if !opts.contains_key("message") && !pos.is_empty() {
+                opts.insert("message".into(), json!(pos.join(" ")));
+            }
+            ("surface.confirm", |v| {
+                if v["confirmed"] == true {
+                    "OK confirmed".into()
+                } else {
+                    "OK cancelled".into()
+                }
+            })
+        }
         "rename-tab" => {
             if !pos.is_empty() {
                 opts.insert("title".into(), json!(pos.join(" ")));

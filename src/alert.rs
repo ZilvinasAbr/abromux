@@ -25,8 +25,9 @@ pub struct Confirm<'a> {
     pub info: &'a str,
     /// The action's button, e.g. "Close".
     pub button: &'a str,
+    /// The "Don't ask again" checkbox's label; "" for no checkbox.
     pub suppress: &'a str,
-    /// Prefs key that turns the sheet off.
+    /// Prefs key that turns the sheet off; "" for a sheet that always asks.
     pub skip_key: &'a str,
 }
 
@@ -66,7 +67,7 @@ pub fn is_open(cx: &App) -> bool {
 /// (the receiver errors).
 pub fn confirm(window: &mut Window, cx: &mut App, c: Confirm) -> oneshot::Receiver<bool> {
     let (tx, rx) = oneshot::channel();
-    if abromux_platform::prefs::bool(c.skip_key) {
+    if !c.skip_key.is_empty() && abromux_platform::prefs::bool(c.skip_key) {
         let _ = tx.send(true);
         return rx;
     }
@@ -119,7 +120,7 @@ fn answer(ok: bool, window: &mut Window, cx: &mut App) {
     let Some(mut open) = cx.global_mut::<Sheets>().open.take() else {
         return;
     };
-    if ok && open.ticked {
+    if ok && open.ticked && !open.skip_key.is_empty() {
         abromux_platform::prefs::set_bool(&open.skip_key, true);
     }
     if let Some(restore) = open.restore.take() {
@@ -258,13 +259,17 @@ fn render_sheet(open: &Open) -> AnyElement {
                 .text_center()
                 .child(open.message.clone()),
         )
-        .child(
-            div()
-                .text_size(px(11.5))
-                .text_center()
-                .child(open.info.clone()),
-        )
-        .child(div().w_full().child(checkbox))
+        .when(!open.info.is_empty(), |d| {
+            d.child(
+                div()
+                    .text_size(px(11.5))
+                    .text_center()
+                    .child(open.info.clone()),
+            )
+        })
+        .when(!open.suppress.is_empty(), |d| {
+            d.child(div().w_full().child(checkbox))
+        })
         .child(
             div()
                 .w_full()
