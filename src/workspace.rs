@@ -1,7 +1,9 @@
 //! Workspace model: each workspace owns a tree of split panes; each pane
 //! holds tabs ("surfaces") that are either terminals or browsers.
 
-use crate::{agent::Kind, browser::BrowserView, plugins::TabHandle, terminal::TerminalView};
+use crate::{
+    agent::Kind, browser::BrowserView, paths::tilde, plugins::TabHandle, terminal::TerminalView,
+};
 use gpui::{App, Axis, Entity, EntityId, Focusable, Window};
 
 #[derive(Clone)]
@@ -1053,14 +1055,6 @@ pub fn move_group(
     ws.splice(at..at, block);
     tidy_groups(ws, groups);
     true
-}
-
-pub fn tilde(path: &str) -> String {
-    let home = crate::paths::home_var().map(|h| h.to_string_lossy().into_owned());
-    match home {
-        Some(home) if path.starts_with(&home) => format!("~{}", &path[home.len()..]),
-        _ => path.to_string(),
-    }
 }
 
 /// What's checked out where `dir` is.

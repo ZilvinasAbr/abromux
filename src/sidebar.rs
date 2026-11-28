@@ -6,12 +6,13 @@
 
 use crate::{
     AbroMux, Hints, SIDEBAR_WIDTH, TITLEBAR_H, focus_selected, hint_pill, one_line,
+    paths::tilde,
     select_all_on_double_click,
     settings::{IndicatorStyle, Placement, Settings},
     shortcut_digit, terminal,
     theme::*,
     titlebar,
-    workspace::{self, Group, GroupMove, Workspace, group_span, tilde},
+    workspace::{self, Group, GroupMove, Workspace, group_span},
 };
 use gpui::{prelude::*, *};
 use gpui_component::{
@@ -611,7 +612,7 @@ impl AbroMux {
             return;
         };
         if let (Some(text), Some(i)) = (text, self.ws_index(id)) {
-            self.workspaces[i].description = clean_description(&text);
+            self.workspaces[i].description = abromux_core::text::clean_description(&text);
         }
         self.focus_active(window, cx);
         cx.notify();
@@ -1717,18 +1718,10 @@ trait OwnId: IntoElement {
 
 impl<E: IntoElement> OwnId for E {}
 
-/// A description as typed: trailing blank lines and spaces dropped, empty
-/// for none.
-pub fn clean_description(s: &str) -> Option<String> {
-    let lines: Vec<&str> = s.lines().map(str::trim_end).collect();
-    let text = lines.join("\n").trim().to_string();
-    (!text.is_empty()).then_some(text)
-}
-
 #[cfg(test)]
 mod tests {
     // Not `super::*`: gpui's own `test` attribute would shadow the built-in.
-    use super::{clean_description, short_path};
+    use super::short_path;
 
     #[test]
     fn paths() {
@@ -1739,14 +1732,5 @@ mod tests {
         assert_eq!(short_path(&home, true), "~");
         assert_eq!(short_path("/usr/local/bin", true), "…/bin");
         assert_eq!(short_path("/tmp", true), "/tmp");
-    }
-
-    #[test]
-    fn descriptions() {
-        assert_eq!(clean_description("  \n"), None);
-        assert_eq!(
-            clean_description("Ship it  \n- build\n\n").as_deref(),
-            Some("Ship it\n- build")
-        );
     }
 }

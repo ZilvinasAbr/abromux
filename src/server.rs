@@ -801,7 +801,7 @@ impl AbroMux {
                 let name = str_param(p, "name").map(String::from);
                 let wi = self.open_layout(&spec, name, &base, window, cx);
                 self.workspaces[wi].description =
-                    str_param(p, "description").and_then(crate::sidebar::clean_description);
+                    str_param(p, "description").and_then(abromux_core::text::clean_description);
                 let new_id = self.workspaces[wi].id;
                 if let Some(g) = str_param(p, "group") {
                     let g = self.find_group(g)?;
@@ -876,7 +876,7 @@ impl AbroMux {
                     }
                 }
                 self.workspaces[wi].description =
-                    str_param(p, "description").and_then(crate::sidebar::clean_description);
+                    str_param(p, "description").and_then(abromux_core::text::clean_description);
                 if let (Some(cmd), Some(Surface::Terminal(t))) = (
                     str_param(p, "command"),
                     self.workspaces[wi].focused_surface(),
@@ -4152,7 +4152,7 @@ impl AbroMux {
                 self.naming.remove(&id);
             }
             "set-description" => {
-                ws.description = crate::sidebar::clean_description(
+                ws.description = abromux_core::text::clean_description(
                     str_param(p, "description").context("set-description needs --description")?,
                 )
             }

@@ -1664,7 +1664,7 @@ impl Render for BrowserView {
                         .overflow_hidden()
                         .text_ellipsis()
                         .whitespace_nowrap()
-                        .child(crate::workspace::tilde(&path.to_string_lossy())),
+                        .child(crate::paths::tilde(&path.to_string_lossy())),
                 )
                 .into_any_element()
         } else {

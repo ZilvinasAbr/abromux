@@ -14,11 +14,11 @@
 
 use crate::{
     AbroMux, TITLEBAR_H, channel, keymap,
+    paths::tilde,
     settings::{self, Command, Settings},
     shortcut_digit,
     theme::*,
     workspace::Surface,
-    workspace::tilde,
 };
 use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputEvent, InputState};

@@ -56,7 +56,7 @@ impl AbroMux {
         ws.description = spec
             .description
             .as_deref()
-            .and_then(crate::sidebar::clean_description);
+            .and_then(abromux_core::text::clean_description);
         let (index, group) = self.new_workspace_slot(cx);
         ws.group = group;
         let index = self.insert_workspace(index, ws);

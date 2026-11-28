@@ -495,7 +495,7 @@ fn folder_row(title: &'static str, description: impl Into<SharedString>, key: Ke
                         .truncate()
                         .text_size(px(12.))
                         .text_color(rgb(pal().muted))
-                        .child(crate::workspace::tilde(&shown.to_string_lossy())),
+                        .child(crate::paths::tilde(&shown.to_string_lossy())),
                 )
                 .child(
                     button("choose-folder", "Choose…").on_click(move |_, window, cx| {
@@ -513,7 +513,7 @@ fn folder_row(title: &'static str, description: impl Into<SharedString>, key: Ke
                                 let Some(dir) = paths.into_iter().next() else {
                                     return;
                                 };
-                                let dir = crate::workspace::tilde(&dir.to_string_lossy());
+                                let dir = crate::paths::tilde(&dir.to_string_lossy());
                                 let _ =
                                     cx.update(|window, cx| save(key, Some(json!(dir)), window, cx));
                             })
@@ -1009,7 +1009,7 @@ fn servers_page(inputs: &(Entity<InputState>, Entity<InputState>)) -> Page {
                         },
                     ),
                     None => info_row(
-                        crate::workspace::tilde(&path.to_string_lossy()),
+                        crate::paths::tilde(&path.to_string_lossy()),
                         "Not in config.json, so other versions of the app sharing it don't \
                          trip on them. `abromux servers` changes it too. Keep the List Here \
                          on a server shares it with your other apps.",
@@ -1221,7 +1221,7 @@ fn general_page() -> Page {
                 [
                     info_row(
                         "config.json",
-                        crate::workspace::tilde(&settings::path().to_string_lossy()),
+                        crate::paths::tilde(&settings::path().to_string_lossy()),
                         |_, _| {
                             div()
                                 .flex()
@@ -1240,7 +1240,7 @@ fn general_page() -> Page {
                         match ghostty_config() {
                             Some(p) => format!(
                                 "{} · fonts, colors and terminal keys, read at launch",
-                                crate::workspace::tilde(&p.to_string_lossy())
+                                crate::paths::tilde(&p.to_string_lossy())
                             ),
                             None => "Fonts, colors and terminal keys come from Ghostty's \
                                      config (~/.config/ghostty/config), read at launch"

@@ -66,6 +66,7 @@ use gpui_component::{
     input::{Input, InputEvent, InputState, SelectAll},
     notification::Notification,
 };
+use paths::tilde;
 use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
@@ -75,7 +76,7 @@ use std::{
 };
 use terminal::{TerminalEvent, TerminalView};
 use theme::*;
-use workspace::{Dir, Node, Pane, Surface, TabDrop, Workspace, git_branch, tilde};
+use workspace::{Dir, Node, Pane, Surface, TabDrop, Workspace, git_branch};
 
 actions!(
     abromux,
