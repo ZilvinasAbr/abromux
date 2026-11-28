@@ -537,7 +537,7 @@ impl WorkspaceColors {
             .map(|(_, c)| *c)
             .or_else(|| {
                 s.starts_with('#')
-                    .then(|| crate::workspace::parse_color(s))
+                    .then(|| abromux_core::color::parse_rgb(s))
                     .flatten()
             })
     }
@@ -930,11 +930,13 @@ fn step<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
 /// `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`.
 fn color<'de, D: Deserializer<'de>>(d: D) -> Result<Rgba, D::Error> {
     let s = String::deserialize(d)?;
-    abromux_plugin::color::parse(&s).ok_or_else(|| {
-        serde::de::Error::custom(format!(
-            "{s:?} isn't a color; use #rgb, #rgba, #rrggbb or #rrggbbaa"
-        ))
-    })
+    abromux_core::color::parse_rgba(&s)
+        .map(rgba)
+        .ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "{s:?} isn't a color; use #rgb, #rgba, #rrggbb or #rrggbbaa"
+            ))
+        })
 }
 
 fn opt_color<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Rgba>, D::Error> {
@@ -972,7 +974,7 @@ fn named_colors<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<(String, u32)>, D
         .into_iter()
         .map(|(name, v)| {
             v.as_str()
-                .and_then(crate::workspace::parse_color)
+                .and_then(abromux_core::color::parse_rgb)
                 .map(|c| (name.clone(), c))
                 .ok_or_else(|| serde::de::Error::custom(format!("color {name:?} isn't #rrggbb")))
         })

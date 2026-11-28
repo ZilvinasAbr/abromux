@@ -491,7 +491,7 @@ pub type Status = abromux_core::status::Status<EntityId>;
 pub use abromux_core::status::{LogEntry, LogLevel, Progress};
 
 /// A workspace or group colour: `#rgb` or `#rrggbb` (the `#` is optional).
-pub use abromux_plugin::color::parse_rgb as parse_color;
+pub use abromux_core::color::parse_rgb as parse_color;
 
 impl Workspace {
     /// Its panes, in layout order. Callers go through these rather than

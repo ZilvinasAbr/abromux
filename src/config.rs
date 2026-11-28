@@ -324,7 +324,7 @@ fn unquote(s: &str) -> &str {
 
 /// A Ghostty colour value (`#rrggbb`, quoted or not; also `#rgb`).
 pub fn parse_color(s: &str) -> Option<Rgb> {
-    let n = abromux_plugin::color::parse_rgb(unquote(s.trim()))?;
+    let n = abromux_core::color::parse_rgb(unquote(s.trim()))?;
     Some(Rgb((n >> 16) as u8, (n >> 8) as u8, n as u8))
 }
 
