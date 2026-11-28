@@ -171,6 +171,8 @@ pub enum NodeState {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+// Saved and read a few times a session; boxing would only cost the code.
+#[allow(clippy::large_enum_variant)]
 pub enum TabState {
     Terminal {
         cwd: String,
@@ -204,6 +206,15 @@ pub enum TabState {
         /// in the editor set then.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         edit: Option<String>,
+        /// The page terminal-browser showed in it: taken back with `held`
+        /// as it was, else opened again on this URL.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        page: Option<String>,
+        /// That terminal-browser ran in the tab's shell (`terminal-browser
+        /// open`), which a new shell runs again; else the tab was a browser
+        /// tab, which comes back as one.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        page_in_shell: bool,
     },
     Browser {
         url: String,
@@ -333,6 +344,30 @@ mod tests {
     }
 
     #[test]
+    fn terminal_browser_pages() {
+        // An older session's terminal has no page.
+        let old: TabState = serde_json::from_str(r#"{"kind":"terminal","cwd":"/tmp"}"#).unwrap();
+        assert!(matches!(
+            old,
+            TabState::Terminal {
+                page: None,
+                page_in_shell: false,
+                ..
+            }
+        ));
+        // A held browser tab keeps its page; the flag is left out when false.
+        let t: TabState = serde_json::from_str(
+            r#"{"kind":"terminal","cwd":"/tmp","held":"1-2","surface":3,"page":"https://a.b/"}"#,
+        )
+        .unwrap();
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(json.contains(r#""page":"https://a.b/""#), "{json}");
+        assert!(!json.contains("page_in_shell"), "{json}");
+        let back: TabState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, t);
+    }
+
+    #[test]
     fn round_trips_and_tolerates_missing_fields() {
         let s = Session {
             version: VERSION,
@@ -421,6 +456,8 @@ mod tests {
                                 host: Some("ssh://box".into()),
                                 surface: Some(7),
                                 edit: Some("/tmp/main.rs".into()),
+                                page: Some("https://a.b/".into()),
+                                page_in_shell: true,
                             }],
                         },
                         NodeState::Pane {

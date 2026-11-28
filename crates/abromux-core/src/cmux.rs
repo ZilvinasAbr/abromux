@@ -199,6 +199,8 @@ fn tab(p: &Value, dir: &str) -> Option<TabState> {
                 host: None,
                 surface: None,
                 edit: None,
+                page: None,
+                page_in_shell: false,
             })
         }
         "browser" => {
