@@ -43,10 +43,8 @@
 //! `.abromux/config.json` (see `PROJECT_FILES`); they ask before their first
 //! run.
 
-use crate::{
-    layout::WorkspaceSpec,
-    theme::{Appearance, pal},
-};
+use crate::theme::pal;
+use abromux_core::{layout::WorkspaceSpec, settings::Appearance};
 use gpui::Keystroke;
 use gpui::{Global, Rgba, rgb, rgba};
 use gpui_component::notification::Notification;
@@ -537,7 +535,7 @@ impl WorkspaceColors {
             .map(|(_, c)| *c)
             .or_else(|| {
                 s.starts_with('#')
-                    .then(|| crate::workspace::parse_color(s))
+                    .then(|| abromux_core::color::parse_rgb(s))
                     .flatten()
             })
     }
@@ -628,8 +626,8 @@ impl Default for NotificationSettings {
 }
 
 impl NotificationSettings {
-    pub fn alert(&self, kind: crate::notification::Kind) -> Alert {
-        use crate::notification::Kind;
+    pub fn alert(&self, kind: abromux_core::notify_hook::Kind) -> Alert {
+        use abromux_core::notify_hook::Kind;
         match kind {
             Kind::NeedsInput => self.needs_input,
             Kind::Done => self.done,
@@ -822,23 +820,37 @@ impl TryFrom<Option<RawShortcut>> for Shortcut {
             RawKeys::Many(ks) => ks,
         };
         if let Some(w) = &when {
-            crate::keymap::check_context(w)?;
+            crate::keys::check_context(w)?;
         }
         Ok(Shortcut {
             keys: keys
                 .iter()
-                .map(|k| crate::keymap::parse_seq(k))
+                .map(|k| crate::keys::parse_seq(k))
                 .collect::<Result<_, _>>()?,
             when,
         })
     }
 }
 
+/// Whether a name is an action's (`keymap::ACTIONS`), for the keys of
+/// `"shortcuts"`: the keymap knows its actions, the settings only their
+/// names. [`set_shortcut_names`] sets it.
+static SHORTCUT_NAMES: std::sync::OnceLock<fn(&str) -> bool> = std::sync::OnceLock::new();
+
+/// Say which names `"shortcuts"` takes, before anything reads the file
+/// (main.rs does, first thing). Only the first call counts.
+pub fn set_shortcut_names(known: fn(&str) -> bool) {
+    let _ = SHORTCUT_NAMES.set(known);
+}
+
 fn shortcuts<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<String, Shortcut>, D::Error> {
     let raw = BTreeMap::<String, Option<RawShortcut>>::deserialize(d)?;
+    let known = SHORTCUT_NAMES
+        .get()
+        .expect("settings::set_shortcut_names runs before the config file is read");
     raw.into_iter()
         .map(|(name, s)| {
-            if crate::keymap::find(&name).is_none() {
+            if !known(&name) {
                 return Err(format!(
                     "unknown shortcut `{name}`; `abromux config shortcuts` lists them"
                 ));
@@ -930,11 +942,13 @@ fn step<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
 /// `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`.
 fn color<'de, D: Deserializer<'de>>(d: D) -> Result<Rgba, D::Error> {
     let s = String::deserialize(d)?;
-    abromux_plugin::color::parse(&s).ok_or_else(|| {
-        serde::de::Error::custom(format!(
-            "{s:?} isn't a color; use #rgb, #rgba, #rrggbb or #rrggbbaa"
-        ))
-    })
+    abromux_core::color::parse_rgba(&s)
+        .map(rgba)
+        .ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "{s:?} isn't a color; use #rgb, #rgba, #rrggbb or #rrggbbaa"
+            ))
+        })
 }
 
 fn opt_color<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Rgba>, D::Error> {
@@ -972,7 +986,7 @@ fn named_colors<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<(String, u32)>, D
         .into_iter()
         .map(|(name, v)| {
             v.as_str()
-                .and_then(crate::workspace::parse_color)
+                .and_then(abromux_core::color::parse_rgb)
                 .map(|c| (name.clone(), c))
                 .ok_or_else(|| serde::de::Error::custom(format!("color {name:?} isn't #rrggbb")))
         })
@@ -993,7 +1007,7 @@ pub fn browser_engine(cx: &gpui::App) -> BrowserEngine {
 pub fn default_engine() -> BrowserEngine {
     if abromux_platform::MACOS {
         BrowserEngine::BuiltIn
-    } else if crate::terminal_browser::installed() {
+    } else if crate::paths::find_program("terminal-browser").is_some() {
         BrowserEngine::TerminalBrowser
     } else {
         BrowserEngine::System
@@ -1291,8 +1305,14 @@ pub fn trust(file: &Path, raw: &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// The names main.rs gives [`set_shortcut_names`], for tests that read
+    /// `"shortcuts"`.
+    pub(crate) fn know_shortcuts() {
+        set_shortcut_names(|name| crate::keymap::find(name).is_some());
+    }
 
     #[test]
     fn script_values() {
@@ -1421,6 +1441,7 @@ mod tests {
 
     #[test]
     fn shortcuts() {
+        know_shortcuts();
         let s = parse(
             r#"{
               "shortcuts": {
@@ -1441,6 +1462,7 @@ mod tests {
 
     #[test]
     fn shortcut_errors() {
+        know_shortcuts();
         let err = |text: &str| parse(text).unwrap_err().to_string();
         let e = err(r#"{"shortcuts": {"splitLeft": "cmd-d"}}"#);
         assert!(e.contains("unknown shortcut `splitLeft`"), "{e}");
@@ -1559,7 +1581,7 @@ mod tests {
 
     #[test]
     fn notification_kinds() {
-        use crate::notification::Kind;
+        use abromux_core::notify_hook::Kind;
         let d = NotificationSettings::default();
         assert_eq!(d.alert(Kind::NeedsInput), Alert::Banner);
         assert_eq!(d.alert(Kind::Done), Alert::Unread);

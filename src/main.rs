@@ -1,6 +1,8 @@
 mod about;
+mod actions;
 mod alert;
 mod api;
+mod appearance;
 mod bench;
 mod browser;
 mod channel;
@@ -19,6 +21,7 @@ mod gitlab;
 mod icon;
 mod ipc;
 mod keymap;
+mod keys;
 mod layout;
 mod link;
 mod links;
@@ -51,6 +54,7 @@ mod terminal_browser_panes;
 mod theme;
 mod titlebar;
 mod update;
+mod update_view;
 mod workspace;
 
 use abromux_browser::{
@@ -66,6 +70,7 @@ use gpui_component::{
     input::{Input, InputEvent, InputState, SelectAll},
     notification::Notification,
 };
+use paths::tilde;
 use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
@@ -75,7 +80,7 @@ use std::{
 };
 use terminal::{TerminalEvent, TerminalView};
 use theme::*;
-use workspace::{Dir, Node, Pane, Surface, TabDrop, Workspace, git_branch, tilde};
+use workspace::{Dir, Node, Pane, Surface, TabDrop, Workspace, git_branch};
 
 actions!(
     abromux,
@@ -3334,11 +3339,11 @@ impl Render for AbroMux {
             .notifications_open
             .then(|| self.render_notifications(cx));
         let palette = self.render_palette(cx);
-        let updates = update::popover(
+        let updates = update_view::popover(
             if self.sidebar {
-                update::Anchor::SidebarFoot
+                update_view::Anchor::SidebarFoot
             } else {
-                update::Anchor::Titlebar(px(150.))
+                update_view::Anchor::Titlebar(px(150.))
             },
             px(TITLEBAR_H),
             cx,
@@ -3774,7 +3779,7 @@ impl Render for AbroMux {
                                     titlebar::drag_or_zoom(ev, window)
                                 })
                                 .children(self.titlebar_buttons(cx))
-                                .children(update::pill(cx).map(|p| div().ml_1().child(p)))
+                                .children(update_view::pill(cx).map(|p| div().ml_1().child(p)))
                                 .child(
                                     div()
                                         .ml_2()
@@ -3821,7 +3826,7 @@ impl Render for AbroMux {
             .children(palette)
             .children(toasts)
             // Only where the compositor leaves decorations to the app (GNOME).
-            .children(csd::controls(window))
+            .children(csd::controls(window, quit::request))
             .children(csd::edges(window))
     }
 }
@@ -3952,6 +3957,8 @@ fn main() {
     // runtime folder.
     hold::set_dir(channel::state_dir(), channel::runtime_dir());
     pty::on_output(abromux_platform::power::output);
+    // Before anything reads config.json, whose "shortcuts" name actions.
+    settings::set_shortcut_names(|name| keymap::find(name).is_some());
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "bench-vt") {
         std::process::exit(bench::vt(&args[1..]));
@@ -4135,7 +4142,9 @@ fn run_app(cwd: Option<String>) {
     });
     app.run(move |cx: &mut App| {
         icon::set_dock_icon();
-        abromux_platform::prefs::import_once(&alert::SKIP_KEYS);
+        // The keys the native sheets kept in NSUserDefaults, copied into the
+        // prefs file once.
+        abromux_platform::prefs::import_once(&[quit::SKIP_KEY, SKIP_CLOSE_CLAUDE_KEY]);
         gpui_component::init(cx);
         // A broken config file starts with the defaults, and says so once the window is up.
         let (settings, settings_error) = match settings::load_app() {
@@ -4153,7 +4162,15 @@ fn run_app(cwd: Option<String>) {
         }
         plugins::set_sections(&settings, cx);
         cx.set_global(settings);
-        update::init(cx);
+        cx.set_global(terminal::HoldShells(session::path().is_some()));
+        update::init(
+            |cx| {
+                cx.global::<settings::Settings>()
+                    .app
+                    .automatically_check_for_updates
+            },
+            cx,
+        );
         gitlab::init(channel::support_dir(), cx);
         cx.on_action(|_: &Quit, cx| {
             match cx.active_window().or_else(|| cx.windows().first().copied()) {
@@ -4210,7 +4227,7 @@ fn run_app(cwd: Option<String>) {
                 browser::RemoveSuggestion,
                 Some("Omnibar > Input"),
             ),
-            KeyBinding::new("shift-enter", terminal::FindPrevious, Some("FindBar")),
+            KeyBinding::new("shift-enter", actions::FindPrevious, Some("FindBar")),
         ]);
         // Keybindings run before key listeners; let these reach the PTY.
         cx.bind_keys(
@@ -4271,7 +4288,7 @@ fn run_app(cwd: Option<String>) {
                     ..Default::default()
                 },
                 |window, cx| {
-                    theme::follow(window);
+                    appearance::follow(window);
                     if let Some(e) = settings_error {
                         window.defer(cx, move |window, cx| {
                             window.push_notification(settings::error_notification(e), cx)

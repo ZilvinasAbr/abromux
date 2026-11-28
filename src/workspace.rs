@@ -1,7 +1,8 @@
 //! Workspace model: each workspace owns a tree of split panes; each pane
 //! holds tabs ("surfaces") that are either terminals or browsers.
 
-use crate::{agent::Kind, browser::BrowserView, plugins::TabHandle, terminal::TerminalView};
+use crate::{agent::Kind, browser::BrowserView, paths::tilde, terminal::TerminalView};
+use abromux_plugin::TabHandle;
 use gpui::{App, Axis, Entity, EntityId, Focusable, Window};
 
 #[derive(Clone)]
@@ -455,7 +456,7 @@ pub struct Workspace {
     pub log: Vec<LogEntry>,
     /// Links tracked before tabs were pinned (`crate::links`): suggested
     /// under the pinned tabs until a tab shows them.
-    pub links: Vec<crate::links::Link>,
+    pub links: Vec<abromux_core::links::Link>,
     /// Keys of links untracked here, so they aren't tracked again when a
     /// tab or its branches show them.
     pub hidden_links: Vec<String>,
@@ -469,7 +470,7 @@ pub struct Workspace {
     /// The ticket or merge request a pinned tab was pinned for, so it's
     /// still known as that while its page shows something else (a sign-in
     /// page, say).
-    pub pinned_for: std::collections::HashMap<EntityId, crate::links::Link>,
+    pub pinned_for: std::collections::HashMap<EntityId, abromux_core::links::Link>,
     /// The pane focused before this one, for `last-pane`, and the one
     /// `track_focus` last saw.
     prev_pane: Option<usize>,
@@ -489,7 +490,7 @@ pub type Status = abromux_core::status::Status<EntityId>;
 pub use abromux_core::status::{LogEntry, LogLevel, Progress};
 
 /// A workspace or group colour: `#rgb` or `#rrggbb` (the `#` is optional).
-pub use abromux_plugin::color::parse_rgb as parse_color;
+pub use abromux_core::color::parse_rgb as parse_color;
 
 impl Workspace {
     /// Its panes, in layout order. Callers go through these rather than
@@ -1053,14 +1054,6 @@ pub fn move_group(
     ws.splice(at..at, block);
     tidy_groups(ws, groups);
     true
-}
-
-pub fn tilde(path: &str) -> String {
-    let home = crate::paths::home_var().map(|h| h.to_string_lossy().into_owned());
-    match home {
-        Some(home) if path.starts_with(&home) => format!("~{}", &path[home.len()..]),
-        _ => path.to_string(),
-    }
 }
 
 /// What's checked out where `dir` is.

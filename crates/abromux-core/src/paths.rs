@@ -26,6 +26,15 @@ pub fn expand_tilde(path: &str) -> PathBuf {
     }
 }
 
+/// `path` with [`home_var`] at its start shown as `~`, for display.
+pub fn tilde(path: &str) -> String {
+    let home = home_var().map(|h| h.to_string_lossy().into_owned());
+    match home {
+        Some(home) if path.starts_with(&home) => format!("~{}", &path[home.len()..]),
+        _ => path.to_string(),
+    }
+}
+
 /// `$XDG_CONFIG_HOME` if it's absolute (as the spec asks), else `~/.config`.
 pub fn xdg_config() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
@@ -94,7 +103,7 @@ mod tests {
     }
 
     #[test]
-    fn tilde() {
+    fn expand() {
         assert_eq!(expand_tilde("~"), home());
         assert_eq!(expand_tilde("~/code"), home().join("code"));
         assert_eq!(expand_tilde("~bob/x"), PathBuf::from("~bob/x"));

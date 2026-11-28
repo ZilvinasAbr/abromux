@@ -325,22 +325,6 @@ impl AbroMux {
     }
 }
 
-/// A program's status record as JSON (`program.status`, `surface.list`).
-pub fn program_status_json(shown: Option<&abromux_core::program_status::Shown>) -> Value {
-    let Some(s) = shown else { return Value::Null };
-    let r = &s.record;
-    json!({
-        "id": s.id,
-        "state": r.state.as_str(),
-        "app": r.app,
-        "kind": r.kind.map(|k| k.as_str()),
-        "progress": r.progress,
-        "title": r.title,
-        "msg": r.msg,
-        "others": s.others,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

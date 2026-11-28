@@ -57,7 +57,7 @@ pub fn apply(s: Settings, cx: &mut App) {
         });
     }
     keymap::apply(&s, cx);
-    crate::theme::apply(s.app.appearance, cx);
+    crate::appearance::apply(s.app.appearance, cx);
     crate::remote::apply(&s.remote);
     crate::plugins::set_sections(&s, cx);
     cx.set_global(s);
@@ -88,7 +88,7 @@ pub fn show(cx: &mut App) {
             ..Default::default()
         },
         |window, cx| {
-            crate::theme::follow(window);
+            crate::appearance::follow(window);
             let view = cx.new(|cx| SettingsView::new(window, cx));
             let layer = cx.new(|cx| crate::alert::Layer::new(view, window, cx));
             cx.new(|cx| Root::new(layer, window, cx))
@@ -346,7 +346,7 @@ fn save_shortcut(name: &'static str, keys: Option<String>, window: &mut Window, 
     let mut taken = None;
     let mut value = keys.as_ref().map(|k| json!(k));
     if let Some(k) = &keys {
-        let seq = keymap::parse_seq(k).unwrap_or_default();
+        let seq = crate::keys::parse_seq(k).unwrap_or_default();
         // The default key again: back to the default.
         let (defaults, _) = keymap::keys_for(&Settings::default(), act);
         if defaults == [seq.clone()] {
@@ -495,7 +495,7 @@ fn folder_row(title: &'static str, description: impl Into<SharedString>, key: Ke
                         .truncate()
                         .text_size(px(12.))
                         .text_color(rgb(pal().muted))
-                        .child(crate::workspace::tilde(&shown.to_string_lossy())),
+                        .child(crate::paths::tilde(&shown.to_string_lossy())),
                 )
                 .child(
                     button("choose-folder", "Choose…").on_click(move |_, window, cx| {
@@ -513,7 +513,7 @@ fn folder_row(title: &'static str, description: impl Into<SharedString>, key: Ke
                                 let Some(dir) = paths.into_iter().next() else {
                                     return;
                                 };
-                                let dir = crate::workspace::tilde(&dir.to_string_lossy());
+                                let dir = crate::paths::tilde(&dir.to_string_lossy());
                                 let _ =
                                     cx.update(|window, cx| save(key, Some(json!(dir)), window, cx));
                             })
@@ -1009,7 +1009,7 @@ fn servers_page(inputs: &(Entity<InputState>, Entity<InputState>)) -> Page {
                         },
                     ),
                     None => info_row(
-                        crate::workspace::tilde(&path.to_string_lossy()),
+                        crate::paths::tilde(&path.to_string_lossy()),
                         "Not in config.json, so other versions of the app sharing it don't \
                          trip on them. `abromux servers` changes it too. Keep the List Here \
                          on a server shares it with your other apps.",
@@ -1221,7 +1221,7 @@ fn general_page() -> Page {
                 [
                     info_row(
                         "config.json",
-                        crate::workspace::tilde(&settings::path().to_string_lossy()),
+                        crate::paths::tilde(&settings::path().to_string_lossy()),
                         |_, _| {
                             div()
                                 .flex()
@@ -1240,7 +1240,7 @@ fn general_page() -> Page {
                         match ghostty_config() {
                             Some(p) => format!(
                                 "{} · fonts, colors and terminal keys, read at launch",
-                                crate::workspace::tilde(&p.to_string_lossy())
+                                crate::paths::tilde(&p.to_string_lossy())
                             ),
                             None => "Fonts, colors and terminal keys come from Ghostty's \
                                      config (~/.config/ghostty/config), read at launch"
@@ -1652,7 +1652,7 @@ fn phone_status() -> AnyElement {
                     div()
                         .min_w_0()
                         .text_size(px(12.5))
-                        .font_family(crate::terminal::mono_font())
+                        .font_family(crate::theme::mono_font())
                         .child(shown),
                 )
                 .child(

@@ -2,13 +2,13 @@
 //! (`abromux_browser::backend`: WKWebView on macOS).
 
 use crate::{
+    actions::{Find, FindNext, FindPrevious, Reload, UseSelectionForFind},
     browser_find,
     browser_history::{self, Entry},
     claude_chat::{self, Chat},
     downloads::{self, Downloads},
     find_bar::{FindBar, Step},
     markdown,
-    terminal::{Find, FindNext, FindPrevious, UseSelectionForFind},
     theme::*,
 };
 pub use abromux_browser::backend::watch_clicks;
@@ -34,7 +34,6 @@ actions!(
     [
         Back,
         Forward,
-        Reload,
         ToggleDevTools,
         ShowConsole,
         SuggestNext,
@@ -1664,7 +1663,7 @@ impl Render for BrowserView {
                         .overflow_hidden()
                         .text_ellipsis()
                         .whitespace_nowrap()
-                        .child(crate::workspace::tilde(&path.to_string_lossy())),
+                        .child(crate::paths::tilde(&path.to_string_lossy())),
                 )
                 .into_any_element()
         } else {

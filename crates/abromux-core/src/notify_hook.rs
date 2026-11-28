@@ -37,6 +37,35 @@ use std::{
 /// cmux's default.
 const TIMEOUT: f64 = 20.;
 
+/// What a notification says happened, for `notifications.needsInput`,
+/// `done` and `error` (and the hooks' `kind`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Kind {
+    /// Text a program or `abromux notify` sent (OSC 9/99/777).
+    Message,
+    /// A bell (BEL): no banner, and repeats merge.
+    Bell,
+    /// An agent or program waits for you.
+    NeedsInput,
+    /// An agent finished its turn, or a program is done.
+    Done,
+    /// A program failed.
+    Error,
+}
+
+impl Kind {
+    /// For the hooks' `notification.kind`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Message => "message",
+            Kind::Bell => "bell",
+            Kind::NeedsInput => "needsInput",
+            Kind::Done => "done",
+            Kind::Error => "error",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Effects {
     pub record: bool,

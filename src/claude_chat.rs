@@ -449,7 +449,7 @@ impl Chat {
     fn meta(&self) -> Value {
         json!({
             "t": "meta",
-            "cwd": crate::workspace::tilde(&self.cwd.to_string_lossy()),
+            "cwd": crate::paths::tilde(&self.cwd.to_string_lossy()),
             "cwdFull": self.cwd.to_string_lossy(),
             "dark": crate::theme::is_dark(),
             "session": self.session,
@@ -1434,7 +1434,7 @@ impl Follow {
     fn meta(&self) -> Value {
         json!({
             "t": "meta",
-            "cwd": crate::workspace::tilde(&self.cwd.to_string_lossy()),
+            "cwd": crate::paths::tilde(&self.cwd.to_string_lossy()),
             "cwdFull": self.cwd.to_string_lossy(),
             "session": self.session,
             "mode": self.mode,

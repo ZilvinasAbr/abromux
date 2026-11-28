@@ -116,8 +116,8 @@ pub fn edges(window: &Window) -> Vec<AnyElement> {
 }
 
 /// Minimize, maximize and close, at the window's top right over the tab
-/// strip, when the app draws its own decorations.
-pub fn controls(window: &Window) -> Option<AnyElement> {
+/// strip, when the app draws its own decorations. Close runs `close`.
+pub fn controls(window: &Window, close: fn(&mut Window, &mut App)) -> Option<AnyElement> {
     let Decorations::Client { .. } = window.window_decorations() else {
         return None;
     };
@@ -151,7 +151,7 @@ pub fn controls(window: &Window) -> Option<AnyElement> {
             .child(
                 icon_button("csd-close", "x")
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(|_, window, cx| crate::quit::request(window, cx)),
+                    .on_click(move |_, window, cx| close(window, cx)),
             )
             .into_any_element(),
     )

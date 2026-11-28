@@ -426,9 +426,48 @@ impl Records {
     }
 }
 
+/// A shown status record as JSON (`program.status`, `surface.list`), or
+/// null for none.
+pub fn to_json(shown: Option<&Shown>) -> serde_json::Value {
+    let Some(s) = shown else {
+        return serde_json::Value::Null;
+    };
+    let r = &s.record;
+    serde_json::json!({
+        "id": s.id,
+        "state": r.state.as_str(),
+        "app": r.app,
+        "kind": r.kind.map(|k| k.as_str()),
+        "progress": r.progress,
+        "title": r.title,
+        "msg": r.msg,
+        "others": s.others,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json() {
+        assert_eq!(to_json(None), serde_json::Value::Null);
+        let mut record = Record::new(State::Working);
+        record.progress = Some(40);
+        record.title = Some("Building".into());
+        let shown = Shown {
+            id: "build".into(),
+            record,
+            others: 2,
+        };
+        assert_eq!(
+            to_json(Some(&shown)),
+            serde_json::json!({
+                "id": "build", "state": "working", "app": null, "kind": null,
+                "progress": 40, "title": "Building", "msg": null, "others": 2,
+            })
+        );
+    }
 
     fn set(body: &str) -> Record {
         match parse(body.as_bytes()) {

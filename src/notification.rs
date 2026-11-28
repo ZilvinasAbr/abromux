@@ -26,34 +26,7 @@ pub struct Notification {
     pub bell: bool,
 }
 
-/// What a notification says happened, for `notifications.needsInput`,
-/// `done` and `error` (and the hooks' `kind`).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Kind {
-    /// Text a program or `abromux notify` sent (OSC 9/99/777).
-    Message,
-    /// A bell (BEL): no banner, and repeats merge.
-    Bell,
-    /// An agent or program waits for you.
-    NeedsInput,
-    /// An agent finished its turn, or a program is done.
-    Done,
-    /// A program failed.
-    Error,
-}
-
-impl Kind {
-    /// For the hooks' `notification.kind`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Kind::Message => "message",
-            Kind::Bell => "bell",
-            Kind::NeedsInput => "needsInput",
-            Kind::Done => "done",
-            Kind::Error => "error",
-        }
-    }
-}
+pub use abromux_core::notify_hook::Kind;
 
 impl Notification {
     /// One line for the sidebar and lists: "title: body".
@@ -783,7 +756,7 @@ fn banner_title(title: &str) -> &str {
 
 /// "now", "5m", "3h", "2d".
 fn ago(d: Duration) -> String {
-    abromux_gitlab::time::ago_short(d.as_secs() as i64)
+    abromux_core::text::ago_short(d.as_secs() as i64)
 }
 
 #[cfg(test)]
