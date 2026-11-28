@@ -1,0 +1,3 @@
+[build]
+# Uses kache when installed, else plain rustc; see the script.
+rustc-wrapper = "scripts/rustc-wrapper.sh"
