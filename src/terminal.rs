@@ -3059,16 +3059,15 @@ fn spawn_shell(
             f.to_string_lossy().into_owned(),
         ));
     }
-    // Held shells are for taking back next launch; a run that won't restore
-    // a session (ABROMUX_NO_RESTORE, demos, scripted tests) would only leave
-    // them running unseen. A terminal running a command (an editor) is made
-    // again each launch, so it isn't held either, unless it asks to be (a
-    // terminal-browser tab, taken back with its page as it was).
-    let persistence = match crate::session::path() {
-        Some(_) if command.is_none() || hold_command => cx
-            .try_global::<Settings>()
-            .map_or(Persistence::default(), |s| s.persistence),
-        _ => Persistence::CmuxLike,
+    // A terminal running a command (an editor) is made again each launch,
+    // so it isn't held, unless it asks to be (a terminal-browser tab, taken
+    // back with its page as it was).
+    let hold = cx.try_global::<HoldShells>().is_some_and(|h| h.0);
+    let persistence = if hold && (command.is_none() || hold_command) {
+        cx.try_global::<Settings>()
+            .map_or(Persistence::default(), |s| s.persistence)
+    } else {
+        Persistence::CmuxLike
     };
     let (feed, wake) = Feed::new();
     let opened = crate::pty::open(cwd, &argv, &vars, size, attach, persistence, &feed);
@@ -3129,6 +3128,15 @@ fn reporter(pid: u32, shell: u32, agent: Option<u32>) -> Option<program_resume::
 fn owner_alive(o: &program_resume::Owner) -> bool {
     abromux_platform::process::info(o.pid).is_some_and(|i| o.started.is_none_or(|s| s == i.started))
 }
+
+/// Whether this run may hold shells past quitting (`settings.persistence`).
+/// Held shells are for taking back next launch, so the app says yes only
+/// when it will restore a session: not with ABROMUX_NO_RESTORE, in demos
+/// or in scripted tests, where they'd only be left running unseen. Unset,
+/// nothing is held.
+pub struct HoldShells(pub bool);
+
+impl Global for HoldShells {}
 
 /// Why a terminal has no shell, in red, as its screen shows it.
 fn open_failed_text(e: &anyhow::Error) -> Vec<u8> {

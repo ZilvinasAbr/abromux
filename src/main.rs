@@ -4159,6 +4159,7 @@ fn run_app(cwd: Option<String>) {
         }
         plugins::set_sections(&settings, cx);
         cx.set_global(settings);
+        cx.set_global(terminal::HoldShells(session::path().is_some()));
         update::init(
             |cx| {
                 cx.global::<settings::Settings>()
