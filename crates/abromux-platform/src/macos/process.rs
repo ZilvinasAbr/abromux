@@ -44,6 +44,54 @@ pub fn children(pid: u32) -> Vec<u32> {
     buf.iter().filter(|&&p| p > 0).map(|&p| p as u32).collect()
 }
 
+/// What the terminal checks about a process that reports to it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Info {
+    pub parent: u32,
+    /// Its effective user.
+    pub uid: u32,
+    /// When it started, in a unit of the OS's own: only for telling a
+    /// process from a later one with the same pid.
+    pub started: u64,
+}
+
+/// A process's parent, user and start time, via libproc's PROC_PIDTBSDINFO.
+pub fn info(pid: u32) -> Option<Info> {
+    unsafe extern "C" {
+        fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut u8, size: i32) -> i32;
+    }
+    const PROC_PIDTBSDINFO: i32 = 3;
+    // struct proc_bsdinfo: pbi_ppid at 16, pbi_uid at 20, then after the
+    // names and counters pbi_start_tvsec at 120 and pbi_start_tvusec at 128.
+    let mut buf = [0u8; 136];
+    let n = unsafe {
+        proc_pidinfo(
+            pid as i32,
+            PROC_PIDTBSDINFO,
+            0,
+            buf.as_mut_ptr(),
+            buf.len() as i32,
+        )
+    };
+    if n as usize != buf.len() {
+        return None;
+    }
+    let u32_at = |i: usize| u32::from_ne_bytes(buf[i..i + 4].try_into().unwrap());
+    let u64_at = |i: usize| u64::from_ne_bytes(buf[i..i + 8].try_into().unwrap());
+    Some(Info {
+        parent: u32_at(16),
+        uid: u32_at(20),
+        started: u64_at(120)
+            .wrapping_mul(1_000_000)
+            .wrapping_add(u64_at(128)),
+    })
+}
+
+/// This process's effective user.
+pub fn uid() -> u32 {
+    unsafe { libc::geteuid() }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -51,6 +99,15 @@ mod tests {
         let here = std::env::current_dir().unwrap().canonicalize().unwrap();
         let got = super::cwd(std::process::id()).map(std::path::PathBuf::from);
         assert_eq!(got.map(|p| p.canonicalize().unwrap()), Some(here));
+    }
+
+    #[test]
+    fn reads_a_process_info() {
+        let me = super::info(std::process::id()).unwrap();
+        assert_eq!(me.uid, super::uid());
+        assert_eq!(me.parent, std::os::unix::process::parent_id());
+        assert_eq!(super::info(std::process::id()), Some(me));
+        assert!(super::info(u32::MAX).is_none());
     }
 
     #[test]

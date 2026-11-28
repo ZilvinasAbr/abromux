@@ -26,12 +26,51 @@ pub fn children(pid: u32) -> Vec<u32> {
         .collect()
 }
 
+/// What the terminal checks about a process that reports to it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Info {
+    pub parent: u32,
+    /// Its effective user.
+    pub uid: u32,
+    /// When it started, in a unit of the OS's own: only for telling a
+    /// process from a later one with the same pid.
+    pub started: u64,
+}
+
+/// A process's parent, user and start time, from `/proc/<pid>/stat`
+/// (fields 4 and 22) and the owner of `/proc/<pid>`.
+pub fn info(pid: u32) -> Option<Info> {
+    use std::os::unix::fs::MetadataExt as _;
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // Fields after the command name, which may hold spaces and parens.
+    let rest: Vec<&str> = stat[stat.rfind(')')? + 1..].split_whitespace().collect();
+    Some(Info {
+        parent: rest.get(1)?.parse().ok()?,
+        uid: std::fs::metadata(format!("/proc/{pid}")).ok()?.uid(),
+        started: rest.get(19)?.parse().ok()?,
+    })
+}
+
+/// This process's effective user.
+pub fn uid() -> u32 {
+    unsafe { libc::geteuid() }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
     fn reads_a_process_cwd() {
         let here = std::env::current_dir().unwrap();
         assert_eq!(super::cwd(std::process::id()).as_deref(), here.to_str());
+    }
+
+    #[test]
+    fn reads_a_process_info() {
+        let me = super::info(std::process::id()).unwrap();
+        assert_eq!(me.uid, super::uid());
+        assert_eq!(me.parent, std::os::unix::process::parent_id());
+        assert_eq!(super::info(std::process::id()), Some(me));
+        assert!(super::info(u32::MAX).is_none());
     }
 
     #[test]

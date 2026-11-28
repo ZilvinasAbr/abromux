@@ -6,6 +6,8 @@
 //! - The Program Status Protocol (OSC 7501, `program_status`), and
 //!   ConEmu's progress (OSC 9;4) that maps onto it.
 //! - Prompt starts (OSC 133 A), which end a program's working status.
+//! - The Program Resume Protocol (OSC 7577, `program_resume`), passed on
+//!   raw: only the terminal has the token to check it with.
 
 use crate::program_status::{self, Record, Report};
 use std::collections::HashMap;
@@ -25,6 +27,8 @@ pub enum Found {
     CommandStart,
     /// OSC 133 D: a command finished, with its exit status if the shell said.
     CommandDone(Option<i32>),
+    /// An OSC 7577 body, unchecked.
+    Resume(Vec<u8>),
 }
 
 /// Which OSC a payload belongs to.
@@ -35,6 +39,7 @@ enum Osc {
     /// OSC 9: only 9;4 is ours (the rest are notifications libghostty-vt reports).
     ConEmu,
     Prompt,
+    Resume,
 }
 
 impl Osc {
@@ -44,6 +49,7 @@ impl Osc {
             b"7501" => Osc::Status,
             b"9" => Osc::ConEmu,
             b"133" => Osc::Prompt,
+            b"7577" => Osc::Resume,
             _ => return None,
         })
     }
@@ -52,6 +58,7 @@ impl Osc {
         match self {
             Osc::Status => program_status::MAX_SEQUENCE,
             Osc::Prompt => 256,
+            Osc::Resume => crate::program_resume::MAX_BODY,
             _ => MAX,
         }
     }
@@ -149,6 +156,7 @@ impl Scanner {
                 .kitty(seq)
                 .map(|(title, body)| Found::Notification(title, body)),
             Osc::Status => program_status::parse(seq).map(Found::Status),
+            Osc::Resume => Some(Found::Resume(seq.to_vec())),
             Osc::ConEmu => seq
                 .strip_prefix(b"4;")
                 .or_else(|| (seq == b"4").then_some(b"0".as_slice()))
@@ -268,6 +276,21 @@ mod tests {
             s.feed(b"]99;;Split\x07\x1b\x1b]99;;Again\x07"),
             [n("Split", ""), n("Again", "")]
         );
+    }
+
+    #[test]
+    fn passes_resume_reports_on_whole_or_not_at_all() {
+        let mut s = Scanner::default();
+        assert!(s.feed(b"a\x1b]7577;pid=1:ti").is_empty());
+        assert_eq!(
+            s.feed(b"me=2\x1b\\b"),
+            [Found::Resume(b"pid=1:time=2".to_vec())]
+        );
+        let long = [b'a'; crate::program_resume::MAX_BODY + 1];
+        let mut seq = b"\x1b]7577;".to_vec();
+        seq.extend_from_slice(&long);
+        seq.push(7);
+        assert!(s.feed(&seq).is_empty());
     }
 
     #[test]

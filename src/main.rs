@@ -56,7 +56,7 @@ mod workspace;
 use abromux_browser::{
     auto as browser_auto, downloads, find as browser_find, history as browser_history,
 };
-use abromux_core::{agent, cmux, notify_hook, osc99, paths, program_status};
+use abromux_core::{agent, cmux, notify_hook, osc99, paths, program_resume, program_status};
 use abromux_term::{ghostty, hold, pty};
 use browser::{BrowserEvent, BrowserView};
 use futures::StreamExt;
@@ -290,6 +290,9 @@ struct TerminalOpts {
     /// on). None: the workspace's, if it has one, else this machine's;
     /// empty: this machine's, whatever the workspace's is.
     host: Option<String>,
+    /// A command for a new shell's integration to run at its first prompt
+    /// (session restore: `TerminalView::restore`).
+    resume: Option<abromux_core::program_resume::Restart>,
 }
 
 impl TerminalOpts {
@@ -896,6 +899,7 @@ impl AbroMux {
             command,
             attach,
             host,
+            resume,
         } = opts;
         let surface = attach.as_ref().map_or(self.next_surface + 1, |(n, _)| *n);
         let (home, ws_env) = match self.workspaces.iter().find(|w| w.id == ws) {
@@ -940,7 +944,8 @@ impl AbroMux {
             ));
         }
         let held = attach.as_ref().map(|(_, a)| a.as_str());
-        let term = cx.new(|cx| TerminalView::new(cwd, env, command, held, host, cx));
+        let term =
+            cx.new(|cx| TerminalView::new(cwd, env, command, held, host, resume.as_ref(), cx));
         // Its env names `surface` even when the shell is a new one; restore
         // reserved the numbers the last session used, so it's free.
         self.surface_refs.insert(term.entity_id(), surface);

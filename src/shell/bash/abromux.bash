@@ -54,6 +54,8 @@ _abromux_prompt() {
         builtin printf '\e]133;D;%s\a' "$ret"
     fi
     _abromux_first=
+    # The command abromux resumes here, once, at the first prompt.
+    [[ -z ${ABROMUX_RESUME_FILE+X} ]] || _abromux_resume
     # Start from the unmarked prompt unless something replaced it (a theme
     # that sets PS1 on every prompt).
     [[ $PS1 != "$_abromux_marked_ps1" ]] || PS1=$_abromux_ps1
@@ -65,6 +67,50 @@ _abromux_prompt() {
     _abromux_marked_ps1=$PS1 _abromux_marked_ps2=$PS2
     # Keep the status for whatever runs after this in PROMPT_COMMAND.
     builtin return "$ret"
+}
+
+# Session restore (program_resume.rs): run the command a program here
+# reported with OSC 7577, or a coding agent's resume command, after the
+# startup files. abromux writes it to a file only this user can read: a
+# format version, the folder, then each argument, each ending in NUL. It's
+# read and removed, and the arguments run as they are, never as shell code:
+# the program is looked up on PATH, so no function or builtin of the name
+# runs instead. The C and D marks around it tell abromux when it ends (after
+# a ^C too).
+_abromux_resume() {
+    builtin local f=$ABROMUX_RESUME_FILE v dir x p trap_int
+    builtin local -a a
+    a=()
+    builtin unset ABROMUX_RESUME_FILE
+    [[ -f $f && -O $f ]] || builtin return 0
+    {
+        IFS= builtin read -r -d '' v && IFS= builtin read -r -d '' dir &&
+            while IFS= builtin read -r -d '' x; do a+=("$x"); done
+    } < "$f"
+    builtin command rm -f -- "$f"
+    [[ $v == 1 && ${#a[@]} -gt 0 ]] || builtin return 0
+    if [[ -n $dir ]]; then
+        # Its folder is gone: nothing to resume.
+        [[ -d $dir ]] && builtin cd -- "$dir" || builtin return 0
+    fi
+    if [[ ${a[0]} == */* ]]; then
+        p=${a[0]}
+    else
+        p=$(builtin type -P -- "${a[0]}") && [[ -n $p ]] || builtin return 0
+    fi
+    # A ^C that ends the program would end this function too, before the D
+    # mark and the prompt's marks, unless INT has a trap meanwhile (the
+    # program itself gets the default action). bash keeps $? over a trap.
+    trap_int=$(builtin trap -p INT)
+    builtin trap : INT
+    builtin printf '\e]133;C\a'
+    builtin command -- "$p" "${a[@]:1}"
+    builtin printf '\e]133;D;%s\a' "$?"
+    if [[ -n $trap_int ]]; then
+        builtin eval -- "$trap_int"
+    else
+        builtin trap - INT
+    fi
 }
 
 # Last in PROMPT_COMMAND, so the marks go around the PS1 the rest set. An

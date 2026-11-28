@@ -59,10 +59,43 @@ fn inject_zsh(env: &[(String, String)]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Whether the bash at `path` is 4 or later. An older one (macOS's
+/// `/bin/bash` is 3.2) doesn't read `$ENV` as an interactive login shell in
+/// POSIX mode, so the integration would never load and the shell would stay
+/// in POSIX mode (Ghostty skips it too). Asked once per path.
+fn bash_takes_integration(path: &str) -> bool {
+    static SEEN: std::sync::Mutex<Vec<(String, bool)>> = std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, ok)) = seen.iter().find(|(p, _)| p == path) {
+        return *ok;
+    }
+    let ok = bash_major(path).is_some_and(|v| v >= 4);
+    seen.push((path.to_string(), ok));
+    ok
+}
+
+/// The major version of the bash at `path`, from `BASH_VERSINFO`.
+fn bash_major(path: &str) -> Option<u32> {
+    let out = std::process::Command::new(path)
+        .args([
+            "--norc",
+            "--noprofile",
+            "-c",
+            "echo \"${BASH_VERSINFO[0]}\"",
+        ])
+        .env_remove("BASH_ENV")
+        .env_remove("ENV")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
 /// Only an interactive login shell (`bash -l`, as terminals start it); one
 /// running a command (`-c`) needs no prompt marks.
 fn inject_bash(argv: &mut Vec<String>, env: &[(String, String)]) -> Vec<(String, String)> {
-    if argv.len() != 2 || argv[1] != "-l" {
+    if argv.len() != 2 || argv[1] != "-l" || !bash_takes_integration(&argv[0]) {
         return vec![];
     }
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
@@ -114,6 +147,41 @@ fn dir(
         Some(dir)
     })
     .as_deref()
+}
+
+/// Write the command to resume in a new shell where its integration reads
+/// it (`_abromux_resume`, which removes it): a file only this user can
+/// read, named by a fresh random token.
+pub fn resume_file(r: &abromux_core::program_resume::Restart) -> std::io::Result<PathBuf> {
+    use std::io::Write as _;
+    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+    let dir = crate::channel::support_dir().join("resume");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    // Ones a shell never got to (it was closed before its first prompt).
+    static SWEPT: std::sync::Once = std::sync::Once::new();
+    SWEPT.call_once(|| {
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            if e.metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > day))
+            {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    });
+    let path = dir.join(abromux_core::program_resume::new_token());
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    f.write_all(&r.file_bytes())?;
+    Ok(path)
 }
 
 fn write_files(dir: &Path, files: &[(&str, &str)]) -> std::io::Result<()> {
@@ -270,6 +338,128 @@ mod tests {
         assert_eq!(with.last(), Some(&1));
     }
 
+    /// False (and says so) when the `bash` on PATH is too old for the
+    /// integration, which abromux then doesn't load (macOS's 3.2).
+    fn bash_new_enough() -> bool {
+        let ok = super::bash_takes_integration("bash");
+        if !ok {
+            eprintln!("skipped: bash on PATH is older than 4");
+        }
+        ok
+    }
+
+    #[test]
+    fn asks_bash_its_version() {
+        assert_eq!(super::bash_major("/no/such/bash"), None);
+        assert!(super::bash_major("bash").is_some_and(|v| v >= 3));
+    }
+
+    /// What a login `shell` with the integration prints, raw, when started
+    /// with a resume file for `argv`: it should run it at the first prompt,
+    /// after the startup files (which put the fake program on PATH), and
+    /// remove the file.
+    fn resumed(shell: &str, argv: &[&str]) -> (String, bool) {
+        let home = std::env::temp_dir().join(format!(
+            "abromux-resume-test-{shell}-{}",
+            std::process::id()
+        ));
+        let dir = home.join("integration");
+        write_files(&dir, if shell == "zsh" { ZSH } else { BASH }).unwrap();
+        let bin = home.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let fake = bin.join("show");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nprintf 'in=%s\\n' \"$PWD\"; for a; do printf '[%s]\\n' \"$a\"; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let path = format!(
+            "export PATH={}:$PATH\nshow() {{ echo FUNCTION; }}\n",
+            bin.display()
+        );
+        let rc = if shell == "zsh" {
+            ".zshrc"
+        } else {
+            ".bash_profile"
+        };
+        std::fs::write(home.join(rc), path).unwrap();
+        let work = home.join("a dir");
+        std::fs::create_dir_all(&work).unwrap();
+        let file = home.join("resume-file");
+        let r = abromux_core::program_resume::Restart {
+            argv: argv.iter().map(|a| a.to_string()).collect(),
+            cwd: Some(work.to_string_lossy().into_owned()),
+            cwd_required: true,
+        };
+        std::fs::write(&file, r.file_bytes()).unwrap();
+
+        let pty = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 200,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut cmd = CommandBuilder::new(shell);
+        cmd.env("HOME", &home);
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("ABROMUX_RESUME_FILE", &file);
+        if shell == "zsh" {
+            cmd.env("ZDOTDIR", &dir);
+        } else {
+            cmd.arg("--posix");
+            cmd.env("ENV", dir.join("abromux.bash"));
+            cmd.env("ABROMUX_BASH_INJECT", "1");
+        }
+        cmd.arg("-l");
+        let mut child = pty.slave.spawn_command(cmd).unwrap();
+        drop(pty.slave);
+        let mut reader = pty.master.try_clone_reader().unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = reader.read(&mut buf) {
+                if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut out = vec![];
+        let end = Instant::now() + Duration::from_millis(1500);
+        while let Ok(b) = rx.recv_timeout(end.saturating_duration_since(Instant::now())) {
+            out.extend(b);
+        }
+        let _ = child.kill();
+        let left = file.exists();
+        let _ = std::fs::remove_dir_all(&home);
+        (String::from_utf8_lossy(&out).into_owned(), left)
+    }
+
+    #[test]
+    #[ignore = "runs a real zsh and bash"]
+    fn shells_resume_the_command_at_the_first_prompt() {
+        for shell in ["zsh", "bash"] {
+            if shell == "bash" && !bash_new_enough() {
+                continue;
+            }
+            let (out, left) = resumed(shell, &["show", "", "a b", "$(echo no)", ";x"]);
+            let out = out.replace("\r\n", "\n");
+            assert!(!left, "{shell} left the file");
+            assert!(!out.contains("FUNCTION"), "{shell}: {out}");
+            assert!(
+                out.contains("a dir\n[]\n[a b]\n[$(echo no)]\n[;x]\n"),
+                "{shell}: {out}"
+            );
+            // Marked as a command, so the app knows when it ends.
+            let c = out.find("\x1b]133;C\x07").expect("C mark");
+            let d = out.find("\x1b]133;D;0\x07").expect("D mark");
+            assert!(c < out.find("[a b]").unwrap() && out.find("[a b]").unwrap() < d);
+        }
+    }
+
     /// What an interactive bash with the integration prints for `line`, raw
     /// (with the OSC 133 marks), run as abromux runs it: `bash --posix -l`
     /// with ENV, in a pty, `HOME` holding `files`.
@@ -329,6 +519,9 @@ mod tests {
     #[test]
     #[ignore = "runs a real bash"]
     fn bash_reads_startup_files_and_marks_prompts() {
+        if !bash_new_enough() {
+            return;
+        }
         let out = bash_output(
             &[
                 (".bash_profile", "export FROM=profile; PS1='p> '\n"),
@@ -362,6 +555,9 @@ mod tests {
     #[test]
     #[ignore = "runs a real bash"]
     fn bash_runs_codex_without_its_daemon() {
+        if !bash_new_enough() {
+            return;
+        }
         let home = std::env::temp_dir().join(format!("abromux-bash-codex-{}", std::process::id()));
         let bin = home.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -400,6 +596,9 @@ mod tests {
     #[test]
     #[ignore = "runs a real bash"]
     fn bash_prompt_survives_squeezing() {
+        if !bash_new_enough() {
+            return;
+        }
         let prompts = |s: &String| s.matches("zilvinas@Zilvinas-MacBook-Pro").count();
         let without: Vec<_> = squeeze("bash", false).iter().map(prompts).collect();
         let with: Vec<_> = squeeze("bash", true).iter().map(prompts).collect();

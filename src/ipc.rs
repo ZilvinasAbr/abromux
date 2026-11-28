@@ -45,8 +45,13 @@ fn foreign(path: &Path, own: &Path) -> bool {
 
 /// The app starting from a shell of another channel's app: drop what that
 /// shell had from it (its socket, surface, workspace and CLI), so this
-/// app's terminals and calls don't reach the other one.
+/// app's terminals and calls don't reach the other one. An OSC 7577 token
+/// goes whoever gave it.
 pub fn forget_foreign_env() {
+    // The terminal abromux was started from gave it an OSC 7577 token; a
+    // nested terminal mustn't pass it on (each of its shells gets its own).
+    // SAFETY: called first thing in main, before any thread starts.
+    unsafe { std::env::remove_var(abromux_core::program_resume::ENV) };
     let own = crate::channel::runtime_dir().join("abromux.sock");
     if std::env::var_os("ABROMUX_SOCKET_PATH").is_some_and(|p| foreign(Path::new(&p), &own)) {
         for k in [

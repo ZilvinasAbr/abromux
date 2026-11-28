@@ -192,6 +192,7 @@ fn tab(p: &Value, dir: &str) -> Option<TabState> {
                 font_size: t["fontSize"].as_f64().map(|f| f as f32),
                 scrollback: str_of(t, "scrollback").map(scrollback),
                 agent: agent(t),
+                resume: None,
                 name,
                 cwd,
                 held: None,

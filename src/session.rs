@@ -132,7 +132,20 @@ pub fn write(session: &Session, path: &std::path::Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
+    // Only this user's: it has what resumes programs (OSC 7577 records)
+    // and held shells' tokens.
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        f.write_all(json.as_bytes())?;
+    }
     std::fs::rename(&tmp, path)
 }
 
@@ -541,6 +554,7 @@ impl AbroMux {
                 font_size,
                 scrollback,
                 agent,
+                resume,
                 name,
                 held,
                 host,
@@ -558,7 +572,7 @@ impl AbroMux {
                     .and_then(|f| self.make_editor(ws, &f, cwd.clone(), window, cx).ok());
                 if let Some(s) = editor {
                     if let (Some(size), Surface::Terminal(t)) = (font_size, &s) {
-                        t.update(cx, |t, cx| t.restore(None, Some(size), None, cx));
+                        t.update(cx, |t, cx| t.restore(None, Some(size), None, None, cx));
                     }
                     if name.is_some() {
                         s.set_custom_title(name, cx);
@@ -566,21 +580,45 @@ impl AbroMux {
                     return s;
                 }
                 let attach = surface.zip(held);
+                // What a new shell runs: the command a program here reported
+                // (OSC 7577), else the agent's. One program comes back in
+                // the shell's foreground, so the nearest the shell wins: the
+                // agent when the program ran under it, else the program (the
+                // agent ran under it, or was a stopped job beside it).
+                let agent_restart = agent.as_ref().and_then(|a| a.restart());
+                let program = resume
+                    .as_ref()
+                    .and_then(|r| r.best())
+                    .filter(|r| !(r.under_agent && agent_restart.is_some()))
+                    .map(abromux_core::program_resume::Restart::from);
+                let restart = program.clone().or(agent_restart);
                 let opts = crate::TerminalOpts {
                     cwd,
                     attach,
                     host,
+                    resume: restart.clone(),
                     ..Default::default()
                 };
                 let s = self.make_terminal(ws, opts, window, cx);
                 if let Surface::Terminal(t) = &s {
                     t.update(cx, |t, cx| {
                         if t.attached {
-                            // It ran on: its screen and agent are still there.
-                            t.restore(None, font_size, None, cx);
+                            // It ran on: its screen, agent and records are
+                            // still there.
+                            t.restore(None, font_size, None, None, cx);
                             t.agent = agent;
+                            if let Some(r) = resume {
+                                t.load_resume(r, cx);
+                            }
                         } else {
-                            t.restore(scrollback.as_deref(), font_size, agent, cx)
+                            let agent = agent.filter(|_| program.is_none());
+                            t.restore(
+                                scrollback.as_deref(),
+                                font_size,
+                                agent,
+                                restart.as_ref(),
+                                cx,
+                            )
                         }
                     });
                 }
@@ -753,6 +791,7 @@ fn tab_state(s: &Surface, scrollback: bool, refs: &Refs, cx: &App) -> TabState {
                     .flatten(),
                 edit,
                 agent: t.agent.clone().filter(crate::agent::Agent::alive),
+                resume: t.saved_resume(),
                 name: t.custom_title.clone(),
             }
         }
