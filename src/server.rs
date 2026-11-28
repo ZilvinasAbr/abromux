@@ -1413,6 +1413,41 @@ impl AbroMux {
                 self.reveal_tab(s.entity_id(), window, cx);
                 self.describe_surface(&s, true, cx)
             }
+            "surface.confirm" => {
+                let (_, _, s) = self.surface_target(p)?;
+                let message = str_param(p, "message")
+                    .context("missing message")?
+                    .to_string();
+                let info = str_param(p, "info").unwrap_or("").to_string();
+                let button = str_param(p, "button").unwrap_or("OK").to_string();
+                self.reveal_tab(s.entity_id(), window, cx);
+                // After the reveal's own deferred focus, so the sheet keeps
+                // the keyboard.
+                let (tx, rx) = oneshot::channel();
+                window.defer(cx, move |window, cx| {
+                    let answer = crate::alert::confirm(
+                        window,
+                        cx,
+                        crate::alert::Confirm {
+                            message: &message,
+                            info: &info,
+                            button: &button,
+                            suppress: "",
+                            skip_key: "",
+                        },
+                    );
+                    cx.foreground_executor()
+                        .spawn(async move {
+                            let _ = tx.send(answer.await == Ok(true));
+                        })
+                        .detach();
+                });
+                // No time limit: it waits for the user. Another sheet
+                // already up drops the request, which counts as Cancel.
+                return Ok(Reply::Later(
+                    async move { Ok(json!({ "confirmed": rx.await == Ok(true) })) }.boxed_local(),
+                ));
+            }
             "tab.pin" => {
                 let (_, _, s) = self.surface_target(p)?;
                 let pinned = self.pin_tab(s.entity_id(), cx);

@@ -430,6 +430,12 @@ pub const METHODS: &[Method] = &[
         "@surface",
     ),
     m(
+        "surface.confirm",
+        "confirm",
+        "Ask the user on a sheet, showing the tab first; waits for the answer: {confirmed}. terminal-browser's \"Leave site?\" uses it.",
+        "@surface;message:string The question;info?:string A line under it;button?:string The action's button (default OK)",
+    ),
+    m(
         "surface.send_text",
         "send",
         "Type text into a terminal. \\n presses Return; also \\t, \\e and \\\\.",

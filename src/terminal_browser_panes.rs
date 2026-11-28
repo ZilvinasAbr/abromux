@@ -15,6 +15,11 @@
 //! SSO sign-ins talk to the page that opened them. A running daemon keeps the
 //! code it started with, so a change applies once every terminal-browser has
 //! quit and the next one starts it again.
+//!
+//! The same way, and whatever the setting, a page with unsaved changes asks
+//! "Leave site?" on an abromux sheet (`abromux confirm`) before it's left:
+//! terminal-browser makes its pages with `disableDialogs` and never handles
+//! Electron's `will-prevent-unload`, so such a page just stayed, silently.
 
 use std::{
     path::{Path, PathBuf},
@@ -25,49 +30,90 @@ use std::{
     time::SystemTime,
 };
 
-/// The function the hooks call (`__abxOpenPane(url, env)`), between markers.
-const HELPER: &str = include_str!("terminal_browser_panes.js");
-/// The start of the helper, in any version of it.
-const BEGIN: &str = "/* abromux: terminal-browser-panes v";
-const END: &str = "/* abromux: terminal-browser-panes (end) */\n";
-/// main.js's first line; the helper goes right after it.
+/// A set of changes to main.js: a helper (between markers, right after the
+/// first line) and the edits that call it, each of whose stock code must be
+/// there once.
+struct Hook {
+    helper: &'static str,
+    /// The start of the helper, in any version of it.
+    begin: &'static str,
+    end: &'static str,
+    edits: &'static [(&'static str, &'static str)],
+    /// In whatever the setting; else only with `browser.terminalBrowserPanes`.
+    always: bool,
+}
+
+/// New tabs as panes (`__abxOpenPane(url, env)`), with the setting.
+/// Each session's `ctx.env` is its own pane's.
+const PANES: Hook = Hook {
+    helper: include_str!("terminal_browser_panes.js"),
+    begin: "/* abromux: terminal-browser-panes v",
+    end: "/* abromux: terminal-browser-panes (end) */\n",
+    always: false,
+    edits: &[
+        // TabManager.openWindow: a link that asks for a new tab.
+        (
+            "    this.create(details.url, details.disposition === \"foreground-tab\");\n",
+            "    if (__abxOpenPane(details.url, this.__abxEnv)) return \"deny\";\n    \
+             this.create(details.url, details.disposition === \"foreground-tab\");\n",
+        ),
+        // The page's context menu.
+        (
+            "      case \"open-link-tab\":\n        this.tabs.create(menu.linkURL);\n",
+            "      case \"open-link-tab\":\n        \
+             if (!__abxOpenPane(menu.linkURL, this.ctx.env)) this.tabs.create(menu.linkURL);\n",
+        ),
+        // The new-tab box.
+        (
+            "      if (text13.trim()) this.tabs.create(this.resolveInput(text13));\n",
+            "      if (text13.trim()) { const u = this.resolveInput(text13); \
+             if (!__abxOpenPane(u, this.ctx.env)) this.tabs.create(u); }\n",
+        ),
+        // The session hands its env to its TabManager, for openWindow.
+        (
+            "      this.defaultUrl\n    );\n  }\n  lastZoom = 1;",
+            "      this.defaultUrl\n    );\n    this.tabs.__abxEnv = ctx.env;\n  }\n  lastZoom = 1;",
+        ),
+    ],
+};
+
+/// "Leave site?" on an abromux sheet for a page with unsaved changes
+/// (`__abxConfirmUnload`). Always in: terminal-browser alone just keeps
+/// such a page, silently.
+const UNLOAD: Hook = Hook {
+    helper: include_str!("terminal_browser_unload.js"),
+    begin: "/* abromux: terminal-browser-unload v",
+    end: "/* abromux: terminal-browser-unload (end) */\n",
+    always: true,
+    edits: &[
+        // Each page (PageHost) asks before it's left.
+        (
+            "        this.window.on(\"closed\", this.onWindowClosed);\n",
+            "        this.window.on(\"closed\", this.onWindowClosed);\n        \
+             this.window.webContents.on(\"will-prevent-unload\", (e) => \
+             __abxConfirmUnload(e, this.window.webContents));\n",
+        ),
+        // Each browser session is known, to find a page's pane by its env.
+        (
+            "  constructor(ctx) {\n    this.ctx = ctx;\n    this.defaultUrl = ",
+            "  constructor(ctx) {\n    this.ctx = ctx;\n    __abxTrackSession(this);\n    this.defaultUrl = ",
+        ),
+    ],
+};
+
+/// Every hook, in the order they go in.
+const HOOKS: [&Hook; 2] = [&PANES, &UNLOAD];
+
+/// main.js's first line; the helpers go right after it.
 const HEAD: &str = "\"use strict\";\n";
 
-/// terminal-browser's code and what it becomes; each must be there once.
-/// Each session's `ctx.env` is its own pane's.
-const EDITS: &[(&str, &str)] = &[
-    // TabManager.openWindow: a link that asks for a new tab.
-    (
-        "    this.create(details.url, details.disposition === \"foreground-tab\");\n",
-        "    if (__abxOpenPane(details.url, this.__abxEnv)) return \"deny\";\n    \
-         this.create(details.url, details.disposition === \"foreground-tab\");\n",
-    ),
-    // The page's context menu.
-    (
-        "      case \"open-link-tab\":\n        this.tabs.create(menu.linkURL);\n",
-        "      case \"open-link-tab\":\n        \
-         if (!__abxOpenPane(menu.linkURL, this.ctx.env)) this.tabs.create(menu.linkURL);\n",
-    ),
-    // The new-tab box.
-    (
-        "      if (text13.trim()) this.tabs.create(this.resolveInput(text13));\n",
-        "      if (text13.trim()) { const u = this.resolveInput(text13); \
-         if (!__abxOpenPane(u, this.ctx.env)) this.tabs.create(u); }\n",
-    ),
-    // The session hands its env to its TabManager, for openWindow.
-    (
-        "      this.defaultUrl\n    );\n  }\n  lastZoom = 1;",
-        "      this.defaultUrl\n    );\n    this.tabs.__abxEnv = ctx.env;\n  }\n  lastZoom = 1;",
-    ),
-];
-
-/// `src` (stock main.js) with the hooks in.
-fn patch(src: &str) -> Result<String, String> {
+/// `src` (stock main.js) with `hook` in.
+fn patch(src: &str, hook: &Hook) -> Result<String, String> {
     let Some(body) = src.strip_prefix(HEAD) else {
         return Err("its main.js doesn't start as expected".into());
     };
     let mut out = body.to_string();
-    for (stock, ours) in EDITS {
+    for (stock, ours) in hook.edits {
         match out.matches(stock).count() {
             1 => out = out.replacen(stock, ours, 1),
             n => {
@@ -78,20 +124,22 @@ fn patch(src: &str) -> Result<String, String> {
             }
         }
     }
-    Ok(format!("{HEAD}{HELPER}{out}"))
+    Ok(format!("{HEAD}{}{out}", hook.helper))
 }
 
-/// `src` without the hooks, or an error if they can't all be taken out (an
+/// `src` without any hooks, or an error if they can't all be taken out (an
 /// older abromux's, which hooked in elsewhere).
 fn unpatch(src: &str) -> Result<String, String> {
     let mut out = src.to_string();
-    if let Some(start) = out.find(BEGIN)
-        && let Some(end) = out[start..].find(END)
-    {
-        out.replace_range(start..start + end + END.len(), "");
-    }
-    for (stock, ours) in EDITS {
-        out = out.replace(ours, stock);
+    for hook in HOOKS {
+        if let Some(start) = out.find(hook.begin)
+            && let Some(end) = out[start..].find(hook.end)
+        {
+            out.replace_range(start..start + end + hook.end.len(), "");
+        }
+        for (stock, ours) in hook.edits {
+            out = out.replace(ours, stock);
+        }
     }
     if out.contains("__abx") {
         return Err("couldn't take out an older abromux's change; \
@@ -101,18 +149,25 @@ fn unpatch(src: &str) -> Result<String, String> {
     Ok(out)
 }
 
-/// `src` as it should be: hooked in (this version's) if `on`, stock if not.
-/// None when it already is.
-fn wanted(src: &str, on: bool) -> Result<Option<String>, String> {
-    let hooked = src.contains(BEGIN);
-    let current = src.contains(HELPER);
-    match (on, hooked) {
-        (true, true) if current => Ok(None),
-        (true, true) => patch(&unpatch(src)?).map(Some),
-        (true, false) => patch(src).map(Some),
-        (false, true) => unpatch(src).map(Some),
-        (false, false) => Ok(None),
+/// `src` as it should be: the unload hook in, and the panes hook if
+/// `panes` (this version's of each). None when it already is.
+fn wanted(src: &str, panes: bool) -> Result<Option<String>, String> {
+    let on = |hook: &Hook| hook.always || panes;
+    let as_wanted = HOOKS.iter().all(|h| {
+        if on(h) {
+            src.contains(h.helper)
+        } else {
+            !src.contains(h.begin)
+        }
+    });
+    if as_wanted {
+        return Ok(None);
     }
+    let mut out = unpatch(src)?;
+    for hook in HOOKS.into_iter().filter(|h| on(h)) {
+        out = patch(&out, hook)?;
+    }
+    Ok(Some(out))
 }
 
 /// The id of the toast that says the setting couldn't be applied.
@@ -155,7 +210,7 @@ pub fn sync() -> Result<(), String> {
         });
     // A failure isn't tried again until the file or the setting changes.
     *seen = Some((main.clone(), stamp(&main), on));
-    result.map_err(|e| format!("terminal-browser new tabs as panes: {e}"))
+    result.map_err(|e| format!("terminal-browser hooks: {e}"))
 }
 
 /// Replace `path` whole, keeping its permissions.
@@ -200,55 +255,80 @@ fn main_js() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    /// The bits of terminal-browser 0.15.3's main.js the hooks go into.
+    /// The bits of terminal-browser 0.16.3's main.js the hooks go into.
     const STOCK: &str = "\"use strict\";\nvar a = 1;\n  openWindow(id2, details) {\n    \
         this.create(details.url, details.disposition === \"foreground-tab\");\n    \
         return \"deny\";\n  }\n      case \"open-link-tab\":\n        this.tabs.create(menu.linkURL);\n        \
-        return;\n      if (text13.trim()) this.tabs.create(this.resolveInput(text13));\n    \
-        this.tabs = new TabManager(\n      {},\n      this.defaultUrl\n    );\n  }\n  lastZoom = 1;\n";
+        return;\n      if (text13.trim()) this.tabs.create(this.resolveInput(text13));\n  \
+        constructor(ctx) {\n    this.ctx = ctx;\n    this.defaultUrl = 1;\n    \
+        this.tabs = new TabManager(\n      {},\n      this.defaultUrl\n    );\n  }\n  lastZoom = 1;\n        \
+        this.window.on(\"closed\", this.onWindowClosed);\n";
+
+    fn all_in(src: &str) -> String {
+        patch(&patch(src, &PANES).unwrap(), &UNLOAD).unwrap()
+    }
 
     #[test]
     fn hooks_in_and_out_again() {
-        let ours = patch(STOCK).unwrap();
-        assert!(ours.starts_with(&format!("{HEAD}{HELPER}")));
+        let ours = all_in(STOCK);
+        assert!(ours.starts_with(&format!("{HEAD}{}{}", UNLOAD.helper, PANES.helper)));
         assert_eq!(
             ours.matches("__abxOpenPane(").count(),
             4,
             "the helper and 3 calls"
         );
         assert!(ours.contains("this.tabs.__abxEnv = ctx.env;"));
+        assert!(ours.contains("__abxTrackSession(this);"));
+        assert!(ours.contains("\"will-prevent-unload\", (e) => __abxConfirmUnload(e, "));
         assert_eq!(unpatch(&ours).unwrap(), STOCK);
     }
 
     #[test]
     fn follows_the_setting() {
-        let ours = patch(STOCK).unwrap();
-        assert_eq!(wanted(STOCK, true).unwrap().as_deref(), Some(&*ours));
-        assert_eq!(wanted(&ours, true).unwrap(), None, "already in");
-        assert_eq!(wanted(&ours, false).unwrap().as_deref(), Some(STOCK));
-        assert_eq!(wanted(STOCK, false).unwrap(), None, "nothing to take out");
+        let both = all_in(STOCK);
+        let unload = patch(STOCK, &UNLOAD).unwrap();
+        assert_eq!(wanted(STOCK, true).unwrap().as_deref(), Some(&*both));
+        assert_eq!(wanted(&both, true).unwrap(), None, "already in");
+        assert_eq!(wanted(&both, false).unwrap().as_deref(), Some(&*unload));
+        assert_eq!(
+            wanted(STOCK, false).unwrap().as_deref(),
+            Some(&*unload),
+            "unload is always in"
+        );
+        assert_eq!(wanted(&unload, false).unwrap(), None);
+        assert_eq!(wanted(&unload, true).unwrap().as_deref(), Some(&*both));
         // An older helper is swapped for this one.
-        let old = ours.replace(" v2 (begin)", " v1 (begin)");
-        assert_eq!(wanted(&old, true).unwrap().as_deref(), Some(&*ours));
+        let old = both.replace("-panes v2 (begin)", "-panes v1 (begin)");
+        assert_eq!(wanted(&old, true).unwrap().as_deref(), Some(&*both));
+        // An older abromux's panes hook alone, with the setting off.
+        let panes_only = patch(STOCK, &PANES).unwrap();
+        assert_eq!(
+            wanted(&panes_only, false).unwrap().as_deref(),
+            Some(&*unload)
+        );
     }
 
     #[test]
     fn leaves_an_unknown_version_alone() {
         let moved = STOCK.replace("open-link-tab", "open-link-in-tab");
-        assert!(patch(&moved).is_err());
+        assert!(patch(&moved, &PANES).is_err());
         let twice = STOCK.replace(
             "  lastZoom = 1;",
             "  lastZoom = 1;\n      this.defaultUrl\n    );\n  }\n  lastZoom = 1;",
         );
-        assert!(patch(&twice).is_err(), "a hook point twice");
-        assert!(patch("var a;").is_err(), "no \"use strict\" first");
+        assert!(patch(&twice, &PANES).is_err(), "a hook point twice");
+        assert!(patch("var a;", &UNLOAD).is_err(), "no \"use strict\" first");
+        let no_close = STOCK.replace("onWindowClosed", "onClosed");
+        assert!(wanted(&no_close, false).is_err());
         let stray = format!("{STOCK}__abxOpenPane(1)");
         assert!(unpatch(&stray).is_err());
     }
 
     #[test]
-    fn helper_is_marked() {
-        assert!(HELPER.starts_with(BEGIN));
-        assert!(HELPER.ends_with(END));
+    fn helpers_are_marked() {
+        for hook in HOOKS {
+            assert!(hook.helper.starts_with(hook.begin));
+            assert!(hook.helper.ends_with(hook.end));
+        }
     }
 }
