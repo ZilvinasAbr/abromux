@@ -4062,7 +4062,7 @@ impl AbroMux {
                 {
                     v["claude_session"] = json!(true);
                 }
-                let status = crate::events::program_status_json(t.program.shown().as_ref());
+                let status = crate::program_status::to_json(t.program.shown().as_ref());
                 if !status.is_null() {
                     v["program_status"] = status;
                 }

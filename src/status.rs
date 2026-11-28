@@ -151,7 +151,7 @@ impl AbroMux {
             self.emit_for(
                 "program.status",
                 surface,
-                serde_json::json!({ "status": crate::events::program_status_json(now.as_ref()) }),
+                serde_json::json!({ "status": crate::program_status::to_json(now.as_ref()) }),
             );
         }
         let Some(wi) = self.workspaces.iter().position(|w| w.owns(surface)) else {
