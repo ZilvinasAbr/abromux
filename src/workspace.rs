@@ -456,7 +456,7 @@ pub struct Workspace {
     pub log: Vec<LogEntry>,
     /// Links tracked before tabs were pinned (`crate::links`): suggested
     /// under the pinned tabs until a tab shows them.
-    pub links: Vec<crate::links::Link>,
+    pub links: Vec<abromux_core::links::Link>,
     /// Keys of links untracked here, so they aren't tracked again when a
     /// tab or its branches show them.
     pub hidden_links: Vec<String>,
@@ -470,7 +470,7 @@ pub struct Workspace {
     /// The ticket or merge request a pinned tab was pinned for, so it's
     /// still known as that while its page shows something else (a sign-in
     /// page, say).
-    pub pinned_for: std::collections::HashMap<EntityId, crate::links::Link>,
+    pub pinned_for: std::collections::HashMap<EntityId, abromux_core::links::Link>,
     /// The pane focused before this one, for `last-pane`, and the one
     /// `track_focus` last saw.
     prev_pane: Option<usize>,
