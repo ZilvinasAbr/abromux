@@ -12,10 +12,6 @@ use crate::theme::*;
 use futures::channel::oneshot;
 use gpui::{prelude::*, *};
 
-/// The keys the native sheets kept in NSUserDefaults, copied into the
-/// prefs file once ([`abromux_platform::prefs::import_once`]).
-pub const SKIP_KEYS: [&str; 2] = [crate::quit::SKIP_KEY, crate::SKIP_CLOSE_CLAUDE_KEY];
-
 /// Where a sheet hangs from: just under the titlebar.
 const TOP: f32 = crate::TITLEBAR_H;
 const WIDTH: f32 = 280.;

@@ -3822,7 +3822,7 @@ impl Render for AbroMux {
             .children(palette)
             .children(toasts)
             // Only where the compositor leaves decorations to the app (GNOME).
-            .children(csd::controls(window))
+            .children(csd::controls(window, quit::request))
             .children(csd::edges(window))
     }
 }
@@ -4136,7 +4136,9 @@ fn run_app(cwd: Option<String>) {
     });
     app.run(move |cx: &mut App| {
         icon::set_dock_icon();
-        abromux_platform::prefs::import_once(&alert::SKIP_KEYS);
+        // The keys the native sheets kept in NSUserDefaults, copied into the
+        // prefs file once.
+        abromux_platform::prefs::import_once(&[quit::SKIP_KEY, SKIP_CLOSE_CLAUDE_KEY]);
         gpui_component::init(cx);
         // A broken config file starts with the defaults, and says so once the window is up.
         let (settings, settings_error) = match settings::load_app() {
