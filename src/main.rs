@@ -1,4 +1,5 @@
 mod about;
+mod actions;
 mod alert;
 mod api;
 mod bench;
@@ -4213,7 +4214,7 @@ fn run_app(cwd: Option<String>) {
                 browser::RemoveSuggestion,
                 Some("Omnibar > Input"),
             ),
-            KeyBinding::new("shift-enter", terminal::FindPrevious, Some("FindBar")),
+            KeyBinding::new("shift-enter", actions::FindPrevious, Some("FindBar")),
         ]);
         // Keybindings run before key listeners; let these reach the PTY.
         cx.bind_keys(

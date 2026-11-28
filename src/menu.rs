@@ -174,10 +174,13 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::submenu(Menu {
                     name: "Find".into(),
                     items: vec![
-                        MenuItem::action("Find…", terminal::Find),
-                        MenuItem::action("Find Next", terminal::FindNext),
-                        MenuItem::action("Find Previous", terminal::FindPrevious),
-                        MenuItem::action("Use Selection for Find", terminal::UseSelectionForFind),
+                        MenuItem::action("Find…", crate::actions::Find),
+                        MenuItem::action("Find Next", crate::actions::FindNext),
+                        MenuItem::action("Find Previous", crate::actions::FindPrevious),
+                        MenuItem::action(
+                            "Use Selection for Find",
+                            crate::actions::UseSelectionForFind,
+                        ),
                     ],
                 }),
             ],
@@ -195,7 +198,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Back", browser::Back),
                 MenuItem::action("Forward", browser::Forward),
-                MenuItem::action("Reload Page", browser::Reload),
+                MenuItem::action("Reload Page", crate::actions::Reload),
                 MenuItem::action("Zoom In", browser::ZoomIn),
                 MenuItem::action("Zoom Out", browser::ZoomOut),
                 MenuItem::action("Actual Size", browser::ActualSize),

@@ -150,11 +150,11 @@ pub const ACTIONS: &[Act] = {
         "openInitLua", Some("Open init.lua"), OpenInitLua, [(None, [])];
         "copy", Some("Copy"), terminal::Copy, [(T, ["cmd-c"])];
         "paste", Some("Paste"), terminal::Paste, [(T, ["cmd-v"])];
-        "find", Some("Find…"), terminal::Find, [(T, ["cmd-f"]), (B, ["cmd-f"]), (BI, ["cmd-f"])];
-        "findNext", Some("Find Next"), terminal::FindNext, [(T, ["cmd-g"]), (B, ["cmd-g"])];
-        "findPrevious", Some("Find Previous"), terminal::FindPrevious,
+        "find", Some("Find…"), actions::Find, [(T, ["cmd-f"]), (B, ["cmd-f"]), (BI, ["cmd-f"])];
+        "findNext", Some("Find Next"), actions::FindNext, [(T, ["cmd-g"]), (B, ["cmd-g"])];
+        "findPrevious", Some("Find Previous"), actions::FindPrevious,
             [(T, ["cmd-shift-g", "alt-cmd-g"]), (B, ["cmd-shift-g", "alt-cmd-g"])];
-        "useSelectionForFind", Some("Use Selection for Find"), terminal::UseSelectionForFind,
+        "useSelectionForFind", Some("Use Selection for Find"), actions::UseSelectionForFind,
             [(T, ["cmd-e"]), (B, ["cmd-e"])];
         "clearScrollback", Some("Clear Scrollback"), terminal::ClearScrollback, [(T, ["cmd-k"])];
         "restartShell", Some("Restart Shell"), terminal::RestartShell, [(T, [])];
@@ -165,7 +165,7 @@ pub const ACTIONS: &[Act] = {
         "focusAddressBar", Some("Focus Address Bar"), FocusAddressBar, [(None, ["cmd-l"])];
         "back", Some("Back"), browser::Back, [(B, ["cmd-["]), (BI, ["cmd-["])];
         "forward", Some("Forward"), browser::Forward, [(B, ["cmd-]"]), (BI, ["cmd-]"])];
-        "reloadPage", Some("Reload Page"), browser::Reload, [(B, ["cmd-r"])];
+        "reloadPage", Some("Reload Page"), actions::Reload, [(B, ["cmd-r"])];
         "toggleDevTools", Some("Toggle Developer Tools"), browser::ToggleDevTools, [(B, ["alt-cmd-i"])];
         "showConsole", Some("Show JavaScript Console"), browser::ShowConsole, [(B, ["alt-cmd-c"])];
         "toggleDownloads", Some("Show Downloads"), browser::ToggleDownloads, [(B, ["alt-cmd-l"])];
@@ -409,7 +409,7 @@ pub fn apply(settings: &Settings, cx: &mut App) {
     for k in reload.map_or(&[][..], |(_, keys)| keys) {
         bindings.push(KeyBinding::new(
             k,
-            crate::browser::Reload,
+            crate::actions::Reload,
             Some(crate::terminal_browser::KEY_CONTEXT),
         ));
     }
@@ -820,7 +820,7 @@ pub(crate) mod tests {
         assert!(named("terminal::ClearScrollback").is_empty());
         assert!(named("abromux::NewTerminal").is_empty());
         assert_eq!(named("abromux::RunCommand"), [new_tab]);
-        assert_eq!(named("terminal::Find").len(), 3, "one per context");
+        assert_eq!(named("pane::Find").len(), 3, "one per context");
     }
 
     #[test]

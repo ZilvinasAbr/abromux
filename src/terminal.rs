@@ -3,6 +3,7 @@
 
 use crate::pty::{Feed, Opened, Pty};
 use crate::{
+    actions::{Find, FindNext, FindPrevious, Reload, UseSelectionForFind},
     agent::{self, Agent, Kind},
     config::{Config, CursorStyle as ConfigCursor},
     find_bar::{FindBar, Step},
@@ -82,10 +83,6 @@ actions!(
         DecreaseFontSize,
         ResetFontSize,
         ClearScrollback,
-        Find,
-        FindNext,
-        FindPrevious,
-        UseSelectionForFind,
         RestartShell
     ]
 );
@@ -2311,7 +2308,7 @@ impl Render for TerminalView {
                     }
                 }),
             )
-            .on_action(cx.listener(|this, _: &crate::browser::Reload, _, cx| {
+            .on_action(cx.listener(|this, _: &Reload, _, cx| {
                 if !this.reload_page(cx) {
                     cx.propagate();
                 }
