@@ -53,6 +53,7 @@ mod terminal_browser_panes;
 mod theme;
 mod titlebar;
 mod update;
+mod update_view;
 mod workspace;
 
 use abromux_browser::{
@@ -3337,11 +3338,11 @@ impl Render for AbroMux {
             .notifications_open
             .then(|| self.render_notifications(cx));
         let palette = self.render_palette(cx);
-        let updates = update::popover(
+        let updates = update_view::popover(
             if self.sidebar {
-                update::Anchor::SidebarFoot
+                update_view::Anchor::SidebarFoot
             } else {
-                update::Anchor::Titlebar(px(150.))
+                update_view::Anchor::Titlebar(px(150.))
             },
             px(TITLEBAR_H),
             cx,
@@ -3777,7 +3778,7 @@ impl Render for AbroMux {
                                     titlebar::drag_or_zoom(ev, window)
                                 })
                                 .children(self.titlebar_buttons(cx))
-                                .children(update::pill(cx).map(|p| div().ml_1().child(p)))
+                                .children(update_view::pill(cx).map(|p| div().ml_1().child(p)))
                                 .child(
                                     div()
                                         .ml_2()
@@ -4158,7 +4159,14 @@ fn run_app(cwd: Option<String>) {
         }
         plugins::set_sections(&settings, cx);
         cx.set_global(settings);
-        update::init(cx);
+        update::init(
+            |cx| {
+                cx.global::<settings::Settings>()
+                    .app
+                    .automatically_check_for_updates
+            },
+            cx,
+        );
         gitlab::init(channel::support_dir(), cx);
         cx.on_action(|_: &Quit, cx| {
             match cx.active_window().or_else(|| cx.windows().first().copied()) {

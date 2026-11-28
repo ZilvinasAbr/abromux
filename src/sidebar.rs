@@ -1042,7 +1042,7 @@ impl AbroMux {
                     .children(rows),
             )
             // The update pill, while there's an update to tell about (update.rs).
-            .children(crate::update::pill(cx).map(|p| {
+            .children(crate::update_view::pill(cx).map(|p| {
                 div()
                     .flex_none()
                     .flex()
